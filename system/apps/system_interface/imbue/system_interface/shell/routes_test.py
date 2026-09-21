@@ -58,8 +58,8 @@ def _open_window(client: FlaskClient, app_name: str, path: str, client_id: str =
     )
 
 
-def _placements(client: FlaskClient, client_id: str) -> list[dict[str, Any]]:
-    return client.get(f"/api/placements/home?client={client_id}").get_json()["placements"]
+def _placements(client: FlaskClient, client_id: str, desktop_id: str = "home") -> list[dict[str, Any]]:
+    return client.get(f"/api/placements/{desktop_id}?client={client_id}").get_json()["placements"]
 
 
 def _desktop_windows(client: FlaskClient) -> list[dict[str, Any]]:
@@ -261,12 +261,15 @@ def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_age
     _register_client(app, "c7", "home")
     requester = {"app": "chat", "marker": "agent-1"}
 
-    assert _op(client, "open", {"app": "files"}, requester).status_code == 412
+    # An open settles on nobody with two clients and no message: it lands unplaced (see the unplaced test); a
+    # per-client verb is refused outright.
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] is None
+    assert _op(client, "focus", {"window": "files"}, requester).status_code == 412
 
     shell.activity.append_message("c7", "home", "chat", "agent-1", "hello")
     attributed = _op(client, "open", {"app": "files"}, requester)
     assert attributed.status_code == 200 and attributed.get_json()["client_id"] == "c7"
-    assert _op(client, "open", {"app": "files"}, {"app": "chat", "marker": "agent-2"}).status_code == 412
+    assert _op(client, "open", {"app": "files"}, {"app": "chat", "marker": "agent-2"}).get_json()["client_id"] is None
     explicit = _op(client, "open", {"app": "files", "client": "c1"}, requester)
     assert explicit.status_code == 200 and explicit.get_json()["client_id"] == "c1"
     # A client id names a layout file, so one outside the id's alphabet is refused before any read.
@@ -878,7 +881,7 @@ def test_an_op_lands_with_no_browser_connected_on_a_recorded_client(client: Flas
     _record_client(app, "c1", "home")
     requester = _TERMINAL_REQUESTER
 
-    assert _op(client, "open", {"app": "files"}, requester).status_code == 412
+    assert _op(client, "focus", {"window": "files"}, requester).status_code == 412
     opened = _op(client, "open", {"app": "files", "client": "c1"}, requester)
     assert opened.status_code == 200
     assert [placement["window_id"] for placement in _placements(client, "c1")] == [opened.get_json()["window_id"]]
@@ -921,11 +924,59 @@ def test_shortcut_and_wallpaper_ops_edit_the_target_desktop(client: FlaskClient,
 
 
 def test_an_op_with_no_client_to_target_is_a_412(client: FlaskClient) -> None:
-    refused = _op(client, "open", {"app": "terminal"}, None)
+    refused = _op(client, "minimize", {"window": "terminal"}, None)
     assert refused.status_code == 412 and "--client" in refused.get_json()["detail"]
     assert _op(client, "open", {"app": "terminal", "client": "ghost"}, None).status_code == 404
     # An argument the op itself needs is reported before any client is looked for.
     assert _op(client, "load", {}, None).status_code == 400
+
+
+def test_an_open_with_no_client_to_target_lands_unplaced_on_the_desktop(client: FlaskClient, app: Flask) -> None:
+    """An agent with nobody connected still opens its window (desktop contracts.md section 8): it is written on
+    the named desktop, else the first, with no placement, so every client sees it minimized, and a second open at
+    the path answers the same window rather than another."""
+    _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+    work = client.post("/api/desktops", json={"name": "Work", "color": "#123456", "glyph": 1}).get_json()
+
+    opened = _op(client, "open", {"app": "terminal", "path": "/?session=terminal-1", "desktop": "Work"}, None)
+    again = _op(client, "open", {"app": "terminal", "path": "/?session=terminal-1", "desktop": "Work"}, None)
+    on_first = _op(client, "open", {"app": "files"}, None)
+
+    assert opened.status_code == 200
+    answer = opened.get_json()
+    assert (answer["client_id"], answer["layout"], answer["desktop_id"]) == (None, None, work["id"])
+    assert [window["id"] for window in answer["desktop"]["windows"]] == [answer["window_id"]]
+    assert again.get_json()["window_id"] == answer["window_id"]
+    assert on_first.get_json()["desktop_id"] == "home"
+    # Nobody's layout holds it: it reads as minimized for both clients, and neither was switched to Work.
+    assert _placements(client, "c1", work["id"]) == [] and _placements(client, "c2", work["id"]) == []
+    assert sorted(
+        (record["id"], record["active_desktop"]) for record in client.get("/api/clients").get_json()["clients"]
+    ) == [("c1", "home"), ("c2", "home")]
+
+
+def test_an_open_asked_for_minimized_places_the_window_out_of_sight_and_leaves_a_found_one_alone(
+    client: FlaskClient, app: Flask
+) -> None:
+    _register_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+
+    opened = _op(client, "open", {"app": "terminal", "path": "/?session=terminal-1", "minimized": True}, requester)
+    window_id = opened.get_json()["window_id"]
+    assert [(placement["window_id"], placement["is_minimized"]) for placement in _placements(client, "c1")] == [
+        (window_id, True)
+    ]
+
+    # Restored by hand, then found again by a minimized open: it stays where the user put it.
+    _op(client, "restore", {"window": window_id}, requester)
+    found = _op(client, "open", {"app": "terminal", "path": "/?session=terminal-1", "minimized": True}, requester)
+    assert found.get_json()["window_id"] == window_id
+    assert [placement["is_minimized"] for placement in _placements(client, "c1")] == [False]
+    # A plain open of the same path raises it as before.
+    _op(client, "minimize", {"window": window_id}, requester)
+    _op(client, "open", {"app": "terminal", "path": "/?session=terminal-1"}, requester)
+    assert [placement["is_minimized"] for placement in _placements(client, "c1")] == [False]
 
 
 def test_a_whole_app_refresh_reaches_every_client_and_needs_no_target(client: FlaskClient, app: Flask) -> None:

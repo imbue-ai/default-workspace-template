@@ -6,7 +6,7 @@ Subcommands:
     desktops                            List every desktop with its windows and shortcuts, and every client.
     list                                List every app (launch paths, running or not) with its windows, plus the desktops.
     load <desktop>                      Switch the target client onto a desktop.
-    open <app|url> [--path P | --launch ID --param k=v ...] [--if-present focus|new]
+    open <app|url> [--path P | --launch ID --param k=v ...] [--if-present focus|new] [--minimized]
                                         Open a window of an app (a bare https:// URL opens a new browser on that page).
     focus <window>                      Restore and raise a window.
     minimize <window>                   Put a window out of sight (its frame is kept).
@@ -58,10 +58,13 @@ that is its own chat), which is what ``self`` means and how the shell attributes
 client (the one that last messaged that chat). ``desktops`` and ``list`` read ``GET
 /api/inventory`` instead.
 
-Output for the read commands is YAML by default; pass ``--json`` for the raw structured
-object. Descriptions of what an op did go to stderr; stdout carries only the window id of an
-``open``, the structured output of the read commands, and the desktop's shortcuts as they stand
-after a ``shortcut`` write.
+The read commands print JSON, indented, in the shell's own order (windows in opening
+order). Descriptions of what an op did go to stderr; stdout carries only the window id of an
+``open``, the JSON of the read commands, and the desktop's shortcuts as they stand after a
+``shortcut`` write.
+
+Only the standard library is imported: inside a workspace the script runs under the system
+``python3``, which has none of the root venv's packages.
 
 Retired verbs (``split``, ``move``, ``rename``, ``delete``, ``stop``, ``start``,
 ``replace-url``, ``inspect``, ``where``, ``views``) and the old ``app:``, ``chat:``,
@@ -75,14 +78,12 @@ import os
 import re
 import sys
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, NoReturn
-
-import tomlkit
-import yaml
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -119,7 +120,7 @@ _RETIRED_VERBS = {
     "split": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h); 'open' puts a new window on the desktop",
     "move": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h)",
     "rename": "a title belongs to the app that owns the page: the chat's POST /api/chats/<id>/rename (the terminal offers no rename route yet)",
-    "delete": "close the window with 'close'; what backs the page is the app's to end (the chat's destroy route, the browser's DELETE /browsers/<name>; the terminal offers no delete route yet, so end its tmux session from a shell)",
+    "delete": "close the window with 'close'; a terminal or the browser is ended by its app once no window shows it, and a chat only by the chat's own destroy route",
     "stop": "the app's own route stops what backs a page (the chat's stop route, the browser's POST /browsers/<name>/stop)",
     "start": "the app's own route starts what backs a page (the browser's POST /browsers/<name>/start)",
     "replace-url": "'navigate <window> <path>' points a window at another path under its app",
@@ -278,12 +279,12 @@ def _read_registry_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     with open(path, "rb") as f:
-        doc = tomlkit.load(f)
-    rows: list[dict[str, Any]] = []
-    for app in doc.get("apps", []):
-        if hasattr(app, "get") and isinstance(app.get("name"), str) and app.get("name"):
-            rows.append(dict(app))
-    return rows
+        doc = tomllib.load(f)
+    return [
+        app
+        for app in doc.get("apps", [])
+        if isinstance(app, dict) and isinstance(app.get("name"), str) and app.get("name")
+    ]
 
 
 def _is_app_registered(name: str) -> bool:
@@ -385,13 +386,9 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
     return EXIT_ERROR
 
 
-def _emit_structured(data: Any, as_json: bool) -> None:
-    if as_json:
-        sys.stdout.write(json.dumps(data, indent=2))
-        sys.stdout.write("\n")
-    else:
-        # ``sort_keys=False`` keeps the server's intentional ordering (windows in opening order).
-        yaml.safe_dump(data, sys.stdout, sort_keys=False, default_flow_style=False)
+def _emit_structured(data: Any) -> None:
+    sys.stdout.write(json.dumps(data, indent=2))
+    sys.stdout.write("\n")
 
 
 # Targeting and answers
@@ -425,7 +422,10 @@ def _describe_window(answer: dict[str, Any], window_id: str | None) -> str:
 
 
 def _describe_target(answer: dict[str, Any]) -> str:
-    return f"desktop {answer.get('desktop_id')} for client {answer.get('client_id')}"
+    client_id = answer.get("client_id")
+    if client_id is None:
+        return f"desktop {answer.get('desktop_id')} for no client (minimized everywhere)"
+    return f"desktop {answer.get('desktop_id')} for client {client_id}"
 
 
 def _run_desktop_op(
@@ -546,7 +546,7 @@ def _cmd_context(args: argparse.Namespace) -> int:
     status, body = _post_layout("context", {})
     if status != 200 or not isinstance(body, dict):
         return _report_failure("context", status, body)
-    _emit_structured(body.get("clients", []), args.json)
+    _emit_structured(body.get("clients", []))
     return EXIT_OK
 
 
@@ -554,9 +554,7 @@ def _cmd_desktops(args: argparse.Namespace) -> int:
     inventory = _fetch_inventory()
     if inventory is None:
         return EXIT_ERROR
-    _emit_structured(
-        {"desktops": _listed_desktops(inventory), "clients": _listed_clients(inventory)}, args.json
-    )
+    _emit_structured({"desktops": _listed_desktops(inventory), "clients": _listed_clients(inventory)})
     return EXIT_OK
 
 
@@ -569,8 +567,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
             "apps": _listed_apps(inventory),
             "desktops": _listed_desktops(inventory),
             "clients": _listed_clients(inventory),
-        },
-        args.json,
+        }
     )
     return EXIT_OK
 
@@ -628,6 +625,8 @@ def _cmd_open(args: argparse.Namespace) -> int:
         return err
     if args.if_present:
         op_args["if_present"] = args.if_present
+    if args.minimized:
+        op_args["minimized"] = True
     op_args.update(_target_args(args.desktop, args.client))
     return _run_desktop_op(
         "open",
@@ -715,7 +714,7 @@ def _run_shortcut_write(op: str, op_args: dict[str, Any], done: str) -> int:
         op,
         op_args,
         lambda answer: f"{done} on {_describe_target(answer)}",
-        emit=lambda answer: _emit_structured(_shortcuts_document(answer), False),
+        emit=lambda answer: _emit_structured(_shortcuts_document(answer)),
     )
 
 
@@ -723,7 +722,7 @@ def _cmd_shortcuts(args: argparse.Namespace) -> int:
     status, body = _post_layout("shortcuts", _target_args(args.desktop, args.client))
     if status != 200 or not isinstance(body, dict):
         return _report_failure("shortcuts", status, body)
-    _emit_structured(_shortcuts_document(body), args.json)
+    _emit_structured(_shortcuts_document(body))
     return EXIT_OK
 
 
@@ -791,7 +790,10 @@ def _add_target_arguments(subparser: argparse.ArgumentParser) -> None:
 
 
 def _add_json_argument(subparser: argparse.ArgumentParser) -> None:
-    subparser.add_argument("--json", action="store_true", help="Emit JSON instead of YAML")
+    # CLEANUP: drop --json once every workspace runs a release where JSON is the only output
+    # (it became so in September 2026); it is accepted so instructions written for the YAML
+    # default keep working.
+    subparser.add_argument("--json", action="store_true", help="Accepted for compatibility: the output is JSON either way")
 
 
 def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str) -> None:
@@ -853,6 +855,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=_IF_PRESENT_CHOICES,
         default=None,
         help="What to do about a window of the app already at the path: focus it (the default) or open another.",
+    )
+    p_open.add_argument(
+        "--minimized",
+        action="store_true",
+        help="Place a window this open creates minimized, so it does not land over what the user is doing; "
+        "a window found already at the path is left as it is.",
     )
     _add_target_arguments(p_open)
     p_open.set_defaults(func=_cmd_open)

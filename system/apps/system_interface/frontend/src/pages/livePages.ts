@@ -3,8 +3,9 @@
  * by window id, created when the window is first shown in this client and destroyed only when
  * the window closes or its desktop is deleted. A page is never re-parented (that reloads it):
  * hidden pages are ``display: none``, and the reconcile step positions each page over its
- * window's content box, in the same stacking context as the window chrome so a window's edges
- * and shield stay clickable over a cross-origin page. Every page but the focused one is inert
+ * window's content box (``placePage`` re-places one page per pointer move of a drag or resize,
+ * with no redraw), in the same stacking context as the window chrome so a window's edges and
+ * shield stay clickable over a cross-origin page. Every page but the focused one is inert
  * (``pointer-events: none``), and every page is inert while a gesture runs.
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
@@ -176,6 +177,15 @@ export class LivePagesLayer implements PageDriver {
     if (page !== undefined) sendToChildFrame(page.frame, SHELL_CLOSE_REQUEST);
   }
 
+  /** Put one shown page over its window's content box as it is now, leaving its stacking and
+   *  interactivity alone: the per-move step of a drag or resize, which redraws nothing. */
+  placePage(windowId: string): void {
+    const page = this.pages.get(windowId);
+    if (page === undefined || page.wrapper.style.display === "none") return;
+    const box = this.contentBox(windowId);
+    if (box !== null) this.position(page, box);
+  }
+
   /**
    * Put every page where its window is. Run after each redraw, once the window chrome is in the
    * DOM to measure: pages of the active desktop's shown windows are created (unless the window
@@ -344,12 +354,17 @@ export class LivePagesLayer implements PageDriver {
     page.wrapper.remove();
   }
 
-  private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
+  private position(page: LivePage, box: HostRect): void {
     const style = page.wrapper.style;
     style.left = `${box.left}px`;
     style.top = `${box.top}px`;
     style.width = `${box.width}px`;
     style.height = `${box.height}px`;
+  }
+
+  private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
+    this.position(page, box);
+    const style = page.wrapper.style;
     // Interleaved with the window chrome: chrome at 2i+2 sits over its own page at 2i+1 and over
     // every lower window's page and chrome.
     style.zIndex = String(2 * stackIndex + 1);

@@ -16,9 +16,9 @@ const shortcut: DesktopShortcut = {
 };
 
 describe("shortcutLabel", () => {
-  it("reads the app's name while focusing and the launch path's label while always creating", () => {
+  it("reads the app's name in either mode, and the app name when the app is unknown", () => {
     expect(shortcutLabel(shortcut, docs)).toBe("Docs");
-    expect(shortcutLabel({ ...shortcut, mode: "new" }, docs)).toBe("New docs");
+    expect(shortcutLabel({ ...shortcut, mode: "new" }, docs)).toBe("Docs");
     expect(shortcutLabel(shortcut, undefined)).toBe("docs");
   });
 });

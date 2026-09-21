@@ -33,6 +33,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `default_shortcut` | table | no | absent | `{launch = "<id>", mode = "focus" \| "new"}`; `launch` names a declared launch path, or `open` when the app declares none. |
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
 | `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
+| `window_closed_path` | string | no | absent | A path shaped like a launch path; the shell posts every closed window of the app there (section 5.3), for an app whose resources live as long as their windows (`docs/system/specs/window-bound-resources.md`). |
 | `references`, `scope`, `wiring`, `handles` | | | | Unchanged. |
 
 `instances`, `instances_url`, and `actions` are removed; a manifest that carries them fails to load.
@@ -43,18 +44,18 @@ Built-in manifests:
 | App | `critical` | `priority` | `launcher_rank` | `default_shortcut` | `launch_paths` |
 |---|---|---|---|---|---|
 | `system_interface` | true | `system_interface` | | none | none; `internal = true` |
-| `chat` | true | `chat` | 10 | `{launch = "new", mode = "new"}` | `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
-| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "focus"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
+| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
+| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
-| `files` | false | `files` | 20 | `{launch = "new", mode = "focus"}` | `new` ("New File Viewer", `/`, params `path` optional) |
-| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("New Browser", `/new`, params `url` optional) |
+| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, params `path` optional) |
+| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Open Browser", `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
 
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), `launcher_rank`, and `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default) from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -168,6 +169,7 @@ An open with `is_new` writes the requesting client's placement (section 10, casc
 An open answered with `is_new: false` restores and raises the existing window in the requesting client's layout, writes it, and broadcasts `placements_updated` for that client.
 A location report on a settling window clears `is_settling`.
 A close drops the window from every layout file of the desktop and broadcasts `desktops_updated` and one `placements_updated` per rewritten layout.
+After that, when the window's app registered a `window_closed_path`, the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's `url` plus that path from a thread of its own, with a 2 second timeout, and neither waits for nor acts on the answer; a deleted desktop's windows are posted the same way.
 A location that changes nothing writes and broadcasts nothing.
 
 ### 5.4 Placements
@@ -219,7 +221,7 @@ Outbound:
 
 ## 7. The app contract (`app_contract.js`)
 
-Served at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`.
+Built once, into the shell's static output, and served by every app at `/_static/app_contract.js` from its own origin (the shell serves it too, with `Access-Control-Allow-Origin: *`): a page imports it as a module, and a module import is a fetch without cookies, which the desktop client's forwarder and the share gateway refuse across origins.
 Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), disconnect()}`.
 `openPath` sends `shell:open` below.
 `capabilities` is `{navigation: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect.
@@ -247,7 +249,7 @@ The shell and the minds chrome accept messages only from frames they created, so
 
 `POST /api/layout/broadcast` with `{"op", "args", "requester"}`, loopback only.
 `requester` is `{"app", "marker"}` (`{"app": "chat", "marker": "<chat-id>"}` for a chat's agent, from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), or `null`; `self` in a window argument names the window of `app` on the target client's active desktop whose path, as the target client sees it (its own stored path for an independent window), carries `marker` as a path segment or a query value.
-Targeting: `args.client`, else the client that most recently messaged the requester, else the one connected client, else `412` listing the connected clients.
+Targeting: `args.client`, else the client that most recently messaged the requester, else the one connected client, else `412` listing the connected clients; `open` alone, with nothing settling the client, writes the window on `args.desktop` (else the first desktop) with no placement instead, so it reads as minimized for every client, and answers with `client_id` and `layout` null.
 `args.desktop` names the desktop an op edits by name or id and switches the target client to it.
 
 | Op | Args | Effect |
@@ -255,7 +257,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `context` | | read-only; every client's recent activity (`{"ok", "clients"}`) |
 | `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
-| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?` | open a window at `path`, else at the launch path (`launch`, else the app's `default_shortcut.launch`, else its first) with `params` as the query string; a window of the app at that path is focused unless `if_present` is `new`; answers the window id |
+| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the launch path (`launch`, else the app's `default_shortcut.launch`, else its first) with `params` as the query string; a window of the app at that path is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
 | `place` | `window`, `zone` (`left`, `right`, `maximized`) or `frame` (`x,y,width,height`) | set the state, or the frame with state `NORMAL` |
@@ -322,8 +324,13 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-floating-entry-size` | `56px` | | | yes |
 | `--desk-floating-entry-inset-x` | `16px` | | | yes |
 | `--desk-floating-entry-inset-y` | `12px` | | | yes |
+| `--desk-resize-edge` | `8px` | | | no |
+| `--desk-resize-corner` | `16px` | | | no |
+| `--desk-resize-overhang` | `3px` | | | no |
+| `--desk-resize-edge-inset` | `calc(var(--desk-resize-corner) - var(--desk-resize-overhang))` | | | no |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
+The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.
 Colours, type roles, radii, and elevation come from `base.css` and are not repeated here.
 
 ## 12. Selectors shared with tests
@@ -334,6 +341,7 @@ Data attributes, never classes, so restyling cannot break a test:
 |---|---|
 | `data-desktop-id` | the backdrop root |
 | `data-window-id`, `data-window-state`, `data-minimized` | each window's root |
+| `data-window-frame`, `data-window-content` | the window's clipping frame, and the content box its page is laid over |
 | `data-drag-handle`, `data-resize-edge="n\|s\|e\|w\|ne\|nw\|se\|sw"` | title bar, resize edges |
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |

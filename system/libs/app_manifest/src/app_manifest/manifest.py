@@ -158,6 +158,11 @@ class AppManifest(FrozenModel):
         "an app without one follows every ranked app",
     )
     pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when it declares one")
+    window_closed_path: LaunchPathValue | None = Field(
+        default=None,
+        description="The path under the app's origin the shell posts to when a window of the app closes; "
+        "an app whose resources live as long as their windows sweeps on it",
+    )
     references: tuple[AppReference, ...] = Field(
         default=(), description="The artifacts outside the app's directory that belong to it"
     )

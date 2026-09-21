@@ -8,10 +8,13 @@ like every Python app with a manifest):
 - `terminal` (`terminal-app`) is the terminal origin. It serves the **wrapper pages**
   on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
   pty origin, reports its path and the session's title to the shell through the app
-  contract (imported from the shell origin), re-points the frame on `shell:navigate`,
+  contract (the shell's built module, served from this origin at
+  `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
   and passes the shell's `ttyd-focus` grant on to ttyd; `/new[?workdir=]` allocates
   the lowest free `terminal-N`, creates its tmux session, and redirects to its page;
-  `/api/sessions/<name>` is what the page refreshes from, and `/api/health` the probe.
+  `/api/sessions/<name>` is what the page refreshes from, `/api/health` the probe, and
+  `POST /api/window-closed` (the manifest's `window_closed_path`) where the shell
+  posts a closed window of the terminal so the window sweep below runs at once.
   It appends the `server_registered` discovery event to
   `$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl` (`discovery.py`), recreates the
   remembered sessions, registers `app.toml` and 7681 through
@@ -71,9 +74,9 @@ session recreated for it starts in the default.
   no longer has (a container restart clears the server), adopts a live one it
   finds by id or by name, and leaves alone a terminal the user stopped
   (`is_stopped` in the store).
-- The source also carries the terminal's own verbs, which no route offers yet:
-  delete kills the live session by its id, forgets the record, and drops the
-  id file, refusing an `mngr-` session; rename changes only the title (the name and the tmux session name
+- The source also carries the terminal's own verbs: delete (what the window
+  sweep calls) kills the live session by its id, forgets the record, and drops
+  the id file, refusing an `mngr-` session; rename changes only the title (the name and the tmux session name
   stay; a title that canonicalizes to nothing under
   `app_manifest.primitives.canonical_name_from_title` is refused, and one whose
   canonical form collides with another terminal's title, case-insensitively, is
@@ -85,6 +88,21 @@ session recreated for it starts in the default.
 
 Session switching inside tmux is not reported to the shell: a window shows the
 session in its URL, and a reload reattaches to that session.
+
+## A terminal lives as long as a window shows it
+
+`window_sweep.py` (`WindowSweeper`) reads the shell's desktops
+(`GET /api/desktops` on `MINDS_WORKSPACE_SERVER_URL`, through
+`app_manifest.shell_windows`) and hands the terminal's window paths to
+`TmuxSessionSource.sweep_windows`: a remembered terminal some window shows is
+marked window-seen in the store (`is_window_seen`), and one that was marked and
+no window shows any more is deleted. A terminal no window has ever shown (a
+hand-made session, one an agent opened with nobody watching, a window still
+settling at `/new`) is never collected, and a shell that cannot be read is a
+skipped sweep, never an empty desktop. The sweep runs every 90 seconds and at
+once whenever the shell posts a closed window to `/api/window-closed`; the post
+is a hint only, and the sweep reads the shell for the truth. The design is
+`docs/system/specs/window-bound-resources.md`.
 
 The store, `data/.apps/terminal/instances.json` (`store.py`; app data, beside
 the other apps' stored records, while `data/.state/terminal/` holds only the

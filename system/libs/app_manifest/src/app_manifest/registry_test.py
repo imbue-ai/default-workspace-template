@@ -42,6 +42,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.launch_paths == ()
     assert row.launcher_rank is None
     assert row.pin is None
+    assert row.window_closed_path is None
 
 
 def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
@@ -60,6 +61,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"]}, {id = "recent", label = "Recent", path = "/recent"}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
+        'window_closed_path = "/api/window-closed"\n'
     )
 
     rows = read_registry(registry)
@@ -67,6 +69,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert len(rows) == 1
     row = rows[0]
     assert row.icon == APP_ICON_MARKUP
+    assert row.window_closed_path == "/api/window-closed"
     assert row.display_name == "File Viewer"
     assert row.priority == "files"
     assert row.default_shortcut is not None

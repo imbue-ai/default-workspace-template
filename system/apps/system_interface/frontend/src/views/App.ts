@@ -10,7 +10,7 @@
 import m from "mithril";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { fetchWallpapers } from "../model/api";
-import { MESSAGE_PARAM, launchPathOf, launchTilesOf, promptTargetOfTiles } from "../model/launch";
+import { MESSAGE_PARAM, defaultShortcutMode, launchPathOf, launchTilesOf, promptTargetOfTiles } from "../model/launch";
 import type {
   AppRecord,
   AvatarDesign,
@@ -39,7 +39,7 @@ import {
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../model/TemplateCatalog";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
-import { LivePagesLayer } from "../pages/livePages";
+import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
@@ -48,13 +48,14 @@ import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
 import type { LauncherWindowRow } from "./LauncherOverlay";
 import { FloatingCard, Menu, anchorForEvent, anchorForPoint } from "./Menu";
 import type { MenuAnchor, MenuEntry } from "./Menu";
+import { applyRectStyle } from "./pixelStyle";
 import { RunningAppPopover } from "./RunningAppsWidget";
+import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import { taskbarEntryMenuEntries, windowMenuEntries } from "./WindowMenu";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
-import { shortcutLabel } from "./ShortcutIcon";
 
 type OpenMenu =
   | { readonly kind: "window"; readonly windowId: string; readonly anchor: MenuAnchor }
@@ -130,6 +131,22 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
+  /** Paint a window as the store now has it, straight onto the DOM: its rectangle onto its element, its
+   *  page over the content box that just moved, and the snap preview shown or hidden. Per pointer move
+   *  of a drag or resize, with no redraw (one per move would re-render the whole desktop and reposition
+   *  every page), and once more when the gesture ends or is cancelled: a redraw diffs against the last
+   *  render rather than the DOM and writes nothing it finds equal, so the DOM must already be at what
+   *  the render answers, which the store's ``windowRect`` and ``snapPreviewRect`` are at every point. */
+  function paintWindow(current: DesktopStore, windowId: string): void {
+    const area = backdropArea;
+    if (area === null) return;
+    const element = area.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
+    if (element !== null) applyRectStyle(element, current.windowRect(windowId));
+    pages?.placePage(windowId);
+    const preview = area.querySelector<HTMLElement>(`[${SNAP_PREVIEW_ATTRIBUTE}]`);
+    if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
+  }
+
   /** The gesture source measures points against ``root`` (the whole layout, so the taskbar's long presses
    *  count too); the store wants the backdrop's pixels, which differ by whatever sits above the backdrop. */
   function gestureListener(current: DesktopStore, root: HTMLElement): GestureListener {
@@ -187,9 +204,11 @@ export function App(): m.Component<AppAttrs> {
         switch (binding.kind) {
           case "window-move":
             current.updateWindowMove(point);
+            paintWindow(current, binding.windowId);
             return;
           case "window-resize":
             current.updateWindowResize(delta);
+            paintWindow(current, binding.windowId);
             return;
           case "shortcut":
             current.updateShortcutDrag(point);
@@ -206,9 +225,11 @@ export function App(): m.Component<AppAttrs> {
         switch (binding.kind) {
           case "window-move":
             current.endWindowMove(point);
+            paintWindow(current, binding.windowId);
             break;
           case "window-resize":
             current.endWindowResize(delta);
+            paintWindow(current, binding.windowId);
             break;
           case "shortcut":
             current.endShortcutDrag(point);
@@ -221,8 +242,9 @@ export function App(): m.Component<AppAttrs> {
         }
         pages?.setGestureActive(false);
       },
-      onCancel: () => {
+      onCancel: (binding) => {
         current.cancelGesture();
+        if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         pages?.setGestureActive(false);
       },
       onLongPress: (binding, client) => {
@@ -347,7 +369,7 @@ export function App(): m.Component<AppAttrs> {
     entries.push(
       {
         key: "change-mode",
-        label: `Change shortcut to "${shortcutLabel({ ...shortcut, mode: otherMode }, app)}"`,
+        label: otherMode === "new" ? "Always open a new window" : "Focus the last window instead",
         run: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
       "divider",
@@ -458,7 +480,7 @@ export function App(): m.Component<AppAttrs> {
           void current.openLaunchPath(app.name, launchPath.id, {});
         },
         onAddShortcut: (launchPath: LaunchPath) => {
-          void current.addShortcut(app.name, launchPath.id, "focus");
+          void current.addShortcut(app.name, launchPath.id, defaultShortcutMode(app, launchPath));
         },
       }),
     );

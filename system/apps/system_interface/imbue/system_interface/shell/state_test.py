@@ -5,16 +5,23 @@ from pathlib import Path
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
+from app_manifest.primitives import AppName
+
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
+from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import StoredWindowPath
+from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
+from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PATH
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import write_two_app_registry
@@ -59,3 +66,60 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
         )
     finally:
         shell.stop()
+
+
+def _shell_recording_hints(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, hints: list[WindowClosedHint]
+) -> ShellState:
+    registry_path = write_two_app_registry(tmp_path)
+    built = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    return built.model_copy_update(to_update(built.field_ref().close_hint_poster, hints.append))
+
+
+def _open(shell: ShellState, desktop_id: str, app: str, path: str) -> WindowId:
+    request = WindowOpenRequest(app=AppName(app), path=WindowPath(path), client_id=ClientId("laptop"))
+    return shell.open_window(desktop_id, request, is_minimized=False).window.id
+
+
+def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    hints: list[WindowClosedHint] = []
+    shell = _shell_recording_hints(tmp_path, broadcaster, hints)
+    (home,) = shell.list_desktops()
+    terminal_window = _open(shell, home.id, "terminal", "/?session=terminal-1")
+    files_window = _open(shell, home.id, "files", "/notes/")
+
+    assert shell.close_window(home.id, terminal_window) is True
+    assert hints == [
+        WindowClosedHint(
+            app="terminal",
+            url=f"{TEST_TERMINAL_URL}{TEST_TERMINAL_WINDOW_CLOSED_PATH}",
+            body={"path": "/?session=terminal-1", "window_id": str(terminal_window), "desktop_id": "home"},
+        )
+    ]
+    # A second close of the same window is idempotent and tells nobody; the files row names no path.
+    assert shell.close_window(home.id, terminal_window) is False
+    assert shell.close_window(home.id, files_window) is True
+    assert len(hints) == 1
+
+
+def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    hints: list[WindowClosedHint] = []
+    shell = _shell_recording_hints(tmp_path, broadcaster, hints)
+    shell.list_desktops()
+    work = shell.desktops.create_desktop("Work", "#123456", 1, (), ())
+    first = _open(shell, work.id, "terminal", "/?session=terminal-1")
+    second = _open(shell, work.id, "terminal", "/?session=terminal-2")
+    _open(shell, work.id, "files", "/")
+
+    shell.delete_desktop(work.id)
+
+    assert [(hint.body["window_id"], hint.body["desktop_id"]) for hint in hints] == [
+        (str(first), "work"),
+        (str(second), "work"),
+    ]

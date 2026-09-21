@@ -1,8 +1,10 @@
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from app_manifest.registry import ENV_APPS_FILE
+from app_manifest.testing import ShellStub
 
 # system/libs/app_manifest/src/app_manifest/conftest.py -> the repository root, the cwd the
 # registration script is resolved against.
@@ -17,3 +19,13 @@ def registration_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
     registry = tmp_path / "apps.toml"
     monkeypatch.setenv(ENV_APPS_FILE, str(registry))
     return registry
+
+
+@pytest.fixture
+def shell_stub() -> Iterator[ShellStub]:
+    stub = ShellStub()
+    stub.start()
+    try:
+        yield stub
+    finally:
+        stub.close()

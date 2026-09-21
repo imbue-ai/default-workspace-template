@@ -14,6 +14,7 @@ from typing import Final
 from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
 from flask import Flask
+from flask import request
 
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import Desktop
@@ -36,6 +37,8 @@ TEST_NOW: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
 TEST_TERMINAL_URL: Final[str] = "http://localhost:7681"
 # The URL of the ``files`` row of ``write_two_app_registry``, which declares none.
 TEST_FILES_URL: Final[str] = "http://localhost:7000"
+# Where the ``terminal`` row of ``write_two_app_registry`` asks to be told a window of its closed.
+TEST_TERMINAL_WINDOW_CLOSED_PATH: Final[str] = "/api/window-closed"
 
 
 def registry_row_toml(
@@ -53,6 +56,7 @@ def registry_row_toml(
     launch_params: Mapping[str, Sequence[str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
+    window_closed_path: str | None = None,
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
     ``default_shortcut`` is ``(launch, mode)``."""
@@ -76,6 +80,8 @@ def registry_row_toml(
         lines.append(
             f'pin = {{ path = "{path}", style = "{style}", scope = "{scope}", default_mode = "{default_mode}" }}'
         )
+    if window_closed_path is not None:
+        lines.append(f'window_closed_path = "{window_closed_path}"')
     for launch_id, launch_label, launch_path in launch_paths:
         lines.append("[[apps.launch_paths]]")
         lines.append(f'id = "{launch_id}"')
@@ -104,6 +110,7 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
             program="terminal",
             default_shortcut=("new", "new"),
             launch_paths=[("new", "New terminal", "/new")],
+            window_closed_path=TEST_TERMINAL_WINDOW_CLOSED_PATH,
         ),
         registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcut=("open", "focus")),
         *extra_rows,
@@ -151,6 +158,18 @@ def build_inventory(
     inventory.reload_registry()
     inventory.refresh_liveness()
     return inventory
+
+
+def recording_app(received: list[dict[str, Any]]) -> Flask:
+    """An app that appends every JSON body posted to ``/api/window-closed`` to ``received`` and answers 204."""
+    app = Flask("recording")
+
+    def take() -> tuple[str, int]:
+        received.append(request.get_json(force=True))
+        return "", 204
+
+    app.add_url_rule(TEST_TERMINAL_WINDOW_CLOSED_PATH, view_func=take, methods=["POST"], endpoint="take")
+    return app
 
 
 def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:

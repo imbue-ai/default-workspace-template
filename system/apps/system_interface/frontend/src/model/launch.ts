@@ -5,7 +5,7 @@
  * declare a ``launcher_rank``.
  */
 
-import type { AppRecord, LaunchPath } from "./records";
+import type { AppRecord, LaunchPath, ShortcutMode } from "./records";
 
 /** One "Open new" tile: an app and the launch path it runs. */
 export interface LaunchTile {
@@ -46,6 +46,13 @@ export function promptTargetOfTiles(tiles: readonly LaunchTile[]): LaunchTile | 
 /** The launch path of ``app`` with ``launchId``, or null when the app declares none by that id. */
 export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | null {
   return app.launch_paths.find((candidate) => candidate.id === launchId) ?? null;
+}
+
+/** The mode a shortcut added for ``launchPath`` starts in: the app's declared default when this is its
+ *  default launch path, else ``new`` (a shortcut is "a new window of this app" unless the app says otherwise). */
+export function defaultShortcutMode(app: AppRecord, launchPath: LaunchPath): ShortcutMode {
+  const declared = app.default_shortcut;
+  return declared !== null && declared.launch === launchPath.id ? declared.mode : "new";
 }
 
 /** The path a launch path opens at, with ``params`` as its query string (``/new?message=...``). */

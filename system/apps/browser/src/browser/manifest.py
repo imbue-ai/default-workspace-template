@@ -51,6 +51,9 @@ class ManifestEntry(MutableModel):
     # A stopped browser is restored as stopped (registered with its tabs, no Chromium) rather
     # than relaunched; an entry without the flag is a browser to relaunch.
     stopped: bool = False
+    # Whether a desktop window ever showed this browser (the window sweep stops only such a
+    # browser once no window shows it); an entry without the flag was never shown.
+    window_seen: bool = False
 
 
 class Manifest(MutableModel):

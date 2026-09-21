@@ -30,6 +30,18 @@ def _posted_ops(fake_shell: Any) -> list[tuple[str, dict[str, Any]]]:
     return [(body["op"], body["args"]) for path, body in fake_shell.posted if path == "/api/layout/broadcast"]
 
 
+def _json_documents(text: str) -> list[Any]:
+    """Every JSON document in ``text``, one per read or shortcut write that printed on stdout."""
+    decoder = json.JSONDecoder()
+    documents: list[Any] = []
+    rest = text.lstrip()
+    while rest:
+        document, end = decoder.raw_decode(rest)
+        documents.append(document)
+        rest = rest[end:].lstrip()
+    return documents
+
+
 # naming apps and windows
 
 
@@ -137,12 +149,28 @@ def test_open_of_a_launch_path_or_a_url_posts_the_launch_and_its_params(
     assert layout.main(["open", "terminal", "--launch", "new", "--param", "workdir=/data", "--if-present", "new"]) == 0
     assert layout.main(["open", "https://example.com/docs"]) == 0
     assert layout.main(["open", "chat"]) == 0
+    assert layout.main(["open", "chat", "--minimized"]) == 0
     assert _posted_ops(fake_shell) == [
         ("open", {"app": "terminal", "launch": "new", "params": {"workdir": "/data"}, "if_present": "new"}),
         ("open", {"app": "browser", "launch": "new", "params": {"url": "https://example.com/docs"}}),
         ("open", {"app": "chat"}),
+        ("open", {"app": "chat", "minimized": True}),
     ]
-    assert capsys.readouterr().out == f"{_CHAT_WINDOW['id']}\n" * 3
+    assert capsys.readouterr().out == f"{_CHAT_WINDOW['id']}\n" * 4
+
+
+def test_open_with_no_client_says_the_window_landed_for_nobody(
+    registry: Path, fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_shell.op_answer = {
+        **desktop_answer(windows=[_CHAT_WINDOW], window_id=_CHAT_WINDOW["id"]),
+        "client_id": None,
+        "layout": None,
+    }
+    assert layout.main(["open", "chat"]) == layout.EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out == f"{_CHAT_WINDOW['id']}\n"
+    assert captured.err.endswith("on desktop home for no client (minimized everywhere)\n")
 
 
 def test_open_arguments_are_refused_where_they_make_no_sense(
@@ -246,7 +274,7 @@ def test_refresh_reaches_one_window_or_every_page_of_an_app(fake_shell: Any, cap
 def test_context_and_load_ride_the_op_route(fake_shell: Any, capsys: pytest.CaptureFixture[str]) -> None:
     fake_shell.context_clients = [{"client_id": "c1", "active_desktop": "home", "is_connected": True}]
     assert layout.main(["context"]) == 0
-    assert "client_id: c1" in capsys.readouterr().out
+    assert json.loads(capsys.readouterr().out) == fake_shell.context_clients
     fake_shell.op_answer = desktop_answer(desktop_id="research")
     assert layout.main(["load", "Research", "--client", "c1"]) == 0
     assert "switched client c1 onto desktop research" in capsys.readouterr().err
@@ -350,7 +378,7 @@ def test_shortcut_verbs_post_to_the_desktop_and_print_its_shortcuts(fake_shell: 
     assert "moved shortcut docs open to cell 2,0" in captured.err
     assert "removed shortcut docs open" in captured.err
     assert "set the wallpaper to bundled dunes" in captured.err and "cleared the wallpaper" in captured.err
-    assert captured.out.count("shortcuts:") == 3
+    assert [document["desktop"] for document in _json_documents(captured.out)] == ["research"] * 3
     with pytest.raises(SystemExit):
         layout.main(["wallpaper", "sky"])
     with pytest.raises(SystemExit):

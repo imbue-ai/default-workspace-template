@@ -23,8 +23,8 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 and copies its static fields onto the row: ``display_name``, ``critical``,
 ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
-and the names of the params), and ``pin`` (path, and style, scope, and
-default_mode when given); the icon is read from the file the
+and the names of the params), ``pin`` (path, and style, scope, and
+default_mode when given), and ``window_closed_path``; the icon is read from the file the
 manifest names, relative to the manifest. Every manifest field is authoritative
 on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -144,7 +144,7 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
 # structured keys (``default_shortcut``, ``launch_paths``, ``pin``) are handled
 # on their own. ``program`` defaults to the name when the manifest omits it.
-_MANIFEST_STRING_KEYS = ("display_name", "priority", "program")
+_MANIFEST_STRING_KEYS = ("display_name", "priority", "program", "window_closed_path")
 _MANIFEST_BOOL_KEYS = ("critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
@@ -170,6 +170,7 @@ _MANIFEST_OWNED_KEYS = (
     "actions",
     "launch_paths",
     "pin",
+    "window_closed_path",
 )
 
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
@@ -768,7 +769,7 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, launcher_rank, default_shortcut, "
-            "launch_paths, pin) are copied onto the row on every call."
+            "launch_paths, pin, window_closed_path) are copied onto the row on every call."
         ),
     )
     parser.add_argument(

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from app_manifest.manifest import load_manifest
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from browser import runner
 from browser import session as bsession
 from browser.primitives import APP_NAME
@@ -18,18 +19,35 @@ def test_the_daemon_names_itself_after_its_manifest() -> None:
     manifest = load_manifest(_APP_MANIFEST_PATH)
     assert manifest.name == APP_NAME
     assert [launch_path.path for launch_path in manifest.launch_paths] == [runner.NEW_PATH]
+    assert manifest.window_closed_path == runner.WINDOW_CLOSED_PATH
 
 
-def test_the_viewer_page_carries_the_shells_origin_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-a1b2"\n')
-    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
-
+def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
     response = runner.application.test_client().get("/")
 
     assert response.status_code == 200
-    assert '<meta name="workspace-shell-label" content="system_interface-a1b2">' in response.text
+    assert 'import("/_static/app_contract.js")' in response.text
     assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_the_app_contract_module_is_the_shells_build_output_served_from_this_origin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The path is relative to the repo root every supervised program runs from.
+    monkeypatch.chdir(tmp_path)
+    missing = runner.application.test_client().get("/_static/app_contract.js")
+    assert missing.status_code == 404
+    assert "not built" in missing.get_json()["error"]
+
+    source = "export function connectToShell() {}\n"
+    built = tmp_path / SHELL_APP_CONTRACT_PATH
+    built.parent.mkdir(parents=True)
+    built.write_text(source)
+    served = runner.application.test_client().get("/_static/app_contract.js")
+
+    assert served.status_code == 200
+    assert served.mimetype == "text/javascript"
+    assert served.text == source
 
 
 def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -59,3 +77,39 @@ def test_new_refuses_a_start_page_that_is_not_http(monkeypatch: pytest.MonkeyPat
 
     assert response.status_code == 400
     assert "url" in response.get_json()["error"]
+
+
+def test_new_answers_the_browser_already_up_without_another_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    launched: list[bsession.LiveBrowser] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager, "_spawn_launch", lambda self, session, **k: launched.append(session)
+    )
+    up = bsession.LiveBrowser(browser_id="browser-1")
+    up._lifecycle = "running"
+    runner.manager._browsers["browser-1"] = up
+
+    redirected = runner.application.test_client().get("/new", follow_redirects=False)
+    created = runner.application.test_client().post("/browsers", json={})
+
+    assert redirected.status_code == 302, redirected.text
+    assert redirected.headers["Location"] == "/?session=browser-1"
+    assert created.get_json() == {"name": "browser-1"}
+    assert launched == []
+
+
+def test_a_window_closed_post_sweeps_at_once_and_answers_no_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    swept: list[str] = []
+
+    async def fake_sweep(self: bsession.BrowserSessionManager, shell_url: str) -> list[str] | None:
+        swept.append(shell_url)
+        return []
+
+    monkeypatch.setattr(bsession.BrowserSessionManager, "sweep_from_shell", fake_sweep)
+
+    response = runner.application.test_client().post(
+        "/api/window-closed", json={"path": "/?session=browser-1", "window_id": "win-1", "desktop_id": "home"}
+    )
+
+    assert response.status_code == 204
+    assert len(swept) == 1

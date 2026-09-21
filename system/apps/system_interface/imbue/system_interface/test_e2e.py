@@ -1093,7 +1093,7 @@ def test_shortcut_menu_changes_mode_and_removes_and_the_tray_adds_one_back(e2e_s
         poll_interval=0.1,
         error_message="the mode never flipped",
     )
-    expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_LAUNCH_LABEL)
+    expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
 
     shortcut.click(button="right")
     page.locator('[data-menu-item="remove"]').click()

@@ -39,6 +39,7 @@ def _full_manifest_data() -> dict[str, object]:
         ],
         "launcher_rank": 20,
         "pin": {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"},
+        "window_closed_path": "/api/window-closed",
     }
 
 
@@ -61,6 +62,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.pin.style is PinStyle.AVATAR
     assert manifest.pin.scope is LocationScope.INDEPENDENT
     assert manifest.pin.default_mode is EntryMode.FLOATING
+    assert manifest.window_closed_path == "/api/window-closed"
 
 
 def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> None:
@@ -92,6 +94,11 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
 def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
     with pytest.raises(ValidationError, match=field):
         AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
+
+
+def test_window_closed_path_follows_the_launch_path_rule() -> None:
+    with pytest.raises(ValidationError, match="no query string"):
+        AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})
 
 
 def test_duplicate_launch_path_ids_are_rejected() -> None:
@@ -242,6 +249,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.launch_paths == ()
     assert manifest.launcher_rank is None
     assert manifest.pin is None
+    assert manifest.window_closed_path is None
     assert manifest.handles == {}
 
 

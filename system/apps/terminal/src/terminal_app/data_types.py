@@ -50,6 +50,10 @@ class TerminalSessionRecord(FrozenModel):
         default=False,
         description="Whether the user stopped this terminal, so its session is not recreated at startup",
     )
+    is_window_seen: bool = Field(
+        default=False,
+        description="Whether a desktop window has shown this terminal; only such a terminal is collected once none does",
+    )
 
 
 class TerminalListing(FrozenModel):

@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from app_manifest.primitives import canonical_name_from_title, is_name_conflict
+from app_manifest.shell_windows import window_query_value
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -18,6 +19,7 @@ from terminal_app.errors import (
 )
 from terminal_app.interfaces import TerminalSessionStoreInterface, TmuxInterface
 from terminal_app.primitives import (
+    SESSION_QUERY_KEY,
     TerminalTitle,
     TmuxSessionId,
     TmuxSessionName,
@@ -249,6 +251,28 @@ class TmuxSessionSource(MutableModel):
                 self.tmux.kill_session(TmuxSessionId(live.session_id))
             self.store.remove_record(name)
             self._remove_session_id_file(name)
+
+    def sweep_windows(self, window_paths: Sequence[str]) -> list[TmuxSessionName]:
+        """Mark every remembered terminal a window shows, and delete the ones a window showed once and none shows now.
+
+        ``window_paths`` is what the shell reports for this app; a path naming no session (a window still
+        settling at ``/new``) shows nothing. A terminal no window has ever shown is left alone, so a session
+        made by hand or opened by an agent with nobody watching outlives any sweep. Answers what was collected.
+        """
+        shown_names = {
+            name for path in window_paths if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None
+        }
+        collected: list[TmuxSessionName] = []
+        with self._lock:
+            for record in self.store.list_records():
+                if record.name in shown_names:
+                    if not record.is_window_seen:
+                        self.store.save_record(record.model_copy_update(to_update(record.field_ref().is_window_seen, True)))
+                elif record.is_window_seen:
+                    collected.append(record.name)
+        for name in collected:
+            self.delete_terminal(name)
+        return collected
 
     def rename_terminal(self, name: TmuxSessionName, title: TerminalTitle) -> TerminalListing:
         """Retitle the terminal; its name and its tmux session stay. Raises UnknownTerminalError, or

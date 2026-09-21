@@ -9,10 +9,10 @@
 import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelRect } from "../geometry/frames";
-import { launchPathOf } from "../model/launch";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appGlyph } from "./glyphs";
+import { rectStyle } from "./pixelStyle";
 
 /** The intrinsic width and height the glyph markup carries; the drawing is sized by its token-sized box
  *  (``[&>svg]:size-full``), so the theme's ``--desk-icon-size`` governs, in compact mode too. */
@@ -33,12 +33,10 @@ export interface ShortcutIconAttrs {
   readonly onContextMenu: (x: number, y: number) => void;
 }
 
-/** What a shortcut reads: the launch path's label while it always creates ("New Terminal"), the
- *  app's name while it focuses ("Terminal"). */
+/** What a shortcut reads: its app's name, whatever its mode ("Terminal"); the launch path's label is the
+ *  launcher tile's. */
 export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefined): string {
-  if (app === undefined) return shortcut.target.app;
-  const launchPath = launchPathOf(app, shortcut.target.launch);
-  return shortcut.mode === "new" && launchPath !== null ? launchPath.label : app.display_name;
+  return app === undefined ? shortcut.target.app : app.display_name;
 }
 
 export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
@@ -62,12 +60,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             (isSelected ? "bg-fill-active " : "hover:bg-fill-hover ") +
             (isLifted ? "opacity-40 " : "") +
             (isStopped ? "text-faint" : "text-primary"),
-          style: {
-            left: `${rect.x}px`,
-            top: `${rect.y}px`,
-            width: `${rect.width}px`,
-            height: `${rect.height}px`,
-          },
+          style: rectStyle(rect),
           ...hoverTooltipAttrs(isStopped ? `${label}: not running` : null),
           onclick: isRunOnClick ? onRun : onSelect,
           // A double tap's dblclick follows two clicks that already ran the shortcut.
