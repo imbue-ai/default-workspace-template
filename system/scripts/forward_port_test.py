@@ -713,7 +713,7 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
         ),
     ],
 )
-def test_manifest_registration_refuses_a_malformed_launch_declaration(
+def test_manifest_registration_refuses_a_malformed_manifest_declaration(
     tmp_path: Path, declaration: str, expected_error: str
 ) -> None:
     apps_file = tmp_path / "apps.toml"
