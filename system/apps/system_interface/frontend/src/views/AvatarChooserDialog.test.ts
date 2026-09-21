@@ -56,11 +56,13 @@ describe("AvatarChooserDialog", () => {
     expect(disabled.parentElement?.getAttribute("data-hover-tooltip")).toBe(NO_CHAT_APP_REASON);
   });
 
-  it("shows the loading and error states, and closes on Done", () => {
+  it("shows the loading and error states, and closes on Done, which holds the focus when it opens", () => {
     expect(render({ designs: null }).querySelector("[role='status']")?.textContent).toBe("Loading designs…");
     expect(render({ designs: null, loadError: "down" }).querySelector("[role='alert']")?.textContent).toBe("down");
     const onClose = vi.fn();
-    (render({ onClose }).querySelector(".avatar-chooser-done") as HTMLElement).click();
+    const done = render({ onClose }).querySelector(".avatar-chooser-done") as HTMLElement;
+    expect(document.activeElement).toBe(done);
+    done.click();
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
