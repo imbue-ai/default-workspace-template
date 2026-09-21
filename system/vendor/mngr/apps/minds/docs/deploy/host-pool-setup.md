@@ -220,6 +220,10 @@ command refuses -- there is deliberately no storage add-on ordering; pick a
 larger storage config instead. `minds-admin server pricing` marks each row's
 base storage with a `UNITS_VALID` column, and `server list` shows gen-2 boxes'
 capacity as used/total units and disk (gen-1 boxes keep the slot display).
+Both `pricing` and `order` restrict themselves to two-drive NVMe software
+mirrors, the only storage shape the gen-2 reinstall layout produces (see
+[setup/order-boxes.md](setup/order-boxes.md), "Which configs the tooling can
+use", for the `--any-storage` / `--allow-unsupported-storage` escape hatches).
 
 Gen-2 capacity is **two-budget accounting**, not slot counting: a box's
 machines are checked against its memory-unit budget (RAM minus the 8GiB host
@@ -366,6 +370,12 @@ decommissioning. It does not cover us: we hold the recovery passphrase, the
 box unlocks itself, and box root reads the mapper. Live slices are not
 private from the operator (see the addendum in
 [security-boundaries-audit.md](../security-boundaries-audit.md)).
+
+A usable TPM 2.0 is therefore a hardware precondition: the prep checks for one
+right after its package install and refuses a box without it before its storage
+partition is touched (OVH's catalog does not say which units have one; see
+[setup/order-boxes.md](setup/order-boxes.md), "TPM 2.0 is a hardware
+precondition", for the remedy).
 
 Two keyslots open the volume:
 

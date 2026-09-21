@@ -22,10 +22,10 @@
  * hatch for content that is not a plain row (a slider, a switch, a search field). The chrome is
  * exported for that custom content, so it can dress like the rows around it.
  *
- * Everything portals to <body>: menus open from inside dockview's clipping overlays and from
- * inside modals, and a card that extends past its panel would otherwise be cut off at the
- * panel's edge. They sit on `--z-popover`, above the modal overlays, so one opened from a
- * modal paints over it.
+ * Everything portals to <body>: menus open from inside a window's own clipping box and from
+ * inside modals, and a card that extends past the window would otherwise be cut off at its
+ * edge. They sit on `--z-popover`, above the modal overlays, so one opened from a modal paints
+ * over it.
  *
  * The Tailwind scanner reads utility names from the literals in this file: keep every utility
  * name a contiguous literal.

@@ -8,6 +8,7 @@ on its own but move data in and out:
                       messages seen for each (raw; no clustering).
   - `list-tickets` -- list the team's existing flake tickets, with their bodies.
   - `create-ticket` / `update-ticket` / `close-ticket` -- mutate Linear.
+  - `sync-project` -- file every labelled ticket under the flake project (drift repair).
 
 It deliberately does NOT cluster or root-cause failures. That judgment belongs to
 the calling agent, which can read the failure text and group by cause far more
@@ -45,7 +46,7 @@ class FlakeReconcileError(Exception):
     """Base exception for the flake-reconcile tool."""
 
 
-# --- Parsing one flake-aware check-run summary --------------------------------
+# Parsing one flake-aware check-run summary
 
 
 class RunOutcome(UpperCaseStrEnum):
@@ -169,7 +170,7 @@ def _unescape(value: str) -> str:
     return html.unescape(value)
 
 
-# --- Windowed flake data (raw; the agent does the clustering) -----------------
+# Windowed flake data (raw; the agent does the clustering)
 
 
 class CheckRunRecord(FrozenModel):
@@ -312,7 +313,7 @@ def preferred_status_for_branches(branches: AbstractSet[str]) -> ClusterStatus:
     return ClusterStatus.BACKLOG
 
 
-# --- Linear tickets (read model) ----------------------------------------------
+# Linear tickets (read model)
 
 
 class FlakeTicket(FrozenModel):
@@ -324,9 +325,21 @@ class FlakeTicket(FrozenModel):
     state_type: str = Field(description="Workflow state type (triage/backlog/unstarted/started/completed/canceled)")
     is_open: bool = Field(description="Whether the ticket is in a non-terminal state")
     description: str = Field(description="Full ticket body (the agent reads its own markers from this)")
+    project_id: str = Field(description="UUID of the project the ticket is filed under, or empty if none")
 
 
-# --- I/O boundary: `gh` for CI, `latchkey` for Linear -------------------------
+@pure
+def tickets_missing_project(tickets: Sequence[FlakeTicket], project_id: str) -> tuple[FlakeTicket, ...]:
+    """The labelled tickets that are not filed under the flake project.
+
+    The label is what the sweep indexes on and the project is what people read, so
+    the two must name the same set; any ticket carrying the label and not the project
+    is drift to repair.
+    """
+    return tuple(ticket for ticket in tickets if ticket.project_id != project_id)
+
+
+# I/O boundary: `gh` for CI, `latchkey` for Linear
 
 
 _DEFAULT_REPO: Final[str] = "imbue-ai/mngr-internal"
@@ -335,10 +348,12 @@ _DEFAULT_SUITES: Final[tuple[str, ...]] = (
     "Unit + Integration Tests",
     "Acceptance Tests",
     "Minds Snapshot Resume Tests",
+    "Minds Evals Tests (repeated)",
 )
 _DEFAULT_WINDOW_DAYS: Final[int] = 14
 _DEFAULT_RUN_LIMIT: Final[int] = 2000
 _FLAKY_CLUSTER_LABEL: Final[str] = "flaky-cluster"
+_FLAKY_PROJECT_NAME: Final[str] = "CI Flake Reconciliation"
 _LINEAR_GRAPHQL_URL: Final[str] = "https://api.linear.app/graphql"
 _GH_TIMEOUT_SECONDS: Final[int] = 180
 _LINEAR_TIMEOUT_SECONDS: Final[int] = 60
@@ -346,10 +361,11 @@ _TERMINAL_STATE_TYPES: Final[tuple[str, ...]] = ("completed", "canceled")
 
 
 class _LinearIds(FrozenModel):
-    """Resolved Linear UUIDs needed to create/close flake tickets in a team."""
+    """Resolved Linear UUIDs needed to create, close, and re-file flake tickets in a team."""
 
     team_id: str = Field(description="Linear team UUID")
     label_id: str = Field(description="UUID of the flaky-cluster label")
+    project_id: str = Field(description="UUID of the project every flake ticket is filed under")
     closed_state_id: str = Field(description="UUID of the workflow state used to close")
     ready_state_id: str = Field(
         description="UUID of the 'ready to work on' state (first unstarted), or empty for team default"
@@ -490,7 +506,7 @@ def fetch_flake_tickets(team_key: str) -> tuple[FlakeTicket, ...]:
         + team_key
         + '" } }, labels: { name: { eq: "'
         + _FLAKY_CLUSTER_LABEL
-        + '" } } }, first: 250) { nodes { identifier id url description state { type } } } }'
+        + '" } } }, first: 250) { nodes { identifier id url description state { type } project { id } } } }'
     )
     data = _linear_graphql({"query": query}, timeout_seconds=_LINEAR_TIMEOUT_SECONDS)
     tickets: list[FlakeTicket] = []
@@ -504,9 +520,21 @@ def fetch_flake_tickets(team_key: str) -> tuple[FlakeTicket, ...]:
                 state_type=state_type,
                 is_open=state_type not in _TERMINAL_STATE_TYPES,
                 description=node.get("description") or "",
+                project_id=(node.get("project") or {}).get("id", ""),
             )
         )
     return tuple(tickets)
+
+
+def _resolve_flake_project_id() -> str:
+    query = 'query { projects(filter: { name: { eq: "' + _FLAKY_PROJECT_NAME + '" } }, first: 1) { nodes { id } } }'
+    data = _linear_graphql({"query": query}, timeout_seconds=_LINEAR_TIMEOUT_SECONDS)
+    nodes = data["data"]["projects"]["nodes"]
+    if not nodes:
+        raise FlakeReconcileError(
+            f"No Linear project named {_FLAKY_PROJECT_NAME!r}; flake tickets have nowhere to be filed"
+        )
+    return str(nodes[0]["id"])
 
 
 def _resolve_linear_ids(team_key: str) -> _LinearIds:
@@ -550,6 +578,7 @@ def _resolve_linear_ids(team_key: str) -> _LinearIds:
     return _LinearIds(
         team_id=team["id"],
         label_id=label_id,
+        project_id=_resolve_flake_project_id(),
         closed_state_id=completed_states[0]["id"],
         ready_state_id=ready_state_id,
         backlog_state_id=backlog_state_id,
@@ -579,6 +608,7 @@ def create_ticket(team_key: str, title: str, body: str, status: str) -> dict[str
         "title": title,
         "description": body,
         "labelIds": [linear_ids.label_id],
+        "projectId": linear_ids.project_id,
     }
     state_id = _state_id_for_status(linear_ids, status)
     if state_id:
@@ -604,6 +634,25 @@ def set_ticket_status(team_key: str, issue_id: str, status: str) -> None:
     }
     _linear_graphql(payload, timeout_seconds=_LINEAR_TIMEOUT_SECONDS)
     logger.info("Set {} to {}", issue_id, status)
+
+
+def sync_ticket_project(team_key: str) -> tuple[str, ...]:
+    """File every labelled ticket under the flake project, and report which ones moved.
+
+    Creation already sets the project, so this only has work to do when someone
+    clears it in the Linear UI. It is idempotent: a congruent backlog changes nothing.
+    """
+    linear_ids = _resolve_linear_ids(team_key)
+    drifted = tickets_missing_project(fetch_flake_tickets(team_key), linear_ids.project_id)
+    for ticket in drifted:
+        payload = {
+            "query": "mutation($id: String!, $input: IssueUpdateInput!){issueUpdate(id:$id, input:$input){success}}",
+            "variables": {"id": ticket.issue_id, "input": {"projectId": linear_ids.project_id}},
+        }
+        _linear_graphql(payload, timeout_seconds=_LINEAR_TIMEOUT_SECONDS)
+        logger.info("Filed {} under {}", ticket.identifier, _FLAKY_PROJECT_NAME)
+    logger.info("{} ticket(s) needed the project", len(drifted))
+    return tuple(ticket.identifier for ticket in drifted)
 
 
 def comment_ticket(issue_id: str, body: str) -> None:
@@ -639,7 +688,7 @@ def close_ticket(team_key: str, issue_id: str) -> None:
     logger.info("Closed {}", issue_id)
 
 
-# --- CLI ----------------------------------------------------------------------
+# CLI
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -694,6 +743,11 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--branch", dest="branches", action="append", default=[], help="a branch the cluster flaked on (repeatable)"
     )
 
+    sync_project = subparsers.add_parser(
+        "sync-project", help=f"file every labelled ticket under the {_FLAKY_PROJECT_NAME!r} project"
+    )
+    sync_project.add_argument("--team", dest="team_key", default=_DEFAULT_TEAM_KEY, help="Linear team key")
+
     return parser.parse_args(list(argv))
 
 
@@ -726,6 +780,9 @@ def main() -> int:
     elif args.command == "comment-ticket":
         comment_ticket(args.issue_id, Path(args.body_file).read_text())
         print(json.dumps({"commented": args.issue_id}))
+    elif args.command == "sync-project":
+        filed = sync_ticket_project(args.team_key)
+        print(json.dumps({"filed_under_project": list(filed)}, indent=2))
     elif args.command == "preferred-status":
         print(preferred_status_for_branches(set(args.branches)).name.lower())
     else:

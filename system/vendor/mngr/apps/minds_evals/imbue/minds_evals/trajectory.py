@@ -132,7 +132,16 @@ def _step_boundary_step(boundary: StepBoundary, step_id: int) -> Step:
         timestamp=boundary.started_at,
         source="system",
         message=_step_boundary_message(boundary),
-        extra={"minds_evals": {"kind": STEP_BOUNDARY_KIND, "step_name": boundary.name}},
+        # The opening message rides along because it is the join the marker was placed on: a reader
+        # of the document can then check the placement against the conversation without the state
+        # file beside it. Empty when the step ended before the client said anything.
+        extra={
+            "minds_evals": {
+                "kind": STEP_BOUNDARY_KIND,
+                "step_name": boundary.name,
+                "opening_message": boundary.opening_message,
+            }
+        },
     )
 
 

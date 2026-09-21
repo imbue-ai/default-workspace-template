@@ -3,15 +3,14 @@
  * next to its target, positioned (fixed) under the target after a hover-intent
  * delay.
  *
- * Tab content in dockview can use neither of the usual tooltip mechanisms.
- * Native ``title`` is suppressed: dockview marks every tab ``draggable``
- * (tab.js sets ``element.draggable = true``, plus
- * ``-webkit-user-drag: element``), and Chromium hides ``title`` tooltips on
- * draggable elements and their descendants. A CSS ``::after`` bubble is
- * clipped by the tab strip's overflow (``.dv-tabs-container`` is
- * ``overflow: auto`` and ``.dv-groupview`` is ``overflow: hidden``). A
- * body-level, fixed-position element driven by our own listeners avoids both:
- * it is not a native tooltip, and it is not inside the clipping container.
+ * The desktop's chrome can use neither of the usual tooltip mechanisms.
+ * Native ``title`` cannot be timed or styled, and much of the chrome it would
+ * sit on is dragged by pointer (a window's title bar, a shortcut icon), where a
+ * native tooltip surfacing mid-gesture is noise. A CSS ``::after`` bubble is
+ * clipped by the container its trigger sits in: a window's body is
+ * ``overflow: hidden`` and the taskbar's entries strip scrolls. A body-level,
+ * fixed-position element driven by our own listeners avoids both: it is not a
+ * native tooltip, and it is not inside the clipping container.
  *
  * That being the only mechanism that works everywhere in the workspace, it is
  * the one every workspace tooltip uses: 250ms hover-intent delay, keyboard
@@ -33,7 +32,7 @@
  * document to be heard -- a detached tree never reaches the listeners.
  *
  * The exceptions are both the same problem: a bubble under the trigger covers
- * the thing the pointer is choosing between. The project rail takes ``right``,
+ * the thing the pointer is choosing between. The chat rail takes ``right``,
  * because a rail row sits directly above the row it is being compared against;
  * a list of rows that raise their own tooltips takes ``above``, because the
  * rows below the pointer are what a bubble would cover. ``placeTooltip`` takes
@@ -379,7 +378,7 @@ function wireListeners(): void {
 
 /**
  * Give an element a tooltip, or take it away with ``null``. For DOM this
- * workspace builds by hand (the lightbox, the dock's tab strip); mithril views
+ * workspace builds by hand (the lightbox); mithril views
  * spread ``hoverTooltipAttrs`` instead. Removing the element needs no cleanup:
  * nothing is attached to it.
  */

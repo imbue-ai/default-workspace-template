@@ -30,7 +30,7 @@ Crystallize creates one of:
 The type drives two things: which **gates** the worker emits (skill →
 `outline-approval` then `final-creation`; app → none, since the user
 confirmed the live site already) and the **go-live** step after merge (skill →
-post-crystallize migration; app → refresh the tab). The worker reads the
+post-crystallize migration; app → refresh the window). The worker reads the
 type from the task file and loads `type-<TYPE>.md`; you proxy
 whatever gates it emits.
 
@@ -217,7 +217,7 @@ Flow-specific substitutions:
 - Milestones: any name, non-blocking → provisional merge per `lead-proxy.md`'s
   "Milestone reports: provisional merge". Provisional go-live is the minimum
   that makes the creation usable: **skill** → it is on disk at
-  `.agents/skills/$NAME/` and invocable; **app** → refresh the tab. Step 6
+  `.agents/skills/$NAME/` and invocable; **app** → refresh the window. Step 6
   still runs only on `done`.
 - Terminal statuses: `done` (merge, destroy the worker per `lead-proxy.md`,
   then Step 6); `stuck` (failure flow per
@@ -237,8 +237,8 @@ sub-workers it split its pass across are already gone with it):
   introduced, restart any caching service, and close the ticket recorded in
   `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
   separate commit.
-- **service**: refresh the tab so the user sees the merged build
-  (`python3 system/scripts/layout.py refresh <service-name>`), then close the ticket.
+- **service**: refresh its window so the user sees the merged build
+  (`python3 system/scripts/layout.py refresh --app <service-name>`), then close the ticket.
 
 ## Guidelines
 

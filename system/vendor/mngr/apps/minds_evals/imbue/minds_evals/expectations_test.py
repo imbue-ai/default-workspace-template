@@ -4,14 +4,15 @@ import pytest
 
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import DeliverableKind
-from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import FlowSurface
 from imbue.minds_evals.data_types import ProcessCheckKind
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
-from imbue.minds_evals.data_types import UiFlow
+from imbue.minds_evals.data_types import ScriptedFlowAction
+from imbue.minds_evals.data_types import ScriptedFlowActionKind
 from imbue.minds_evals.errors import EvalConfigError
 from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
+from imbue.minds_evals.ui_flows import MAX_STEPS_PER_FLOW
 
 
 def test_parse_expectations_accepts_an_outcome_and_a_bare_deliverable() -> None:
@@ -95,34 +96,53 @@ def test_parse_expectations_rejects_a_flow_with_neither_steps_nor_script() -> No
         )
 
 
-def test_parse_expectations_rejects_a_flow_carrying_both_a_script_and_steps() -> None:
-    with pytest.raises(EvalConfigError, match="both 'script'"):
-        parse_expectations(
-            {
-                "outcome": "x",
-                "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "script": "flow.py"}],
-            },
-            "todo-app",
-        )
+def _scripted_flow(script: object, **extra: object) -> dict[str, object]:
+    return {
+        "outcome": "x",
+        "deliverable": {"kind": "minds-app"},
+        "ui_flows": [{"name": "f", "expect": "e", "script": script, **extra}],
+    }
 
 
-def test_parse_expectations_rejects_a_scripted_flow_as_unimplemented() -> None:
-    # Reserved, not implemented. Accepting it would give a case author a green generation and a
-    # completed trial for verification that never ran -- the one failure mode a reserved field
-    # must not have. Natural-language flows are unaffected.
-    with pytest.raises(EvalConfigError, match="known but unimplemented"):
-        parse_expectations(
-            {
-                "outcome": "x",
-                "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "script": "flows/f.py"}],
-            },
-            "todo-app",
-        )
+_ADD_SCRIPT = [
+    {"kind": "input", "role": "textbox", "target": "New task", "text": "walk dog"},
+    {"kind": "click", "role": "button", "target": "Add"},
+]
 
 
-def test_parse_expectations_still_accepts_a_natural_language_flow() -> None:
+@pytest.mark.parametrize(
+    "flow",
+    [
+        pytest.param({"name": "f", "actions": "open it"}, id="actions-without-expect"),
+        pytest.param({"name": "f", "expect": "e"}, id="expect-alone"),
+        pytest.param({"name": "f", "script": _ADD_SCRIPT}, id="script-without-expect"),
+    ],
+)
+def test_parse_expectations_rejects_a_flow_that_is_not_either_kind_whole(flow: dict[str, object]) -> None:
+    with pytest.raises(EvalConfigError, match=r"either 'actions' \+ 'expect' or 'script' \+ 'expect'"):
+        parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}, "ui_flows": [flow]}, "todo-app")
+
+
+def test_parse_expectations_rejects_a_flow_carrying_both_a_script_and_actions() -> None:
+    with pytest.raises(EvalConfigError, match="both 'script' and 'actions'"):
+        parse_expectations(_scripted_flow(_ADD_SCRIPT, actions="Add a task."), "todo-app")
+
+
+def test_parse_expectations_reads_a_scripted_flows_actions_in_order() -> None:
+    expectations = parse_expectations(
+        _scripted_flow([*_ADD_SCRIPT, {"kind": "scroll", "amount": -200}, {"kind": "wait"}]), "todo-app"
+    )
+
+    assert expectations.ui_flows[0].actions == ""
+    assert expectations.ui_flows[0].script == (
+        ScriptedFlowAction(kind=ScriptedFlowActionKind.INPUT, role="textbox", target="New task", text="walk dog"),
+        ScriptedFlowAction(kind=ScriptedFlowActionKind.CLICK, role="button", target="Add"),
+        ScriptedFlowAction(kind=ScriptedFlowActionKind.SCROLL, amount=-200),
+        ScriptedFlowAction(kind=ScriptedFlowActionKind.WAIT),
+    )
+
+
+def test_parse_expectations_gives_a_model_driven_flow_no_script() -> None:
     expectations = parse_expectations(
         {
             "outcome": "x",
@@ -133,7 +153,94 @@ def test_parse_expectations_still_accepts_a_natural_language_flow() -> None:
     )
 
     assert expectations.ui_flows[0].name == "persistence"
-    assert expectations.ui_flows[0].script == ""
+    assert expectations.ui_flows[0].script == ()
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected_message"),
+    [
+        pytest.param({"kind": "click", "role": "button"}, "'click' needs target", id="click-without-target"),
+        pytest.param({"kind": "click", "target": "Add"}, "'click' needs role", id="click-without-role"),
+        pytest.param(
+            {"kind": "input", "role": "textbox", "target": "New task"}, "'input' needs text", id="input-without-text"
+        ),
+        pytest.param({"kind": "keys"}, "'keys' needs text", id="keys-without-text"),
+        pytest.param({"kind": "scroll"}, "'scroll' needs amount", id="scroll-without-amount"),
+        pytest.param({"kind": "open"}, "'open' needs text", id="open-without-a-path"),
+        pytest.param({"kind": "click", "role": " ", "target": "Add"}, "'click' needs role", id="blank-role"),
+        pytest.param(
+            {"kind": "click", "role": "button", "target": "Add", "text": "walk dog"},
+            "'click' does not take text",
+            id="click-with-text",
+        ),
+        pytest.param({"kind": "wait", "amount": 500}, "'wait' does not take amount", id="wait-with-amount"),
+        pytest.param({"kind": "reload", "text": "/"}, "'reload' does not take text", id="reload-with-text"),
+        pytest.param(
+            {"kind": "open", "text": "https://evil.example/"}, "is not a start path", id="open-another-origin"
+        ),
+        pytest.param({"kind": "open", "text": "//evil.example/"}, "is not a start path", id="open-another-host"),
+        pytest.param({"kind": "done"}, "every script ends with on its own", id="done"),
+        pytest.param({"kind": "hover", "target": "Add"}, "unknown kind 'hover'", id="unknown-kind"),
+        pytest.param({"role": "button", "target": "Add"}, "unknown kind None", id="no-kind"),
+        pytest.param({"kind": ["click"]}, "unknown kind", id="kind-not-a-string"),
+        pytest.param({"kind": "click", "role": "button", "name": "Add"}, "unknown key", id="unknown-key"),
+        pytest.param({"kind": "click", "role": "button", "target": 3}, "target must be a string", id="int-target"),
+        pytest.param({"kind": "scroll", "amount": "200"}, "amount must be an integer", id="string-amount"),
+        pytest.param({"kind": "scroll", "amount": True}, "amount must be an integer", id="bool-amount"),
+        pytest.param(
+            {"kind": "click", "role": "checkbox", "target": "walk dog", "beside": "walk dog"},
+            "addresses its element by target or by beside, not both",
+            id="target-and-beside",
+        ),
+        pytest.param({"kind": "click", "beside": "walk dog"}, "'click' needs role", id="beside-without-role"),
+        pytest.param(
+            {"kind": "input", "role": "textbox", "beside": "Notes"},
+            "'input' needs text",
+            id="located-input-without-text",
+        ),
+        pytest.param({"kind": "wait", "beside": "walk dog"}, "'wait' does not take beside", id="wait-with-beside"),
+        pytest.param({"kind": "click", "role": "checkbox", "beside": 3}, "beside must be a string", id="int-beside"),
+        pytest.param("click Add", "must be an object", id="not-an-object"),
+    ],
+)
+def test_parse_expectations_rejects_a_script_action_its_kind_cannot_perform(
+    entry: object, expected_message: str
+) -> None:
+    # Both the action's place and the problem are named, in whichever order the message puts them.
+    with pytest.raises(EvalConfigError, match=r"(?=.*ui_flows\[0\]\.script\[1\])(?=.*{})".format(expected_message)):
+        parse_expectations(_scripted_flow([_ADD_SCRIPT[0], entry]), "todo-app")
+
+
+@pytest.mark.parametrize(
+    ("script", "expected_message"),
+    [
+        pytest.param([], "has no actions", id="empty"),
+        pytest.param("flows/f.py", "must be a list", id="a-file-name"),
+        pytest.param(None, "must be a list", id="null"),
+    ],
+)
+def test_parse_expectations_rejects_a_script_that_is_not_a_list_of_actions(
+    script: object, expected_message: str
+) -> None:
+    with pytest.raises(EvalConfigError, match=expected_message):
+        parse_expectations(_scripted_flow(script), "todo-app")
+
+
+def test_parse_expectations_accepts_a_script_that_leaves_one_step_for_its_closing_done() -> None:
+    script = [{"kind": "wait"}] * (MAX_STEPS_PER_FLOW - 1)
+
+    expectations = parse_expectations(_scripted_flow(script), "todo-app")
+
+    assert len(expectations.ui_flows[0].script) == MAX_STEPS_PER_FLOW - 1
+
+
+def test_parse_expectations_rejects_a_script_that_leaves_no_step_for_its_closing_done() -> None:
+    # The flow's step budget would run out on the last action, before the `done`, and the flow
+    # would be recorded as the app failing to finish.
+    script = [{"kind": "wait"}] * MAX_STEPS_PER_FLOW
+
+    with pytest.raises(EvalConfigError, match="at most {} ".format(MAX_STEPS_PER_FLOW - 1)):
+        parse_expectations(_scripted_flow(script), "todo-app")
 
 
 def test_parse_expectations_rejects_fresh_env_as_unimplemented() -> None:
@@ -232,20 +339,44 @@ def test_expand_expectations_turns_natural_language_flows_into_checks() -> None:
     assert expectations.ui_flow_checks[0].expect == "'buy milk' is visible."
 
 
-def test_expand_expectations_refuses_to_expand_a_scripted_flow() -> None:
-    # Scripts are rejected at parse time, so this can only be reached if that rejection is ever
-    # removed -- at which point expanding one into an ordinary check would silently commission
-    # verification that nothing runs. Constructed directly, since parsing will not produce it.
-    expectations = Expectations(
-        outcome="x",
-        deliverable=parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo").deliverable,
-        ui_flows=(UiFlow(name="scripted", actions="", expect="", script="flows/f.py", surface=FlowSurface.ORIGIN),),
-        test_commands=(),
-        is_fresh_env_enabled=False,
+def test_expand_expectations_renders_a_scripted_flows_script_as_its_actions() -> None:
+    # The judge's digest and the flow log read `actions` for both kinds of flow, so a scripted
+    # flow's script reaches them as numbered prose whose numbers are the log's step indices.
+    expectations = expand_expectations(
+        parse_expectations(
+            _scripted_flow([*_ADD_SCRIPT, {"kind": "open", "text": "?latency=300"}, {"kind": "reload"}]), "todo"
+        )
     )
 
-    with pytest.raises(AssertionError, match="rejected at parse time"):
-        expand_expectations(expectations)
+    (check,) = expectations.ui_flow_checks
+    assert check.actions == (
+        "Step 1: type 'walk dog' into the textbox named 'New task'. "
+        "Step 2: click the button named 'Add'. "
+        "Step 3: open ?latency=300. "
+        "Step 4: reload the page."
+    )
+    assert [entry.kind for entry in check.script] == [
+        ScriptedFlowActionKind.INPUT,
+        ScriptedFlowActionKind.CLICK,
+        ScriptedFlowActionKind.OPEN,
+        ScriptedFlowActionKind.RELOAD,
+    ]
+    assert check.expect == "e"
+
+
+def test_expand_expectations_keeps_a_model_driven_flows_actions_and_gives_it_no_script() -> None:
+    expectations = expand_expectations(
+        parse_expectations(
+            {
+                "outcome": "x",
+                "deliverable": {"kind": "minds-app"},
+                "ui_flows": [{"name": "f", "actions": "Add a task.", "expect": "e"}],
+            },
+            "todo",
+        )
+    )
+
+    assert (expectations.ui_flow_checks[0].actions, expectations.ui_flow_checks[0].script) == ("Add a task.", ())
 
 
 def test_parse_expectations_rejects_two_flows_whose_names_collide() -> None:
@@ -304,6 +435,133 @@ def test_parse_expectations_rejects_an_unknown_surface() -> None:
             },
             "todo",
         )
+
+
+def _flow_with_start_path(start_path: object) -> dict[str, object]:
+    return {
+        "outcome": "x",
+        "deliverable": {"kind": "minds-app"},
+        "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "start_path": start_path}],
+    }
+
+
+def test_parse_expectations_opens_a_flow_at_its_apps_root_by_default() -> None:
+    expectations = parse_expectations(
+        {
+            "outcome": "x",
+            "deliverable": {"kind": "minds-app"},
+            "ui_flows": [{"name": "persistence", "actions": "s", "expect": "e"}],
+        },
+        "todo",
+    )
+
+    assert expand_expectations(expectations).ui_flow_checks[0].start_path == ""
+
+
+@pytest.mark.parametrize("start_path", ["", "/", "?latency=300", "/?arm_delete=1", "/tasks/3?view=all#notes"])
+def test_expand_expectations_carries_a_flows_start_path_into_its_check(start_path: str) -> None:
+    expectations = parse_expectations(_flow_with_start_path(start_path), "todo")
+
+    assert expand_expectations(expectations).ui_flow_checks[0].start_path == start_path
+
+
+@pytest.mark.parametrize(
+    "start_path",
+    [
+        pytest.param("latency=300", id="not-anchored-to-the-origin"),
+        pytest.param("#top", id="fragment-only"),
+        pytest.param("//evil.example/", id="scheme-relative-host"),
+        pytest.param("http://evil.example/", id="absolute-url"),
+        pytest.param("https:evil.example", id="scheme-without-slashes"),
+        pytest.param("\\\\evil.example", id="backslash-host"),
+        pytest.param("/\\evil.example", id="backslash-read-as-a-second-slash"),
+        pytest.param("/\t/evil.example", id="tab-stripped-into-a-second-slash"),
+        pytest.param("/\n/evil.example", id="newline-stripped-into-a-second-slash"),
+        pytest.param(" /tasks", id="leading-space"),
+        pytest.param("/tasks ", id="trailing-space"),
+        pytest.param("/my tasks", id="inner-space"),
+        pytest.param("/café", id="non-ascii"),
+    ],
+)
+def test_parse_expectations_rejects_a_start_path_that_could_leave_the_apps_origin(start_path: str) -> None:
+    with pytest.raises(EvalConfigError, match=r"ui_flows\[0\]\.start_path: .* is not a start path"):
+        parse_expectations(_flow_with_start_path(start_path), "todo")
+
+
+@pytest.mark.parametrize("start_path", [300, None, ["/tasks"]])
+def test_parse_expectations_rejects_a_start_path_that_is_not_a_string(start_path: object) -> None:
+    with pytest.raises(EvalConfigError, match="start_path must be a string"):
+        parse_expectations(_flow_with_start_path(start_path), "todo")
+
+
+def test_parse_expectations_reads_a_scripted_action_that_locates_a_nameless_element() -> None:
+    located = {"kind": "click", "role": "checkbox", "beside": "walk dog"}
+
+    expectations = parse_expectations(_scripted_flow([_ADD_SCRIPT[0], located]), "todo-app")
+
+    assert expectations.ui_flows[0].script[1] == ScriptedFlowAction(
+        kind=ScriptedFlowActionKind.CLICK, role="checkbox", beside="walk dog"
+    )
+
+
+def test_parse_expectations_ignores_a_comment_key_on_a_flow_entry() -> None:
+    commented = _scripted_flow(_ADD_SCRIPT, _comment="why this flow exists", _comment_2="a second note")
+
+    expectations = parse_expectations(commented, "todo-app")
+
+    assert expectations == parse_expectations(_scripted_flow(_ADD_SCRIPT), "todo-app")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(
+            {"outcome": "x", "deliverable": {"kind": "minds-app"}, "_comment": "a note"}, id="on-the-expectations"
+        ),
+        pytest.param(_scripted_flow([{**_ADD_SCRIPT[0], "_comment": "a note"}]), id="on-a-script-action"),
+        pytest.param(_scripted_flow(_ADD_SCRIPT, comment="a note"), id="unprefixed-on-a-flow"),
+    ],
+)
+def test_parse_expectations_takes_a_comment_key_only_on_a_flow_entry(raw: dict[str, object]) -> None:
+    with pytest.raises(EvalConfigError, match="unknown key"):
+        parse_expectations(raw, "todo-app")
+
+
+@pytest.mark.parametrize("max_judge_screenshots", [1, 32, 100])
+def test_expand_expectations_carries_the_cases_screenshot_ceiling_into_the_expanded_form(
+    max_judge_screenshots: int,
+) -> None:
+    raw = {**_scripted_flow(_ADD_SCRIPT), "max_judge_screenshots": max_judge_screenshots}
+
+    expanded = expand_expectations(parse_expectations(raw, "todo-app"))
+
+    assert expanded.max_judge_screenshots == max_judge_screenshots
+
+
+def test_expand_expectations_leaves_the_screenshot_ceiling_to_the_verifier_when_the_case_sets_none() -> None:
+    assert (
+        expand_expectations(parse_expectations(_scripted_flow(_ADD_SCRIPT), "todo-app")).max_judge_screenshots is None
+    )
+
+
+@pytest.mark.parametrize(
+    "max_judge_screenshots",
+    [
+        pytest.param(0, id="zero"),
+        pytest.param(-4, id="negative"),
+        pytest.param(101, id="over-the-api-image-limit"),
+        pytest.param(True, id="bool"),
+        pytest.param("32", id="string"),
+        pytest.param(32.0, id="float"),
+    ],
+)
+def test_parse_expectations_rejects_a_screenshot_ceiling_outside_what_the_judge_request_takes(
+    max_judge_screenshots: object,
+) -> None:
+    raw = {**_scripted_flow(_ADD_SCRIPT), "max_judge_screenshots": max_judge_screenshots}
+
+    with pytest.raises(EvalConfigError, match="max_judge_screenshots must be an integer from 1 to 100"):
+        parse_expectations(raw, "todo-app")
 
 
 def test_parse_expectations_reads_a_process_block() -> None:

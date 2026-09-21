@@ -1,0 +1,1 @@
+The live docker-archive mirror release test (`test_docker_mirror_release.py`) runs the default-workspace-template's digest-pinned base image (read from the template ref named by `DEFAULT_WORKSPACE_TEMPLATE_REF`, default `main`) instead of the floating `python:3.12-slim-trixie` tag, so it exercises the trixie the fleet actually builds on (imbue-ai/mngr-internal#1138).

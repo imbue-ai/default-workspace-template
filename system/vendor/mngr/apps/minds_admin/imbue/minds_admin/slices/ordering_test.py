@@ -4,15 +4,18 @@ from typing import cast
 
 import pytest
 
+from imbue.minds_admin.slices.ordering import MIN_BOX_LINK_SPEED_MBPS
 from imbue.minds_admin.slices.ordering import _ReinstallStartAttempt
 from imbue.minds_admin.slices.ordering import _looks_like_service_name
 from imbue.minds_admin.slices.ordering import _read_address_tolerating_missing_service
+from imbue.minds_admin.slices.ordering import assert_box_link_speed_sufficient
 from imbue.minds_admin.slices.ordering import build_box_host_key_postinstall_script
 from imbue.minds_admin.slices.ordering import build_gen2_reinstall_storage
 from imbue.minds_admin.slices.ordering import derive_server_specs
 from imbue.minds_admin.slices.ordering import derive_uplink_mbps_from_option_codes
 from imbue.minds_admin.slices.ordering import extract_order_id
 from imbue.minds_admin.slices.ordering import parse_uplink_mbps_from_bandwidth_option_code
+from imbue.minds_admin.slices.ordering import read_dedicated_server_link_speed_mbps
 from imbue.minds_admin.slices.ordering import select_eco_option_codes
 from imbue.minds_admin.slices.ordering import start_os_reinstall
 from imbue.minds_admin.slices.ordering import summarize_checkout_prices
@@ -519,3 +522,32 @@ def test_derive_uplink_mbps_is_none_without_a_parseable_public_bandwidth_code() 
         )
         is None
     )
+
+
+@pytest.mark.parametrize("link_speed_mbps", [MIN_BOX_LINK_SPEED_MBPS, 25000])
+def test_assert_box_link_speed_sufficient_accepts_the_floor_and_faster_ports(link_speed_mbps: int) -> None:
+    assert_box_link_speed_sufficient(link_speed_mbps, "ns1.ovh.us")
+
+
+def test_assert_box_link_speed_sufficient_refuses_a_slower_port_naming_both_speeds() -> None:
+    with pytest.raises(BareMetalConfigError) as exc_info:
+        assert_box_link_speed_sufficient(1000, "ns1010319.ip-51-81-167.us")
+    message = str(exc_info.value)
+    assert "ns1010319.ip-51-81-167.us" in message
+    assert "1000 Mbit/s port" in message
+    assert f"at least {MIN_BOX_LINK_SPEED_MBPS} Mbit/s" in message
+    assert "cancel its renewal" in message
+
+
+def test_assert_box_link_speed_sufficient_fails_closed_when_ovh_reports_no_link_speed() -> None:
+    with pytest.raises(BareMetalConfigError, match="reports no linkSpeed"):
+        assert_box_link_speed_sufficient(None, "ns1.ovh.us")
+
+
+def test_read_dedicated_server_link_speed_mbps_reads_an_integer_link_speed_and_nothing_else() -> None:
+    reported = _ScriptedDedicatedServerClient([{"ip": "203.0.113.10", "linkSpeed": 10000}])
+    assert read_dedicated_server_link_speed_mbps(cast(OvhVpsClient, reported), "ns1.ovh.us") == 10000
+    # An absent or non-integer linkSpeed reads as unreported, which the guard then refuses (fail closed).
+    for body in ({"ip": "203.0.113.10"}, {"ip": "203.0.113.10", "linkSpeed": "10000"}):
+        unreported = _ScriptedDedicatedServerClient([body])
+        assert read_dedicated_server_link_speed_mbps(cast(OvhVpsClient, unreported), "ns1.ovh.us") is None
