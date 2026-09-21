@@ -211,6 +211,10 @@ export class FakeDesktopApi implements DesktopApi {
     this.calls.push(`closeWindow:${desktopId}:${windowId}`);
     this.refuse();
     const desktop = this.desktop(desktopId);
+    // As the shell does (a 409): a pinned window is never closed.
+    if (desktop.windows.some((candidate) => candidate.id === windowId && candidate.is_pinned)) {
+      throw new Error(`Window ${windowId} is pinned and cannot be closed; minimize it instead`);
+    }
     this.replace({ ...desktop, windows: desktop.windows.filter((candidate) => candidate.id !== windowId) });
     // As the shell does: the window leaves every client's layout of the desktop, each rewrite stamped.
     for (const [key, layout] of [...this.layouts]) {
