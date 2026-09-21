@@ -66,7 +66,7 @@ function rowAttrs(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.
       ROW_CLASS +
       (isEnabled ? "cursor-pointer text-primary " : "cursor-default text-faint ") +
       (isHighlighted ? "bg-fill-active" : ""),
-    onpointerenter: () => attrs.onHighlight(index),
+    onpointerenter: isEnabled ? () => attrs.onHighlight(index) : undefined,
     onclick: isEnabled ? () => attrs.onRun(row) : undefined,
   };
 }
