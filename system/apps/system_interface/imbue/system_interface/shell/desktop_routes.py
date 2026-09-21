@@ -37,9 +37,7 @@ from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_wire_json
-from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
-from imbue.system_interface.shell.data_types import window_wire_json
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
@@ -173,13 +171,15 @@ def _existing_wallpaper(wallpaper: Wallpaper | None) -> Wallpaper | None:
 
 
 def list_desktops() -> ResponseReturnValue:
-    return jsonify({"desktops": [desktop_wire_json(desktop) for desktop in _shell().list_desktops()]})
+    shell = _shell()
+    return jsonify({"desktops": shell.desktops_wire_json(shell.list_desktops())})
 
 
 def create_desktop() -> ResponseReturnValue:
     body = parse_request_body(DesktopMetadataRequest)
-    desktop = _shell().create_desktop(body.name, body.color, body.glyph)
-    return jsonify(desktop_wire_json(desktop)), HTTP_CREATED
+    shell = _shell()
+    desktop = shell.create_desktop(body.name, body.color, body.glyph)
+    return jsonify(shell.desktop_wire_json(desktop)), HTTP_CREATED
 
 
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
@@ -187,7 +187,7 @@ def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph, body.sharing)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
@@ -195,7 +195,7 @@ def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(body.wallpaper))
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def delete_desktop(desktop_id: str) -> ResponseReturnValue:
@@ -209,7 +209,7 @@ def set_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
     shortcut = DesktopShortcut(target=_validated_target(shell, body.target), mode=body.mode, cell=body.cell)
     desktop = shell.desktops.set_shortcut(desktop_id, shortcut)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def move_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
@@ -217,7 +217,7 @@ def move_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.move_shortcut(desktop_id, body.app, body.launch, body.cell)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
@@ -225,7 +225,7 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.remove_shortcut(desktop_id, body.app, body.launch)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 # Section 5.3: windows
@@ -235,7 +235,7 @@ def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
     outcome = _shell().open_window(desktop_id, body, is_minimized=False)
     return (
-        jsonify({"window": window_wire_json(outcome.window), "is_new": outcome.is_new}),
+        jsonify({"window": _shell().window_wire_json(outcome.window), "is_new": outcome.is_new}),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
     )
 
@@ -248,7 +248,7 @@ def close_window(desktop_id: str, window_id: str) -> ResponseReturnValue:
 def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowLocationReport)
     window = _shell().report_window_location(desktop_id, WindowId(window_id), body.client_id, body.path, body.title)
-    return jsonify(window_wire_json(window))
+    return jsonify(_shell().window_wire_json(window))
 
 
 # Section 5.4: placements
@@ -331,7 +331,7 @@ def inventory_document_json(shell: ShellState) -> dict[str, Any]:
             shown = _shown_window_ids(desktop, layout)
         clients.append({**_client_wire_json_on(record, str(record.id) in connected, active), "shown": shown})
     return {
-        "desktops": [desktop_wire_json(desktop) for desktop in desktops],
+        "desktops": shell.desktops_wire_json(desktops),
         "apps": shell.inventory.serialized(),
         "clients": clients,
     }
@@ -588,7 +588,7 @@ def _open_unplaced(
             "ok": True,
             "desktop_id": str(desktop.id),
             "client_id": None,
-            "desktop": desktop_wire_json(shell.get_desktop(desktop.id)),
+            "desktop": shell.desktop_wire_json(shell.get_desktop(desktop.id)),
             "layout": None,
             "window_id": str(outcome.window.id),
         }
@@ -602,7 +602,7 @@ def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | N
             "ok": True,
             "desktop_id": str(desktop.id),
             "client_id": str(target.client_id),
-            "desktop": desktop_wire_json(desktop),
+            "desktop": shell.desktop_wire_json(desktop),
             "layout": _layout_wire_json(shell, desktop, target.client_id),
             "window_id": str(window_id) if window_id is not None else None,
         }

@@ -172,7 +172,8 @@ subcommand: it is the taskbar's desktop menu, or the shell's REST routes
 location report; `is_pinned`: the app's pinned window, present on every desktop
 and never closed; `scope`: `linked`, or `independent` for a window whose path
 is each client's own, in which case the listed `path` is the shared home path
-and each client's page may be elsewhere) and shortcuts, and every client with its `active_desktop`,
+and `client_paths` says where each client's page is, by client id) and shortcuts,
+and every client with its `active_desktop`,
 `is_connected`, and `shown` (the windows of its active desktop it has not
 minimized). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both

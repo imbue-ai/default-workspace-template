@@ -324,6 +324,7 @@ def test_desktops_and_list_read_the_inventory_document(fake_shell: Any, capsys: 
                     "is_settling": False,
                     "is_pinned": False,
                     "scope": "linked",
+                    "client_paths": {},
                 }
             ],
         }
@@ -346,6 +347,7 @@ def test_desktops_and_list_read_the_inventory_document(fake_shell: Any, capsys: 
             "is_settling": False,
             "is_pinned": False,
             "scope": "linked",
+            "client_paths": {},
             "desktop": "home",
         }
     ]
