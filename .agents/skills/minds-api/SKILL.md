@@ -146,8 +146,10 @@ protocol it does not know, and the app caps `update-self` at its own version for
 exactly that reason. An omitted `branch` means the repository's own default
 branch, for the workspace template as for any other repo -- no app version fills
 it in for you -- so leaving it out makes the new workspace whatever that branch
-holds that day: unreleased code, which an `imbue_cloud` create then records
-under the app's release.
+holds that day: unreleased code, stamped with the app's release anyway, because
+the version a create records falls back to the app's own when no branch was
+named. Only an `imbue_cloud` create escapes that, and only because leasing a
+pre-baked host makes it resolve a release of its own.
 
 **If the version read fails, do not create the workspace.** An app that cannot
 say which release it supports cannot be handed one it understands, and a
