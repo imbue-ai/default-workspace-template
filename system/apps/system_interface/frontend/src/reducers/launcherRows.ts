@@ -13,14 +13,14 @@ import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import { activePlacements, appByName, effectiveWindowTitle, isWindowMinimized, openableApps } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
-/** A row that runs one launch path of one app, in the mode its manifest decides (plan section 3.3). */
+/** A row that runs one launch path of one app; the store decides focus or new from the manifest when it runs
+ *  (plan section 3.3). */
 export interface LaunchRow {
   readonly kind: "launch";
   /** The ``data-launcher-row`` spelling, unique across the menu. */
   readonly key: string;
   readonly app: AppRecord;
   readonly launchPath: LaunchPath;
-  readonly runKind: "focus" | "new";
   readonly label: string;
   /** The app's display name, when the label does not already say it. */
   readonly caption: string | null;
@@ -84,15 +84,14 @@ export function windowRowKey(windowId: string): string {
 function launchRowsOf(apps: readonly AppRecord[], query: string): LaunchRow[] {
   const rows: LaunchRow[] = [];
   for (const { app, launchPath } of orderAppLaunches(appLaunchesOf(apps))) {
-    const runKind = launchRowKindOf(app, launchPath);
-    if (runKind === "text") continue;
+    // A free-text launch path is listed once, at the foot, never as a launch-path row.
+    if (launchRowKindOf(app, launchPath) === "text") continue;
     if (!matchesQuery(query, launchPath.label, app.display_name, app.name)) continue;
     rows.push({
       kind: "launch",
       key: launchRowKey("launch", app.name, launchPath.id),
       app,
       launchPath,
-      runKind,
       label: launchPath.label,
       caption: launchPath.label === app.display_name ? null : app.display_name,
     });

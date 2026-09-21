@@ -67,8 +67,6 @@ describe("the launcher's rows", () => {
       "text:chatty:new",
       "text:chatty:send",
     ]);
-    expect(menu.launchRows[0].runKind).toBe("focus");
-    expect(menu.launchRows[1].runKind).toBe("new");
     expect(menu.launchRows[1].caption).toBe("Terminal");
     expect(menu.launchRows[0].caption).toBeNull();
     expect(menu.textRows.map((row) => row.textAction)).toEqual(["primary", "secondary"]);
