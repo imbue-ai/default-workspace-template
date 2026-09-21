@@ -456,9 +456,16 @@ def _app_name_or_raise(raw: str, what: str) -> AppName:
         raise LayoutOpError(f"{what} {raw!r} is not an app name: {e}") from e
 
 
-def _resolve_window(desktop: Desktop, layout: DesktopLayout, raw: str, requester: OpRequester | None) -> Window:
-    """The window an op names: a window id, ``self`` (the requester's app's window whose path carries its marker),
-    or an app name (that app's most recently focused window in this client's layout)."""
+def _resolve_window(
+    desktop: Desktop,
+    seen_windows: Sequence[Window],
+    layout: DesktopLayout,
+    raw: str,
+    requester: OpRequester | None,
+) -> Window:
+    """The window an op names, as the shared record: a window id, ``self`` (the requester's app's window whose path,
+    as the target client sees it in ``seen_windows``, carries its marker), or an app name (that app's most recently
+    focused window in this client's layout)."""
     if not raw:
         raise LayoutOpError("this op needs a window: a window id, 'self', or an app name")
     if raw == SELF_WINDOW:
@@ -469,14 +476,14 @@ def _resolve_window(desktop: Desktop, layout: DesktopLayout, raw: str, requester
         own = next(
             (
                 window
-                for window in desktop.windows
+                for window in seen_windows
                 if window.app == requester.app and path_carries_marker(window.path, requester.marker)
             ),
             None,
         )
         if own is None:
             raise WindowNotFoundError(f"self ({requester.app} carrying {requester.marker!r} on desktop {desktop.id})")
-        return own
+        return require_window(desktop, own.id)
     try:
         window_id = WindowId(raw)
     except InvalidShellValueError:
@@ -609,7 +616,8 @@ def _op_window(
 ) -> WindowId:
     desktop = target.desktop
     layout = shell.read_desktop_layout(desktop.id, target.client_id)
-    window = _resolve_window(desktop, layout, arguments.window, requester)
+    seen_windows = shell.windows_for_client(desktop, target.client_id)
+    window = _resolve_window(desktop, seen_windows, layout, arguments.window, requester)
     match op:
         case "focus":
             shell.edit_desktop_layout(
@@ -652,7 +660,7 @@ def _op_window(
             if not arguments.path:
                 raise LayoutOpError("navigate needs a path")
             # As if the target client's page had reported it: an independent window moves for that client alone.
-            seen = shell.effective_window_for_client(desktop, window, target.client_id)
+            seen = next(candidate for candidate in seen_windows if candidate.id == window.id)
             shell.report_window_location(
                 desktop.id, window.id, target.client_id, WindowPath(arguments.path), seen.title
             )
@@ -740,7 +748,8 @@ def _refresh_window(
 ) -> ResponseReturnValue:
     """The transient one-window ``refresh``: the window's page on the target client."""
     layout = shell.read_desktop_layout(target.desktop.id, target.client_id)
-    window = _resolve_window(target.desktop, layout, arguments.window, requester)
+    seen_windows = shell.windows_for_client(target.desktop, target.client_id)
+    window = _resolve_window(target.desktop, seen_windows, layout, arguments.window, requester)
     shell.broadcaster.broadcast_layout_op(
         "refresh",
         {"window": str(window.id)},

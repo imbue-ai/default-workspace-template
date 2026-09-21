@@ -440,6 +440,17 @@ def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays
     assert [window["path"] for window in _desktop_windows(client)] == ["/", "/?session=t2"]
     assert "desktops_updated" in [message["type"] for message in drain_messages(first_queue)]
 
+    # ``self`` looks for the requester's marker in the window's path as the target client sees it: c1's own
+    # path carries it, c2's (the home path) does not.
+    requester = {"app": "buddy", "marker": "2"}
+    focused = _op(client, "focus", {"window": "self", "client": "c1"}, requester)
+    assert focused.status_code == 200 and focused.get_json()["window_id"] == pinned["id"]
+    assert _op(client, "focus", {"window": "self", "client": "c2"}, requester).status_code == 404
+    drain_messages(first_queue)
+    assert _op(client, "refresh", {"window": "self", "client": "c1"}, requester).status_code == 200
+    (refresh,) = [message for message in drain_messages(first_queue) if message["type"] == "layout_op"]
+    assert (refresh["args"], refresh["target_client_id"]) == ({"window": pinned["id"]}, "c1")
+
 
 def test_a_clients_stored_paths_on_other_desktops_survive_a_report(
     tmp_path: Path, broadcaster: WebSocketBroadcaster

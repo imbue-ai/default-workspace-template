@@ -208,9 +208,11 @@ class ShellState(MutableModel):
         independent = {window.id for window in desktop.windows if window.scope is LocationScope.INDEPENDENT}
         return self.window_paths.read_paths(client_id, independent)
 
-    def effective_window_for_client(self, desktop: Desktop, window: Window, client_id: ClientId) -> Window:
-        """The window as ``client_id`` sees it: an independent window at the client's own path and title."""
-        return effective_window(window, self.read_window_paths(desktop, client_id).get(window.id))
+    def windows_for_client(self, desktop: Desktop, client_id: ClientId) -> tuple[Window, ...]:
+        """The desktop's windows as ``client_id`` sees them, in opening order: each independent one at the client's
+        own path and title, which is where an op's ``self`` looks for the requester's marker."""
+        stored = self.read_window_paths(desktop, client_id)
+        return tuple(effective_window(window, stored.get(window.id)) for window in desktop.windows)
 
     def _broadcast_placements_written(self, rewritten: Sequence[StoredDesktopLayout]) -> None:
         for stored in rewritten:
