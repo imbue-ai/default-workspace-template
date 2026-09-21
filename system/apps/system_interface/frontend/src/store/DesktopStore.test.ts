@@ -7,6 +7,7 @@ import {
   appRecord,
   clientRecord,
   desktopRecord,
+  launchPathRecord,
   placementRecord,
   themeMetricsRecord,
   windowRecord,
@@ -765,6 +766,41 @@ describe("pinned entries", () => {
     expect(store.getState().desktops[0].windows.map((window) => window.id)).toEqual(["win-1", "win-9"]);
     await store.closeOrMinimizeWindow("win-1");
     expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+
+  it("drafts into the pinned window as a load the pages follow, not as the page's own report", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
+        ],
+      }),
+    ];
+    const store = makeStore();
+    await store.start(NO_LINK);
+    socket.deliver().onAppsUpdated([
+      appRecord("docs"),
+      appRecord("buddy", {
+        pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
+        launch_paths: [launchPathRecord({ id: "root", path: "/", params: ["draft"] })],
+      }),
+    ]);
+    const loadsBefore = store.getLayoutLoadsRevision();
+    expect(await store.draftIntoPinnedWindow("Draw me")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
+      `reportWindowLocation:home:win-9:${CLIENT}:/?draft=Draw+me:Buddy`,
+    );
+    // Applied as a layout load: the revision moved, so the live pages follow the stored path to the page.
+    expect(store.getLayoutLoadsRevision()).toBe(loadsBefore + 1);
+    expect(store.getState().layout.window_paths["win-9"]).toEqual({ path: "/?draft=Draw+me", title: "Buddy" });
+    // And the window is shown.
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized).toBe(
+      false,
+    );
+    // A desktop with no pinned app taking a draft has nowhere to put one.
+    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("buddy")]);
+    expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
   });
 
   it("restores a pinned window the client never placed at the frame the shell answered, not the cascade", async () => {

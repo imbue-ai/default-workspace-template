@@ -1490,7 +1490,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
     icon and back, "Change avatar..." opens the chooser, choosing a design changes every open window, and
     "Design your own..." drafts the design prompt into this client's pinned window, whose home launch path takes a
     draft, rather than opening a chat."""
-    with _running_e2e_server(tmp_path, pin=("avatar", "linked", "floating")) as server:
+    with _running_e2e_server(tmp_path, pin=("avatar", "independent", "floating")) as server:
         _land(page, server)
         entry = _pinned_entry(page)
         expect(entry).to_be_visible(timeout=15000)
@@ -1524,6 +1524,10 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         with _second_client(page, server) as other:
             other_entry = _pinned_entry(other)
             expect(other_entry).to_be_visible(timeout=15000)
+            # The pinned window is shown first, so the draft below has a live page to move rather than a page to
+            # create at the draft path: the case a user with the chat open is in.
+            entry.click()
+            expect(_window(page, _pinned_window(server.base_url)["id"])).to_be_visible(timeout=15000)
             _open_entry_menu(page, entry).locator('[data-menu-item="change-avatar"]').click()
             chooser = page.locator("[data-avatar-chooser]")
             expect(chooser).to_be_visible(timeout=5000)
@@ -1544,16 +1548,32 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             # pointed at the draft path and shown, and no window is opened.
             chooser.locator(".avatar-design-own").click()
             expect(chooser).to_have_count(0)
+            pinned_id = _pinned_window(server.base_url)["id"]
+            client_id = _client_id(page)
+
+            def _drafted_path() -> str:
+                layout = _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={client_id}")
+                return str(layout["window_paths"].get(pinned_id, {}).get("path", ""))
+
             wait_for(
-                lambda: _pinned_window(server.base_url)["path"].startswith(f"{_PINNED_HOME_PATH}?draft="),
+                lambda: _drafted_path().startswith(f"{_PINNED_HOME_PATH}?draft="),
                 timeout=10.0,
                 poll_interval=0.1,
-                error_message="the pinned window was never pointed at the draft",
+                error_message="this client's view of the pinned window was never pointed at the draft",
             )
-            drafted = _pinned_window(server.base_url)["path"]
+            drafted = _drafted_path()
             (draft,) = urllib.parse.parse_qs(urllib.parse.urlsplit(drafted).query)["draft"]
             assert "design my own desktop avatar" in draft
-            expect(_window(page, _pinned_window(server.base_url)["id"])).to_be_visible(timeout=15000)
+            expect(_window(page, pinned_id)).to_be_visible(timeout=15000)
+            # The page itself is moved there (the following step, as for an agent's navigate), and only here: the
+            # shared record keeps the home path, the other client's view is untouched, and no window is opened.
+            wait_for(
+                lambda: drafted in _page_frame(page, pinned_id).evaluate("() => window.__navigations"),
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message="the pinned window's page was never navigated to the draft",
+            )
+            assert _pinned_window(server.base_url)["path"] == _PINNED_HOME_PATH
             assert [window["app"] for window in _windows(server.base_url)] == [_PINNED_APP_NAME]
 
 
