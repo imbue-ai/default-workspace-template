@@ -797,7 +797,7 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
     created = arrival["created_desktop"]
     assert arrival["desktop_id"] == "alice" and arrival["replaced_desktop_name"] is None
     assert created["id"] == "alice" and created["name"] == "Alice" and created["glyph"] == 1
-    home = client.get("/api/desktops/home" if False else "/api/desktops").get_json()["desktops"][0]
+    home = client.get("/api/desktops").get_json()["desktops"][0]
     assert created["shortcuts"] == home["shortcuts"]
     (copied,) = created["windows"]
     assert copied["id"] != opened["id"] and (copied["app"], copied["path"]) == ("terminal", "/?session=terminal-1")
