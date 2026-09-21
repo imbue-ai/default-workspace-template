@@ -164,15 +164,21 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
         });
         break;
     }
+    return templatesSectionShell("mt-10", m("h2", { class: SECTION_HEADING_CLASS }, TEMPLATES_TITLE), body);
+  }
+
+  /** The templates section as both the resting page and the search results draw it: the marker the template tile
+   *  scrolls to, with the hooks that do the scrolling once it asked for it. */
+  function templatesSectionShell(spacingClass: string, heading: m.Vnode, body: m.Children): m.Vnode {
     return m(
       "section",
       {
         "data-section": "templates",
-        class: "getting-started-templates mt-10",
+        class: `getting-started-templates ${spacingClass}`,
         oncreate: (created: m.VnodeDOM) => scrollToTemplatesIfPending(created.dom as HTMLElement),
         onupdate: (updated: m.VnodeDOM) => scrollToTemplatesIfPending(updated.dom as HTMLElement),
       },
-      [m("h2", { class: SECTION_HEADING_CLASS }, TEMPLATES_TITLE), body],
+      [heading, body],
     );
   }
 
@@ -192,29 +198,21 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
       starts.length === 0 ? null : startSomethingSection(starts, attrs, null),
       templates.length === 0
         ? null
-        : m(
-            "section",
-            {
-              "data-section": "templates",
-              class: "getting-started-templates mt-6 first:mt-0",
-              oncreate: (created: m.VnodeDOM) => scrollToTemplatesIfPending(created.dom as HTMLElement),
-              onupdate: (updated: m.VnodeDOM) => scrollToTemplatesIfPending(updated.dom as HTMLElement),
-            },
-            [
-              m("h2", { class: `${SECTION_HEADING_CLASS} mb-2` }, SEARCH_TEMPLATES_TITLE),
-              m(
-                "div",
-                { class: "grid gap-6 @max-[620px]:grid-cols-2 grid-cols-4" },
-                templates.map((template) =>
-                  m(TemplateCard, {
-                    key: template.slug,
-                    template,
-                    isFill: true,
-                    onPick: (picked) => (detailTemplate = picked),
-                  }),
-                ),
+        : templatesSectionShell(
+            "mt-6 first:mt-0",
+            m("h2", { class: `${SECTION_HEADING_CLASS} mb-2` }, SEARCH_TEMPLATES_TITLE),
+            m(
+              "div",
+              { class: "grid gap-6 @max-[620px]:grid-cols-2 grid-cols-4" },
+              templates.map((template) =>
+                m(TemplateCard, {
+                  key: template.slug,
+                  template,
+                  isFill: true,
+                  onPick: (picked) => (detailTemplate = picked),
+                }),
               ),
-            ],
+            ),
           ),
     ];
   }
