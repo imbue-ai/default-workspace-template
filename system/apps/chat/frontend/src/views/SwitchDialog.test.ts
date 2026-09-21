@@ -364,6 +364,21 @@ describe("the switch dialog", () => {
     expect(state.switches).toEqual([]);
   });
 
+  it("keeps a rebind's armed pick when its account is picked again from the chooser", async () => {
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    await flush();
+    render();
+    choose("switch-dialog-model", "gpt-6-astra");
+    pressButton("Switch this chat");
+    expect(getPendingPick("agent-1")?.identity.model_id).toBe("gpt-6-astra");
+
+    // The auth-error note's chooser hands back the same account.
+    beginSwitchToAccountId("agent-1", OTHER_CLAUDE.id);
+    expect(getPendingAccountId("agent-1")).toBe(OTHER_CLAUDE.id);
+    expect(getPendingPick("agent-1")?.identity.model_id).toBe("gpt-6-astra");
+  });
+
   it("starts a rebind's new chat on the model this chat runs on when nothing new is picked", async () => {
     state.chat = chatSnapshotFixture("agent-1", {
       active_agent: {
