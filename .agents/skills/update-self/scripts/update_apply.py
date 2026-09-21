@@ -511,7 +511,7 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
         return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
     # The shell's bundle is served by every tree the workspace ever ran, manifest or not;
-    # only the chat's depends on the restored tree carrying the chat frontend.
+    # every other bundle depends on the restored tree carrying its app's frontend.
     served = tuple(
         bundle
         for bundle in FRONTEND_BUNDLES
@@ -940,7 +940,7 @@ def apply_update(
         if marker.worker_bundles is not None:
             # All or nothing: the bundles are built together from one tree, and a
             # live build emits them all, so one that cannot be installed means a
-            # live build for both.
+            # live build for all of them.
             rejections = {
                 bundle.app: _worker_bundle_reject_reason(
                     marker.worker_bundles.get(bundle.app),

@@ -15,10 +15,12 @@ It is what the user is looking at *right now*, so you always work against an
   served by the threaded Werkzeug server).
 - Frontend: `system/apps/system_interface/frontend/src/` (TypeScript + Vite + Tailwind
   + mithril), one member of the npm workspace rooted at `system/package.json`
-  beside the chat app's frontend (`system/apps/chat/frontend/`) and the shared
-  `system/libs/workspace_ui` library both import. Build output goes to the gitignored
-  `system/apps/system_interface/imbue/system_interface/static/` (and the chat's to
-  `system/apps/chat/imbue/chat/static/`).
+  beside the chat app's frontend (`system/apps/chat/frontend/`), the Getting
+  Started app's (`system/apps/getting_started/frontend/`), and the shared
+  `system/libs/workspace_ui` library all three import. Build output goes to the gitignored
+  `system/apps/system_interface/imbue/system_interface/static/` (the chat's to
+  `system/apps/chat/imbue/chat/static/` and the Getting Started app's to
+  `system/apps/getting_started/src/getting_started/static/`).
 
 ## Design system: an optional convention for the default UI
 
@@ -50,7 +52,8 @@ System-interface specifics:
   so your edits are picked up with no reinstall and no restart. Never install the
   global `system-interface` tool.
 - Frontend: `cd system && npm run build` (you must produce a clean build; one
-  build at the npm root emits the shell's bundle and the chat app's) plus
+  build at the npm root emits the shell's bundle, the chat app's, and the Getting
+  Started app's) plus
   `npm run lint` and `npm test` there.
 - The Playwright harness in
   `system/apps/system_interface/imbue/system_interface/test_e2e.py` already spins up an
@@ -74,15 +77,16 @@ System-interface specifics:
 
 Before you report `done`, your work_dir **must** contain a current frontend
 build (`cd system && npm ci && npm run build`, output in the gitignored
-`imbue/system_interface/static/` and, for the chat app, `imbue/chat/static/`).
+`imbue/system_interface/static/` and, for the chat and Getting Started apps,
+`imbue/chat/static/` and `src/getting_started/static/`).
 This is **not** conditional on
 whether you touched the frontend: the lead previews your change by booting your
 work_dir directly, and the preview **refuses to boot a work_dir with no build**
 (it serves the backend's "Frontend not built" placeholder otherwise, which reads
 as a broken UI). A fresh worktree has no `node_modules` and no `static/`, so a
 backend-only change that skips the build leaves nothing to preview. Build it and
-confirm `imbue/system_interface/static/index.html` and `imbue/chat/static/chat.html`
-exist before reporting `done`.
+confirm `imbue/system_interface/static/index.html`, `imbue/chat/static/chat.html`,
+and `src/getting_started/static/index.html` exist before reporting `done`.
 
 ## Real scenario: look at it firsthand, do not imagine it
 

@@ -307,11 +307,12 @@ Interpret the exit code and report it to the user:
   a rollback whose own git steps failed). The interface may be down; escalate
   immediately. The pre-apply copies are kept under
   `data/.state/update-apply/snapshots/`, and when the apply touched the
-  frontend the stderr names a copy per bundle (the shell's and the chat's) --
-  copying each back over its own served directory
-  (`system/apps/system_interface/imbue/system_interface/static/` and
-  `system/apps/chat/imbue/chat/static/`) needs neither `npm` nor a registry,
-  so pass both paths on with the escalation. Read the stderr rather than
+  frontend the stderr names a copy per bundle (the shell's, the chat's, and the
+  Getting Started app's) -- copying each back over its own served directory
+  (`system/apps/system_interface/imbue/system_interface/static/`,
+  `system/apps/chat/imbue/chat/static/`, and
+  `system/apps/getting_started/src/getting_started/static/`) needs neither `npm`
+  nor a registry, so pass every path on with the escalation. Read the stderr rather than
   assuming a path is there. This exit also leaves a durable
   `data/.state/update-apply/emergency.json` (reason, the agent that drove the
   apply, where the copies are) and the system interface shows a banner off it
