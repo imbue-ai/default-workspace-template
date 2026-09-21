@@ -10,7 +10,6 @@
    tree. A class name assembled by string concatenation is NOT detected -- safelist any such case
    with `@source inline("...")`. */
 @source "./**/*.ts";
-@source "../../../libs/workspace_ui/src/**/*.ts";
 
 /* The template rails scroll sideways beside their paging arrows; the scrollbar itself
    is hidden (no utility reaches the pseudo-element), and the cut-off card at the rail's edge is
