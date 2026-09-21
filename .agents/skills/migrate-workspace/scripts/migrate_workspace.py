@@ -884,6 +884,11 @@ AUDIT_PATTERNS: Mapping[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"update-service\b"),
         re.compile(r"(?:crystallize|update|heal|harden)-artifact"),
         re.compile(r"artifact-(?:skill|service|system-interface)"),
+        # The latchkey skill is now `connect-external-service`. Matched as a path
+        # into the old directory or as prose naming it, never as bare `latchkey`,
+        # which every legitimate CLI call carries (those are the `latchkey` kind).
+        re.compile(r"skills/latchkey\b"),
+        re.compile(r"latchkey`? skill"),
     ),
 }
 
