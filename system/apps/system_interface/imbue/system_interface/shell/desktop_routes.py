@@ -255,8 +255,9 @@ def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnVal
 
 def _layout_wire_json(shell: ShellState, desktop: Desktop, client_id: ClientId) -> dict[str, Any]:
     """The client's layout of the desktop with its stored paths for the desktop's independent windows."""
-    layout = shell.placements.read_layout(desktop.id, client_id, {window.id for window in desktop.windows})
-    return desktop_layout_wire_json(layout, shell.read_window_paths(desktop, client_id))
+    return desktop_layout_wire_json(
+        shell.read_desktop_layout(desktop, client_id), shell.read_window_paths(desktop, client_id)
+    )
 
 
 def get_placements(desktop_id: str) -> ResponseReturnValue:
@@ -615,7 +616,7 @@ def _op_window(
     shell: ShellState, op: str, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> WindowId:
     desktop = target.desktop
-    layout = shell.read_desktop_layout(desktop.id, target.client_id)
+    layout = shell.read_desktop_layout(desktop, target.client_id)
     seen_windows = shell.windows_for_client(desktop, target.client_id)
     window = _resolve_window(desktop, seen_windows, layout, arguments.window, requester)
     match op:
@@ -747,7 +748,7 @@ def _refresh_window(
     shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> ResponseReturnValue:
     """The transient one-window ``refresh``: the window's page on the target client."""
-    layout = shell.read_desktop_layout(target.desktop.id, target.client_id)
+    layout = shell.read_desktop_layout(target.desktop, target.client_id)
     seen_windows = shell.windows_for_client(target.desktop, target.client_id)
     window = _resolve_window(target.desktop, seen_windows, layout, arguments.window, requester)
     shell.broadcaster.broadcast_layout_op(
