@@ -71,7 +71,6 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
       "name": "Home",
       "color": "#2f6b4f",
       "glyph": 0,
-      "sharing": "shared",
       "wallpaper": {"kind": "bundled", "name": "apricot-coast"},
       "shortcuts": [
         {"target": {"kind": "launch", "app": "chat", "launch": "new"}, "mode": "new", "cell": {"column": 0, "row": 0}}
@@ -85,10 +84,10 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 ```
 
 - `desktops` is in creation order; the first is the fallback desktop.
-- `color` is `#RRGGBB`; `glyph` is `0..9`; `sharing` is `shared` or `personal`; `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+- `color` is `#RRGGBB`; `glyph` is `0..9`; `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
 - `shortcuts`: `target.kind` is `launch` (the only V1 kind); at most one shortcut per `(app, launch)`; `cell.column` and `cell.row` are integers at least 0.
 - `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_settling` is true from an open at a launch path until the first location report, and false for an open at an explicit path.
-- A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read.
+- A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read. A desktop that still carries the retired `sharing` key is read with the key dropped.
 
 ### 4.2 `placements/<desktop_id>/<client_id>.json`
 
@@ -110,8 +109,15 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 ### 4.3 `clients.json`
 
-`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>"}}}`.
+`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "user_id": "<user_id>" | null}}}`.
+`user_id` is the signed-in visitor the client last arrived as (section 5.5), null for the owner or an anonymous client; an entry without the key reads as null.
 A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and rewritten at version 2 on the next write.
+
+### 4.3a `users.json`
+
+`{"version": 1, "users": {"<user_id>": {"desktop_id": "<desktop_id>", "desktop_name": "<name>", "email": "<email>" | null, "display_name": "<name>" | null, "last_seen": "<RFC 3339>"}}}`.
+One entry per signed-in visitor the shell has made a desktop for (plan section 3.10): the desktop, the name it was created with, the identity as of the last arrival.
+A user id matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, as the identity header carries it.
 
 ### 4.4 Wallpapers
 
@@ -138,7 +144,7 @@ Removed: `POST /api/apps/<name>/changed`, `POST /api/apps/<name>/instances` and 
 |---|---|---|
 | `GET /api/desktops` | | `{"desktops": [desktop, ...]}` |
 | `POST /api/desktops` | `{"name", "color", "glyph"}` | `201 desktop`, seeded shortcuts, no windows, wallpaper `null`; `409` on an id conflict |
-| `POST /api/desktops/<id>/settings` | `{"name", "color", "glyph", "sharing"}` | `200 desktop` |
+| `POST /api/desktops/<id>/settings` | `{"name", "color", "glyph"}` | `200 desktop` |
 | `POST /api/desktops/<id>/wallpaper` | `{"wallpaper": wallpaper \| null}` | `200 desktop`; `404` when the named wallpaper does not exist |
 | `POST /api/desktops/<id>/delete` | | `200 {"fallback_desktop_id"}`; `409` for the last desktop |
 | `POST /api/desktops/<id>/shortcuts` | `{"target", "mode", "cell"}` | `200 desktop`; replaces the entry for the same `(app, launch)`; `400` for an app or launch path the registry does not declare |
@@ -172,16 +178,23 @@ A location that changes nothing writes and broadcasts nothing.
 `layout` is the object of section 4.2.
 A save whose placements name windows the desktop does not hold is accepted with those entries dropped.
 
-### 5.5 Clients, inventory, wallpapers
+### 5.5 Clients, arrival, inventory, wallpapers
 
 | Route | Response |
 |---|---|
-| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected"}]}` |
+| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected", "user_id"}]}` |
+| `POST /api/clients/<client_id>/arrive` | `{"desktop_id", "created_desktop": desktop \| null, "replaced_desktop_name": string \| null}` |
 | `GET /api/inventory` | `{"desktops": [desktop, ...], "apps": [app, ...], "clients": [client with "shown": [window_id, ...]]}` where `shown` is the windows of the client's active desktop that its layout does not minimize |
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
 `app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...]}], "default_shortcut", "launcher_rank", "is_running"}`.
+
+The arrival is what a shell page posts first, before reading the desktops, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2).
+`desktop_id` is where the client lands (`null` while the workspace has no desktop): for the owner and for a request with no `user_id`, the client's stored desktop when it exists, else the first desktop (section 4.3); for a visiting user (`owner` false with a `user_id`), the desktop made for them.
+On a visiting user's first arrival the shell creates that desktop and answers it as `created_desktop`: named after the user (their `display_name`, else the local part of their `email`, else `Guest`; suffixed ` 2`, ` 3`, ... until neither the name nor its id is taken), with the first free glyph and that glyph's colour, holding the first desktop's shortcuts, its wallpaper, and one new window at the path of each of its settled windows; it is recorded in `users.json`, broadcast as `desktops_updated`, and the client is recorded on it with its `user_id`.
+A later client of the same user lands on that desktop; a returning client keeps the desktop it was on.
+When the recorded desktop no longer exists the shell seeds another the same way and answers the deleted one's name as `replaced_desktop_name`, which the page shows once (`data-replaced-desktop-notice`).
 
 ## 6. The WebSocket
 
@@ -327,6 +340,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |
 | `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar and launcher |
 | `data-tray-widget="desktops"`, `data-desktop-switch="<id>"`, `data-tray-widget="presence"`, `data-presence-user="<user-id>"` | the tray |
+| `data-replaced-desktop-notice="<name>"` | the notice that a visitor's desktop was deleted and replaced |
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launch="<app>:<launch>"` | launcher tiles (today's `data-launch` spelling kept) |
 

@@ -3,10 +3,10 @@
 from datetime import timedelta
 from pathlib import Path
 
-from imbue.imbue_common.model_update import to_update
-from imbue.mngr.utils.polling import wait_for
 from app_manifest.primitives import AppName
 
+from imbue.imbue_common.model_update import to_update
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport

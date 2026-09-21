@@ -39,6 +39,7 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
@@ -1202,3 +1203,69 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
         expect(_window(phone_page, phone_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
         expect(_taskbar_entry(page, phone_window)).to_have_attribute("data-minimized", "true", timeout=15000)
         expect(_window(page, laptop_window)).to_have_attribute("data-focused", "true")
+
+
+def _visitor_headers(user_id: str, display_name: str) -> dict[str, str]:
+    """The identity header a share gateway stamps on a signed-in visitor's requests."""
+    identity = {"owner": False, "user_id": user_id, "email": f"{user_id}@example.com", "display_name": display_name}
+    return {IDENTITY_HEADER: json.dumps(identity)}
+
+
+@contextlib.contextmanager
+def _visiting_client(
+    page: Page, e2e_server: E2EServer, user_id: str, display_name: str, desktop_id: str
+) -> Generator[Page, None, None]:
+    """A page of a second browser context whose every request carries a visitor's identity, opened on the shell and
+    waited for on the visitor's own desktop (the shared landing helper waits for Home, which a visitor never sees)."""
+    context = _second_context(page, extra_http_headers=_visitor_headers(user_id, display_name))
+    try:
+        visitor = context.new_page()
+        visitor.goto(f"{e2e_server.base_url}/")
+        expect(visitor.locator(f'[data-desktop-id="{desktop_id}"]')).to_be_visible(timeout=15000)
+        yield visitor
+    finally:
+        context.close()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_server: E2EServer, page: Page) -> None:
+    """A signed-in visitor's first page load gets a desktop named after them, holding Home's shortcut and a window at
+    each of Home's settled windows, and leaves Home as it was; a second client of theirs lands there too; and when
+    that desktop is deleted, their next load seeds another and says so."""
+    _land(page, e2e_server)
+    home_window = _open_via_shortcut(page, e2e_server)
+    expect(_window(page, home_window)).to_be_visible(timeout=15000)
+
+    with _visiting_client(page, e2e_server, "user-alice", "Alice", "alice") as visitor:
+        expect(visitor.locator(f'[data-desktop-id="alice"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
+        desktops = _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]
+        (alice,) = [desktop for desktop in desktops if desktop["id"] == "alice"]
+        assert alice["name"] == "Alice"
+        (copied,) = alice["windows"]
+        assert copied["id"] != home_window and copied["app"] == _STUB_APP_NAME
+        # The copy is hers to arrange: it starts minimized in her taskbar, and Home's window is untouched.
+        expect(_taskbar_entry(visitor, copied["id"])).to_be_visible(timeout=15000)
+        assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
+        expect(page.locator('[data-desktop-switch="alice"]')).to_be_visible(timeout=15000)
+        expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
+
+        with _visiting_client(page, e2e_server, "user-alice", "Alice", "alice"):
+            pass
+        assert [desktop["id"] for desktop in _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]] == [
+            _HOME_DESKTOP_ID,
+            "alice",
+        ]
+
+        deletion = urllib.request.Request(
+            f"{e2e_server.base_url}/api/desktops/alice/delete",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(deletion, timeout=5):
+            pass
+        visitor.reload()
+        expect(visitor.locator('[data-replaced-desktop-notice="Alice"]')).to_be_visible(timeout=15000)
+        expect(visitor.locator('[data-desktop-id="alice"]')).to_be_visible()
+        visitor.locator(".replaced-desktop-dismiss").click()
+        expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)

@@ -12,6 +12,7 @@ from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.testing import TEST_NOW
 
 
@@ -38,6 +39,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "active_desktop": "research",
         "last_seen": "2026-09-04T00:02:00+00:00",
         "is_connected": True,
+        "user_id": None,
     }
     assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
 
@@ -87,7 +89,7 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
     written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
     assert written["version"] == 2
     assert set(written["clients"]) == {"viewer", "desktopper", "c3"}
-    assert set(written["clients"]["viewer"]) == {"active_desktop", "last_seen"}
+    assert set(written["clients"]["viewer"]) == {"active_desktop", "last_seen", "user_id"}
 
 
 def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Path) -> None:
@@ -95,3 +97,21 @@ def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Pat
     assert ClientStore(state_directory=tmp_path).list_clients() == []
     (tmp_path / CLIENTS_FILENAME).write_text(json.dumps({"version": 2, "clients": "nope"}))
     assert ClientStore(state_directory=tmp_path).list_clients() == []
+
+
+def test_an_arrival_records_the_user_and_the_landing_desktop_and_a_report_keeps_the_user(tmp_path: Path) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    arrived = store.record_arrival(ClientId("c1"), UserId("user-alice"), DesktopId("alice"), TEST_NOW)
+    assert arrived.is_active_desktop_changed is True
+    assert arrived.record.user_id == "user-alice" and arrived.record.active_desktop == "alice"
+    # The client_state report carries no user, so the recorded one stays.
+    reported = store.record_report(_report("c1", "home"), TEST_NOW + timedelta(minutes=1)).record
+    assert reported.user_id == "user-alice" and reported.active_desktop == "home"
+    # Arriving again on the desktop the client is on changes nothing about the desktop.
+    assert (
+        store.record_arrival(
+            ClientId("c1"), UserId("user-alice"), DesktopId("home"), TEST_NOW
+        ).is_active_desktop_changed
+        is False
+    )
+    assert client_wire_json(reported, False)["user_id"] == "user-alice"

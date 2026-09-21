@@ -24,6 +24,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
@@ -58,6 +59,8 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.layout_ops import DesktopOpArguments
 from imbue.system_interface.shell.layout_ops import INVENTORY_OPS
 from imbue.system_interface.shell.layout_ops import LOAD_OP
@@ -67,7 +70,6 @@ from imbue.system_interface.shell.layout_ops import SELF_WINDOW
 from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -114,7 +116,6 @@ class DesktopSettingsRequest(FrozenModel):
     name: str = Field(description="The display name")
     color: str = Field(description="'#RRGGBB'")
     glyph: int = Field(description="The glyph index")
-    sharing: SharingMode = Field(description="shared or personal")
 
 
 class DesktopWallpaperRequest(FrozenModel):
@@ -187,7 +188,7 @@ def create_desktop() -> ResponseReturnValue:
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(DesktopSettingsRequest)
     shell = _shell()
-    desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph, body.sharing)
+    desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph)
     shell.broadcast_desktops_updated()
     return jsonify(desktop_wire_json(desktop))
 
@@ -268,7 +269,23 @@ def save_placements(desktop_id: str) -> ResponseReturnValue:
     return jsonify({"updated_at": desktop_layout_wire_json(saved)["updated_at"] if saved is not None else None})
 
 
-# Section 5.5: wallpapers, and the inventory document
+# Section 5.5: the arrival, wallpapers, and the inventory document
+
+
+@pure
+def arrival_wire_json(outcome: ClientArrivalOutcome) -> dict[str, Any]:
+    """The answer of ``POST /api/clients/<client_id>/arrive`` (desktop contracts.md section 5.5)."""
+    return {
+        "desktop_id": str(outcome.desktop_id) if outcome.desktop_id is not None else None,
+        "created_desktop": desktop_wire_json(outcome.created_desktop) if outcome.created_desktop is not None else None,
+        "replaced_desktop_name": outcome.replaced_desktop_name,
+    }
+
+
+def arrive_client(client_id: str) -> ResponseReturnValue:
+    """A shell page has loaded for ``client_id``: settle the desktop it lands on from the requester's identity."""
+    identity = parse_identity_header(request.headers.get(IDENTITY_HEADER))
+    return jsonify(arrival_wire_json(_shell().arrive_client(ClientId(client_id), identity)))
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
@@ -388,6 +405,9 @@ def register_desktop_routes(application: Flask) -> None:
     )
     application.add_url_rule(
         "/api/placements/<desktop_id>", view_func=save_placements, methods=["POST"], endpoint="save_placements"
+    )
+    application.add_url_rule(
+        "/api/clients/<client_id>/arrive", view_func=arrive_client, methods=["POST"], endpoint="arrive_client"
     )
     application.add_url_rule(
         "/api/wallpapers", view_func=list_wallpapers_route, methods=["GET"], endpoint="list_wallpapers_route"

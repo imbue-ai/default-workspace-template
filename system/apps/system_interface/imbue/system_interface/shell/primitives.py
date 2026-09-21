@@ -21,6 +21,7 @@ _DESKTOP_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,
 _CLIENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAVE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^save-[0-9a-f]{16}$")
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^win-[0-9a-f]{16}$")
+_USER_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # A wallpaper reference's ``name`` is a file name without its extension (desktop contracts.md section 4.4).
 _WALLPAPER_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MINTED_ID_BYTES: Final[int] = 8
@@ -94,6 +95,20 @@ class DesktopId(NonEmptyStr):
         return _string_schema(cls, handler)
 
 
+class UserId(NonEmptyStr):
+    """A signed-in account's user id as the identity header carries it; it names the user's state files, so it is held
+    to a filename-safe alphabet."""
+
+    def __new__(cls, value: str) -> Self:
+        if not _USER_ID_PATTERN.fullmatch(value):
+            raise InvalidShellValueError(f"invalid user id {value!r}")
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return _string_schema(cls, handler)
+
+
 class WindowId(NonEmptyStr):
     """A window id the shell minted: ``win-<16 hex>``, never reused."""
 
@@ -153,13 +168,6 @@ class WallpaperName(NonEmptyStr):
 
 def mint_window_id() -> WindowId:
     return WindowId(f"win-{secrets.token_hex(_MINTED_ID_BYTES)}")
-
-
-class SharingMode(LowerCaseStrEnum):
-    """Whether a desktop is shared with everyone on the workspace or personal (a wire value; V1 enforces nothing)."""
-
-    SHARED = auto()
-    PERSONAL = auto()
 
 
 class WindowState(UpperCaseStrEnum):

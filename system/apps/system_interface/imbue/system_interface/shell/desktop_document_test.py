@@ -1,6 +1,7 @@
 """Tests for the pure desktop editor: the shared geometry vectors, and the verbs over desktops and layouts."""
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
 from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import ShortcutTarget
+from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import BackdropSize
 from imbue.system_interface.shell.desktop_document import FitMetrics
@@ -25,6 +27,7 @@ from imbue.system_interface.shell.desktop_document import GridMetrics
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
+from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import fit_frame_to_backdrop
@@ -38,6 +41,7 @@ from imbue.system_interface.shell.desktop_document import path_carries_marker
 from imbue.system_interface.shell.desktop_document import place_shortcuts
 from imbue.system_interface.shell.desktop_document import reading_order_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktop_document import settled_windows
 from imbue.system_interface.shell.desktop_document import snap_zone_for_release
 from imbue.system_interface.shell.desktop_document import unsnap_frame
 from imbue.system_interface.shell.desktop_document import with_shortcut
@@ -50,11 +54,16 @@ from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
 from imbue.system_interface.shell.desktop_document import without_shortcut
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import WallpaperKind
+from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import desktop_with_windows
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -358,3 +367,34 @@ def test_the_verbs_edit_one_placement_and_the_stack() -> None:
     # A window with no placement yet gets its default before the verb applies.
     absent = with_window_raised(_layout(), _WIN_1)
     assert absent.placements == (placement_record(_WIN_1),)
+
+
+def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_settled_windows_as_new_windows() -> None:
+    settled = window_record(WindowId("win-000000000000000a"), "terminal", "/?session=terminal-1")
+    settling = window_record(WindowId("win-000000000000000b"), "files", "/new", is_settling=True)
+    bare = desktop_with_windows(settled, settling)
+    source = bare.model_copy_update(
+        to_update(
+            bare.field_ref().shortcuts,
+            (
+                DesktopShortcut(
+                    target=ShortcutTarget(app=AppName("terminal"), launch=LaunchPathId("new")),
+                    mode=ShortcutMode.NEW,
+                    cell=GridCell(column=0, row=0),
+                ),
+            ),
+        ),
+        to_update(bare.field_ref().wallpaper, Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dunes"))),
+    )
+    assert [window.id for window in settled_windows(source)] == [settled.id]
+    later = TEST_NOW + timedelta(hours=1)
+    seeded = desktop_seeded_from(
+        source, DesktopId("alice"), "Alice", "#16A34A", 1, [WindowId("win-00000000000000ff")], later
+    )
+    assert (seeded.id, seeded.name, seeded.color, seeded.glyph) == ("alice", "Alice", "#16A34A", 1)
+    assert seeded.shortcuts == source.shortcuts and seeded.wallpaper == source.wallpaper
+    (copied,) = seeded.windows
+    assert (copied.id, copied.app, copied.path, copied.title) == ("win-00000000000000ff", "terminal", settled.path, "")
+    assert copied.opened_at == later and copied.is_settling is False
+    with pytest.raises(InvalidShellValueError):
+        desktop_seeded_from(source, DesktopId("bob"), "Bob", "#16A34A", 1, [], later)

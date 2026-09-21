@@ -1,5 +1,6 @@
 """Tests for the shell's HTTP routes (desktop contracts.md sections 5, 6, and 8) over a test state and the two-app registry."""
 
+import json
 import queue
 from pathlib import Path
 from typing import Any
@@ -11,10 +12,12 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import TEST_NOW
@@ -295,7 +298,7 @@ def test_the_default_desktop_is_seeded_from_the_registry_on_the_first_read(clien
     desktops = client.get("/api/desktops").get_json()["desktops"]
     assert [desktop["id"] for desktop in desktops] == ["home"]
     (home,) = desktops
-    assert home["name"] == "Home" and home["sharing"] == "shared" and home["wallpaper"] is None
+    assert home["name"] == "Home" and home["wallpaper"] is None and "sharing" not in home
     assert home["windows"] == []
     assert home["shortcuts"] == [
         {
@@ -320,14 +323,11 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert client.post("/api/desktops", json={"name": "research!", "color": "#12B5A5", "glyph": 4}).status_code == 409
     assert client.post("/api/desktops", json={"name": "Bad", "color": "red", "glyph": 4}).status_code == 400
     settled = client.post(
-        "/api/desktops/research/settings",
-        json={"name": "Research 2", "color": "#222222", "glyph": 2, "sharing": "personal"},
+        "/api/desktops/research/settings", json={"name": "Research 2", "color": "#222222", "glyph": 2}
     )
-    assert settled.status_code == 200 and settled.get_json()["sharing"] == "personal"
+    assert settled.status_code == 200 and settled.get_json()["name"] == "Research 2"
     assert (
-        client.post(
-            "/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2, "sharing": "shared"}
-        ).status_code
+        client.post("/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2}).status_code
         == 404
     )
 
@@ -753,3 +753,85 @@ def test_a_malformed_op_argument_is_a_400_naming_the_argument(
     refused = _op(client, op, args, _TERMINAL_REQUESTER)
     assert refused.status_code == 400
     assert fragment in refused.get_json()["detail"]
+
+
+# The arrival (desktop plan section 3.10)
+
+_ALICE = json.dumps({"owner": False, "user_id": "user-alice", "email": "alice@example.com", "display_name": "Alice"})
+_BOB = json.dumps({"owner": False, "user_id": "user-bob", "email": "bob@example.com"})
+_OWNER = json.dumps({"owner": True, "user_id": "user-owner", "email": "owner@example.com"})
+
+
+def _arrive(client: FlaskClient, client_id: str, identity: str | None) -> dict[str, Any]:
+    headers = {} if identity is None else {IDENTITY_HEADER: identity}
+    response = client.post(f"/api/clients/{client_id}/arrive", headers=headers)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.get_json()
+
+
+def test_the_owner_and_an_anonymous_client_arrive_on_their_recorded_desktop_or_the_first(
+    client: FlaskClient, app: Flask
+) -> None:
+    assert _arrive(client, "c-new", None) == {
+        "desktop_id": "home",
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    _record_client(app, "c-owner", "research")
+    assert _arrive(client, "c-owner", _OWNER)["desktop_id"] == "research"
+    # Arriving makes no desktop and records no user for either of them.
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == ["home", "research"]
+    assert _shell(app).users.list_users() == []
+
+
+def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_clients_land_on_it(
+    client: FlaskClient, app: Flask
+) -> None:
+    shell = _shell(app)
+    client_queue = _register_client(app, "c-owner", "home")
+    opened = _open_window(client, "terminal", "/?session=terminal-1", client_id="c-owner").get_json()["window"]
+    drain_messages(client_queue)
+
+    arrival = _arrive(client, "c-alice-laptop", _ALICE)
+    created = arrival["created_desktop"]
+    assert arrival["desktop_id"] == "alice" and arrival["replaced_desktop_name"] is None
+    assert created["id"] == "alice" and created["name"] == "Alice" and created["glyph"] == 1
+    home = client.get("/api/desktops/home" if False else "/api/desktops").get_json()["desktops"][0]
+    assert created["shortcuts"] == home["shortcuts"]
+    (copied,) = created["windows"]
+    assert copied["id"] != opened["id"] and (copied["app"], copied["path"]) == ("terminal", "/?session=terminal-1")
+    assert home["windows"] == [opened]
+    # Everyone hears of the new desktop; the client's record names the user and the desktop.
+    assert "desktops_updated" in {message["type"] for message in drain_messages(client_queue)}
+    record = shell.clients.get_client("c-alice-laptop")
+    assert record is not None and record.user_id == "user-alice" and record.active_desktop == "alice"
+    stored = shell.users.get_user(UserId("user-alice"))
+    assert stored is not None and stored.desktop_id == "alice" and stored.display_name == "Alice"
+
+    # A second client of the same user lands on the same desktop; nothing new is made.
+    second = _arrive(client, "c-alice-phone", _ALICE)
+    assert second == {"desktop_id": "alice", "created_desktop": None, "replaced_desktop_name": None}
+    # A returning client of hers keeps the desktop it moved to.
+    _record_client(app, "c-alice-laptop", "home")
+    assert _arrive(client, "c-alice-laptop", _ALICE)["desktop_id"] == "home"
+    # Another user gets their own, named after their email when they have no display name.
+    bob = _arrive(client, "c-bob", _BOB)
+    assert bob["desktop_id"] == "bob" and bob["created_desktop"]["glyph"] == 2
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
+        "home",
+        "alice",
+        "bob",
+    ]
+
+
+def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_reported(
+    client: FlaskClient, app: Flask
+) -> None:
+    _arrive(client, "c-alice", _ALICE)
+    assert client.post("/api/desktops/alice/delete").status_code == 200
+    again = _arrive(client, "c-alice", _ALICE)
+    assert again["desktop_id"] == "alice" and again["replaced_desktop_name"] == "Alice"
+    assert again["created_desktop"]["name"] == "Alice"
+    # A client of hers that had a record was moved along with her.
+    assert _shell(app).clients.get_client("c-alice").active_desktop == "alice"

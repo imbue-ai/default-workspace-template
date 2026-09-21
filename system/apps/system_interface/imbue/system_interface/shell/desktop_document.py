@@ -11,6 +11,7 @@ written once here and once in TypeScript against the same constants and the shar
 import math
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from datetime import datetime
 from typing import Final
 from typing import assert_never
 from urllib.parse import parse_qsl
@@ -34,7 +35,9 @@ from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.errors import GridSearchExhaustedError
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
@@ -443,6 +446,49 @@ def default_launch_path_id(row: RegistryRow) -> LaunchPathId | None:
     offered = {launch_path.id for launch_path in effective_launch_paths(row)}
     declared = row.default_shortcut.launch
     return declared if declared in offered else None
+
+
+@pure
+def settled_windows(desktop: Desktop) -> tuple[Window, ...]:
+    """The windows whose pages have reported where they are; a settling one is mid-launch and is not copied."""
+    return tuple(window for window in desktop.windows if not window.is_settling)
+
+
+@pure
+def desktop_seeded_from(
+    source: Desktop,
+    desktop_id: DesktopId,
+    name: str,
+    color: str,
+    glyph: int,
+    # One fresh id per settled window of ``source``, in that order.
+    window_ids: Sequence[WindowId],
+    opened_at: datetime,
+) -> Desktop:
+    """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its settled windows' paths
+    (desktop plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's."""
+    settled = settled_windows(source)
+    if len(window_ids) != len(settled):
+        raise InvalidShellValueError(f"seeding needs {len(settled)} window id(s), got {len(window_ids)}")
+    return Desktop(
+        id=desktop_id,
+        name=name,
+        color=color,
+        glyph=glyph,
+        wallpaper=source.wallpaper,
+        shortcuts=source.shortcuts,
+        windows=tuple(
+            Window(
+                id=window_id,
+                app=window.app,
+                path=window.path,
+                title=window.title,
+                opened_at=opened_at,
+                is_settling=False,
+            )
+            for window, window_id in zip(settled, window_ids, strict=True)
+        ),
+    )
 
 
 @pure

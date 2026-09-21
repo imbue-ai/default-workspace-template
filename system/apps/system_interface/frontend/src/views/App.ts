@@ -34,6 +34,7 @@ import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog"
 import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
 import type { LauncherWindowRow } from "./LauncherOverlay";
 import { Menu, anchorForEvent, anchorForPoint } from "./Menu";
+import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import type { MenuAnchor, MenuEntry } from "./Menu";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
@@ -411,8 +412,8 @@ export function App(): m.Component<AppAttrs> {
       desktop,
       wallpapers,
       isDeleting: dialog.isDeleting,
-      onSave: async (name, color, glyph, sharing, wallpaper) => {
-        await current.updateDesktopSettings(desktop.id, name, color, glyph, sharing);
+      onSave: async (name, color, glyph, wallpaper) => {
+        await current.updateDesktopSettings(desktop.id, name, color, glyph);
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
         settingsDialog = null;
       },
@@ -423,6 +424,16 @@ export function App(): m.Component<AppAttrs> {
       onCancel: () => {
         settingsDialog = null;
       },
+    });
+  }
+
+  function replacedDesktopNotice(current: DesktopStore, desktop: Desktop | null): m.Children {
+    const replacedDesktopName = current.getReplacedDesktopName();
+    if (replacedDesktopName === null || desktop === null) return null;
+    return m(ReplacedDesktopNotice, {
+      replacedDesktopName,
+      currentDesktopName: desktop.name,
+      onDismiss: () => current.dismissReplacedDesktopNotice(),
     });
   }
 
@@ -611,6 +622,7 @@ export function App(): m.Component<AppAttrs> {
         openMenu?.kind === "desktops" ? desktopsMenu(current, openMenu.anchor) : null,
         openMenu?.kind === "desktop" ? desktopMenu(current, openMenu.desktopId, openMenu.anchor) : null,
         settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+        replacedDesktopNotice(current, desktop),
       ]);
     },
   };

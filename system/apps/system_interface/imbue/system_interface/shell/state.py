@@ -23,6 +23,7 @@ from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
+from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import Desktop
@@ -31,30 +32,41 @@ from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
+from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktop_document import settled_windows
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
+from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
+from imbue.system_interface.shell.desktops import desktop_name_for_user
+from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
+from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.identity import is_visiting_user
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -78,6 +90,7 @@ class ShellState(MutableModel):
         frozen=True, description="Where the workspace's own wallpaper files are read from"
     )
     clients: ClientStore = Field(frozen=True, description="clients.json")
+    users: UserStore = Field(frozen=True, description="users.json: the desktop made for each signed-in visitor")
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     client_prune_interval_seconds: float = Field(
@@ -329,6 +342,86 @@ class ShellState(MutableModel):
             self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
         return outcome.is_active_desktop_changed
 
+    def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome:
+        """Where a client whose shell page just loaded lands (desktop plan section 3.10): the owner and anonymous
+        clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
+        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
+        while a returning client of theirs keeps the desktop it was on."""
+        desktops = self.list_desktops()
+        record = self.clients.get_client(client_id)
+        if not desktops:
+            return ClientArrivalOutcome(desktop_id=None, created_desktop=None, replaced_desktop_name=None)
+        if not is_visiting_user(identity):
+            return ClientArrivalOutcome(
+                desktop_id=resolve_active_desktop(record, desktops), created_desktop=None, replaced_desktop_name=None
+            )
+        assert identity.user_id is not None
+        now = datetime.now(timezone.utc)
+        user_id = UserId(identity.user_id)
+        known = self.users.get_user(user_id)
+        desktop_ids = {desktop.id for desktop in desktops}
+        created: Desktop | None = None
+        replaced_desktop_name: str | None = None
+        if known is not None and known.desktop_id in desktop_ids:
+            own_desktop_id = known.desktop_id
+            own_desktop_name = known.desktop_name
+            is_returning_client = record is not None and record.active_desktop in desktop_ids
+            landing = record.active_desktop if is_returning_client and record is not None else own_desktop_id
+            assert landing is not None
+        else:
+            created = self._create_desktop_for_user(identity, desktops, now)
+            own_desktop_id = created.id
+            own_desktop_name = created.name
+            landing = created.id
+            replaced_desktop_name = known.desktop_name if known is not None else None
+        self.users.record_user(
+            UserRecord(
+                user_id=user_id,
+                desktop_id=own_desktop_id,
+                desktop_name=own_desktop_name,
+                email=identity.email,
+                display_name=identity.display_name,
+                last_seen=now,
+            )
+        )
+        outcome = self.clients.record_arrival(client_id, user_id, landing, now)
+        if created is not None:
+            self.broadcast_desktops_updated()
+        # A client that already had a record may have other windows open on the desktop it was moved off.
+        if record is not None and outcome.is_active_desktop_changed:
+            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(landing))
+        return ClientArrivalOutcome(
+            desktop_id=landing, created_desktop=created, replaced_desktop_name=replaced_desktop_name
+        )
+
+    def _create_desktop_for_user(
+        self, identity: RequestIdentity, desktops: Sequence[Desktop], now: datetime
+    ) -> Desktop:
+        """A desktop named after the user, seeded from the first desktop (its shortcuts, wallpaper, and settled
+        windows as new windows), with the next free glyph and that glyph's colour."""
+        name = desktop_name_for_user(identity, desktops)
+        glyph = next_glyph_index([desktop.glyph for desktop in desktops])
+        source = desktops[0]
+        seeded = desktop_seeded_from(
+            source,
+            slugify_desktop_name(name),
+            name,
+            DESKTOP_GLYPH_COLORS[glyph],
+            glyph,
+            [mint_window_id() for _ in settled_windows(source)],
+            now,
+        )
+        created = self.desktops.add_desktop(seeded)
+        logger.info(
+            "Seeded desktop {!r} for user {} from {!r} ({} shortcut(s), {} window(s))",
+            created.name,
+            identity.user_id,
+            source.name,
+            len(created.shortcuts),
+            len(created.windows),
+        )
+        return created
+
     def active_desktop_of_client(self, client_id: str) -> DesktopId | None:
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""
         return resolve_active_desktop(self.clients.get_client(client_id), self.list_desktops())
@@ -369,6 +462,7 @@ def build_shell_state(
         placements=PlacementStore(state_directory=state_directory),
         wallpaper_files_directory=wallpaper_files_directory,
         clients=ClientStore(state_directory=state_directory),
+        users=UserStore(state_directory=state_directory),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
     )

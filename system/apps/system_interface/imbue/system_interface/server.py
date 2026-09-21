@@ -26,10 +26,8 @@ from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
 from imbue.system_interface.documents import inject_meta_tag
-from imbue.system_interface.presence import IDENTITY_HEADER
 from imbue.system_interface.presence import PresenceOutcome
 from imbue.system_interface.presence import PresenceSessionId
-from imbue.system_interface.presence import parse_identity_header
 from imbue.system_interface.presence import present_user_wire_json
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.request_helpers import error_response
@@ -40,6 +38,8 @@ from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState

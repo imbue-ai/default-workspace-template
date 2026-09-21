@@ -7,15 +7,15 @@ from pathlib import Path
 import pytest
 
 from imbue.imbue_common.model_update import to_update
-from imbue.system_interface.presence import ANONYMOUS_OWNER
 from imbue.system_interface.presence import PRESENCE_SESSION_TTL
 from imbue.system_interface.presence import PresenceSessionId
 from imbue.system_interface.presence import PresenceStore
-from imbue.system_interface.presence import RequestIdentity
-from imbue.system_interface.presence import parse_identity_header
 from imbue.system_interface.presence import parse_presence_timestamp
 from imbue.system_interface.presence import present_user_wire_json
 from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.identity import ANONYMOUS_OWNER
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.identity import parse_identity_header
 
 _T0 = datetime(2026, 9, 19, 10, 0, 0, tzinfo=timezone.utc)
 _BOB = RequestIdentity(
