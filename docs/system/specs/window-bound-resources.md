@@ -1,6 +1,6 @@
 # Window-bound resources and new-window shortcuts
 
-Status: agreed design (2026-09-20), pre-implementation.
+Status: agreed design (2026-09-20), implemented on `mngr/desktop-ui-phase-6`.
 Audience: implementers of `system/apps/terminal`, `system/apps/browser`, `system/apps/chat`, `system/libs/app_manifest`, the shell (`system/apps/system_interface`), `system/scripts/layout.py`, and the `manage-desktop` and `agentic-browser-fleet` skills.
 
 This spec amends the desktop interface ([plan](../blueprint/desktop-interface/plan-desktop-interface.md), [contracts](../blueprint/desktop-interface/contracts.md), [concepts](../blueprint/desktop-interface/concepts.md)) in two places that the first live test showed do not feel like a desktop:

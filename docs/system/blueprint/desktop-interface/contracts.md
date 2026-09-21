@@ -32,6 +32,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `params` is an optional array of `{name, label, required}` naming query parameters the shell may append. |
 | `default_shortcut` | table | no | absent | `{launch = "<id>", mode = "focus" \| "new"}`; `launch` names a declared launch path, or `open` when the app declares none. |
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
+| `window_closed_path` | string | no | absent | A path shaped like a launch path; the shell posts every closed window of the app there (section 5.3), for an app whose resources live as long as their windows (`docs/system/specs/window-bound-resources.md`). |
 | `references`, `scope`, `wiring`, `handles` | | | | Unchanged. |
 
 `instances`, `instances_url`, and `actions` are removed; a manifest that carries them fails to load.
@@ -51,7 +52,7 @@ Built-in manifests:
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), and `launcher_rank` from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?}` with `params` as the array of names), `launcher_rank`, and `window_closed_path` from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -157,6 +158,7 @@ An open with `is_new` writes the requesting client's placement (section 10, casc
 An open answered with `is_new: false` restores and raises the existing window in the requesting client's layout, writes it, and broadcasts `placements_updated` for that client.
 A location report on a settling window clears `is_settling`.
 A close drops the window from every layout file of the desktop and broadcasts `desktops_updated` and one `placements_updated` per rewritten layout.
+After that, when the window's app registered a `window_closed_path`, the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's `url` plus that path from a thread of its own, with a 2 second timeout, and neither waits for nor acts on the answer; a deleted desktop's windows are posted the same way.
 A location that changes nothing writes and broadcasts nothing.
 
 ### 5.4 Placements
@@ -228,7 +230,7 @@ The shell and the minds chrome accept messages only from frames they created, so
 
 `POST /api/layout/broadcast` with `{"op", "args", "requester"}`, loopback only.
 `requester` is `{"app", "marker"}` (`{"app": "chat", "marker": "<chat-id>"}` for a chat's agent, from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), or `null`; `self` in a window argument names the window of `app` on the target client's active desktop whose path carries `marker` as a path segment or a query value.
-Targeting: `args.client`, else the client that most recently messaged the requester, else the one connected client, else `412` listing the connected clients.
+Targeting: `args.client`, else the client that most recently messaged the requester, else the one connected client, else `412` listing the connected clients; `open` alone, with nothing settling the client, writes the window on `args.desktop` (else the first desktop) with no placement instead, so it reads as minimized for every client, and answers with `client_id` and `layout` null.
 `args.desktop` names the desktop an op edits by name or id and switches the target client to it.
 
 | Op | Args | Effect |
@@ -236,7 +238,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `context` | | read-only; every client's recent activity (`{"ok", "clients"}`) |
 | `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
-| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?` | open a window at `path`, else at the launch path (`launch`, else the app's `default_shortcut.launch`, else its first) with `params` as the query string; a window of the app at that path is focused unless `if_present` is `new`; answers the window id |
+| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the launch path (`launch`, else the app's `default_shortcut.launch`, else its first) with `params` as the query string; a window of the app at that path is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
 | `place` | `window`, `zone` (`left`, `right`, `maximized`) or `frame` (`x,y,width,height`) | set the state, or the frame with state `NORMAL` |
