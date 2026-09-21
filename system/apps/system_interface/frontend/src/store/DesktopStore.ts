@@ -501,15 +501,20 @@ export class DesktopStore {
 
   /** Write how this client shows a pinned entry (its mode, style, and floating position). Applied at once, so a
    *  released drag lands where it was dropped rather than at the old spot until the shell answers; the record
-   *  the shell answers is then taken, and a refusal puts the old presentation back. */
+   *  the shell answers is then taken, and a refusal puts that entry's old presentation back (another entry
+   *  written or pushed meanwhile is not undone with it). */
   async setEntryPresentation(app: string, presentation: EntryPresentation): Promise<void> {
-    const previous = this.state.entries;
-    this.dispatch({ type: "entries_updated", entries: { ...previous, [app]: presentation } });
+    const previous = this.state.entries[app];
+    this.dispatch({ type: "entries_updated", entries: { ...this.state.entries, [app]: presentation } });
     try {
       const record = await this.deps.api.setEntryPresentation(this.deps.clientId, app, presentation);
       this.dispatch({ type: "entries_updated", entries: record.entries });
     } catch (error) {
-      this.dispatch({ type: "entries_updated", entries: previous });
+      const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
+      this.dispatch({
+        type: "entries_updated",
+        entries: previous === undefined ? others : { ...others, [app]: previous },
+      });
       this.deps.notify(`Could not change the entry: ${(error as Error).message}`);
     }
   }
