@@ -39,9 +39,9 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 Recorded here so the implementation need not re-argue them.
 
 1. Every seeded shortcut is in `new` mode: a shortcut is "a new window of this app".
-   A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's tiles.
+   A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's rows.
 2. A new chat window is the chat list at `/`.
-   The chat app creates chats only from its own page (the New chat button, the launcher's seeded prompts through `/new`) and the workspace's seeding; the desktop shortcut and `layout.py open chat` never create one.
+   The chat app creates chats only from its own page (the New chat button, the launcher's free-text row and the Getting Started app's seeded prompts through `/new`) and the workspace's seeding; the desktop shortcut and `layout.py open chat` never create one.
 3. A terminal and a browser are **window-bound**: the app destroys the resource once no window on any desktop shows it.
    The files app and the chat have no window-bound resource.
 4. Collection is the **app's**, by a sweep over the shell's windows: run when the shell says a window of the app closed, and every 90 seconds as the safety net.
@@ -66,12 +66,11 @@ Recorded here so the implementation need not re-argue them.
 | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, param `path`) | File Viewer |
 | `browser` | `{launch = "new", mode = "focus"}` | `new` ("Open Browser", `/new`, param `url`) | Browser |
 
-The chat gains a second launch path, `root`, listed first so the launcher's "Open new" tiles show "Chat" before "New Chat".
-The `new` launch path stays: the launcher's "Start something" intents and templates seed a chat through the launch path that declares a `message` param, the welcome chat's auto-open targets `/?chat=<id>` explicitly, and `layout.py open chat --launch new` remains the way an agent starts a chat.
+The chat gains a second launch path, `root`, listed first so the launcher's rows show "Chat" before "New Chat".
+The `new` launch path stays: the launcher's primary free-text row and the Getting Started app's intents and templates seed a chat through the launch path that declares `message` as its `text_param`, the welcome chat's auto-open targets `/?chat=<id>` explicitly, and `layout.py open chat --launch new` remains the way an agent starts a chat.
 The browser's launch path is relabelled "Open Browser" because it no longer always creates (section 5.4).
 
-`shortcutLabel` in `ShortcutIcon.ts` returns the app's display name in both modes, so a shortcut's icon never renames when its mode changes; the launch path's label is what the launcher's tile shows.
-`launchRowLabel` ("Open new chat") in the launcher's search reads the same for both chat tiles; that is accepted.
+`shortcutLabel` in `ShortcutIcon.ts` returns the app's display name in both modes, so a shortcut's icon never renames when its mode changes; the launch path's label is what the launcher's row shows, beside the app's display name.
 
 ### 3.2 What a run does
 
@@ -262,6 +261,6 @@ Each step leaves the tree green and is one or two commits.
   Needs a new page-to-shell message; the viewer's overlays cover it for now.
 - One Chromium with one profile and a window per fleet browser (shared logins across concurrent browsers).
   Moot while the fleet holds one browser.
-- Hiding the chat's `new` tile from the launcher.
+- Hiding the chat's `new` tile from the launcher: resolved by the launcher-and-getting-started plan, where `new` is the launcher's primary free-text row rather than a tile.
 - Migrating existing desktops' shortcuts.
 - Letting only the last-interacted window of a shared browser drive its size; every viewer's resize wins in turn, and the others letterbox, as today.

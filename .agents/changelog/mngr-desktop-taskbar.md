@@ -1,0 +1,1 @@
+The update-self apply learns the Getting Started app's frontend bundle (`system/apps/getting_started/frontend` built into `system/apps/getting_started/src/getting_started/static`) beside the shell's and the chat's, so an update that changes the app's frontend rebuilds it; there is no boot preflight for it, as an update's bundle is all it needs.
