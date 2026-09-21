@@ -71,7 +71,8 @@ DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
 )
 # What a user's desktop is called when their identity offers no usable name.
 FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
-# The key the tabbed-era desktops file carried per desktop; every desktop is shared now.
+# The key desktops.json carried per desktop before every desktop was shared (the sharing mode); an old file may
+# still hold it.
 # CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_unlocked`` around late November 2026, once every
 # workspace has rewritten its desktops.json without the key (the first write after this release does).
 _RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
