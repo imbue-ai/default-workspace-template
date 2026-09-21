@@ -148,10 +148,7 @@ describe("the avatar chooser", () => {
 
   it("opens from the pinned entry's menu, and stays closed when dismissed before the catalog answered", async () => {
     const entry = pinnedEntry();
-    let answerCatalog: () => void = () => undefined;
-    api.readGate = new Promise((resolve) => {
-      answerCatalog = resolve;
-    });
+    const answerCatalog = api.holdReads();
     openEntryMenuRow(entry, "change-avatar");
     expect(document.querySelector("[data-avatar-chooser]")).not.toBeNull();
     expect(document.querySelector("[data-avatar-chooser] [role='status']")).not.toBeNull();

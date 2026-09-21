@@ -37,6 +37,15 @@ export class FakeDesktopApi implements DesktopApi {
   /** While set, the client records, a layout, and the catalog answer only once this settles: a test holds
    *  those reads open. */
   readGate: Promise<void> | null = null;
+
+  /** Hold the reads open until the answered function is called. */
+  holdReads(): () => void {
+    let answer: () => void = () => undefined;
+    this.readGate = new Promise((resolve) => {
+      answer = resolve;
+    });
+    return answer;
+  }
   avatars: AvatarCatalog = {
     designs: [
       { id: "gummy-seal", label: "Gummy seal", source_path: null },
