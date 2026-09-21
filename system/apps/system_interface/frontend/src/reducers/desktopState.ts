@@ -394,7 +394,7 @@ export interface TaskbarEntry {
   readonly title: string;
   readonly isMinimized: boolean;
   readonly isFocused: boolean;
-  /** The app's pinned window: its entry is always there and offers no Close. */
+  /** The app's pinned window: its entry is always there, and its Close minimizes it rather than closing it. */
   readonly isPinned: boolean;
   /** How this client shows the entry; null for an ordinary window's entry. */
   readonly look: EntryLook | null;
