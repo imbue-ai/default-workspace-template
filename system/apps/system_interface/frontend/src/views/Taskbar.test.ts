@@ -48,13 +48,10 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     tray: {
       desktops: [desktopRecord("home"), desktopRecord("work")],
       activeDesktopId: "home",
-      apps: [docs, appRecord("hidden", { internal: true }), appRecord("stopped", { is_running: false })],
       isDesktopsMenuOpen: false,
-      openRunningAppName: null,
       onSwitchDesktop: vi.fn(),
       onOpenDesktopsMenu: vi.fn(),
       onDesktopContextMenu: vi.fn(),
-      onOpenRunningApp: vi.fn(),
     },
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
@@ -126,17 +123,10 @@ describe("Taskbar", () => {
       tray: {
         desktops: [desktopRecord("home"), desktopRecord("work")],
         activeDesktopId: "home",
-        apps: [
-          appRecord("docs"),
-          appRecord("hidden", { internal: true }),
-          appRecord("stopped", { is_running: false }),
-        ],
         isDesktopsMenuOpen: false,
-        openRunningAppName: null,
         onSwitchDesktop,
         onOpenDesktopsMenu: vi.fn(),
         onDesktopContextMenu: vi.fn(),
-        onOpenRunningApp: vi.fn(),
       },
     });
     expect(taskbar.querySelector("[data-launcher-field]")).not.toBeNull();
@@ -145,11 +135,8 @@ describe("Taskbar", () => {
     expect(switches.map((element) => element.getAttribute("data-active"))).toEqual(["true", "false"]);
     (switches[1] as HTMLElement).click();
     expect(onSwitchDesktop).toHaveBeenCalledWith("work");
-    expect(
-      [...taskbar.querySelectorAll("[data-running-app]")].map((element) => element.getAttribute("data-running-app")),
-    ).toEqual(["docs"]);
     expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
-    expect(taskbar.querySelector('[data-tray-widget="running-apps"]')).not.toBeNull();
+    expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
   });
 
   it("the launcher field's Escape clears a typed query first, and keeps the key from the document", () => {

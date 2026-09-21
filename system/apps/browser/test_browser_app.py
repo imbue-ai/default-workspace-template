@@ -10,6 +10,7 @@ from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from browser import runner
 from browser import session as bsession
 from browser.primitives import APP_NAME
+from imbue.mngr.utils.polling import wait_for
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
 _APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"
@@ -112,4 +113,5 @@ def test_a_window_closed_post_sweeps_at_once_and_answers_no_content(monkeypatch:
     )
 
     assert response.status_code == 204
-    assert len(swept) == 1
+    # The route only schedules the sweep on the bridge loop, so the answer can land before the sweep runs.
+    wait_for(lambda: len(swept) == 1, timeout=5.0, poll_interval=0.02, error_message="the hinted sweep never ran")

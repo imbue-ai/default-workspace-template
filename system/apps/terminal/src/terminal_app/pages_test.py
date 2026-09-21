@@ -8,6 +8,7 @@ from terminal_app.pages import (
     SessionPage,
     render_page,
 )
+from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -134,15 +135,33 @@ def test_health_answers(pages_client: FlaskClient) -> None:
     assert pages_client.get("/api/health").json == {"status": "ok"}
 
 
-def test_a_window_closed_post_asks_for_a_sweep_and_answers_no_content(
-    pages_client: FlaskClient, window_closed_posts: list[None]
+def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_no_content(
+    pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
     response = pages_client.post(
         "/api/window-closed", json={"path": "/?session=terminal-1", "window_id": "win-1", "desktop_id": "home"}
     )
 
     assert response.status_code == 204
-    assert len(window_closed_posts) == 1
+    assert window_closed_posts == [TmuxSessionName("terminal-1")]
+
+
+def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
+    pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
+) -> None:
+    # A window still settling at its launch path, a path naming something no session can be called, a body of
+    # another shape, and no JSON at all: each brings a sweep and marks nothing.
+    settling = pages_client.post(
+        "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-1", "desktop_id": "home"}
+    )
+    odd_name = pages_client.post(
+        "/api/window-closed", json={"path": "/?session=not%20a%20name", "window_id": "win-2", "desktop_id": "home"}
+    )
+    odd_shape = pages_client.post("/api/window-closed", json=["/?session=terminal-1"])
+    not_json = pages_client.post("/api/window-closed", data="terminal-1", content_type="text/plain")
+
+    assert [r.status_code for r in (settling, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
+    assert window_closed_posts == [None, None, None, None]
 
 
 def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_client: FlaskClient) -> None:

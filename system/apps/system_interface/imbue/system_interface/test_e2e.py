@@ -1172,31 +1172,6 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     expect(_window(page, home_window)).to_be_visible(timeout=15000)
 
 
-@pytest.mark.timeout(60, func_only=False)
-def test_running_apps_widget_lists_windows_and_launch_paths(e2e_server: E2EServer, page: Page) -> None:
-    """The Running apps widget shows one icon per running app; its popover lists the app's windows on this
-    desktop (a row raises one) and its launch paths (a row opens one)."""
-    _land(page, e2e_server)
-    first = _open_via_shortcut(page, e2e_server)
-    _window(page, first).locator('[data-window-control="minimize"]').click()
-    expect(_taskbar_entry(page, first)).to_have_attribute("data-minimized", "true")
-
-    page.locator(f'[data-running-app="{_STUB_APP_NAME}"]').click()
-    popover = page.locator(f'[data-running-app-popover="{_STUB_APP_NAME}"]')
-    expect(popover).to_be_visible(timeout=5000)
-    expect(popover.locator(f'[data-popover-window="{first}"]')).to_be_visible()
-    popover.locator(f'[data-popover-launch="{_STUB_SHORTCUT_KEY}"]').click()
-    windows = _wait_for_window_count(e2e_server.base_url, 2)
-    (second,) = [window["id"] for window in windows if window["id"] != first]
-    expect(_window(page, second)).to_be_visible(timeout=15000)
-
-    page.locator(f'[data-running-app="{_STUB_APP_NAME}"]').click()
-    expect(popover).to_be_visible(timeout=5000)
-    popover.locator(f'[data-popover-window="{first}"]').click()
-    expect(_window(page, first)).to_be_visible(timeout=10000)
-    expect(_window(page, first)).to_have_attribute("data-focused", "true")
-
-
 # Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)
 
 

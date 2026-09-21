@@ -17,3 +17,5 @@ Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interfac
 - A window drag follows a mouse press whose motion the X server reports as a pen under another pointer id (an absolute-axis virtual mouse under a VM does this), instead of ignoring every move; a mouse and a pen count as the same pointer across one gesture, and only fingers are told apart by id.
 
 - Window-bound resources (`docs/system/specs/window-bound-resources.md`): a close (and a deleted desktop's windows) is posted to the app's registered `window_closed_path`, when it has one, from a thread the shell never waits on. The op route's `open` takes `minimized` (a window it finds is left as placed) and, with no client to target, writes the window unplaced instead of answering 412. A shortcut's icon reads its app's name whatever its mode, and "Add to desktop" takes the app's declared mode for its default launch path.
+
+- The Running apps tray widget (one icon per running app, with a popover of its windows and launch paths) is removed: the taskbar entries and the launcher already cover what it showed. The tray holds the Desktops widget alone.

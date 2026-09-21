@@ -10,7 +10,7 @@
 import m from "mithril";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { fetchWallpapers } from "../model/api";
-import { defaultShortcutMode, launchPathOf } from "../model/launch";
+import { launchPathOf } from "../model/launch";
 import type {
   AppRecord,
   AvatarDesign,
@@ -19,7 +19,6 @@ import type {
   LaunchPath,
   WallpaperListing,
 } from "../model/records";
-import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -48,10 +47,9 @@ import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
 import type { LauncherWindowRow } from "./LauncherOverlay";
-import { FloatingCard, Menu, anchorForEvent, anchorForPoint } from "./Menu";
+import { Menu, anchorForEvent, anchorForPoint } from "./Menu";
 import type { MenuAnchor, MenuEntry } from "./Menu";
 import { applyRectStyle } from "./pixelStyle";
-import { RunningAppPopover } from "./RunningAppsWidget";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
@@ -64,8 +62,7 @@ type OpenMenu =
   | { readonly kind: "entry"; readonly windowId: string; readonly anchor: MenuAnchor }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly anchor: MenuAnchor }
   | { readonly kind: "desktops"; readonly anchor: MenuAnchor }
-  | { readonly kind: "desktop"; readonly desktopId: string; readonly anchor: MenuAnchor }
-  | { readonly kind: "running-app"; readonly appName: string; readonly anchor: MenuAnchor };
+  | { readonly kind: "desktop"; readonly desktopId: string; readonly anchor: MenuAnchor };
 
 interface SettingsDialogState {
   readonly desktopId: string;
@@ -452,54 +449,6 @@ export function App(): m.Component<AppAttrs> {
     return target instanceof Element && target.closest("[data-desktops-menu]") !== null;
   }
 
-  function isRunningAppButton(target: Node): boolean {
-    return target instanceof Element && target.closest("[data-running-app]") !== null;
-  }
-
-  function runningAppPopover(current: DesktopStore, appName: string, anchor: MenuAnchor): m.Children {
-    const state = current.getState();
-    const app = appByName(state, appName);
-    const desktop = activeDesktop(state);
-    if (app === undefined || desktop === null) return null;
-    const placements = activePlacements(state);
-    const windows = desktop.windows
-      .filter((window) => window.app === app.name)
-      .map((window) => ({
-        window,
-        title: effectiveWindowTitle(state, window, app),
-        isMinimized: isWindowMinimized(placements, window.id),
-      }));
-    return m(
-      FloatingCard,
-      {
-        anchor,
-        placement: "below",
-        role: "dialog",
-        marker: "running-app",
-        onClose: closeMenu,
-        isInsideTrigger: isRunningAppButton,
-      },
-      m(RunningAppPopover, {
-        app,
-        windows,
-        desktopShortcutKeys: new Set(
-          desktop.shortcuts.map((shortcut) => shortcutKey(shortcut.target.app, shortcut.target.launch)),
-        ),
-        onPickWindow: (windowId) => {
-          closeMenu();
-          current.restoreWindow(windowId);
-        },
-        onRunLaunch: (launchPath: LaunchPath) => {
-          closeMenu();
-          void current.openLaunchPath(app.name, launchPath.id, {});
-        },
-        onAddShortcut: (launchPath: LaunchPath) => {
-          void current.addShortcut(app.name, launchPath.id, defaultShortcutMode(app, launchPath));
-        },
-      }),
-    );
-  }
-
   function openSettings(desktopId: string | null, isDeleting: boolean): void {
     if (desktopId === null) return;
     settingsDialog = { desktopId, isDeleting };
@@ -752,21 +701,13 @@ export function App(): m.Component<AppAttrs> {
           tray: {
             desktops: state.desktops,
             activeDesktopId: state.activeDesktopId,
-            apps: state.apps,
             isDesktopsMenuOpen: openMenu?.kind === "desktops",
-            openRunningAppName: openMenu?.kind === "running-app" ? openMenu.appName : null,
             onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
             onOpenDesktopsMenu: (event) => {
               openMenu = openMenu?.kind === "desktops" ? null : { kind: "desktops", anchor: anchorForEvent(event) };
             },
             onDesktopContextMenu: (desktopId, x, y) => {
               openMenu = { kind: "desktop", desktopId, anchor: anchorForPoint(x, y) };
-            },
-            onOpenRunningApp: (app, event) => {
-              openMenu =
-                openMenu?.kind === "running-app" && openMenu.appName === app.name
-                  ? null
-                  : { kind: "running-app", appName: app.name, anchor: anchorForEvent(event) };
             },
           },
           onEntryClick,
@@ -777,7 +718,6 @@ export function App(): m.Component<AppAttrs> {
         openMenu?.kind === "shortcut" ? shortcutMenu(current, openMenu.shortcut, openMenu.anchor) : null,
         openMenu?.kind === "desktops" ? desktopsMenu(current, openMenu.anchor) : null,
         openMenu?.kind === "desktop" ? desktopMenu(current, openMenu.desktopId, openMenu.anchor) : null,
-        openMenu?.kind === "running-app" ? runningAppPopover(current, openMenu.appName, openMenu.anchor) : null,
         settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
         avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
       ]);
