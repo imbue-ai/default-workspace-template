@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from app_manifest.manifest import EntryMode
 from app_manifest.manifest import PinStyle
+from app_manifest.primitives import AppName
 
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
@@ -65,14 +66,14 @@ def test_an_entry_presentation_is_kept_on_the_client_across_its_reports_and_refu
     floating = EntryPresentation(
         mode=EntryMode.FLOATING, style=PinStyle.AVATAR, position=FloatingPosition(x=0.9, y=0.85)
     )
-    record = store.set_entry_presentation(ClientId("c1"), "chat", floating, TEST_NOW + timedelta(minutes=1))
+    record = store.set_entry_presentation(ClientId("c1"), AppName("chat"), floating, TEST_NOW + timedelta(minutes=1))
     assert record.entries == {"chat": floating}
     assert record.last_seen == TEST_NOW + timedelta(minutes=1)
     # A later report and a desktop move keep the presentation; a second app's entry sits beside it.
     store.record_report(_report("c1", "research"), TEST_NOW + timedelta(minutes=2))
     store.set_active_desktop(ClientId("c1"), DesktopId("home"), TEST_NOW + timedelta(minutes=3))
     bar = EntryPresentation(mode=EntryMode.BAR, style=PinStyle.PLAIN, position=None)
-    both = store.set_entry_presentation(ClientId("c1"), "notes", bar, TEST_NOW + timedelta(minutes=4))
+    both = store.set_entry_presentation(ClientId("c1"), AppName("notes"), bar, TEST_NOW + timedelta(minutes=4))
     assert both.entries == {"chat": floating, "notes": bar}
     assert client_wire_json(both, False)["entries"] == {
         "chat": {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}},
@@ -81,7 +82,7 @@ def test_an_entry_presentation_is_kept_on_the_client_across_its_reports_and_refu
     stored = json.loads((tmp_path / CLIENTS_FILENAME).read_text())["clients"]["c1"]["entries"]
     assert set(stored) == {"chat", "notes"}
     with pytest.raises(ClientNotFoundError):
-        store.set_entry_presentation(ClientId("nobody"), "chat", bar, TEST_NOW)
+        store.set_entry_presentation(ClientId("nobody"), AppName("chat"), bar, TEST_NOW)
 
 
 def test_clients_unseen_for_the_retention_period_are_pruned(tmp_path: Path) -> None:

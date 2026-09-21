@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
@@ -188,7 +189,7 @@ class ClientStore(MutableModel):
         )
 
     def set_entry_presentation(
-        self, client_id: ClientId, app: str, presentation: EntryPresentation, now: datetime
+        self, client_id: ClientId, app: AppName, presentation: EntryPresentation, now: datetime
     ) -> ClientRecord:
         """Store how a recorded client shows one pinned entry; raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
@@ -198,7 +199,7 @@ class ClientStore(MutableModel):
             if previous is None:
                 raise ClientNotFoundError(f"No client record for {client_id!r}")
             updated = previous.model_copy_update(
-                to_update(previous.field_ref().entries, {**previous.entries, app: presentation}),
+                to_update(previous.field_ref().entries, {**previous.entries, str(app): presentation}),
                 to_update(previous.field_ref().last_seen, stamped),
             )
             clients = {**document.clients, str(client_id): updated}
