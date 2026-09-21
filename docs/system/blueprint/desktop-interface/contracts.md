@@ -193,7 +193,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 The arrival is what a shell page posts first, before reading the desktops, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2).
 `desktop_id` is where the client lands (`null` while the workspace has no desktop): for the owner and for a request with no `user_id`, the client's stored desktop when it exists, else the first desktop (section 4.3); for a visiting user (`owner` false with a `user_id`), the desktop made for them.
 On a visiting user's first arrival the shell creates that desktop and answers it as `created_desktop`: named after the user (their `display_name`, else the local part of their `email`, else `Guest`; suffixed ` 2`, ` 3`, ... until neither the name nor its id is taken), with the first free glyph and that glyph's colour, holding the first desktop's shortcuts, its wallpaper, and one new window at the path of each of its settled windows; it is recorded in `users.json`, broadcast as `desktops_updated`, and the client is recorded on it with its `user_id`.
-A later client of the same user lands on that desktop; a returning client keeps the desktop it was on.
+A later client of the same user lands on that desktop; a returning client keeps the desktop it was on, when it last arrived as that same user (a client whose record names another user, or none, lands on the user's desktop).
 When the recorded desktop no longer exists the shell seeds another the same way and answers the deleted one's name as `replaced_desktop_name`, which the page shows once (`data-replaced-desktop-notice`).
 
 ## 6. The WebSocket

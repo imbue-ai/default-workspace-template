@@ -16,6 +16,7 @@ from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import FALLBACK_USER_DESKTOP_NAME
 from imbue.system_interface.shell.desktops import default_desktop
+from imbue.system_interface.shell.desktops import desktop_kept_by_returning_client
 from imbue.system_interface.shell.desktops import desktop_name_for_user
 from imbue.system_interface.shell.desktops import find_desktop_by_name_or_id
 from imbue.system_interface.shell.desktops import next_glyph_index
@@ -30,6 +31,7 @@ from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -186,3 +188,17 @@ def test_the_next_glyph_is_the_first_unused_then_cycles() -> None:
     assert next_glyph_index(list(range(GLYPH_COUNT))) == 0
     assert next_glyph_index([*range(GLYPH_COUNT), 0]) == 1
     assert len(DESKTOP_GLYPH_COLORS) == GLYPH_COUNT
+
+
+def test_a_returning_client_keeps_its_desktop_only_when_it_last_arrived_as_the_same_user() -> None:
+    alice = UserId("user-alice")
+    desktop_ids = {DesktopId("home"), DesktopId("alice")}
+    on_home = ClientRecord(id=ClientId("c1"), active_desktop=DesktopId("home"), last_seen=TEST_NOW, user_id=alice)
+    assert desktop_kept_by_returning_client(on_home, alice, desktop_ids) == "home"
+    assert desktop_kept_by_returning_client(None, alice, desktop_ids) is None
+    bobs = on_home.model_copy_update(to_update(on_home.field_ref().user_id, UserId("user-bob")))
+    assert desktop_kept_by_returning_client(bobs, alice, desktop_ids) is None
+    anonymous = on_home.model_copy_update(to_update(on_home.field_ref().user_id, None))
+    assert desktop_kept_by_returning_client(anonymous, alice, desktop_ids) is None
+    gone = on_home.model_copy_update(to_update(on_home.field_ref().active_desktop, DesktopId("deleted")))
+    assert desktop_kept_by_returning_client(gone, alice, desktop_ids) is None

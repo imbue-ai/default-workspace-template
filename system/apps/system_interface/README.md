@@ -179,8 +179,8 @@ arrival the shell makes them a desktop named after them (display name, else
 the email's local part, made unique), seeded from the first desktop: its
 shortcuts, its wallpaper, and a new window at the path of each window that
 is open there. It is remembered in `users.json`, every later client of that
-user lands on it, a returning client keeps the desktop it was on, and if it
-has been deleted the next arrival seeds another and says so. Every desktop
+user lands on it, a returning client keeps the desktop it was on (when it
+last arrived as that same user), and if it has been deleted the next arrival seeds another and says so. Every desktop
 stays shared and in everyone's switcher; there is no private mode.
 
 ### The desktop, the taskbar, and the launcher

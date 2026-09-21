@@ -46,6 +46,7 @@ from imbue.system_interface.shell.desktop_document import with_window_placed_on_
 from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
+from imbue.system_interface.shell.desktops import desktop_kept_by_returning_client
 from imbue.system_interface.shell.desktops import desktop_name_for_user
 from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
@@ -365,9 +366,8 @@ class ShellState(MutableModel):
         if known is not None and known.desktop_id in desktop_ids:
             own_desktop_id = known.desktop_id
             own_desktop_name = known.desktop_name
-            is_returning_client = record is not None and record.active_desktop in desktop_ids
-            landing = record.active_desktop if is_returning_client and record is not None else own_desktop_id
-            assert landing is not None
+            kept = desktop_kept_by_returning_client(record, user_id, desktop_ids)
+            landing = kept if kept is not None else own_desktop_id
         else:
             created = self._create_desktop_for_user(identity, desktops, now)
             own_desktop_id = created.id

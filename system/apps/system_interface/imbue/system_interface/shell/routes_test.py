@@ -818,6 +818,11 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
     # Another user gets their own, named after their email when they have no display name.
     bob = _arrive(client, "c-bob", _BOB)
     assert bob["desktop_id"] == "bob" and bob["created_desktop"]["glyph"] == 2
+    # A browser context that last arrived as Bob, or anonymously, is no returning client of Alice's: it lands on
+    # her desktop, not on the one it was on.
+    assert _arrive(client, "c-bob", _ALICE)["desktop_id"] == "alice"
+    _record_client(app, "c-shared", "home")
+    assert _arrive(client, "c-shared", _ALICE)["desktop_id"] == "alice"
     assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
         "home",
         "alice",
