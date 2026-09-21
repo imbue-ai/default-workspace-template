@@ -12,6 +12,7 @@ from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.status import AvatarStatus
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import STALE_AFTER
+from imbue.system_interface.avatar.status import _TAIL_BLOCK_BYTES
 from imbue.system_interface.avatar.status import agent_events_path
 from imbue.system_interface.avatar.status import fold_agent_events
 from imbue.system_interface.avatar.status import parse_event_timestamp
@@ -81,16 +82,35 @@ def test_timestamps_parse_with_nanoseconds_and_offsets() -> None:
     assert parse_event_timestamp("yesterday") is None
 
 
-def test_the_tail_read_stops_at_the_last_snapshot_and_skips_a_cut_line(tmp_path: Path) -> None:
+def _padded_lines(line: str, total_bytes: int) -> list[str]:
+    """Copies of ``line`` padded with trailing spaces (which JSON tolerates) that, each with its newline, take
+    exactly ``total_bytes``."""
+    padding = 200
+    per_line = len(line) + padding + 1
+    count, remainder = divmod(total_bytes, per_line)
+    lines = [line + " " * padding] * (count - 1)
+    return [*lines, line + " " * (padding + remainder)]
+
+
+def test_the_tail_read_stops_at_the_last_snapshot_even_when_a_block_boundary_cuts_its_line(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
-    filler = _event("AGENT_STATE", agent=_agent("filler", "STOPPED", is_primary=False)) + " " * 200
-    lines = [filler] * 2000 + [_event("AGENTS_FULL_STATE", agents=[_agent("a", "RUNNING")])] + [filler] * 3
+    snapshot = _event("AGENTS_FULL_STATE", agents=[_agent("a", "RUNNING")])
+    filler = _event("AGENT_STATE", agent=_agent("filler", "STOPPED"))
+    # Sized so the block read first from the end begins a few bytes into the snapshot line: the line is cut, so
+    # the read must go on to the block that holds its start rather than drop it.
+    trailing = _padded_lines(filler, _TAIL_BLOCK_BYTES + 5 - (len(snapshot) + 1))
+    first = _event("AGENT_STATE", agent=_agent("first", "STOPPED"))
+    lines = [first, *_padded_lines(filler, 2 * _TAIL_BLOCK_BYTES), snapshot, *trailing]
     path.write_text("\n".join(lines) + "\n")
     tail = read_tail_lines_back_to_snapshot(path)
-    assert len(tail) < len(lines)
+    # Not the whole file: the read ends in the block that holds the snapshot's start.
+    assert first not in tail
     assert all(json.loads(line) for line in tail if line.strip())
-    assert '"AGENTS_FULL_STATE"' in tail[0] or any('"AGENTS_FULL_STATE"' in line for line in tail)
+    assert [line.strip() for line in tail[tail.index(snapshot) + 1 :] if line.strip()] == [filler] * len(trailing)
     assert read_avatar_status(path, _NOW) == AvatarStatus(mood=AvatarMood.WORKING, is_stale=False)
+    # A file with no snapshot is read whole.
+    path.write_text("\n".join([filler] * 3) + "\n")
+    assert read_tail_lines_back_to_snapshot(path)[:3] == [filler] * 3
 
 
 def test_an_absent_file_reads_stale_and_idle(tmp_path: Path) -> None:
