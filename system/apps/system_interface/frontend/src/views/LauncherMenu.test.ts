@@ -81,14 +81,17 @@ describe("the launcher menu", () => {
     expect(noMatch.root.querySelector('[data-text-action="primary"]')!.getAttribute("data-highlighted")).toBe("true");
   });
 
-  it("a click runs an enabled row and a hover moves the highlight; a disabled row runs nothing", () => {
+  it("a click runs an enabled row and a hover moves the highlight; a disabled row runs nothing and takes no hover", () => {
     const { root, attrs } = render(launcherRowsOf(stateWithWindows(), ""));
     (root.querySelector('[data-launch="terminal:new"]') as HTMLElement).click();
     expect(attrs.onRun).toHaveBeenCalledWith(expect.objectContaining({ key: "launch:terminal:new" }));
     root.querySelector('[data-text-action="primary"]')!.dispatchEvent(new PointerEvent("pointerenter"));
     expect(attrs.onHighlight).toHaveBeenCalledWith(2);
-    (root.querySelector('[data-text-action="secondary"]') as HTMLElement).click();
+    const secondary = root.querySelector('[data-text-action="secondary"]') as HTMLElement;
+    secondary.click();
+    secondary.dispatchEvent(new PointerEvent("pointerenter"));
     expect(attrs.onRun).toHaveBeenCalledTimes(1);
+    expect(attrs.onHighlight).toHaveBeenCalledTimes(1);
   });
 
   it("spells the secondary key for the platform and previews the first words of the text", () => {
