@@ -574,6 +574,16 @@ def test_set_container_timezone_falls_back_when_the_fetched_zone_cannot_be_appli
     assert Path(os.readlink(localtime)).name == "New_York"
 
 
+def test_set_container_timezone_tolerates_a_non_utf8_cache(tmp_path: Path) -> None:
+    cache = tmp_path / "data" / ".state" / "user_timezone"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"\xff\xfe")
+
+    localtime, _ = _set_timezone_in(tmp_path, "")
+
+    assert not localtime.exists()
+
+
 # --- _fetch_user_timezone ---
 
 
