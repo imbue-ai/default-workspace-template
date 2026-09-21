@@ -7,7 +7,7 @@ from flask import Flask
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
-from imbue.system_interface.avatar.designs import MAXMINIMAL_DESIGN_SVG_BYTES
+from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.register_avatar import AvatarRegistrationError
 from imbue.system_interface.avatar.register_avatar import main
 from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
@@ -38,7 +38,7 @@ def test_the_helper_names_the_reason_a_design_is_refused(app: Flask, tmp_path: P
     custom = tmp_path / "custom.svg"
     custom.write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>*{x:1}</style></svg>')
     oversized = tmp_path / "big.svg"
-    oversized.write_bytes(b" " * (MAXMINIMAL_DESIGN_SVG_BYTES + 1))
+    oversized.write_bytes(b" " * (MAX_SVG_BYTES + 1))
     binary = tmp_path / "binary.svg"
     binary.write_bytes(b"\xff\xfe")
     with serve_app(app) as served:
