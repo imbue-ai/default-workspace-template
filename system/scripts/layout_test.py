@@ -149,12 +149,28 @@ def test_open_of_a_launch_path_or_a_url_posts_the_launch_and_its_params(
     assert layout.main(["open", "terminal", "--launch", "new", "--param", "workdir=/data", "--if-present", "new"]) == 0
     assert layout.main(["open", "https://example.com/docs"]) == 0
     assert layout.main(["open", "chat"]) == 0
+    assert layout.main(["open", "chat", "--minimized"]) == 0
     assert _posted_ops(fake_shell) == [
         ("open", {"app": "terminal", "launch": "new", "params": {"workdir": "/data"}, "if_present": "new"}),
         ("open", {"app": "browser", "launch": "new", "params": {"url": "https://example.com/docs"}}),
         ("open", {"app": "chat"}),
+        ("open", {"app": "chat", "minimized": True}),
     ]
-    assert capsys.readouterr().out == f"{_CHAT_WINDOW['id']}\n" * 3
+    assert capsys.readouterr().out == f"{_CHAT_WINDOW['id']}\n" * 4
+
+
+def test_open_with_no_client_says_the_window_landed_for_nobody(
+    registry: Path, fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_shell.op_answer = {
+        **desktop_answer(windows=[_CHAT_WINDOW], window_id=_CHAT_WINDOW["id"]),
+        "client_id": None,
+        "layout": None,
+    }
+    assert layout.main(["open", "chat"]) == layout.EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out == f"{_CHAT_WINDOW['id']}\n"
+    assert captured.err.endswith("on desktop home for no client (minimized everywhere)\n")
 
 
 def test_open_arguments_are_refused_where_they_make_no_sense(

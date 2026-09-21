@@ -71,7 +71,7 @@ def _shell_recording_hints(
 
 def _open(shell: ShellState, desktop_id: str, app: str, path: str) -> WindowId:
     request = WindowOpenRequest(app=AppName(app), path=WindowPath(path), client_id=ClientId("laptop"))
-    return shell.open_window(desktop_id, request).window.id
+    return shell.open_window(desktop_id, request, is_minimized=False).window.id
 
 
 def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(

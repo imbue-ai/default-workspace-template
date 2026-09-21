@@ -81,6 +81,7 @@ from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import op_only_args
 from imbue.system_interface.shell.route_helpers import parse_request_body
 from imbue.system_interface.shell.route_helpers import require_client
+from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
@@ -234,7 +235,7 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
-    outcome = _shell().open_window(desktop_id, body)
+    outcome = _shell().open_window(desktop_id, body, is_minimized=False)
     return (
         jsonify({"window": window_wire_json(outcome.window), "is_new": outcome.is_new}),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
@@ -514,7 +515,15 @@ def _launch_query(params: Mapping[str, str]) -> str:
     return f"?{urlencode(dict(params))}" if params else ""
 
 
-def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId) -> WindowOpenRequest:
+class _OpenTarget(FrozenModel):
+    """What an ``open`` op opens, before any client is involved."""
+
+    app: AppName = Field(description="The app")
+    path: WindowPath = Field(description="The explicit path, or the launch path with its params as the query")
+    launch: LaunchPathId | None = Field(description="The launch path the path was built from, when it was")
+
+
+def _open_target(shell: ShellState, arguments: DesktopOpArguments) -> _OpenTarget:
     """What an ``open`` op opens: an explicit path, else the launch path it names, the app's default, or its first,
     with the params as the query string."""
     app = _app_name_or_raise(arguments.app, "app")
@@ -522,9 +531,7 @@ def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: C
     if arguments.path:
         if arguments.launch is not None or arguments.params:
             raise LayoutOpError("an open names a path or a launch path, not both")
-        return WindowOpenRequest(
-            app=app, path=WindowPath(arguments.path), client_id=client_id, if_present=arguments.if_present, launch=None
-        )
+        return _OpenTarget(app=app, path=WindowPath(arguments.path), launch=None)
     offered = effective_launch_paths(entry.row)
     default_launch = default_launch_path_id(entry.row)
     launch_id = (
@@ -535,12 +542,43 @@ def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: C
     launch = next((candidate for candidate in offered if candidate.id == launch_id), None)
     if launch is None:
         raise LayoutOpError(f"App {str(app)!r} declares no launch path {str(launch_id)!r}")
+    return _OpenTarget(app=app, path=WindowPath(f"{launch.path}{_launch_query(arguments.params)}"), launch=launch.id)
+
+
+def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId) -> WindowOpenRequest:
+    target = _open_target(shell, arguments)
     return WindowOpenRequest(
-        app=app,
-        path=WindowPath(f"{launch.path}{_launch_query(arguments.params)}"),
-        client_id=client_id,
-        if_present=arguments.if_present,
-        launch=launch.id,
+        app=target.app, path=target.path, client_id=client_id, if_present=arguments.if_present, launch=target.launch
+    )
+
+
+def _open_unplaced(
+    shell: ShellState, arguments: DesktopOpArguments, args_raw: Mapping[str, Any], requester: OpRequester | None
+) -> ResponseReturnValue:
+    """An ``open`` with no client to target (desktop contracts.md section 8): the window is written on the named
+    desktop, else the first, with no placement, so it shows minimized for every client rather than being refused."""
+    desktops = shell.list_desktops()
+    requested = _requested_desktop(args_raw)
+    if requested is not None:
+        desktop = find_desktop_by_name_or_id(desktops, requested)
+        if desktop is None:
+            raise DesktopNotFoundError(requested)
+    elif desktops:
+        desktop = desktops[0]
+    else:
+        raise LayoutOpError("there is no desktop to open on yet")
+    target = _open_target(shell, arguments)
+    outcome = shell.open_window_unplaced(desktop.id, target.app, target.path, target.launch, arguments.if_present)
+    logger.info("layout op=open requester={} desktop={} client=none args={}", requester, desktop.id, args_raw)
+    return jsonify(
+        {
+            "ok": True,
+            "desktop_id": str(desktop.id),
+            "client_id": None,
+            "desktop": desktop_wire_json(shell.get_desktop(desktop.id)),
+            "layout": None,
+            "window_id": str(outcome.window.id),
+        }
     )
 
 
@@ -670,6 +708,9 @@ def dispatch_desktop_op(
         return _refresh_app(shell, arguments.app, requester)
     if op == RELOAD_SYSTEM_INTERFACE_OP:
         return _reload_system_interface(shell, requester)
+    # An open is the one client-scoped op that still means something with no client: the window is shared.
+    if op == "open" and resolve_client(shell, args_raw, requester) is None:
+        return _open_unplaced(shell, arguments, args_raw, requester)
     target = _resolve_target(shell, args_raw, requester)
     window_id: WindowId | None = None
     match op:
@@ -678,7 +719,7 @@ def dispatch_desktop_op(
             pass
         case "open":
             window_id = shell.open_window(
-                target.desktop.id, _open_request(shell, arguments, target.client_id)
+                target.desktop.id, _open_request(shell, arguments, target.client_id), arguments.minimized
             ).window.id
         case "refresh":
             return _refresh_window(shell, arguments, target, requester)

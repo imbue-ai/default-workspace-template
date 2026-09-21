@@ -478,10 +478,11 @@ def default_placement(window_id: WindowId, stored_count: int) -> WindowPlacement
 
 
 @pure
-def opened_placement(window_id: WindowId, stored_count: int) -> WindowPlacement:
-    """The placement an open writes for the requesting client: the cascade frame, normal, shown."""
+def opened_placement(window_id: WindowId, stored_count: int, is_minimized: bool) -> WindowPlacement:
+    """The placement an open writes for the requesting client: the cascade frame, normal, shown unless the open
+    asked for it minimized (an agent surfacing something without pulling it over the user's work)."""
     return WindowPlacement(
-        window_id=window_id, frame=cascade_frame(stored_count), state=WindowState.NORMAL, is_minimized=False
+        window_id=window_id, frame=cascade_frame(stored_count), state=WindowState.NORMAL, is_minimized=is_minimized
     )
 
 
@@ -554,9 +555,9 @@ def _with_placement_in_place(layout: DesktopLayout, placement: WindowPlacement) 
 
 
 @pure
-def with_window_placed_on_open(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
-    """The layout with a just-opened window on top of the stack, at the cascade frame, shown."""
-    return _with_placement_on_top(layout, opened_placement(window_id, len(layout.placements)))
+def with_window_placed_on_open(layout: DesktopLayout, window_id: WindowId, is_minimized: bool) -> DesktopLayout:
+    """The layout with a just-opened window on top of the stack, at the cascade frame, shown or minimized."""
+    return _with_placement_on_top(layout, opened_placement(window_id, len(layout.placements), is_minimized))
 
 
 @pure

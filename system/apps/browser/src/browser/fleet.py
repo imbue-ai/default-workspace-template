@@ -188,16 +188,17 @@ def _layout(*args: str, quiet: bool = False) -> bool:
 
 
 def _open_viewer_window(browser_name: str) -> None:
-    """Surface browser ``browser_name`` as its own window on the requesting agent's desktop, optimistically.
+    """Surface browser ``browser_name`` as its own window on the requesting agent's desktop, minimized.
 
-    ``layout.py open browser --path /?session=<name>`` lands the window on the client that most recently
-    messaged this chat (else the one connected client), so the human watching the chat sees the browser
-    appear. If the shell is unreachable -- an isolated ``launch-task`` sub-agent in its own container -- or
-    it cannot tell which client to place the window on, we fall back to one neutral line offering the
-    launcher: the browser is up and fully drivable from the CLI either way; the window is only a
-    live-view convenience.
+    ``layout.py open browser --path /?session=<name> --minimized`` lands the window on the client that most
+    recently messaged this chat (else the one connected client, else unplaced on the first desktop), out of
+    the way of what the human is doing; a window already there is left as they placed it. The window is
+    what keeps the browser alive (docs/system/specs/window-bound-resources.md): a browser no window shows
+    is stopped once one has shown it. If the shell is unreachable -- an isolated ``launch-task`` sub-agent in
+    its own container -- we fall back to one neutral line offering the launcher: the browser is up and fully
+    drivable from the CLI either way.
     """
-    if _layout("open", "browser", "--path", f"/?session={browser_name}", quiet=True):
+    if _layout("open", "browser", "--path", f"/?session={browser_name}", "--minimized", quiet=True):
         return
     _out(f"browser {browser_name} is ready. To watch it live, open it from the "
          'launcher (Browser -> ' + f"{browser_name}).")
