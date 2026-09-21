@@ -586,17 +586,6 @@ describe("gestures", () => {
     expect(last(activePlacements(store.getState()))).toMatchObject({ state: "NORMAL", frame: { x: 0.5, width: 0.5 } });
   });
 
-  it("a pushed presence set replaces the connected users and schedules a redraw", async () => {
-    let redraws = 0;
-    const store = await startedStore(() => void (redraws += 1));
-    const before = redraws;
-    expect(getPresentUsers()).toEqual([]);
-    socket.deliver().onPresenceUpdated([presentUserRecord("user-bob-4471")]);
-    expect(getPresentUsers().map((user) => user.user_id)).toEqual(["user-bob-4471"]);
-    expect(redraws).toBe(before + 1);
-    expect(store.getState().desktops).toHaveLength(2);
-  });
-
   it("a move or resize in progress schedules no redraw; its start and end do", async () => {
     let redraws = 0;
     const store = await startedStore(() => void (redraws += 1));
@@ -646,6 +635,19 @@ describe("gestures", () => {
     await settle();
     expect(api.calls).toContain("moveDesktopShortcut:home:docs:new:2,2");
     expect(store.getGesture()).toBeNull();
+  });
+});
+
+describe("presence", () => {
+  it("a pushed presence set replaces the connected users and schedules a redraw", async () => {
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    const before = redraws;
+    expect(getPresentUsers()).toEqual([]);
+    socket.deliver().onPresenceUpdated([presentUserRecord("user-bob-4471")]);
+    expect(getPresentUsers().map((user) => user.user_id)).toEqual(["user-bob-4471"]);
+    expect(redraws).toBe(before + 1);
+    expect(store.getState().desktops).toHaveLength(2);
   });
 });
 
