@@ -201,7 +201,9 @@ def parse_design_svg(svg: str) -> Element:
     if len(svg.encode("utf-8")) > MAX_SVG_BYTES:
         raise InvalidShellValueError(f"the design exceeds {MAX_SVG_BYTES // 1024} KiB")
     if "<?" in svg:
-        raise InvalidShellValueError("XML processing instructions are not supported in a design")
+        raise InvalidShellValueError(
+            "an XML declaration or processing instruction (<?...?>) is not supported in a design; the file starts at <svg"
+        )
     try:
         root = fromstring(svg, forbid_dtd=True, forbid_entities=True, forbid_external=True)
     except (ParseError, DefusedXmlException) as e:

@@ -8,7 +8,7 @@ The image says whether any agent on the machine is working. The seven bundled de
 
 ## Authoring a design through chat
 
-Draw an SVG, show the user a preview, and wait for their approval before selecting it. Use the 100 by 100 coordinate system: the outer element must be `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">`. It fits the floating entry's 56px box and the taskbar entry's smaller one, so draw with enough margin for movement.
+Draw an SVG, show the user a preview, and wait for their approval before selecting it. Use the 100 by 100 coordinate system: the file starts at the outer element, which must be `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">` (no `<?xml ...?>` declaration before it). It fits the floating entry's 56px box and the taskbar entry's smaller one, so draw with enough margin for movement.
 
 Supported elements: `svg`, `g`, `defs`, `title`, `desc`, `path`, `circle`, `ellipse`, `rect`, `line`, `polyline`, `polygon`, `linearGradient`, `radialGradient`, and `stop`. Use presentation attributes for colour, stroke, and geometry, including local `url(#gradient-id)` paints. Arbitrary CSS, `style` attributes, scripts, event attributes, external references, `image`, `use`, `foreignObject`, filters, SMIL, and processing instructions are refused. The small supported animation vocabulary is:
 
