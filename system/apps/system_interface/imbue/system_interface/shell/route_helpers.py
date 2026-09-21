@@ -1,5 +1,5 @@
-"""The request helpers the shell's route modules share: status codes, the loopback gate, error bodies, and how an op
-settles on the one client it targets (desktop contracts.md section 8)."""
+"""The request helpers the shell's route modules share: status codes, the loopback gate, error bodies, the requester's
+identity, and how an op settles on the one client it targets (desktop contracts.md section 8)."""
 
 from collections.abc import Mapping
 from typing import Any
@@ -18,6 +18,9 @@ from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import NoTargetClientError
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.state import ShellState
@@ -57,6 +60,11 @@ def parse_request_body(model: type[_RequestModel]) -> _RequestModel:
         return model.model_validate(body)
     except ValidationError as e:
         raise InvalidShellValueError(describe_validation_error(e)) from e
+
+
+def request_identity() -> RequestIdentity:
+    """The requester the current request's ``X-Imbue-Identity`` header vouches for; the anonymous owner without one."""
+    return parse_identity_header(request.headers.get(IDENTITY_HEADER))
 
 
 def require_loopback() -> ResponseReturnValue | None:
