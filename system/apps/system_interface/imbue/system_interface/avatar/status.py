@@ -295,10 +295,11 @@ class AvatarStatusReader(MutableModel):
     def _run(self) -> None:
         while not self._stop.is_set():
             is_woken = self._wake.wait(timeout=self.stale_check_interval_seconds)
-            self._wake.clear()
             if self._stop.is_set():
                 return
             if is_woken:
                 self._stop.wait(timeout=self.debounce_seconds)
+            # Cleared once the burst has settled, so every write in it is folded by the one refold below.
+            self._wake.clear()
             self._ensure_watching()
             self.refresh()
