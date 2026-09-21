@@ -122,7 +122,6 @@ export function Window(): m.Component<WindowAttrs> {
                 isFocused,
                 isCompact,
                 isMenuOpen: attrs.isMenuOpen,
-                isPinned: window.is_pinned,
                 onControl: attrs.onControl,
                 onDoubleClick: attrs.onToggleMaximize,
               }),

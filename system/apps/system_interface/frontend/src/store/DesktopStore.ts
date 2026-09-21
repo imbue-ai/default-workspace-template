@@ -754,6 +754,16 @@ export class DesktopStore {
     await this.closeWindow(focused);
   }
 
+  /** What every human-facing Close does (the title bar's control, the two menus): close the window for everyone,
+   *  or, for a pinned window, which is never closed, minimize it, so the habit of reaching for the control holds. */
+  async closeOrMinimizeWindow(windowId: string): Promise<void> {
+    if (findWindow(this.state, windowId)?.window.is_pinned === true) {
+      this.minimizeWindow(windowId);
+      return;
+    }
+    await this.closeWindow(windowId);
+  }
+
   /** Whether showing the window has to wait: it is still settling on another client's open, and this
    *  client has no placement for it. Showing it now would create its page at the launch path and run
    *  the launch a second time, so the restore is queued for when the window has a real path. */
