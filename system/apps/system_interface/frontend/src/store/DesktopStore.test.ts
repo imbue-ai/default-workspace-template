@@ -794,6 +794,9 @@ describe("pinned entries", () => {
     // Applied as a layout load: the revision moved, so the live pages follow the stored path to the page.
     expect(store.getLayoutLoadsRevision()).toBe(loadsBefore + 1);
     expect(store.getState().layout.window_paths["win-9"]).toEqual({ path: "/?draft=Draw+me", title: "Buddy" });
+    // Marked as this client's own navigation for that follow, so the pages honour it even where the page just
+    // reported leaving the draft path.
+    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/?draft=Draw+me" });
     // And the window is shown.
     expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized).toBe(
       false,
@@ -817,7 +820,11 @@ describe("pinned entries", () => {
     expect(store.getLayoutLoadsRevision()).toBe(loadsBefore);
     expect(store.getState().desktops[0].windows.find((window) => window.id === "win-9")?.path).toBe("/?doc=4");
     expect(store.getState().layout.window_paths["win-9"]).toBeUndefined();
-    // A window the desktops do not hold is nothing to move, and a refusal is told to the user.
+    // The navigation is marked as this client's own, handed over once.
+    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/?doc=4" });
+    expect(store.takeOwnNavigation()).toBeNull();
+    // A window the desktops do not hold is nothing to move, and a refusal is told to the user; neither leaves a
+    // mark for some later follow to lift the stale-snapshot guard by.
     const callsBefore = api.calls.length;
     expect(await store.navigateOwnWindow("win-404", "/")).toBe(false);
     expect(api.calls.length).toBe(callsBefore);
@@ -825,6 +832,7 @@ describe("pinned entries", () => {
     expect(await store.navigateOwnWindow("win-9", "/?doc=5")).toBe(false);
     expect(notices).toEqual(["Could not move the window: no such client"]);
     expect(store.getDesktopsRevision()).toBe(desktopsBefore + 1);
+    expect(store.takeOwnNavigation()).toBeNull();
   });
 
   it("restores a pinned window the client never placed at the frame the shell answered, not the cascade", async () => {

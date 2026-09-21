@@ -522,7 +522,6 @@ export class DesktopStore {
   async navigateOwnWindow(windowId: string, path: string): Promise<boolean> {
     const found = findWindow(this.state, windowId);
     if (found === null) return false;
-    this.ownNavigation = { windowId, path };
     const title = effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
     let reported: WindowRecord;
     try {
@@ -531,8 +530,11 @@ export class DesktopStore {
       this.deps.notify(`Could not move the window: ${(error as Error).message}`);
       return false;
     }
+    // Marked only once the answer is applied, for the one follow that application triggers: set any earlier, a
+    // refusal or a broadcast landing meanwhile would leave the mark to lift the guard for some other follow.
     if (found.window.scope === "independent") {
       if (found.desktop.id !== this.state.activeDesktopId) return true;
+      this.ownNavigation = { windowId, path };
       this.layoutLoadsRevision += 1;
       this.dispatch({
         type: "window_paths_loaded",
@@ -541,6 +543,7 @@ export class DesktopStore {
       });
       return true;
     }
+    this.ownNavigation = { windowId, path };
     this.desktopsRevision += 1;
     this.dispatch({ type: "window_location_reported", desktopId: found.desktop.id, window: reported });
     return true;
