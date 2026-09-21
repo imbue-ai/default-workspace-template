@@ -16,6 +16,9 @@ export interface LaunchTile {
 // The query parameter a seeded prompt rides (contracts.md section 2: the manifest declares it on
 // the launch path that takes a first message).
 export const MESSAGE_PARAM = "message";
+// The query parameter a draft rides: text for the page's composer, unsent, which the launch path at a pin's home
+// path declares when the pinned window takes one (pinned-taskbar-entries plan section 4.7).
+export const DRAFT_PARAM = "draft";
 
 /** Every launch path of every openable app, as tiles, in registry and manifest order. */
 export function launchTilesOf(apps: readonly AppRecord[]): LaunchTile[] {

@@ -12,6 +12,8 @@ export const NEW_CHAT_PATHNAME = "/new";
 // The launch path's params (system/apps/chat/app.toml).
 export const ACCOUNT_ID_PARAM = "account_id";
 export const MESSAGE_PARAM = "message";
+// The root's own param (system/apps/chat/app.toml): text for the composer of the chat the root shows, unsent.
+export const DRAFT_PARAM = "draft";
 
 /** The chat the URL selects, or null for none (or an id that cannot be a chat's). */
 export function selectionFromSearch(search: string): string | null {
@@ -31,6 +33,11 @@ export function rootPathFor(chatId: string | null): string {
 /** Whether ``pathname`` (under ``basePath``) is the ``new`` launch path. */
 export function isNewChatPath(pathname: string, basePath: string): boolean {
   return pathname === `${basePath}${NEW_CHAT_PATHNAME}` || pathname === `${basePath}${NEW_CHAT_PATHNAME}/`;
+}
+
+/** The draft the root's URL hands the shown chat's composer, "" for none. */
+export function draftFromSearch(search: string): string {
+  return new URLSearchParams(search).get(DRAFT_PARAM) ?? "";
 }
 
 export interface NewChatParams {

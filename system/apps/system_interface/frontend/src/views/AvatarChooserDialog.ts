@@ -1,9 +1,9 @@
 /**
  * The avatar chooser (pinned-taskbar-entries plan section 4.7): a dialog on the shared Modal with every
  * design's still image, the workspace's choice marked, a link to the chosen design's original, and
- * "Design your own...", which starts a chat seeded with the design prompt through whichever app declares
- * a launch path that takes a message (the shell names no app). Choosing a design writes the workspace's
- * selection; every window, this one included, follows the shell's broadcast.
+ * "Design your own...", which drafts the design prompt into the pinned window whose app declares a launch
+ * path at its home path taking a draft (the shell names no app), unsent. Choosing a design writes the
+ * workspace's selection; every window, this one included, follows the shell's broadcast.
  */
 
 import m from "mithril";
@@ -11,10 +11,11 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { avatarImageUrl, avatarSourceUrl } from "../model/api";
-import { NO_CHAT_APP_REASON } from "../model/launch";
 import type { AvatarDesign } from "../model/records";
 
 /** The first message of the chat "Design your own..." starts. */
+export const NO_DRAFT_TARGET_REASON = "No pinned window on this desktop takes a draft";
+
 export const AVATAR_DESIGN_PROMPT =
   "I'd like to design my own desktop avatar. Help me draw it, show me a preview, " +
   "and replace my current avatar only after I approve the design. " +
@@ -73,7 +74,7 @@ function designOwnRow(attrs: AvatarChooserDialogAttrs): m.Children {
   return m("div", { class: "mt-4 border-t border-default pt-3" }, [
     m(
       "span",
-      { class: "inline-block", ...hoverTooltipAttrs(isDisabled ? NO_CHAT_APP_REASON : null) },
+      { class: "inline-block", ...hoverTooltipAttrs(isDisabled ? NO_DRAFT_TARGET_REASON : null) },
       m(
         Button,
         {
@@ -87,7 +88,7 @@ function designOwnRow(attrs: AvatarChooserDialogAttrs): m.Children {
     m(
       "p",
       { class: "type-helper mt-1 text-secondary" },
-      "Starts a chat about how your avatar should look; the message is sent as soon as the chat opens.",
+      "Puts a request to draw your avatar into your chat, for you to edit and send.",
     ),
   ]);
 }

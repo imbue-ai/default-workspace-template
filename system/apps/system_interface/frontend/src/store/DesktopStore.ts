@@ -9,7 +9,7 @@
 
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
-import { launchPathOf, launchPathWithParams } from "../model/launch";
+import { DRAFT_PARAM, launchPathOf, launchPathWithParams } from "../model/launch";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -54,7 +54,9 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  draftTargetOf,
   effectiveWindow,
+  effectiveWindowTitle,
   entryLook,
   findWindow,
   initialDesktopState,
@@ -489,6 +491,19 @@ export class DesktopStore {
   /** The designs on offer, read anew on every call so one an agent registered meanwhile is listed. */
   async fetchAvatarDesigns(): Promise<readonly AvatarDesign[]> {
     return (await this.deps.api.fetchAvatars()).designs;
+  }
+
+  /** Hand ``text`` to the pinned window that takes a draft (plan section 4.7): this client's view of it is pointed
+   *  at the draft path, as an agent's navigate would be, and the window is restored and raised; the page drafts the
+   *  text into a chat's composer and reports the selection back. False when no pinned app on this desktop takes one. */
+  async draftIntoPinnedWindow(text: string): Promise<boolean> {
+    const target = draftTargetOf(this.state);
+    if (target === null) return false;
+    const title = effectiveWindowTitle(this.state, target.window, appByName(this.state, target.window.app));
+    const path = launchPathWithParams(target.launchPath, { [DRAFT_PARAM]: text });
+    const isTaken = await this.reportLocation(target.window.id, path, title);
+    this.restoreWindow(target.window.id);
+    return isTaken;
   }
 
   /** Choose the workspace's avatar design; every window (this one included) follows the shell's broadcast. */

@@ -10,7 +10,7 @@
 import m from "mithril";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { fetchWallpapers } from "../model/api";
-import { MESSAGE_PARAM, defaultShortcutMode, launchPathOf, launchTilesOf, promptTargetOfTiles } from "../model/launch";
+import { defaultShortcutMode, launchPathOf } from "../model/launch";
 import type {
   AppRecord,
   AvatarDesign,
@@ -29,6 +29,7 @@ import {
   appByName,
   barEntries,
   desktopById,
+  draftTargetOf,
   effectiveWindowTitle,
   entryLook,
   floatingEntries,
@@ -535,7 +536,7 @@ export function App(): m.Component<AppAttrs> {
 
   function avatarChooserView(current: DesktopStore, chooser: AvatarChooserState): m.Children {
     const state = current.getState();
-    const target = promptTargetOfTiles(launchTilesOf(openableApps(state)));
+    const target = draftTargetOf(state);
     return m(AvatarChooserDialog, {
       designs: chooser.designs,
       loadError: chooser.loadError,
@@ -546,9 +547,7 @@ export function App(): m.Component<AppAttrs> {
           ? null
           : () => {
               avatarChooser = null;
-              void current.openLaunchPath(target.app.name, target.launchPath.id, {
-                [MESSAGE_PARAM]: AVATAR_DESIGN_PROMPT,
-              });
+              void current.draftIntoPinnedWindow(AVATAR_DESIGN_PROMPT);
             },
       onClose: () => {
         avatarChooser = null;

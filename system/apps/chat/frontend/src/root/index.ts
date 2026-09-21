@@ -20,6 +20,7 @@ import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import {
   addChatsUpdatedListener,
+  removeChatsUpdatedListener,
   createChat,
   getChatById,
   getChats,
@@ -39,9 +40,16 @@ import type { ChatRailAttrs } from "./ChatRail";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
-import { groupedRows, rowsFromSnapshots } from "./rows";
+import { groupedRows, mostRecentChatId, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
-import { isNewChatPath, newChatParamsFromSearch, rootPathFor, selectionFromSearch } from "./selection";
+import {
+  draftFromSearch,
+  isNewChatPath,
+  newChatParamsFromSearch,
+  rootPathFor,
+  selectionFromSearch,
+} from "./selection";
+import { prependToComposer } from "../views/MessageInput";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
 // it the list starts collapsed beside the chat, and fills the root while nothing is selected.
@@ -89,23 +97,55 @@ function select(chatId: string | null): void {
   m.redraw();
 }
 
-async function createAndSelect(accountId: string, message: string): Promise<void> {
+async function createAndSelect(accountId: string, message: string, then: (chatId: string) => void): Promise<void> {
   try {
     const created = await createChat("", accountId, message);
     startedHere.add(created.chatId);
     select(created.chatId);
+    then(created.chatId);
   } catch (error) {
     alert(`Failed to create chat: ${(error as Error).message}`);
   }
 }
 
-/** Start a new chat: on the account the user picked, or after a sign-in when nothing is signed in. */
-function startNewChat(accountId: string, message: string): void {
+/** Start a new chat: on the account the user picked, or after a sign-in when nothing is signed in; ``then`` runs
+ *  with the chat once it is selected. */
+function startNewChat(accountId: string, message: string, then: (chatId: string) => void = () => undefined): void {
   if (accountId !== "" || getSelectedAccount() !== null) {
-    void createAndSelect(accountId !== "" ? accountId : (getSelectedAccount()?.id ?? ""), message);
+    void createAndSelect(accountId !== "" ? accountId : (getSelectedAccount()?.id ?? ""), message, then);
     return;
   }
-  openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId, message) });
+  openProviderChooser({
+    onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId, message, then),
+  });
+}
+
+/** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
+ *  its persisted draft on mount. */
+function draftInto(chatId: string, text: string): void {
+  if (pool?.draftInto(chatId, text) === true) return;
+  prependToComposer(chatId, text);
+}
+
+/** The root's ``draft`` param (the desktop's "Design your own..."): the text goes to the composer of the chat the
+ *  URL selects, else the shown one, else the most recently active one, else a chat created for it; the chat is
+ *  selected and shown, and nothing is sent. The URL the root then reports carries the selection alone, so a reload
+ *  does not draft again. */
+function takeDraft(text: string, requestedChatId: string | null): void {
+  const rows = rowsFromSnapshots(getChats(), getProvisionalChats());
+  const listed = new Set(rows.map((row) => row.chatId));
+  const chatId =
+    requestedChatId !== null && listed.has(requestedChatId)
+      ? requestedChatId
+      : selectedChatId !== null && listed.has(selectedChatId)
+        ? selectedChatId
+        : mostRecentChatId(rows, startedHere);
+  if (chatId === null) {
+    startNewChat("", "", (created) => draftInto(created, text));
+    return;
+  }
+  select(chatId);
+  draftInto(chatId, text);
 }
 
 function onChatsUpdated(): void {
@@ -217,6 +257,11 @@ function connectRootToShell(): void {
         startNewChat(params.accountId, params.message);
         return;
       }
+      const draft = draftFromSearch(target.search);
+      if (draft !== "") {
+        takeDraft(draft, selectionFromSearch(target.search));
+        return;
+      }
       select(selectionFromSearch(target.search));
     },
   });
@@ -246,6 +291,17 @@ function bootstrap(): void {
     const params = newChatParamsFromSearch(window.location.search);
     // Accounts decide where the chat starts; a create before they load would run on none.
     void accountsLoaded.then(() => startNewChat(params.accountId, params.message));
+    return;
+  }
+  const draft = draftFromSearch(window.location.search);
+  if (draft !== "") {
+    // The chats decide which composer takes it; a draft before they load would always start a new chat.
+    const requested = selectedChatId;
+    const onceListed = (): void => {
+      removeChatsUpdatedListener(onceListed);
+      void accountsLoaded.then(() => takeDraft(draft, requested));
+    };
+    addChatsUpdatedListener(onceListed);
   }
 }
 

@@ -44,7 +44,7 @@ Built-in manifests:
 | App | `critical` | `priority` | `launcher_rank` | `default_shortcut` | `launch_paths` |
 |---|---|---|---|---|---|
 | `system_interface` | true | `system_interface` | | none | none; `internal = true` |
-| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
+| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, params `draft` optional); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
 | `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, params `path` optional) |

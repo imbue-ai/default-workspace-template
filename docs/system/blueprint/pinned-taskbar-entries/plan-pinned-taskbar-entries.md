@@ -241,10 +241,10 @@ Each is a stable, documented mngr convention; a change to any of them shows up a
 Choosing a design writes the workspace's selection and every window follows the broadcast.
 The dialog closes on Escape, on a press outside, or on Done.
 
-"Design your own..." starts a chat seeded with the prototype's design prompt through the launch path that declares a `message` parameter, the way the launcher's "Start something" intents do, so the shell names no app.
-The prompt tells the agent to draw a design, show a preview, and register it only after the user approves.
-The button is disabled, with the reason as its tooltip, when no app declares such a launch path.
-A note beside it says the message is sent when the chat opens; the prototype's editable draft is deferred.
+"Design your own..." drafts the prototype's design prompt into the conversation the user already has open, unsent, rather than starting a chat: the shell points this client's view of the pinned window at the pin's home launch path with the text as its `draft` parameter (the same location write an agent's `navigate` makes) and restores the window, and the app does the rest.
+The shell names no app: the target is the pinned window on the active desktop whose app declares, at the pin's home path, a launch path that takes `draft`; the button is disabled, with the reason as its tooltip, when none does.
+The chat's root takes `draft` this way: the text goes to the composer of the chat the URL selects, else the shown one, else the most recently active one, else a chat created for it, and the root then reports the selection alone so a reload drafts nothing again.
+The prompt tells the agent to draw a design, show a preview, and register it only after the user approves; nothing is sent until the user sends it.
 
 Registration is the prototype's loopback-only route: an agent inside the workspace posts a design's id, label, SVG, and source path, the shell validates and stores it, and it appears in the chooser.
 A bundled design's id cannot be replaced.
@@ -447,6 +447,5 @@ A suggested commit order inside that pull request, each commit leaving the repos
 - A user toggle of a window's location scope; only a pin sets it.
 - Attention and error expressed on the avatar, and the prototype's badge dot, which stays removed.
 - The prototype's `listening` mood while the chat is open.
-- An editable draft for "Design your own..." (a `draft` launch parameter); the message is sent on open.
 - Keyboard shortcuts for the entry and the chooser.
 - A workspace-owned observer service, so the mood no longer depends on the chat app's process.

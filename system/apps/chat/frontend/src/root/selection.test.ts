@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { isNewChatPath, newChatParamsFromSearch, rootPathFor, selectionFromSearch } from "./selection";
+import {
+  draftFromSearch,
+  isNewChatPath,
+  newChatParamsFromSearch,
+  rootPathFor,
+  selectionFromSearch,
+} from "./selection";
 
 describe("selection", () => {
   it("reads the selected chat off the query and refuses an id that cannot be a chat's", () => {
     expect(selectionFromSearch("?chat=agent-0123abc")).toBe("agent-0123abc");
     expect(selectionFromSearch("?chat=not%20an%20id")).toBeNull();
     expect(selectionFromSearch("")).toBeNull();
+  });
+
+  it("reads the draft the root's URL hands the composer, empty for none", () => {
+    expect(draftFromSearch("?chat=agent-1&draft=Draw+me+a+seal")).toBe("Draw me a seal");
+    expect(draftFromSearch("?chat=agent-1")).toBe("");
+    expect(draftFromSearch("")).toBe("");
   });
 
   it("writes the selection back as the root's path", () => {

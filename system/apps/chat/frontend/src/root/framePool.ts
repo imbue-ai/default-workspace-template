@@ -104,6 +104,15 @@ export class InnerFramePool {
     this.container.appendChild(frame);
   }
 
+  /** Hand ``text`` to the live composer of ``chatId``'s page; false when the page is not loaded yet (the caller
+   *  then stores the draft where the page's composer reads it on mount). */
+  draftInto(chatId: string, text: string): boolean {
+    const api = this.api(chatId);
+    if (api === null) return false;
+    api.prependDraft(text);
+    return true;
+  }
+
   private api(chatId: string): ChatPageEmbedApi | null {
     const held = this.held.get(chatId);
     if (held === undefined || !held.isLoaded) return null;
