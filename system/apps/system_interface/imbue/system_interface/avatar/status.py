@@ -223,8 +223,10 @@ def read_tail_lines_back_to_snapshot(path: Path) -> list[str]:
         chunks: list[bytes] = []
         is_whole = position == 0
         # Whether a newer block's cut first line held the marker: that line starts in an older block, and the read
-        # ends at the first block that holds its start (a marker split across two blocks reads one block further).
+        # ends at the first block that holds its start. A marker the boundary splits is looked for in the older
+        # block joined with the head of the newer one, where the line it sits in starts.
         is_marker_in_cut_line = False
+        newer_head = b""
         while position > 0:
             step = min(_TAIL_BLOCK_BYTES, position)
             position -= step
@@ -232,11 +234,13 @@ def read_tail_lines_back_to_snapshot(path: Path) -> list[str]:
             chunk = stream.read(step)
             chunks.insert(0, chunk)
             is_whole = position == 0
+            joined = chunk + newer_head
+            newer_head = chunk[: len(marker) - 1]
             first_newline = chunk.find(b"\n")
             if first_newline == -1:
-                is_marker_in_cut_line = is_marker_in_cut_line or marker in chunk
+                is_marker_in_cut_line = is_marker_in_cut_line or marker in joined
                 continue
-            if is_marker_in_cut_line or marker in chunk[first_newline + 1 :]:
+            if is_marker_in_cut_line or marker in joined[first_newline + 1 :]:
                 break
             is_marker_in_cut_line = marker in chunk[:first_newline]
     text = b"".join(chunks).decode("utf-8", errors="replace")
