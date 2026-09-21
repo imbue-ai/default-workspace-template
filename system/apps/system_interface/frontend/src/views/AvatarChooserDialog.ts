@@ -118,18 +118,21 @@ export const AvatarChooserDialog: m.Component<AvatarChooserDialogAttrs> = {
       },
       [
         designGrid(attrs),
-        m(
-          "a",
-          {
-            class: "type-helper mt-2 inline-block text-secondary underline",
-            "data-avatar-source": "",
-            href: avatarSourceUrl(attrs.selected),
-            ...hoverTooltipAttrs(selected?.source_path ?? null),
-            // Present and empty: the route's Content-Disposition names the file.
-            download: "",
-          },
-          "Original SVG",
-        ),
+        // Only a design the catalog lists has an original to fetch.
+        selected === undefined
+          ? null
+          : m(
+              "a",
+              {
+                class: "type-helper mt-2 inline-block text-secondary underline",
+                "data-avatar-source": "",
+                href: avatarSourceUrl(selected.id),
+                ...hoverTooltipAttrs(selected.source_path),
+                // Present and empty: the route's Content-Disposition names the file.
+                download: "",
+              },
+              "Original SVG",
+            ),
         designOwnRow(attrs),
       ],
     );
