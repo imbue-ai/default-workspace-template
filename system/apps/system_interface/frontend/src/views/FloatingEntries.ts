@@ -13,6 +13,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import type { PixelRect } from "../geometry/frames";
 import type { AvatarState, TaskbarEntry } from "../reducers/desktopState";
 import { entryStyleParts } from "./AvatarImage";
+import { rectStyle } from "./pixelStyle";
 
 /** The intrinsic size the glyph markup carries; the drawing fills the tile (``[&>svg]:size-full``). */
 const FLOATING_GLYPH_MARKUP_SIZE = 32;
@@ -63,12 +64,7 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
                     : "border-subtle bg-surface/90 text-secondary shadow-raised hover:bg-fill-hover ")) +
               (entry.isMinimized ? "opacity-70 " : "") +
               (isMenuOpen && !isAvatar ? "bg-fill-active" : ""),
-            style: {
-              left: `${rect.x}px`,
-              top: `${rect.y}px`,
-              width: `${rect.width}px`,
-              height: `${rect.height}px`,
-            },
+            style: rectStyle(rect),
             ...hoverTooltipAttrs(tooltip),
             onclick: () => attrs.onClick(entry.window.id),
             oncontextmenu: (event: MouseEvent) => {

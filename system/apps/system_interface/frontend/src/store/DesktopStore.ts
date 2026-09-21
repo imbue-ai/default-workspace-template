@@ -998,13 +998,21 @@ export class DesktopStore {
     this.updateFloatingEntryDrag(pointer);
   }
 
+  /** The pointer moved during a floating entry drag; no redraw, as for a window move: the App paints the
+   *  entry's rectangle straight onto it, and ``renderedFloatingEntryRect`` answers the live value meanwhile. */
   updateFloatingEntryDrag(pointer: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "floating-entry") return;
     const corner = { x: pointer.x - gesture.grabOffset.x, y: pointer.y - gesture.grabOffset.y };
     const clamped = floatingPositionFromPixels(corner, this.backdrop, this.metrics);
     this.gesture = { ...gesture, currentRect: floatingEntryRect(clamped, this.backdrop, this.metrics) };
-    this.notifyListeners();
+  }
+
+  /** The rectangle the desktop draws a floating entry at now, from the app alone: the drag's while one moves it,
+   *  else its stored position's. What the paint of a drag writes onto the entry per pointer move and when the
+   *  gesture ends, as ``windowRect`` is for a window. */
+  floatingEntryRectOf(app: string): PixelRect {
+    return this.renderedFloatingEntryRect(app, this.presentationOf(app)?.position ?? null);
   }
 
   /** The drag ended: the position is written to the client record, once. */

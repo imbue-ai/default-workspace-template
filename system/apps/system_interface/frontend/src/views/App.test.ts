@@ -71,6 +71,52 @@ afterEach(() => {
   gestureListener = null;
 });
 
+describe("a floating entry drag", () => {
+  const buddy = appRecord("buddy", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "floating" } });
+
+  /** A floating buddy entry on a 1000x800 backdrop, lifted at (10, 10): under jsdom every box measures as empty,
+   *  so the grab offset is the press point itself and a move to (x, y) puts the box's corner at (x - 10, y - 10). */
+  function beginDrag(): { listener: GestureListener; element: HTMLElement } {
+    socket.deliver().onAppsUpdated([appRecord("docs"), buddy]);
+    socket.deliver().onDesktopsUpdated([
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+    ]);
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const element = document.querySelector('[data-pinned-entry="buddy"][data-entry-mode="floating"]') as HTMLElement;
+    const listener = gestureListener as GestureListener;
+    listener.onBegin({ kind: "floating-entry", app: "buddy", element }, { x: 10, y: 10 }, { x: 10, y: 10 });
+    return { listener, element };
+  }
+
+  it("paints the entry per move with no redraw, and a redraw then draws the same box", () => {
+    const { listener, element } = beginDrag();
+    expect(element.style.left).toBe("928px");
+    listener.onMove({ kind: "floating-entry", app: "buddy", element }, { x: 110, y: 210 }, { x: 100, y: 200 });
+    expect(element.style.left).toBe("100px");
+    expect(element.style.top).toBe("200px");
+    m.redraw.sync();
+    expect(document.querySelector('[data-pinned-entry="buddy"]')).toBe(element);
+    expect(element.style.left).toBe("100px");
+    listener.onEnd({ kind: "floating-entry", app: "buddy", element }, { x: 110, y: 210 }, { x: 100, y: 200 });
+    expect(element.style.left).toBe("100px");
+    m.redraw.sync();
+    expect(element.style.left).toBe("100px");
+  });
+
+  it("puts the entry back where it was when cancelled, before any redraw", () => {
+    const { listener, element } = beginDrag();
+    listener.onMove({ kind: "floating-entry", app: "buddy", element }, { x: 110, y: 210 }, { x: 100, y: 200 });
+    expect(element.style.left).toBe("100px");
+    listener.onCancel({ kind: "floating-entry", app: "buddy", element });
+    expect(element.style.left).toBe("928px");
+    m.redraw.sync();
+    expect(element.style.left).toBe("928px");
+  });
+});
+
 describe("a window drag", () => {
   const binding = { kind: "window-move", windowId: "win-1" } as const;
 
