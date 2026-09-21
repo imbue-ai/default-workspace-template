@@ -624,6 +624,11 @@ export function App(): m.Component<AppAttrs> {
       const placements = activePlacements(state);
       const focused = activeFocusedWindowId(state);
       const isLauncherOpen = current.isLauncherOpen();
+      // A pinned entry answers the same way in the bar and afloat.
+      const onEntryClick = (windowId: string): void => current.toggleTaskbarEntry(windowId);
+      const onEntryContextMenu = (windowId: string, x: number, y: number): void => {
+        openMenu = { kind: "entry", windowId, anchor: anchorForPoint(x, y) };
+      };
       return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
         m(UpdateStalenessBanner),
         m(
@@ -658,10 +663,8 @@ export function App(): m.Component<AppAttrs> {
                   openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
                   floatingEntries: floatingEntries(state),
                   openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
-                  onEntryClick: (windowId) => current.toggleTaskbarEntry(windowId),
-                  onEntryContextMenu: (windowId, x, y) => {
-                    openMenu = { kind: "entry", windowId, anchor: anchorForPoint(x, y) };
-                  },
+                  onEntryClick,
+                  onEntryContextMenu,
                   isOverlayOpen: openMenu !== null || isLauncherOpen,
                   onSelectShortcut: (key) => {
                     selectedShortcutKey = key;
@@ -731,10 +734,8 @@ export function App(): m.Component<AppAttrs> {
                   : { kind: "running-app", appName: app.name, anchor: anchorForEvent(event) };
             },
           },
-          onEntryClick: (windowId) => current.toggleTaskbarEntry(windowId),
-          onEntryContextMenu: (windowId, x, y) => {
-            openMenu = { kind: "entry", windowId, anchor: anchorForPoint(x, y) };
-          },
+          onEntryClick,
+          onEntryContextMenu,
         }),
         openMenu?.kind === "window" ? windowMenu(current, openMenu.windowId, openMenu.anchor) : null,
         openMenu?.kind === "entry" ? entryMenu(current, openMenu.windowId, openMenu.anchor) : null,
