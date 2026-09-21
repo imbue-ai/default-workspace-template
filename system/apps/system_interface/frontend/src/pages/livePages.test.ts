@@ -42,9 +42,9 @@ let windows: HTMLElement;
 let layer: LivePagesLayer;
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
-function renderChrome(): void {
+function renderChrome(...extraWindowIds: string[]): void {
   windows.innerHTML = "";
-  for (const windowId of ["win-1", "win-2", "win-3"]) {
+  for (const windowId of ["win-1", "win-2", "win-3", ...extraWindowIds]) {
     const chrome = document.createElement("div");
     chrome.setAttribute("data-window-id", windowId);
     const content = document.createElement("div");
@@ -426,11 +426,7 @@ describe("the contract", () => {
     socket.deliver().onDesktopsUpdated(api.desktops);
     socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
     await settle();
-    renderChrome();
-    windows.appendChild(windows.lastElementChild!.cloneNode(true));
-    (windows.lastElementChild as HTMLElement).setAttribute("data-window-id", "win-4");
-    (windows.lastElementChild!.firstElementChild as HTMLElement).getBoundingClientRect = () =>
-      ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+    renderChrome("win-4");
     layer.reconcile();
     expect(frameOf("win-4").getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
     expect(frameOf("win-4").title).toBe("Seven");
@@ -455,6 +451,40 @@ describe("the contract", () => {
     await settle();
     layer.reconcile();
     expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
+  });
+
+  it("leaves an independent window's hidden page alone while another desktop is active", async () => {
+    const [home, work] = api.desktops;
+    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
+    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-4")] });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    renderChrome("win-4");
+    layer.reconcile();
+    const frame = frameOf("win-4");
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // The work desktop's layout knows nothing of this client's path for the window; neither it nor a desktops
+    // update while it is active sends the hidden page to the home path.
+    await store.switchDesktop("work");
+    layer.reconcile();
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    layer.reconcile();
+    expect(wrapperOf("win-4").style.display).toBe("none");
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_HIDDEN }]);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    // Back on its desktop, the stored path is the one the page is at, so nothing moves it.
+    await store.switchDesktop("home");
+    renderChrome("win-4");
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_NAVIGATE);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
   });
 
   it("raises the window of a page that says it took focus", () => {
