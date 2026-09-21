@@ -293,7 +293,7 @@ export class DesktopStore {
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
     this.replacedDesktop = replacedDesktopOf(arrival);
-    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, arrival?.desktopId ?? null);
+    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, arrival?.desktop_id ?? null);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -943,8 +943,8 @@ export interface ReplacedDesktop {
 /** The replaced desktop an arrival reports, when it does; the shell names the deleted desktop only alongside the
  *  one it seeded, so an answer with one but not the other reports nothing. */
 export function replacedDesktopOf(arrival: ClientArrival | null): ReplacedDesktop | null {
-  if (arrival === null || arrival.replacedDesktopName === null || arrival.createdDesktop === null) return null;
-  return { replacedName: arrival.replacedDesktopName, seededName: arrival.createdDesktop.name };
+  if (arrival === null || arrival.replaced_desktop_name === null || arrival.created_desktop === null) return null;
+  return { replacedName: arrival.replaced_desktop_name, seededName: arrival.created_desktop.name };
 }
 
 /** The desktop a fresh window lands on: the deep link's when it exists, else the one the shell's arrival answer

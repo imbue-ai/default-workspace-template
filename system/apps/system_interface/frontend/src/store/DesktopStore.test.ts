@@ -84,7 +84,7 @@ describe("bootstrap", () => {
 
   it("lands a first-time user on the desktop the shell seeded for them, and notices a replaced one until dismissed", async () => {
     const seeded = desktopRecord("alice-2", { name: "Alice 2" });
-    api.arrival = { createdDesktop: seeded, replacedDesktopName: "Alice" };
+    api.arrival = { created_desktop: seeded, replaced_desktop_name: "Alice" };
     const redraws: number[] = [];
     const store = await startedStore(() => redraws.push(1));
     expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["home", "work", "alice-2"]);
@@ -97,7 +97,7 @@ describe("bootstrap", () => {
   });
 
   it("the notice names the seeded desktop even when a deep link lands the client elsewhere", async () => {
-    api.arrival = { createdDesktop: desktopRecord("alice", { name: "Alice" }), replacedDesktopName: "Alice" };
+    api.arrival = { created_desktop: desktopRecord("alice", { name: "Alice" }), replaced_desktop_name: "Alice" };
     const store = makeStore();
     await store.start({ desktopId: "work", open: null, launch: null });
     expect(store.getState().activeDesktopId).toBe("work");
