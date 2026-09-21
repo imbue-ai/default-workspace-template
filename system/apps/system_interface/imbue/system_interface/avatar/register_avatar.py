@@ -8,13 +8,13 @@ original under the app data directory; ``--select`` then makes it the workspace'
 """
 
 import argparse
-import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
 import httpx
 from app_manifest.manifest import describe_validation_error
+from app_manifest.shell_windows import shell_base_url
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
@@ -25,8 +25,6 @@ from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.shell.errors import ShellError
 
-ENV_WORKSPACE_URL: Final[str] = "MINDS_WORKSPACE_SERVER_URL"
-DEFAULT_WORKSPACE_URL: Final[str] = "http://127.0.0.1:8000"
 _REQUEST_TIMEOUT_SECONDS: Final[float] = 15.0
 _JSON_MIMETYPE: Final[str] = "application/json"
 
@@ -53,7 +51,7 @@ def _parse_arguments(argv: Sequence[str] | None) -> RegisterAvatarArguments:
     parser.add_argument("--select", action="store_true", help="Select the design for the whole workspace")
     parser.add_argument(
         "--shell-url",
-        default=os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL),
+        default=shell_base_url(),
         help="The shell's URL (default: MINDS_WORKSPACE_SERVER_URL, else the loopback port)",
     )
     parsed = parser.parse_args(argv)
