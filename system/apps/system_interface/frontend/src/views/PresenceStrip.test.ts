@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import "../testing/dom";
+import { mountView, unmountViews } from "../testing/mount";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import m from "mithril";
 
@@ -18,16 +19,12 @@ const owner = presentUserRecord("user-owner-9c21", {
 });
 
 function render(): HTMLElement {
-  const root = document.createElement("div");
-  document.body.appendChild(root);
-  m.render(root, m(PresenceStrip));
-  return root;
+  return mountView(() => m(PresenceStrip));
 }
 
 afterEach(() => {
+  unmountViews();
   resetPresenceForTesting();
-  vi.unstubAllGlobals();
-  document.body.innerHTML = "";
 });
 
 describe("presenceInitial and presenceTitle", () => {
