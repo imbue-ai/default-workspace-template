@@ -50,6 +50,7 @@ const ROW_CLASS =
   "launcher-row flex h-9 w-full items-center gap-2 px-3 text-left text-(length:--font-size-row) " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ";
 const CAPTION_CLASS = "type-helper shrink-0 truncate text-faint";
+const NO_MATCH_CLASS = "launcher-no-matches m-0 px-3 py-1 text-(length:--font-size-row) text-faint";
 
 function rowAttrs(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.Attributes {
   const isEnabled = isRowEnabled(row);
@@ -161,19 +162,13 @@ export function LauncherMenu(): m.Component<LauncherMenuAttrs> {
             ? null
             : m("div", { "data-section": "text" }, [
                 textFrom === 0 && !isNoMatch ? null : m("div", { class: menuDividerClass() }),
-                isNoMatch
-                  ? m(
-                      "p",
-                      { class: "launcher-no-matches m-0 px-3 py-1 text-(length:--font-size-row) text-faint" },
-                      NO_MATCH_MESSAGE,
-                    )
-                  : null,
+                isNoMatch ? m("p", { class: NO_MATCH_CLASS }, NO_MATCH_MESSAGE) : null,
                 textRows.map((row, index) => rowView(row, textFrom + index, attrs)),
               ]),
           rows.length === 0
             ? m(
                 "p",
-                { class: "launcher-no-matches m-0 px-3 py-1 text-(length:--font-size-row) text-faint" },
+                { class: NO_MATCH_CLASS },
                 isNoMatch ? NO_MATCH_MESSAGE : "No apps are registered on this machine yet.",
               )
             : null,
