@@ -8,7 +8,13 @@ import { catalogTemplateRecord } from "../testing/records";
 import { GettingStartedPage } from "./GettingStartedPage";
 import { START_OPTIONS, START_PAGE_SIZE } from "./startSomething";
 
-afterEach(unmountViews);
+// jsdom has no scrollIntoView; the scroll test stands one in and puts this back.
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+afterEach(() => {
+  unmountViews();
+  Element.prototype.scrollIntoView = originalScrollIntoView;
+});
 
 const LOADED: TemplateCatalogState = {
   kind: "loaded",
@@ -17,7 +23,7 @@ const LOADED: TemplateCatalogState = {
     generated_at: "",
     templates: [
       catalogTemplateRecord("inbox", { title: "Inbox Digest", description: "Triage your mail.", author: "kanjun" }),
-      catalogTemplateRecord("orchard", { title: "Orchard", description: "A work tracker.", author: "mango" }),
+      catalogTemplateRecord("orchard", { title: "Orchard", description: "A work tracker template.", author: "mango" }),
     ],
     shelves: [{ key: "popular", title: "Most popular", slugs: ["inbox"] }],
   },
@@ -83,6 +89,33 @@ describe("the Getting Started page", () => {
     m.redraw.sync();
     expect(root.querySelector(".getting-started-no-matches")).toBeNull();
     expect(root.querySelectorAll("[data-start]")).toHaveLength(START_PAGE_SIZE);
+  });
+
+  it("the template tile scrolls to the templates on hand, resting or searched, and owes nothing when there are none", () => {
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.getAttribute("data-section") ?? "");
+    };
+    const { root } = render();
+    root.querySelector<HTMLElement>('[data-start="template"]')!.click();
+    m.redraw.sync();
+    expect(scrolled).toEqual(["templates"]);
+
+    // These results hold the tile and no template: the pick has nowhere to scroll, now or later.
+    typeQuery(root, "start from a");
+    expect(root.querySelector('[data-section="templates"]')).toBeNull();
+    root.querySelector<HTMLElement>('[data-start="template"]')!.click();
+    m.redraw.sync();
+    typeQuery(root, "");
+    expect(root.querySelector('[data-section="templates"]')).not.toBeNull();
+    expect(scrolled).toEqual(["templates"]);
+
+    // These results hold both: the tile scrolls the results' own templates section.
+    typeQuery(root, "template");
+    expect(root.querySelector('[data-section="templates"] [data-template="orchard"]')).not.toBeNull();
+    root.querySelector<HTMLElement>('[data-start="template"]')!.click();
+    m.redraw.sync();
+    expect(scrolled).toEqual(["templates", "templates"]);
   });
 
   it("says when the templates are loading or failed, and omits the section (and stands the template tile down) with no catalog", () => {
