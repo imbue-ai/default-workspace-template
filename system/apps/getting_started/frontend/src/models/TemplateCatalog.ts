@@ -140,14 +140,14 @@ async function fetchTemplateCatalog(): Promise<TemplateCatalogState> {
   try {
     const response = await fetch(apiUrl(TEMPLATES_CATALOG_PATH));
     if (!response.ok) {
-      console.warn(`[si] could not load the template catalog: HTTP ${response.status}`);
+      console.warn(`[getting-started] could not load the template catalog: HTTP ${response.status}`);
       return { kind: "failed" };
     }
     const data = (await response.json()) as CatalogResponse;
     if (data.catalog === null) return { kind: "disabled" };
     return { kind: "loaded", catalog: data.catalog, isStale: data.is_stale === true };
   } catch (e) {
-    console.warn("[si] could not load the template catalog", e);
+    console.warn("[getting-started] could not load the template catalog", e);
     return { kind: "failed" };
   }
 }
