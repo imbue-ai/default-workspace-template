@@ -99,8 +99,14 @@ class AvatarCatalogStore(MutableModel):
         path = self._path()
         if not path.exists():
             return AvatarCatalog()
-        if path.stat().st_size > _MAX_CATALOG_BYTES:
-            raise InvalidShellValueError(f"the avatar catalog at {path} exceeds its storage bound")
+        size = path.stat().st_size
+        if size > _MAX_CATALOG_BYTES:
+            if is_writing:
+                raise InvalidShellValueError(
+                    f"the avatar catalog at {path} exceeds its storage bound; refusing to overwrite it"
+                )
+            logger.warning("Ignored an avatar catalog of {} bytes at {}, past its storage bound", size, path)
+            return AvatarCatalog()
         raw = read_json_object(path)
         if raw is None:
             if is_writing:
