@@ -85,6 +85,19 @@ def _fold_legacy_client(entry: Any) -> Any:
     return {"active_desktop": desktop, "last_seen": entry.get("last_seen")}
 
 
+@pure
+def _moved_client(
+    client_id: ClientId, previous: _StoredClient | None, desktop_id: DesktopId, stamped: datetime
+) -> _StoredClient:
+    """The recorded client on the desktop, stamped; a client with no record raises ClientNotFoundError."""
+    if previous is None:
+        raise ClientNotFoundError(f"No client record for {client_id!r}")
+    return previous.model_copy_update(
+        to_update(previous.field_ref().active_desktop, desktop_id),
+        to_update(previous.field_ref().last_seen, stamped),
+    )
+
+
 class ClientStore(MutableModel):
     """Reads and writes ``clients.json`` under the shell's state lock."""
 
@@ -158,16 +171,7 @@ class ClientStore(MutableModel):
         """Move a recorded client onto a desktop (a ``load`` op, an op's ``--desktop``, or a deleted desktop's
         fallback); raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
-
-        def moved(previous: _StoredClient | None) -> _StoredClient:
-            if previous is None:
-                raise ClientNotFoundError(f"No client record for {client_id!r}")
-            return previous.model_copy_update(
-                to_update(previous.field_ref().active_desktop, desktop_id),
-                to_update(previous.field_ref().last_seen, stamped),
-            )
-
-        return self._store_client(client_id, moved)
+        return self._store_client(client_id, lambda previous: _moved_client(client_id, previous, desktop_id, stamped))
 
     def record_arrival(
         self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
