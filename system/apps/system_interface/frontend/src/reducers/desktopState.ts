@@ -297,7 +297,6 @@ export function openableApps(state: DesktopState): AppRecord[] {
   return state.apps.filter((app) => !app.internal);
 }
 
-/** The app's pinned window on the active desktop (the shell keeps one per pinned app per desktop), or null. */
 /** Where a draft goes (pinned-taskbar-entries plan section 4.7): a pinned window on the active desktop whose app
  *  declares, at the pin's home path, a launch path taking ``draft``; the path to navigate the window to is that
  *  launch path's with the text. Null when no pinned app takes a draft. */
@@ -319,6 +318,7 @@ export function draftTargetOf(state: DesktopState): DraftTarget | null {
   return null;
 }
 
+/** The app's pinned window on the active desktop (the shell keeps one per pinned app per desktop), or null. */
 export function pinnedWindowOf(state: DesktopState, app: string): WindowRecord | null {
   return activeDesktop(state)?.windows.find((window) => window.app === app && window.is_pinned) ?? null;
 }
