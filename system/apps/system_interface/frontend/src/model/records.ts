@@ -1,9 +1,12 @@
 /**
  * The TypeScript mirrors of the shell's records (desktop-interface contracts.md sections 3 to
- * 5): what ``GET /api/desktops``, the placements routes, the client list, and the ``apps_updated``
- * push carry, spelled as the wire spells them (``snake_case``), and the parsers that read a wire
- * document into them. A document of the wrong shape is refused with ``WireShapeError`` rather
- * than read as an empty one: an empty desktop list would be believed.
+ * 5, and the pinned-taskbar-entries plan): what ``GET /api/desktops``, the placements routes
+ * (a client's stored window paths included), the client list with each client's entries, the
+ * ``apps_updated`` push with each app's pin, the avatar catalog of ``GET /api/avatars``, and the
+ * ``avatar_status``, ``avatar_selection_changed``, and ``client_entries_changed`` pushes carry,
+ * spelled as the wire spells them (``snake_case``), and the parsers that read a wire document
+ * into them. A document of the wrong shape is refused with ``WireShapeError`` rather than read
+ * as an empty one: an empty desktop list would be believed.
  */
 
 export type WindowState = "NORMAL" | "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZED";
