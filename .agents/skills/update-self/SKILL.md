@@ -398,7 +398,8 @@ stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
 **When the update touches `system/apps/system_interface/`,
-`system/apps/chat/frontend/`, `system/libs/workspace_ui/`, or
+`system/apps/chat/frontend/`, `system/apps/getting_started/frontend/`,
+`system/libs/workspace_ui/`, or
 `system/package.json` / `system/package-lock.json` at all** (the trees the
 shell's bundle is stamped over, the same set `update-system-interface`'s
 freshness check names), also take the `editing service system_interface` lease

@@ -2064,10 +2064,12 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/system_interface/frontend/vite.config.ts",
         "system/apps/system_interface/frontend/tsconfig.json",
         "system/apps/system_interface/frontend/public/logo.svg",
-        # The chat app's frontend and the library both compile into a bundle; so does
-        # the tooling every build reads.
+        # The chat's and the Getting Started app's frontends and the library all compile into a
+        # bundle; so does the tooling every build reads.
         "system/apps/chat/frontend/src/index.ts",
         "system/apps/chat/frontend/chat.html",
+        "system/apps/getting_started/frontend/src/index.ts",
+        "system/apps/getting_started/frontend/index.html",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2083,6 +2085,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/package.json",
         "system/package-lock.json",
         "system/apps/chat/frontend/package.json",
+        "system/apps/getting_started/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )

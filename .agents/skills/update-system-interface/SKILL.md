@@ -221,16 +221,18 @@ If the user **approves** the preview:
    verdict (that wait happens *before* this step).
 
 2. **Freshness check** -- the branch is only mergeable if
-   `system/apps/system_interface/`, `system/apps/chat/frontend/`, the shared
-   `system/libs/workspace_ui/`, and the npm lockfile (the trees the shell's and
-   the chat's bundles are stamped over; the apply installs the worker's bundles
-   only as a pair, so a stale chat stamp costs the shell's bundle too) have not
+   `system/apps/system_interface/`, `system/apps/chat/frontend/`,
+   `system/apps/getting_started/frontend/`, the shared
+   `system/libs/workspace_ui/`, and the npm lockfile (the trees the shell's, the
+   chat's, and the Getting Started app's bundles are stamped over; the apply
+   installs the worker's bundles only as a set, so a stale stamp on any one costs
+   the shell's bundle too) have not
    changed since the worker branched (for example, another pass merged in the
    meantime):
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/ system/apps/chat/frontend/ system/libs/workspace_ui/ system/package-lock.json
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/ system/apps/chat/frontend/ system/apps/getting_started/frontend/ system/libs/workspace_ui/ system/package-lock.json
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale --

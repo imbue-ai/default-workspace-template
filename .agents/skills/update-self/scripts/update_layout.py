@@ -28,6 +28,11 @@ CHAT_DIR = "system/apps/chat"
 
 CHAT_FRONTEND_DIR = f"{CHAT_DIR}/frontend"
 
+# The Getting Started app: the third frontend, built beside the other two.
+GETTING_STARTED_DIR = "system/apps/getting_started"
+
+GETTING_STARTED_FRONTEND_DIR = f"{GETTING_STARTED_DIR}/frontend"
+
 # The frontends' shared library (source only: each app's build compiles what it imports) and
 # the npm workspace every frontend belongs to -- one ``npm ci`` at its root, one lockfile.
 FRONTEND_LIB_DIR = "system/libs/workspace_ui"
@@ -43,6 +48,7 @@ NPM_MANIFEST_PATHS = frozenset(
         NPM_LOCKFILE,
         f"{FRONTEND_DIR}/package.json",
         f"{CHAT_FRONTEND_DIR}/package.json",
+        f"{GETTING_STARTED_FRONTEND_DIR}/package.json",
         f"{FRONTEND_LIB_DIR}/package.json",
     }
 )
@@ -56,8 +62,13 @@ FRONTEND_TOOLING_PATHS = frozenset(
     }
 )
 
-# Every directory whose change re-emits a bundle: the two frontends and the library they share.
-FRONTEND_SOURCE_DIRS = (FRONTEND_DIR, CHAT_FRONTEND_DIR, FRONTEND_LIB_DIR)
+# Every directory whose change re-emits a bundle: the three frontends and the library they share.
+FRONTEND_SOURCE_DIRS = (
+    FRONTEND_DIR,
+    CHAT_FRONTEND_DIR,
+    GETTING_STARTED_FRONTEND_DIR,
+    FRONTEND_LIB_DIR,
+)
 
 # The vendored mngr the workspace runs on, and the uv tool built from it. An
 # editable install pins the *source path*, not the dependency closure -- so the
@@ -109,8 +120,6 @@ CHAT_STATIC_DIR = f"{CHAT_DIR}/imbue/chat/static"
 
 CHAT_FRONTEND_BUILD_INDEX = f"{CHAT_STATIC_DIR}/chat.html"
 
-GETTING_STARTED_DIR = "system/apps/getting_started"
-GETTING_STARTED_FRONTEND_DIR = f"{GETTING_STARTED_DIR}/frontend"
 GETTING_STARTED_STATIC_DIR = f"{GETTING_STARTED_DIR}/src/getting_started/static"
 GETTING_STARTED_FRONTEND_BUILD_INDEX = f"{GETTING_STARTED_STATIC_DIR}/index.html"
 
