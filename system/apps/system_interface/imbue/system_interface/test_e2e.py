@@ -1219,7 +1219,8 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
     with _running_e2e_server(tmp_path, pin=("plain", "linked", "bar")) as server:
         _land(page, server)
         pinned = _pinned_window(server.base_url)
-        assert pinned["path"] == _PINNED_HOME_PATH and pinned["scope"] == "linked"
+        assert pinned["path"] == _PINNED_HOME_PATH
+        assert pinned["scope"] == "linked"
         entry = _taskbar_entry(page, pinned["id"])
         expect(entry).to_be_visible(timeout=15000)
         expect(entry).to_have_attribute("data-pinned", "true")
@@ -1261,7 +1262,8 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         )
         with pytest.raises(urllib.error.HTTPError) as refused:
             urllib.request.urlopen(request, timeout=5)
-        assert refused.value.code == 400 and "minimize" in refused.value.read().decode()
+        assert refused.value.code == 400
+        assert "minimize" in refused.value.read().decode()
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
         # A new desktop is born with its own pinned window, and an open at the home path finds it.
@@ -1412,7 +1414,8 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
             lambda entry: entry.get("position") is not None,
             "the drag never wrote the position",
         )
-        assert stored["mode"] == "floating" and stored["style"] == "plain"
+        assert stored["mode"] == "floating"
+        assert stored["style"] == "plain"
         _assert_close(stored["position"]["x"] * backdrop["width"], moved["x"] - backdrop["x"], "stored x")
         _assert_close(stored["position"]["y"] * backdrop["height"], moved["y"] - backdrop["y"], "stored y")
         # The drag fired no click: the window stayed minimized.
