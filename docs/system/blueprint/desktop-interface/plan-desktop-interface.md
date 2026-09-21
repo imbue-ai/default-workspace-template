@@ -225,7 +225,7 @@ Adding a shortcut: the launcher's tiles and the Running apps popover offer "Add 
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
-A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu has no Close and adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
+A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
 The tray's widgets are Desktops and Running apps (concepts.md 2.8); each is one component with one popover, and adding a third is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
