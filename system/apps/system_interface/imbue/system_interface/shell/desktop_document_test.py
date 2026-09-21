@@ -286,6 +286,10 @@ def test_the_earliest_window_at_the_home_path_is_adopted_and_an_independent_pin_
     adopted = independent.desktop.windows[1]
     assert adopted.id == _WIN_2 and adopted.is_pinned is True
     assert adopted.scope is LocationScope.INDEPENDENT and adopted.title == ""
+    # A window still settling at the home path is adopted settled: a pinned window has no launch path to finish.
+    settling = desktop_with_windows(window_record(_WIN_1, "chat", "/", is_settling=True))
+    (adopted_settling,) = with_pinned_windows_ensured(settling, [_pin("chat")], TEST_NOW).desktop.windows
+    assert adopted_settling.id == _WIN_1 and adopted_settling.is_pinned and adopted_settling.is_settling is False
     # A window at another path is not adopted: a pinned window is created beside it.
     drifted_only = desktop_with_windows(window_record(_WIN_1, "chat", "/?chat=agent-1"))
     created = with_pinned_windows_ensured(drifted_only, [_pin("chat")], TEST_NOW).desktop
