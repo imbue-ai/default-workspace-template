@@ -1,6 +1,7 @@
 """Client records: ``clients.json`` (desktop contracts.md section 4.3), the active desktop, the last-seen stamp, and the
 signed-in user, per browser context."""
 
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -141,58 +142,56 @@ class ClientStore(MutableModel):
         return None
 
     def record_report(self, report: ClientStateReport, now: datetime) -> ClientReportOutcome:
-        """Record a ``client_state`` report: the client's last-seen stamp and the desktop it names."""
+        """Record a ``client_state`` report: the client's last-seen stamp and the desktop it names; the user it last
+        arrived as stays."""
         stamped = now.astimezone(timezone.utc)
-        with STATE_FILES_LOCK:
-            document = self._read_unlocked()
-            previous = document.clients.get(str(report.client_id))
-            stored = _StoredClient(
+        return self._store_client(
+            report.client_id,
+            lambda previous: _StoredClient(
                 active_desktop=report.active_desktop,
                 last_seen=stamped,
                 user_id=previous.user_id if previous is not None else None,
-            )
-            clients = {**document.clients, str(report.client_id): stored}
-            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        previous_desktop = previous.active_desktop if previous is not None else None
-        return ClientReportOutcome(
-            record=_record_of(report.client_id, stored),
-            is_active_desktop_changed=previous_desktop != report.active_desktop,
+            ),
         )
 
     def set_active_desktop(self, client_id: ClientId, desktop_id: DesktopId, now: datetime) -> ClientReportOutcome:
         """Move a recorded client onto a desktop (a ``load`` op, an op's ``--desktop``, or a deleted desktop's
         fallback); raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
-        with STATE_FILES_LOCK:
-            document = self._read_unlocked()
-            previous = document.clients.get(str(client_id))
+
+        def moved(previous: _StoredClient | None) -> _StoredClient:
             if previous is None:
                 raise ClientNotFoundError(f"No client record for {client_id!r}")
-            updated = previous.model_copy_update(
+            return previous.model_copy_update(
                 to_update(previous.field_ref().active_desktop, desktop_id),
                 to_update(previous.field_ref().last_seen, stamped),
             )
-            clients = {**document.clients, str(client_id): updated}
-            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        return ClientReportOutcome(
-            record=_record_of(client_id, updated),
-            is_active_desktop_changed=previous.active_desktop != desktop_id,
-        )
+
+        return self._store_client(client_id, moved)
 
     def record_arrival(
         self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
     ) -> ClientReportOutcome:
         """Record a client's arrival (the shell page loading): the user it arrived as and the desktop it lands on."""
         stamped = now.astimezone(timezone.utc)
+        return self._store_client(
+            client_id, lambda _: _StoredClient(active_desktop=desktop_id, last_seen=stamped, user_id=user_id)
+        )
+
+    def _store_client(
+        self, client_id: ClientId, build: Callable[[_StoredClient | None], _StoredClient]
+    ) -> ClientReportOutcome:
+        """Replace one client's entry with what ``build`` makes of the previous one (None for a new client), and
+        answer whether the stored desktop moved."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             previous = document.clients.get(str(client_id))
-            stored = _StoredClient(active_desktop=desktop_id, last_seen=stamped, user_id=user_id)
+            stored = build(previous)
             clients = {**document.clients, str(client_id): stored}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
         previous_desktop = previous.active_desktop if previous is not None else None
         return ClientReportOutcome(
-            record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != desktop_id
+            record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != stored.active_desktop
         )
 
     def prune_unseen(self, now: datetime) -> list[ClientId]:
