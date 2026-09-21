@@ -295,6 +295,11 @@ export function openableApps(state: DesktopState): AppRecord[] {
 }
 
 /** A window of any desktop, with the desktop it is on. */
+/** The app's pinned window on the active desktop (the shell keeps one per pinned app per desktop), or null. */
+export function pinnedWindowOf(state: DesktopState, app: string): WindowRecord | null {
+  return activeDesktop(state)?.windows.find((window) => window.app === app && window.is_pinned) ?? null;
+}
+
 export function findWindow(state: DesktopState, windowId: string): { desktop: Desktop; window: WindowRecord } | null {
   for (const desktop of state.desktops) {
     const window = desktop.windows.find((candidate) => candidate.id === windowId);

@@ -60,6 +60,7 @@ import {
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
+  pinnedWindowOf,
   reduceDesktopState,
   renderedState,
 } from "../reducers/desktopState";
@@ -521,9 +522,8 @@ export class DesktopStore {
 
   /** The presentation a write of one field starts from: the entry's current look. */
   private presentationOf(app: string): EntryPresentation | null {
-    const desktop = activeDesktop(this.state);
-    const window = desktop?.windows.find((candidate) => candidate.app === app && candidate.is_pinned);
-    if (window === undefined) return null;
+    const window = pinnedWindowOf(this.state, app);
+    if (window === null) return null;
     const look = entryLook(this.state, window, appByName(this.state, app));
     return look === null ? null : { mode: look.mode, style: look.style, position: look.position };
   }

@@ -33,6 +33,7 @@ import {
   floatingEntries,
   isWindowMinimized,
   openableApps,
+  pinnedWindowOf,
 } from "../reducers/desktopState";
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../model/TemplateCatalog";
@@ -143,8 +144,7 @@ export function App(): m.Component<AppAttrs> {
       return { x: press.x - (box.left - origin.left), y: press.y - (box.top - origin.top) };
     };
     /** The pinned window of ``app`` on the active desktop, whose entry a floating-entry press names. */
-    const pinnedWindowIdOf = (app: string): string | null =>
-      activeDesktop(current.getState())?.windows.find((window) => window.app === app && window.is_pinned)?.id ?? null;
+    const pinnedWindowIdOf = (app: string): string | null => pinnedWindowOf(current.getState(), app)?.id ?? null;
     return {
       thresholdPx: () => current.getMetrics().dragThreshold,
       isDraggable: (binding) => {
