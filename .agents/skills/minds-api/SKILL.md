@@ -141,10 +141,11 @@ latchkey curl -N .../api/v1/workspaces/operations/create/$OP/logs
 **Always send `branch`, and take it from `GET /api/v1/app/version`.** Never the
 newest tag upstream: a release the app has not been updated to yet speaks a
 protocol it does not know, and the app caps `update-self` at its own version for
-exactly that reason. Omitting the field makes the new workspace whatever the
-template's default branch happens to be that day -- unreleased code, recorded as
-the app's release. A recent Mind app fills an omitted `branch` with the same
-value this command reads, but an older one does not, so send it.
+exactly that reason. An omitted `branch` means the repository's own default
+branch, for the workspace template as for any other repo -- no app version fills
+it in for you -- so leaving it out makes the new workspace whatever that branch
+holds that day: unreleased code, which an `imbue_cloud` create then records
+under the app's release.
 
 Other optional fields (`host_name`, `launch_mode`, `ai_provider`, `account_id`,
 `region`, `backup_*`) -- see `CreateWorkspaceRequest` in the schema. A `400` with `{error, field}` means a field-level problem; a `422`
