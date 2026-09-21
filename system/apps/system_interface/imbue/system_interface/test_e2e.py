@@ -39,7 +39,8 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
@@ -1211,18 +1212,13 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
         expect(_window(page, laptop_window)).to_have_attribute("data-focused", "true")
 
 
-def _visitor_headers(user_id: str, display_name: str) -> dict[str, str]:
-    """The identity header a share gateway stamps on a signed-in visitor's requests."""
-    identity = {"owner": False, "user_id": user_id, "email": f"{user_id}@example.com", "display_name": display_name}
-    return {IDENTITY_HEADER: json.dumps(identity)}
-
-
 def _visiting_client(
     page: Page, e2e_server: E2EServer, user_id: str, display_name: str, desktop_id: str
 ) -> contextlib.AbstractContextManager[Page]:
     """A second client whose every request carries a visitor's identity, landed on the visitor's own desktop (a
     visitor never sees Home)."""
-    return _second_client(page, e2e_server, desktop_id, extra_http_headers=_visitor_headers(user_id, display_name))
+    visitor = RequestIdentity(owner=False, user_id=user_id, email=f"{user_id}@example.com", display_name=display_name)
+    return _second_client(page, e2e_server, desktop_id, extra_http_headers=identity_headers(visitor))
 
 
 @pytest.mark.timeout(90, func_only=False)

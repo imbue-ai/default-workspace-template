@@ -1,6 +1,5 @@
 """Tests for the shell's HTTP routes (desktop contracts.md sections 5, 6, and 8) over a test state and the two-app registry."""
 
-import json
 import queue
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import ClientId
@@ -23,6 +22,7 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_two_app_registry
@@ -757,13 +757,13 @@ def test_a_malformed_op_argument_is_a_400_naming_the_argument(
 
 # The arrival (desktop plan section 3.10)
 
-_ALICE = json.dumps({"owner": False, "user_id": "user-alice", "email": "alice@example.com", "display_name": "Alice"})
-_BOB = json.dumps({"owner": False, "user_id": "user-bob", "email": "bob@example.com"})
-_OWNER = json.dumps({"owner": True, "user_id": "user-owner", "email": "owner@example.com"})
+_ALICE = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com", display_name="Alice")
+_BOB = RequestIdentity(owner=False, user_id="user-bob", email="bob@example.com")
+_OWNER = RequestIdentity(owner=True, user_id="user-owner", email="owner@example.com")
 
 
-def _arrive(client: FlaskClient, client_id: str, identity: str | None) -> dict[str, Any]:
-    headers = {} if identity is None else {IDENTITY_HEADER: identity}
+def _arrive(client: FlaskClient, client_id: str, identity: RequestIdentity | None) -> dict[str, Any]:
+    headers = {} if identity is None else identity_headers(identity)
     response = client.post(f"/api/clients/{client_id}/arrive", headers=headers)
     assert response.status_code == 200, response.get_data(as_text=True)
     return response.get_json()

@@ -20,6 +20,8 @@ from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import cascade_frame
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowId
@@ -161,6 +163,11 @@ def recording_app(received: list[dict[str, Any]]) -> Flask:
 
     app.add_url_rule(TEST_TERMINAL_WINDOW_CLOSED_PATH, view_func=take, methods=["POST"], endpoint="take")
     return app
+
+
+def identity_headers(identity: RequestIdentity) -> dict[str, str]:
+    """The ``X-Imbue-Identity`` header a share gateway stamps on a request, as a test client sends it."""
+    return {IDENTITY_HEADER: identity.model_dump_json()}
 
 
 def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:
