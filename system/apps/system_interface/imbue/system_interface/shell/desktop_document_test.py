@@ -294,6 +294,19 @@ def test_the_earliest_window_at_the_home_path_is_adopted_and_an_independent_pin_
     drifted_only = desktop_with_windows(window_record(_WIN_1, "chat", "/?chat=agent-1"))
     created = with_pinned_windows_ensured(drifted_only, [_pin("chat")], TEST_NOW).desktop
     assert [(window.id == _WIN_1, window.is_pinned) for window in created.windows] == [(True, False), (False, True)]
+    # A pin whose home path moved: the marked independent window's shared path follows it (that record carries
+    # the home path at all times), while a marked linked window keeps the path it drifted to.
+    moved = desktop_with_windows(
+        window_record(_WIN_1, "chat", "/old", is_pinned=True, scope=LocationScope.INDEPENDENT),
+        window_record(_WIN_2, "notes", "/?note=3", is_pinned=True),
+    )
+    pins = [_pin("chat", "/home", LocationScope.INDEPENDENT), _pin("notes", "/inbox")]
+    followed = with_pinned_windows_ensured(moved, pins, TEST_NOW)
+    assert followed.is_written is True
+    assert [(str(window.path), window.is_pinned) for window in followed.desktop.windows] == [
+        ("/home", True),
+        ("/?note=3", True),
+    ]
 
 
 def test_a_withdrawn_pin_leaves_its_window_as_an_ordinary_one() -> None:
