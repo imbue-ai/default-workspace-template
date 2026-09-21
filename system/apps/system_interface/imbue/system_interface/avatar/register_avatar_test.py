@@ -51,4 +51,6 @@ def test_the_helper_names_the_reason_a_design_is_refused(app: Flask, tmp_path: P
             _run(served.http_url, oversized, "big")
         with pytest.raises(AvatarRegistrationError, match="UTF-8"):
             _run(served.http_url, binary, "binary")
+        with pytest.raises(AvatarRegistrationError, match="cannot read"):
+            _run(served.http_url, tmp_path / "missing.svg", "missing")
     assert state_of(app).shell.avatar_catalog.entries()[-1].source_path is None
