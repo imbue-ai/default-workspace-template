@@ -6,6 +6,7 @@ import {
   parseDesktop,
   parseLayout,
   parseClientRecord,
+  parsePresentUsers,
   parseWallpaperListings,
   shortcutKey,
 } from "./records";
@@ -108,6 +109,30 @@ describe("parseAppRecord", () => {
     expect(app.default_shortcut).toEqual({ launch: "new", mode: "focus" });
     expect(app.launcher_rank).toBeNull();
     expect(app.launch_paths).toEqual([]);
+  });
+});
+
+const PRESENT_USER_WIRE = {
+  user_id: "user-owner-9c21",
+  email: "owner@example.com",
+  display_name: null,
+  avatar_url: "https://accounts.example.com/users/user-owner-9c21/avatar/9a7b",
+  owner: true,
+  session_count: 2,
+  first_seen: "2026-09-19T10:00:00.000000000Z",
+  last_seen: "2026-09-19T10:00:30.000000000Z",
+};
+
+describe("parsePresentUsers", () => {
+  it("reads the contract's user objects, a missing name as null", () => {
+    expect(parsePresentUsers([PRESENT_USER_WIRE])).toEqual([PRESENT_USER_WIRE]);
+    expect(parsePresentUsers([])).toEqual([]);
+  });
+
+  it("refuses a user without an email or with a non-boolean owner, and a users that is not a list", () => {
+    expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, email: undefined }])).toThrow(WireShapeError);
+    expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, owner: "yes" }])).toThrow(WireShapeError);
+    expect(() => parsePresentUsers({ users: [] })).toThrow(WireShapeError);
   });
 });
 
