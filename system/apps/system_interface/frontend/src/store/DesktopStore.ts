@@ -198,8 +198,9 @@ export class DesktopStore {
   private hasSocketConnected = false;
   // The path each window's page reported last, so a report answered out of order is not applied.
   private readonly latestReportedPaths = new Map<string, string>();
-  // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast), and
-  // not by a local edit: the live pages follow their windows' stored paths after the shell speaks.
+  // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast, its answer to a
+  // linked window's navigate this window landed), and not by a local edit: the live pages follow their windows'
+  // stored paths after the shell speaks.
   private desktopsRevision = 0;
   // Bumped by every layout the shell hands over: an independent window's stored path arrives with the layout.
   private layoutLoadsRevision = 0;
