@@ -13,14 +13,8 @@ from imbue.system_interface.avatar.designs import bundled_design_source
 from imbue.system_interface.avatar.designs import parse_design_svg
 from imbue.system_interface.avatar.designs import render_design_svg
 from imbue.system_interface.avatar.designs import validate_design_source
+from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
 from imbue.system_interface.shell.errors import InvalidShellValueError
-
-_MINIMAL = (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
-    '<g class="jelly-body"><circle cx="50" cy="60" r="30" fill="#8cd"/></g>'
-    '<g class="jelly-eyes"><ellipse cx="42" cy="55" rx="2" ry="3"/><ellipse cx="58" cy="55" rx="2" ry="3"/></g>'
-    "</svg>"
-)
 
 
 def test_every_bundled_design_parses_and_is_unique() -> None:
@@ -32,7 +26,7 @@ def test_every_bundled_design_parses_and_is_unique() -> None:
 
 
 def test_a_minimal_design_parses() -> None:
-    assert parse_design_svg(_MINIMAL).get("viewBox") == "0 0 100 100"
+    assert parse_design_svg(MINIMAL_DESIGN_SVG).get("viewBox") == "0 0 100 100"
 
 
 @pytest.mark.parametrize(
@@ -82,7 +76,7 @@ def _styles(rendered: str) -> list[str]:
 
 
 def test_a_rendered_image_wears_the_mood_and_the_current_stylesheet() -> None:
-    rendered = render_design_svg(_MINIMAL, AvatarMood.WORKING, is_preview=False, design_id="my-design")
+    rendered = render_design_svg(MINIMAL_DESIGN_SVG, AvatarMood.WORKING, is_preview=False, design_id="my-design")
     root = fromstring(rendered)
     assert root.get("data-mood") == "working"
     assert _styles(rendered) == [ANIMATION_CSS]
@@ -108,5 +102,5 @@ def test_every_bundled_design_renders_working() -> None:
 
 
 def test_a_preview_holds_the_pose_still() -> None:
-    rendered = render_design_svg(_MINIMAL, AvatarMood.WORKING, is_preview=True, design_id="my-design")
+    rendered = render_design_svg(MINIMAL_DESIGN_SVG, AvatarMood.WORKING, is_preview=True, design_id="my-design")
     assert _styles(rendered)[-1] == "*{animation:none!important}"
