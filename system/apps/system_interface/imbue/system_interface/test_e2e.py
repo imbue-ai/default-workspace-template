@@ -1449,9 +1449,9 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
     tmp_path: Path, page: Page
 ) -> None:
     """An ``avatar`` pin draws the workspace's design wearing the mood the agents event file folds to (stale and
-    idle until the file exists, working once an agent runs), its menu's "Change avatar..." opens the chooser,
-    choosing a design changes every open window, and "Design your own..." starts a chat seeded with the design
-    prompt through the app that takes a message."""
+    idle until the file exists, working once an agent runs), its menu's style rows swap the image for the app's
+    icon and back, "Change avatar..." opens the chooser, choosing a design changes every open window, and
+    "Design your own..." starts a chat seeded with the design prompt through the app that takes a message."""
     with _running_e2e_server(tmp_path, is_stub_taking_message=True, pin=("avatar", "linked", "floating")) as server:
         _land(page, server)
         entry = _pinned_entry(page)
@@ -1467,6 +1467,25 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         assert _avatar_image_source(entry).endswith("/api/avatars/gummy-seal/image.svg?mood=working")
         _write_agent_events(server.agent_events_path, "STOPPED")
         expect(entry).to_have_attribute("data-mood", "idle", timeout=15000)
+
+        # The plain style shows the app's icon in place of the avatar; the pin's style brings the image back.
+        entry.click(button="right")
+        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
+        page.locator('[data-menu-item="style-plain"]').click()
+        expect(entry).to_have_attribute("data-entry-style", "plain", timeout=10000)
+        expect(entry.locator("svg")).to_have_count(1)
+        expect(entry.locator("img")).to_have_count(0)
+        wait_for(
+            lambda: _client_entries(server.base_url, _client_id(page))[_PINNED_APP_NAME]["style"] == "plain",
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the style never reached the client record",
+        )
+        entry.click(button="right")
+        expect(page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
+        page.locator('[data-menu-item="style-avatar"]').click()
+        expect(entry).to_have_attribute("data-entry-style", "avatar", timeout=10000)
+        expect(entry.locator("img")).to_have_count(1)
 
         with _second_client(page, server) as other:
             other_entry = _pinned_entry(other)
