@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The store in a preview shell (a second shell booted read-only over a copy of the live state to show a
- * proposed change): the verbs whose effect would land on the live workspace are withheld.
+ * The store in a preview shell (a second shell booted over a copy of the live state to show a proposed
+ * change): the verbs whose effect would land on the live workspace are withheld.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

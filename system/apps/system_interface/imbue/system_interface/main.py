@@ -42,9 +42,9 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--preview",
         action="store_true",
         help=(
-            "Boot as a preview of a proposed change: read-only over the state directory it is given "
-            "(a seeded copy) and the registry MINDS_APPS_FILE names, refusing every verb that would "
-            "act on a live instance"
+            "Boot as a preview of a proposed change: the real desktop over the state directory it is "
+            "given (a seeded copy) and the registry MINDS_APPS_FILE names, refusing only the verbs that "
+            "would reach the live workspace (an app's stop and start, the update notice's)"
         ),
     )
     return parser.parse_args(argv)

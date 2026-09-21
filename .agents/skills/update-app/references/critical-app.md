@@ -116,8 +116,8 @@ uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
     [--with <sibling>]... [--instance-key <key>]
 ```
 
-The manifest's `[preview]` table says what boots: the shell as a read-only
-preview over a seeded copy of the live state directory and a copied registry;
+The manifest's `[preview]` table says what boots: the shell as the real desktop
+over a seeded copy of the live state directory and a copied registry;
 the chat as a secondary chat following the real agents and reading the real
 accounts, opened on the conversation you pass as `--instance-key` (a chat id;
 usually your own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`); the terminal as its wrapper pages on a
