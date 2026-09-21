@@ -305,7 +305,7 @@ The layout file's own stamp is untouched by that write, so a browser save in fli
 
 ### 5.4 The pure editor and the state
 
-`desktop_document.py` gains: `pinned_window(app, home_path, scope)` (the record an ensure creates), `with_pinned_windows_ensured(desktop, pins)` (adopt or create per pin, answering the desktop and whether it changed), and `without_pin_marks(desktop, unpinned_apps)`.
+`desktop_document.py` gains: `pinned_window(app_pin, now)` (the record an ensure creates, from the app's pin and the clock), `with_pinned_windows_ensured(desktop, pins, now)` (adopt or create per pin, answering the desktop and whether it changed; not pure, since a created window's id is minted here), and `without_pin_marks(desktop, pinned_app_names)`.
 `ShellState.list_desktops()` runs the ensure after the default-desktop rule, under the state lock, writing and broadcasting only on change.
 `ShellState.close_window()` raises `PinnedWindowError` (a `409`) for a pinned window.
 `ShellState.report_window_location()` branches on the window's scope.
