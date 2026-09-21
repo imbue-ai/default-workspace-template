@@ -198,10 +198,9 @@ class ShellState(MutableModel):
     def broadcast_desktops_updated(self) -> None:
         self.broadcaster.broadcast_desktops_updated([desktop_wire_json(desktop) for desktop in self.list_desktops()])
 
-    def read_desktop_layout(self, desktop_id: str, client_id: str) -> DesktopLayout:
+    def read_desktop_layout(self, desktop: Desktop, client_id: ClientId) -> DesktopLayout:
         """The client's layout of the desktop as it reads: its own file with stale placements dropped, else empty."""
-        desktop = self.get_desktop(desktop_id)
-        return self.placements.read_layout(desktop_id, client_id, {window.id for window in desktop.windows})
+        return self.placements.read_layout(str(desktop.id), client_id, {window.id for window in desktop.windows})
 
     def read_window_paths(self, desktop: Desktop, client_id: ClientId) -> dict[WindowId, StoredWindowPath]:
         """The client's stored paths and titles for the desktop's independent windows, by window id."""
