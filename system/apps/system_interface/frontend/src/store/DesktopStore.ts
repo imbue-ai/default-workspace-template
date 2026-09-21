@@ -200,6 +200,10 @@ export class DesktopStore {
   private desktopsRevision = 0;
   // Bumped by every layout the shell hands over: an independent window's stored path arrives with the layout.
   private layoutLoadsRevision = 0;
+  // Bumped by every push of the workspace's selection and of this client's entries: a read issued before a
+  // push answers older than the push, and must not overwrite it.
+  private avatarSelectionPushes = 0;
+  private entryPushes = 0;
   // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
@@ -315,11 +319,14 @@ export class DesktopStore {
       onActiveDesktopChanged: (event) => this.takeActiveDesktopChanged(event),
       onClientEntriesChanged: (event) => this.takeClientEntriesChanged(event),
       onAvatarStatus: (status) => this.dispatch({ type: "avatar_status_updated", status }),
-      onAvatarSelectionChanged: (design) =>
-        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null }),
+      onAvatarSelectionChanged: (design) => {
+        this.avatarSelectionPushes += 1;
+        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null });
+      },
       onLayoutOp: (event) => this.handleLayoutOp(event),
     });
     void this.loadAvatarSelection();
+    const entryPushesBefore = this.entryPushes;
     let desktops: Desktop[];
     let clients: ClientRecord[];
     try {
@@ -338,7 +345,7 @@ export class DesktopStore {
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
     const own = clients.find((client) => client.id === this.deps.clientId);
-    if (own !== undefined) this.dispatch({ type: "entries_updated", entries: own.entries });
+    this.takeFetchedEntries(own, entryPushesBefore);
     const recorded = own?.active_desktop ?? null;
     const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, recorded);
     if (chosen === null) return;
@@ -368,10 +375,11 @@ export class DesktopStore {
    *  ``client_entries_changed`` and ``avatar_selection_changed`` missed (the server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
+    const entryPushesBefore = this.entryPushes;
     try {
       const clients = await this.deps.api.fetchClients();
       const own = clients.find((client) => client.id === this.deps.clientId);
-      if (own !== undefined) this.dispatch({ type: "entries_updated", entries: own.entries });
+      this.takeFetchedEntries(own, entryPushesBefore);
       recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);
@@ -453,14 +461,25 @@ export class DesktopStore {
 
   private takeClientEntriesChanged(event: ClientEntriesChangedEvent): void {
     if (event.clientId !== this.deps.clientId) return;
+    this.entryPushes += 1;
     this.dispatch({ type: "entries_updated", entries: event.entries });
   }
 
-  /** The workspace's design and the fallback, from the catalog; a read that fails leaves the initial ones. */
+  /** This client's entries as its fetched record carries them, unless a push landed while the records were
+   *  read: the push is newer than the answer. */
+  private takeFetchedEntries(own: ClientRecord | undefined, entryPushesBefore: number): void {
+    if (own === undefined || this.entryPushes !== entryPushesBefore) return;
+    this.dispatch({ type: "entries_updated", entries: own.entries });
+  }
+
+  /** The workspace's design and the fallback, from the catalog; a read that fails leaves the initial ones, and
+   *  a selection pushed while the catalog was read stands over the catalog's older answer. */
   private async loadAvatarSelection(): Promise<void> {
+    const pushesBefore = this.avatarSelectionPushes;
     try {
       const catalog = await this.deps.api.fetchAvatars();
-      this.dispatch({ type: "avatar_selection_updated", design: catalog.selected, defaultDesign: catalog.default });
+      const design = this.avatarSelectionPushes === pushesBefore ? catalog.selected : this.state.avatar.design;
+      this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: catalog.default });
     } catch (error) {
       console.warn("[si] could not read the avatar designs", error);
     }

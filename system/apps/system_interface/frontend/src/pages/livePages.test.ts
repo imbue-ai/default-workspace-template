@@ -507,7 +507,7 @@ describe("the contract", () => {
     spy.mockClear();
     // Back to home with its layout held open: a desktops update meanwhile knows no stored path for the page.
     let answerLayout: () => void = () => undefined;
-    api.placementsGate = new Promise((resolve) => {
+    api.readGate = new Promise((resolve) => {
       answerLayout = resolve;
     });
     const switching = store.switchDesktop("home");

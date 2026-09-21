@@ -34,10 +34,9 @@ export class FakeDesktopApi implements DesktopApi {
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
-  /** While set, the catalog answers only once this settles: a test holds the read open. */
-  avatarsGate: Promise<void> | null = null;
-  /** While set, a layout read answers only once this settles: a test holds the fetch open. */
-  placementsGate: Promise<void> | null = null;
+  /** While set, the client records, a layout, and the catalog answer only once this settles: a test holds
+   *  those reads open. */
+  readGate: Promise<void> | null = null;
   avatars: AvatarCatalog = {
     designs: [
       { id: "gummy-seal", label: "Gummy seal", source_path: null },
@@ -257,7 +256,7 @@ export class FakeDesktopApi implements DesktopApi {
   async fetchPlacements(desktopId: string, clientId: string): Promise<Layout> {
     this.calls.push(`fetchPlacements:${desktopId}`);
     this.refuse();
-    if (this.placementsGate !== null) await this.placementsGate;
+    if (this.readGate !== null) await this.readGate;
     return this.layoutOf(desktopId, clientId);
   }
 
@@ -279,6 +278,7 @@ export class FakeDesktopApi implements DesktopApi {
   async fetchClients(): Promise<ClientRecord[]> {
     this.calls.push("fetchClients");
     this.refuse();
+    if (this.readGate !== null) await this.readGate;
     return [...this.clients];
   }
 
@@ -300,7 +300,7 @@ export class FakeDesktopApi implements DesktopApi {
   async fetchAvatars(): Promise<AvatarCatalog> {
     this.calls.push("fetchAvatars");
     this.refuse();
-    if (this.avatarsGate !== null) await this.avatarsGate;
+    if (this.readGate !== null) await this.readGate;
     return this.avatars;
   }
 
