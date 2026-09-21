@@ -562,14 +562,16 @@ def test_set_container_timezone_leaves_the_image_zone_with_nothing_to_apply(
     assert not cache.exists()
 
 
-def test_set_container_timezone_does_not_cache_a_zone_it_could_not_apply(
+def test_set_container_timezone_falls_back_when_the_fetched_zone_cannot_be_applied(
     tmp_path: Path,
 ) -> None:
-    _, cache = _set_timezone_in(tmp_path, "America/New_York")
+    localtime, cache = _set_timezone_in(tmp_path, "America/New_York")
+    localtime.unlink()
 
     _set_timezone_in(tmp_path, "Mars/Olympus_Mons")
 
     assert cache.read_text() == "America/New_York\n"
+    assert Path(os.readlink(localtime)).name == "New_York"
 
 
 # --- _fetch_user_timezone ---
