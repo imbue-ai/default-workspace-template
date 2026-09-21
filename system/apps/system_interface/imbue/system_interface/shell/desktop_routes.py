@@ -253,7 +253,7 @@ def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnVal
 # Section 5.4: placements
 
 
-def _layout_wire_json(shell: ShellState, desktop: Desktop, client_id: str) -> dict[str, Any]:
+def _layout_wire_json(shell: ShellState, desktop: Desktop, client_id: ClientId) -> dict[str, Any]:
     """The client's layout of the desktop with its stored paths for the desktop's independent windows."""
     layout = shell.placements.read_layout(desktop.id, client_id, {window.id for window in desktop.windows})
     return desktop_layout_wire_json(layout, shell.read_window_paths(desktop, client_id))
