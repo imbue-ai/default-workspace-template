@@ -123,8 +123,10 @@ workspace's `agent_id` appears once `mngr create` finishes, so you **poll the
 typed operation route** until it's done:
 
 ```bash
-# The release the running Mind app supports -- the version to build from.
-REF=$(latchkey curl .../api/v1/app/version | jq -r .workspace_template_ref)
+# The release the running Mind app supports -- the version to build from. An
+# app too old for this route answers 403/404, and `jq -e` catches that (and an
+# unreachable gateway) rather than posting "null" or an empty branch.
+REF=$(latchkey curl .../api/v1/app/version | jq -er .workspace_template_ref) || exit 1
 
 OP=$(latchkey curl -XPOST .../api/v1/workspaces \
   -H 'Content-Type: application/json' \
@@ -146,6 +148,12 @@ branch, for the workspace template as for any other repo -- no app version fills
 it in for you -- so leaving it out makes the new workspace whatever that branch
 holds that day: unreleased code, which an `imbue_cloud` create then records
 under the app's release.
+
+**If the version read fails, do not create the workspace.** An app that cannot
+say which release it supports cannot be handed one it understands, and a
+fallback here lands the user in exactly the unreleased-code case above. Tell
+them the Mind app needs updating (or restarting, if the gateway was simply
+unreachable) and stop.
 
 Other optional fields (`host_name`, `launch_mode`, `ai_provider`, `account_id`,
 `region`, `backup_*`) -- see `CreateWorkspaceRequest` in the schema. A `400` with `{error, field}` means a field-level problem; a `422`
