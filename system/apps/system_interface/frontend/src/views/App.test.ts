@@ -9,7 +9,7 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
-import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
+import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
 import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
 import { App } from "./App";
 
@@ -17,6 +17,8 @@ const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
 const gestures: GestureSource = { attach: () => () => undefined };
 
+let api: FakeDesktopApi;
+let socket: FakeDesktopSocket;
 let store: DesktopStore;
 
 function pressEscape(): void {
@@ -30,8 +32,8 @@ beforeEach(async () => {
     "fetch",
     vi.fn(async () => ({ ok: true, json: async () => ({ catalog: null }) })),
   );
-  const api = new FakeDesktopApi();
-  const socket = new FakeDesktopSocket();
+  api = new FakeDesktopApi();
+  socket = new FakeDesktopSocket();
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
   api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
   store = new DesktopStore({
@@ -95,6 +97,38 @@ function pressOn(element: HTMLElement): void {
   element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
   m.redraw.sync();
 }
+
+describe("the avatar chooser", () => {
+  it("opens from the pinned entry's menu, and stays closed when dismissed before the catalog answered", async () => {
+    const buddy = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" } });
+    socket.deliver().onAppsUpdated([appRecord("docs"), buddy]);
+    socket.deliver().onDesktopsUpdated([
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+    ]);
+    m.redraw.sync();
+    let answerCatalog: () => void = () => undefined;
+    api.avatarsGate = new Promise((resolve) => {
+      answerCatalog = resolve;
+    });
+    const entry = document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    (document.querySelector('[data-menu-item="change-avatar"]') as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-avatar-chooser]")).not.toBeNull();
+    expect(document.querySelector("[data-avatar-chooser] [role='status']")).not.toBeNull();
+
+    (document.querySelector(".avatar-chooser-done") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+    answerCatalog();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+  });
+});
 
 describe("a press into the focused page", () => {
   it("closes an open menu: the page is shielded while the menu is up, so the press reaches the shell", () => {

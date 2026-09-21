@@ -34,6 +34,8 @@ export class FakeDesktopApi implements DesktopApi {
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
+  /** While set, the catalog answers only once this settles: a test holds the read open. */
+  avatarsGate: Promise<void> | null = null;
   avatars: AvatarCatalog = {
     designs: [
       { id: "gummy-seal", label: "Gummy seal", source_path: null },
@@ -295,6 +297,7 @@ export class FakeDesktopApi implements DesktopApi {
   async fetchAvatars(): Promise<AvatarCatalog> {
     this.calls.push("fetchAvatars");
     this.refuse();
+    if (this.avatarsGate !== null) await this.avatarsGate;
     return this.avatars;
   }
 
