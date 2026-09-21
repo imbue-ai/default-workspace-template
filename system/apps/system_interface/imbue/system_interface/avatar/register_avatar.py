@@ -14,18 +14,25 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+from app_manifest.manifest import describe_validation_error
 from loguru import logger
 from pydantic import Field
+from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.avatar.catalog import DesignRegistration
 from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.primitives import DesignId
-from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.errors import ShellError
 
 ENV_WORKSPACE_URL: Final[str] = "MINDS_WORKSPACE_SERVER_URL"
 DEFAULT_WORKSPACE_URL: Final[str] = "http://127.0.0.1:8000"
 _REQUEST_TIMEOUT_SECONDS: Final[float] = 15.0
+_JSON_MIMETYPE: Final[str] = "application/json"
+
+
+class AvatarRegistrationError(ShellError):
+    """The file is not a design the shell takes, or the shell refused the registration or the selection."""
 
 
 class RegisterAvatarArguments(FrozenModel):
@@ -59,20 +66,43 @@ def _parse_arguments(argv: Sequence[str] | None) -> RegisterAvatarArguments:
     )
 
 
-def register_design(arguments: RegisterAvatarArguments) -> None:
-    """Post the design and, when asked, the selection; raises for a refused registration."""
+def _read_registration(arguments: RegisterAvatarArguments) -> DesignRegistration:
+    """The design as the shell will validate it; raises AvatarRegistrationError with the reason a file is not one."""
     source = arguments.source.resolve()
     with source.open("rb") as stream:
         contents = stream.read(MAX_SVG_BYTES + 1)
     if len(contents) > MAX_SVG_BYTES:
-        raise InvalidShellValueError(f"the design exceeds {MAX_SVG_BYTES // 1024} KiB")
-    registration = DesignRegistration(
-        id=arguments.design_id, label=arguments.label, svg=contents.decode("utf-8"), source_path=str(source)
-    )
+        raise AvatarRegistrationError(f"the design at {source} exceeds {MAX_SVG_BYTES // 1024} KiB")
+    try:
+        svg = contents.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise AvatarRegistrationError(f"the design at {source} is not UTF-8 encoded") from e
+    try:
+        return DesignRegistration(id=arguments.design_id, label=arguments.label, svg=svg, source_path=str(source))
+    except ValidationError as e:
+        raise AvatarRegistrationError(f"the design at {source} was refused: {describe_validation_error(e)}") from e
+
+
+def _check_answer(response: httpx.Response, action: str) -> None:
+    """Raises AvatarRegistrationError carrying the shell's reason when it refused ``action``."""
+    if response.is_success:
+        return
+    is_json = response.headers.get("content-type", "").startswith(_JSON_MIMETYPE)
+    detail = response.json().get("detail") if is_json else None
+    reason = detail if isinstance(detail, str) else response.reason_phrase
+    raise AvatarRegistrationError(f"the shell refused to {action}: {reason} ({response.status_code})")
+
+
+def register_design(arguments: RegisterAvatarArguments) -> None:
+    """Post the design and, when asked, the selection; raises AvatarRegistrationError with the shell's reason for a
+    refusal."""
+    registration = _read_registration(arguments)
     with httpx.Client(base_url=arguments.shell_url, timeout=_REQUEST_TIMEOUT_SECONDS) as client:
-        client.post("/api/avatars", json=registration.model_dump()).raise_for_status()
+        _check_answer(client.post("/api/avatars", json=registration.model_dump()), "register the design")
         if arguments.is_selected:
-            client.post("/api/avatar-selection", json={"design": str(registration.id)}).raise_for_status()
+            _check_answer(
+                client.post("/api/avatar-selection", json={"design": str(registration.id)}), "select the design"
+            )
     logger.info("Registered avatar design {} (selected: {})", registration.id, arguments.is_selected)
 
 
