@@ -1,9 +1,11 @@
 /**
  * The shell's WebSocket (desktop-interface contracts.md section 6), the one socket this window
- * holds. On connect the server sends ``apps_updated`` and ``desktops_updated``; the window answers
- * with its ``client_state`` (which client it is, on which desktop) and re-sends it on every
- * switch. ``placements_updated``, ``active_desktop_changed``, and the transient ``layout_op`` are
- * how this client's other windows, the shell's own edits, and an agent's ops reach this one.
+ * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, and ``avatar_status``;
+ * the window answers with its ``client_state`` (which client it is, on which desktop) and re-sends
+ * it on every switch. ``placements_updated``, ``active_desktop_changed``,
+ * ``client_entries_changed``, and the transient ``layout_op`` are how this client's other windows,
+ * the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
+ * ``avatar_selection_changed`` are how the workspace's avatar reaches every window.
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
