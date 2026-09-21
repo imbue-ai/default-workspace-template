@@ -28,6 +28,7 @@ from imbue.system_interface.shell.desktop_document import BackdropSize
 from imbue.system_interface.shell.desktop_document import FitMetrics
 from imbue.system_interface.shell.desktop_document import GridDimensions
 from imbue.system_interface.shell.desktop_document import GridMetrics
+from imbue.system_interface.shell.desktop_document import PINNED_WINDOW_FRAME
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
@@ -48,6 +49,7 @@ from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import snap_zone_for_release
 from imbue.system_interface.shell.desktop_document import unsnap_frame
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
+from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_shortcut
 from imbue.system_interface.shell.desktop_document import with_shortcut_moved
 from imbue.system_interface.shell.desktop_document import with_window_frame
@@ -317,6 +319,27 @@ def test_a_withdrawn_pin_leaves_its_window_as_an_ordinary_one() -> None:
     # An ordinary window at the home path is adopted again when the pin returns.
     readopted = with_pinned_windows_ensured(unmarked, [_pin("chat"), _pin("notes")], TEST_NOW).desktop
     assert [window.is_pinned for window in readopted.windows] == [True, True] and len(readopted.windows) == 2
+
+
+def test_a_pinned_window_the_client_never_placed_reads_at_the_pinned_frame_below_the_stack() -> None:
+    pinned = window_record(WindowId("win-00000000000000ab"), "buddy", "/", is_pinned=True)
+    ordinary = window_record(WindowId("win-00000000000000cd"), "docs", "/a")
+    desktop = desktop_with_windows(ordinary, pinned)
+    layout = DesktopLayout(version=1, updated_at=None, placements=(placement_record(ordinary.id),))
+    placed = with_pinned_windows_placed(layout, desktop)
+    assert [placement.window_id for placement in placed.placements] == [pinned.id, ordinary.id]
+    assert placed.placements[0].frame == PINNED_WINDOW_FRAME
+    assert placed.placements[0].is_minimized is True
+    assert placed.placements[0].state is WindowState.NORMAL
+    # Placed once (by hand, or by this rule then saved), the stored placement stands.
+    assert with_pinned_windows_placed(placed, desktop) is placed
+    # An ordinary window the client never placed keeps reading as the cascade.
+    assert (
+        with_pinned_windows_placed(
+            DesktopLayout(version=1, updated_at=None, placements=()), desktop_with_windows(ordinary)
+        ).placements
+        == ()
+    )
 
 
 def test_the_pinned_apps_are_the_non_internal_rows_that_carry_a_pin(tmp_path: Path) -> None:

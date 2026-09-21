@@ -1213,7 +1213,7 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
     tmp_path: Path, page: Page
 ) -> None:
     """A pinned app's window is on the home desktop from the first read and on a desktop created later; its
-    taskbar entry is there with nothing open, a click restores the window at the cascade frame, another
+    taskbar entry is there with nothing open, a click restores the window at the pinned frame, another
     minimizes it; the window's close control and both menus' Close minimize it rather than closing it, as does the
     close chord, and an agent's close is refused."""
     with _running_e2e_server(tmp_path, pin=("plain", "linked", "bar")) as server:
@@ -1232,6 +1232,12 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         window = _window(page, pinned["id"])
         expect(window).to_be_visible(timeout=15000)
         expect(window).to_have_attribute("data-pinned", "true")
+        # The first restore lands at the pinned frame: the right half of the backdrop, a margin in.
+        backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
+        shown = _box(window)
+        _assert_close(shown["x"], backdrop["x"] + 0.46 * backdrop["width"], "pinned frame x")
+        _assert_close(shown["width"], 0.5 * backdrop["width"], "pinned frame width")
+        _assert_close(shown["height"], 0.9 * backdrop["height"], "pinned frame height")
         expect(window.locator('[data-window-control="minimize"]')).to_be_visible()
         assert _page_frame(page, pinned["id"]).url == f"{server.pinned_url}{_PINNED_HOME_PATH}"
         # The close control stays, out of habit's way: on a pinned window it minimizes.

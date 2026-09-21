@@ -56,6 +56,7 @@ from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import pinned_window
 from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktops import DesktopStore
@@ -235,8 +236,10 @@ class ShellState(MutableModel):
         )
 
     def read_desktop_layout(self, desktop: Desktop, client_id: ClientId) -> DesktopLayout:
-        """The client's layout of the desktop as it reads: its own file with stale placements dropped, else empty."""
-        return self.placements.read_layout(str(desktop.id), client_id, {window.id for window in desktop.windows})
+        """The client's layout of the desktop as it reads: its own file with stale placements dropped, else empty,
+        and every pinned window it has never placed at the pinned frame (pinned-taskbar-entries plan section 4.3)."""
+        stored = self.placements.read_layout(str(desktop.id), client_id, {window.id for window in desktop.windows})
+        return with_pinned_windows_placed(stored, desktop)
 
     def read_window_paths(self, desktop: Desktop, client_id: ClientId) -> dict[WindowId, StoredWindowPath]:
         """The client's stored paths and titles for the desktop's independent windows, by window id."""
@@ -258,8 +261,14 @@ class ShellState(MutableModel):
     def _edit_placements(
         self, desktop: Desktop, client_id: ClientId, transform: Callable[[DesktopLayout], DesktopLayout]
     ) -> PlacementsEditOutcome:
+        # The edit starts from the layout as the client reads it, pinned windows placed, so an op's first restore of
+        # a pinned window lands where a click's would.
         return self.placements.edit_layout(
-            desktop.id, client_id, {window.id for window in desktop.windows}, transform, datetime.now(timezone.utc)
+            desktop.id,
+            client_id,
+            {window.id for window in desktop.windows},
+            lambda current: transform(with_pinned_windows_placed(current, desktop)),
+            datetime.now(timezone.utc),
         )
 
     def _announce_placements_edit(self, desktop: Desktop, client_id: ClientId, outcome: PlacementsEditOutcome) -> None:
