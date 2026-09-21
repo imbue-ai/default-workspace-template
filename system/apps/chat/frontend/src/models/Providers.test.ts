@@ -12,7 +12,6 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => 
 
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
-  areAccountsLoaded,
   closeProviderChooser,
   getAccounts,
   getFlow,
@@ -45,7 +44,6 @@ describe("loadAccountsWithRetry", () => {
     await loadAccountsWithRetry();
 
     expect(mockRequest).toHaveBeenCalledTimes(1);
-    expect(areAccountsLoaded()).toBe(true);
     expect(getAccounts().map((account) => account.id)).toEqual(["acct-1"]);
   });
 

@@ -31,10 +31,9 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     there is no way to notice that until its first turn fails.
 
     Raises when there are none. There is no shared login to fall back to (`~/.claude` is
-    left alone), so an agent created without an account is simply unauthenticated. The
-    instances API makes that unreachable (with nothing signed in it mints a chat that waits
-    for an account, whose page offers the chooser), and this is the backstop for anything
-    that does not.
+    left alone), so an agent created without an account is simply unauthenticated. The chat
+    root makes that unreachable (with nothing signed in it offers the provider chooser before
+    it creates), and this is the backstop for anything that does not.
     """
     if account_id:
         account = accounts.resolve_account(account_id, home)
@@ -49,11 +48,6 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     # always had it; this one did not, so a row whose folder had gone bound an agent to a
     # directory that is not there -- which surfaces as an empty model bar, not as an error.
     return accounts.resolve_account(chosen.id, home)
-
-
-def has_usable_account(home: Path | None = None) -> bool:
-    """Whether any signed-in account is on a lane this build runs: what ``resolve_binding("")`` needs."""
-    return any(harness_for(account) is not None for account in accounts.read_index(home).accounts)
 
 
 # The harnesses a chat may change account on in place (a rebind, spec 6): every one with an

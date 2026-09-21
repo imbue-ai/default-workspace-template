@@ -1,11 +1,11 @@
 # The chat app
 
 The agent harness UI: live conversations with mngr-managed agents, one page per
-chat, rendered inside a tab's iframe at the chat's own registered origin. It is
-an app of the workspace like the terminal or the file viewer (the workspace app
-model, `docs/system/blueprint/workspace-app-model/`): the shell knows it only
-through its manifest (`app.toml`), its registry row, its instances API, and the
-browser-side contract.
+chat, rendered inside a window's iframe at the chat's own registered origin. It
+is an app of the workspace like the terminal or the file viewer (the desktop
+interface, `docs/system/blueprint/desktop-interface/`): the shell knows it only
+through its manifest (`app.toml`), its registry row, and the browser-side
+contract; everything about chats lives in this app's own pages and routes.
 
 ## What it serves
 
@@ -16,22 +16,29 @@ The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 `mngr observe` for the workspace's agents, and serves:
 
+- `GET /`: the chat root, the built `root.html`: the chat list down the left
+  (`frontend/src/root/`, grouped by the chat that started each helper and
+  ordered by recency, with rename, stop and restart, and delete) beside an inner
+  frame of the selected chat's page. The selection is the `chat` query parameter,
+  so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
+  chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
+  params) serves the same document, and the root creates the chat and selects
+  it client-side. A `draft` query parameter on the root (the `root` launch
+  path's one param, what the desktop's "Design your own..." hands the pinned
+  chat window) puts its text, unsent, into the composer of the chat the URL
+  selects (else the shown one, else the most recently active one, else a chat
+  the root creates for it), and the root then reports the selection alone, so
+  a reload drafts nothing again. The root drives its inner frames through the
+  page's same-origin embed API (`frontend/src/embedApi.ts`) and forwards their
+  `minds:`, `shell:focused`, and `shell:open` messages through
+  `frontend/src/root/relay.ts`, the one module the embed ratchet allows.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
-  hostname, and the terminal app's origin label in meta tags.
-- `/_instances`: the instances API of `contracts.md` section 4.3 over the agent
-  manager (`instances.py`): every chat (a non-primary agent, today) is an
-  explicit, renameable, stoppable instance keyed by its chat id (stop is `mngr
-  stop`, start the same ensure-started path a send takes); a chat that is not an
-  agent yet is a referenced provisional instance under the id mngr will give its
-  first agent, whether it is waiting for an account (`attention`), being created
-  (`working`), or failed (`error`); a subagent view is a referenced instance
-  keyed `<chat-id>.<agent-id>.<session-id>`. A chat's status comes from its
-  active agent's activity state, a pending permission request, and the
-  lifecycle. The API answers `503` until the agent list has been read from mngr
-  once.
+  hostname, and the origin label of the terminal's pty (the terminal app's while
+  no pty is registered) in meta tags. Every chat page reports its path and the
+  chat's title to the shell.
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
-  the queue actions, presence, destroy, start, stop; the subagent reads under
+  the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`.
@@ -39,18 +46,23 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
-  per chat, the agent-level facts under `active_agent`) and the provisional-chat
-  events (`provisional_chat_created`, `provisional_chat_completed`).
+  per chat, the agent-level facts under `active_agent` and the epoch seconds of
+  its last message as `last_messaged_at`, which the chat root's list orders on)
+  and the provisional-chat events (`provisional_chat_created`,
+  `provisional_chat_completed`).
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
-  polls on the `--preflight` boot (after the restart it polls `/_instances`, the
-  route that answers only once the agent manager has its first list).
+  polls on the `--preflight` boot and on every critical app after the restart.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 
 The chat page talks to the shell only through the browser-side contract
-(`shell:open`, `shell:focused`, the handshake) and the shell reaches the chat
-only over loopback (the instances API, the relay). Sends are reported to the
-shell's client-activity route so agents can attribute a request to a client.
+(`shell:open`, `shell:focused`, the handshake); the shell never calls the chat.
+Sends are reported to the shell's client-activity route (`shell_client.py`) so
+agents can attribute a request to a client. A chat's status (`ChatStatus` in
+`primitives.py`: working, idle, attention, stopped, or error) comes from its
+active agent's activity state, a pending permission request, and the lifecycle,
+and rides the `chats_updated` snapshots the chat root's list draws its status
+dots from.
 
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a
@@ -58,9 +70,9 @@ A chat is a sequence of agent transcripts run by one agent at a time
 as `MINDS_CHAT_ID` in its environment. A chat that has run on several agents
 has a record under `data/.apps/chat/chats/<chat-id>/record.json`
 (`chat_records.py`) naming its agents in order; every other agent is a chat of
-its own. The agent manager resolves every chat through the records: the
-instance list shows one chat per record, from its active agent, and never an
-archived member; stop, start, rename, and status act on the active agent, and
+its own. The agent manager resolves every chat through the records: the chat
+list shows one chat per record, from its active agent, and never an archived
+member; stop, start, rename, and status act on the active agent, and
 destroy names every member. The read routes go through `chat_transcript.py`,
 the chat's transcript as its agents' segments in order with an `agent_switch`
 marker between them: an archived segment is read through its harness's
@@ -82,7 +94,7 @@ prompt carries the summary in full when it is 64 KB or under
 (`INLINE_SUMMARY_MAX_BYTES`) and otherwise only its path, which the successor is
 told to read before anything else. Every step is recorded on the chat record's `handoff` entry and
 re-checked against mngr's state, so a restart of the app resumes an unfinished
-handoff where it stopped. While a chat converges its instance stays listed as
+handoff where it stopped. While a chat converges it stays listed as
 `working` from the retiring agent; stop, start, rename, interrupt, the queue
 actions, and the model change answer 409; a send is held (202, `{"status":
 "held"}`) and delivered to the successor in order once it runs; destroy
@@ -147,7 +159,7 @@ the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account
 after a handoff, on the same harness and lane after a rebind) and "Start a new
 chat instead". The verbs the app refuses meanwhile answer 409 with a detail
-written for the user, which the page and the shell's tab menu show as is.
+written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
@@ -165,11 +177,10 @@ The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
 wake-ups, a lead's replies to a worker, the automation runner) and falls back
 to `mngr message` only when the chat app cannot be reached or does not know the
-chat. A send that names no client (no `client_id`, `device_kind`, or
-`active_layout`) posts no client-activity report. The route answers 503 until
-the agent list has been read from mngr once, like the instances API, so a send
-during the app's first seconds is retried rather than mistaken for an unknown
-chat. See `docs/system/blueprint/chat-agent-split/`.
+chat. A send that names no client (no `client_id` or `desktop_id`) posts no
+client-activity report. The route answers 503 until
+the agent list has been read from mngr once, so a send during the app's first
+seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
@@ -209,8 +220,8 @@ Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
 signed-in provider account plus an index, minted by the sign-in flows
 (`harnesses/auth_flows.py`) the chat page's provider chooser drives. A chat
 binds to an account when it is created and moves to another only through a
-switch (a handoff or a rebind, above). A launch that names no account (the New
-Tab tile, a rail shortcut, `layout.py open chat`) goes to the account the user
+switch (a handoff or a rebind, above). A launch that names no account (the
+launcher, a desktop shortcut, `layout.py open chat`) goes to the account the user
 pinned as the default in a chat's provider menu, else to the most recently used
 one; pressing another account in that menu switches the chat to it (through
 the dialog, or at once for a chat with nothing to hand over -- see the switch
@@ -233,16 +244,18 @@ removed, and a create in the workspace is then refused by
 entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
-(the Mind app's update and help chats) has its tab surfaced by this app
-(`auto_open.py`): when the agent appears, the app asks the shell to open the
-chat's address in every connected client, holds the open until a client is
-connected if none is, and records the delivery under
-`data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a tab. The
-open is held for as long as the chat exists, so a chat started while nobody was
-connected still gets its tab whenever someone finally connects. The one
+(the Mind app's update and help chats) has its window surfaced by this app
+(`auto_open.py`): when the agent appears, the app asks the shell to point this
+app's pinned window (the avatar's chat) at the chat and show it, in every
+connected client (a desktop with no pinned window gets a chat root window opened
+instead), holds the request until a client is connected if none is, and records
+the delivery under
+`data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a window.
+The open is held for as long as the chat exists, so a chat started while nobody
+was connected still gets its window whenever someone finally connects. The one
 exception is a workspace with no ledger to read (its chats predate this app
 keeping one, or the file was lost): every labeled chat it already has is adopted
-as shown, since a tab for each is worse than missing one.
+as shown, since a window for each is worse than missing one.
 
 ## Development
 
@@ -261,7 +274,7 @@ registry, for a throwaway boot on another port (`CHAT_PORT`).
 `--preflight` is the update apply's throwaway boot (`.agents/skills/update-self`):
 the app imports, builds, and serves `/api/health` but reconciles no accounts (the
 boot sweep reaps sign-in processes), starts no agent manager (so no `mngr observe`,
-session sweep, memory prioritizer, or nudges to the shell), and registers nothing.
+session sweep, or memory prioritizer), and registers nothing.
 The apply boots the merged chat this way on a free port before restarting the live
 services, since this is the process that imports mngr and the harness plugins, and
 refuses the update when it cannot come up.
