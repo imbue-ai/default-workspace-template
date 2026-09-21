@@ -176,12 +176,13 @@ owner, and any request without a user id, land on the client's recorded
 desktop, else the first. A signed-in visitor would otherwise land on the
 owner's desktop and open and close the owner's windows, so on their first
 arrival the shell makes them a desktop named after them (display name, else
-the email's local part, made unique), seeded from the first desktop: its
-shortcuts, its wallpaper, and a new window at the path of each window that
-is open there. It is remembered in `users.json`, every later client of that
-user lands on it, a returning client keeps the desktop it was on (when it
-last arrived as that same user), and if it has been deleted the next arrival seeds another and says so. Every desktop
-stays shared and in everyone's switcher; there is no private mode.
+the email's local part, else `Guest`, made unique), seeded from the first
+desktop: its shortcuts, its wallpaper, and a new window at the path of each
+settled window open there (one still mid-launch is skipped). It is remembered
+in `users.json`, every later client of that user lands on it, a returning
+client keeps the desktop it was on (when it last arrived as that same user),
+and if it has been deleted the next arrival seeds another and says so. Every
+desktop stays shared and in everyone's switcher; there is no private mode.
 
 ### The desktop, the taskbar, and the launcher
 
