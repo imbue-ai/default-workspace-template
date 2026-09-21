@@ -10,10 +10,8 @@
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
-import { parsePresentUsers } from "../model/Presence";
-import type { PresentUser } from "../model/Presence";
-import { parseAppRecords, parseDesktops } from "../model/records";
-import type { AppRecord, Desktop } from "../model/records";
+import { parseAppRecords, parseDesktops, parsePresentUsers } from "../model/records";
+import type { AppRecord, Desktop, PresentUser } from "../model/records";
 
 /** The transient ops that reach the browser as messages: the rest are applied to the files. */
 export type LayoutOpName = "refresh" | "reload_system_interface";

@@ -11,7 +11,6 @@ import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, Wind
 import { StalePlacementsSaveError } from "../model/api";
 import { launchPathOf, launchPathWithParams } from "../model/launch";
 import { applyPresence } from "../model/Presence";
-import type { PresentUser } from "../model/Presence";
 import type {
   AppRecord,
   Desktop,
@@ -20,6 +19,7 @@ import type {
   IfPresent,
   Layout,
   Placement,
+  PresentUser,
   SharingMode,
   ShortcutMode,
   Wallpaper,

@@ -12,20 +12,9 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import type { PresentUser } from "./records";
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
-
-/** One connected user as the shell serializes it (one entry per user, however many tabs). */
-export interface PresentUser {
-  user_id: string;
-  email: string;
-  display_name: string | null;
-  avatar_url: string | null;
-  owner: boolean;
-  session_count: number;
-  first_seen: string;
-  last_seen: string;
-}
 
 /** The requester's own identity, as the heartbeat answers it. */
 export interface OwnIdentity {
@@ -34,33 +23,6 @@ export interface OwnIdentity {
   email: string;
   display_name?: string;
   avatar_url?: string;
-}
-
-/** Raised when a ``presence_updated`` payload does not have the shape the shell gives it. */
-export class PresenceShapeError extends Error {}
-
-function presentUserOf(raw: unknown): PresentUser {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
-    throw new PresenceShapeError("user is not an object");
-  const record = raw as Record<string, unknown>;
-  if (typeof record.user_id !== "string" || typeof record.email !== "string")
-    throw new PresenceShapeError("user lacks a user_id or an email");
-  return {
-    user_id: record.user_id,
-    email: record.email,
-    display_name: typeof record.display_name === "string" ? record.display_name : null,
-    avatar_url: typeof record.avatar_url === "string" ? record.avatar_url : null,
-    owner: record.owner === true,
-    session_count: typeof record.session_count === "number" ? record.session_count : 0,
-    first_seen: typeof record.first_seen === "string" ? record.first_seen : "",
-    last_seen: typeof record.last_seen === "string" ? record.last_seen : "",
-  };
-}
-
-/** The ``users`` of a ``presence_updated`` message; a payload that is not a list is refused. */
-export function parsePresentUsers(raw: unknown): PresentUser[] {
-  if (!Array.isArray(raw)) throw new PresenceShapeError("users is not an array");
-  return raw.map(presentUserOf);
 }
 
 let presentUsers: PresentUser[] = [];

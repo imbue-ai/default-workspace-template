@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { applyPresence, resetPresenceForTesting } from "../model/Presence";
-import type { PresentUser } from "../model/Presence";
+import type { PresentUser } from "../model/records";
 import { PresenceStrip, presenceInitial, presenceTitle } from "./PresenceStrip";
 
 const bob: PresentUser = {
