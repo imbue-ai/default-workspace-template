@@ -32,7 +32,7 @@ import {
   switchKind,
 } from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
-import { beginSwitchTo, openSwitchDialog } from "./SwitchDialog";
+import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
 import { placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
 import { Portal } from "@imbue/workspace-ui/src/portal";
@@ -508,11 +508,11 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           onclick: () => {
             closeCard();
             openProviderChooser({
+              ...(current !== null ? { unpickable: { accountId: current.id, reason: "current" as const } } : {}),
               onSignedIn: (accountId) => {
                 // Signed in from inside a chat: the new account is what the user switches this
                 // chat to next, so the switch begins on it.
-                const account = accountForAgent(accountId);
-                if (account !== null) beginSwitchTo(chatId, account);
+                beginSwitchToAccountId(chatId, accountId);
                 m.redraw();
               },
             });

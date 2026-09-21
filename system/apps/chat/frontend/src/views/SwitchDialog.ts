@@ -1,8 +1,8 @@
 /**
  * The switch dialog (spec 5.1): "Switch to Codex?" with the model the chat should run on after the
  * switch, "Switch this chat" as the thing it is for, and "Start a new chat" for leaving this chat
- * alone. One dialog per page, opened by the provider menu and by the composer's "Change" link, so
- * both open the same one.
+ * alone. One dialog per page, opened by the provider menu, by the auth-error note's switch link,
+ * and by the composer's "Change" link, so they all open the same one.
  *
  * "Switch this chat" applies nothing yet: it arms the pending switch (``PendingLane``), which the
  * composer's next send carries out. Only a switch that will write a summary asks when the account is
@@ -26,11 +26,13 @@ import type { ModelIdentity } from "../models/ModelSettings";
 import {
   getPendingAccountId,
   getPendingPick,
+  isSwitchTarget,
   setPendingAccount,
   setPendingSwitch,
   switchKind,
 } from "../models/PendingLane";
 import type { PendingPick } from "../models/PendingLane";
+import { accountForAgent } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { getEventsForChat, isTranscriptLoaded, mintMessageId } from "../models/Response";
 import { startChatOnAccount } from "../shell";
@@ -61,26 +63,36 @@ interface OpenDialog {
 let open: OpenDialog | null = null;
 
 /**
- * Switch ``chatId`` to ``target``, arm the switch, or ask first. A chat with no user turn yet has
- * nothing to hand over, so it switches at once with no summary and no dialog; the draft, if any,
- * stays in the composer and goes out normally once the chat runs on the new account. A rebind is
- * armed at once with no dialog: the next send carries it out, so a turn in progress is not cut
- * short by the press. A handoff with context gets the dialog.
+ * Switch ``chatId`` to ``target``, arm the switch, or ask first; nothing, when the chat is not in
+ * the chat list yet or ``target`` is the account it already runs on (a re-authenticated one, say).
+ * A chat with no user turn yet has nothing to hand over, so it switches at once with no summary
+ * and no dialog; the draft, if any, stays in the composer and goes out normally once the chat
+ * runs on the new account. A rebind is armed at once with no dialog: the next send carries it
+ * out, so a turn in progress is not cut short by the press. A handoff with context gets the
+ * dialog.
  */
 export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
+  const chat = getChatById(chatId);
+  if (chat === undefined || !isSwitchTarget(chat, target)) return;
   // Only a loaded transcript can say there is no user turn: an unloaded (or failed) one reads as
   // empty, and switching a chat of hundreds of turns without asking is the worse mistake of the two.
   if (isTranscriptLoaded(chatId) && !hasUserTurn(getEventsForChat(chatId))) {
     void switchFreshChat(chatId, target);
     return;
   }
-  const chat = getChatById(chatId);
-  if (chat !== undefined && switchKind(chat, target) === "rebind") {
+  if (switchKind(chat, target) === "rebind") {
     setPendingSwitch(chatId, target.id, null);
     m.redraw();
     return;
   }
   openSwitchDialog(chatId, target);
+}
+
+/** Switch ``chatId`` to the account with ``accountId``, when the page knows it: what the provider
+ *  chooser's pick and a finished sign-in hand back. */
+export function beginSwitchToAccountId(chatId: string, accountId: string): void {
+  const account = accountForAgent(accountId);
+  if (account !== null) beginSwitchTo(chatId, account);
 }
 
 async function switchFreshChat(chatId: string, target: ProviderAccount): Promise<void> {
