@@ -27,6 +27,7 @@ from imbue.minds_admin.slices.mirror_artifacts import UV_VERSION
 from imbue.minds_admin.slices.s3_ipv4_pin import render_s3_ipv4_pin_section
 from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_encryption_section
 from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_relocation_section
+from imbue.minds_admin.slices.storage_encryption import render_gen2_tpm_preflight_section
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN1_SLICE_SERVICE_USER
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_INSTANCE_PREFIX
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_default_workspace_template_cache_dir
@@ -815,17 +816,18 @@ def build_gen2_box_prep_script(
     is authorized) plus the pre-created per-slice unix users and the
     ``GEN2_DHCP_USER`` DHCP service user, the plugin-rendered prep artifacts
     (template unit / root helper / sudoers / the slice DHCP server's config,
-    unit and udp/67 policy, content-converged), the LUKS storage volume (the
-    storage partition formatted on first prep, TPM-enrolled, its passphrase
-    verified and its header backup staged; the journal, the service user's
-    home and both temp directories bind-mounted onto it), the staged trixie
-    guest image on that volume (pinned docker + the pinned gVisor runtime
-    baked in), the kvm nested-virtualization module pin, the shared swapfile /
-    no-auto-reboot / transfer-tooling / S3-IPv4-pin hardening, the management WireGuard
-    bring-up (echoing the box's public key for the caller to stamp on the row),
-    the ``:22`` lockdown when the tier's Modal Proxy IPs are configured, and
-    the box telemetry collector + timer (phase 4) with its prep-artifact hash
-    manifest.
+    unit and udp/67 policy, content-converged), a TPM 2.0 preflight (a box
+    without one is refused before its storage partition is touched), the
+    LUKS storage volume (the storage partition formatted on first prep,
+    TPM-enrolled, its passphrase verified and its header backup staged; the
+    journal, the service user's home and both temp directories bind-mounted
+    onto it), the staged trixie guest image on that volume (pinned docker +
+    the pinned gVisor runtime baked in), the kvm nested-virtualization module
+    pin, the shared swapfile / no-auto-reboot / transfer-tooling / S3-IPv4-pin
+    hardening, the management WireGuard bring-up (echoing the box's public key
+    for the caller to stamp on the row), the ``:22`` lockdown when the tier's
+    Modal Proxy IPs are configured, and the box telemetry collector + timer
+    (phase 4) with its prep-artifact hash manifest.
 
     No boot-autostart unit: gen-2 boot autostart is exactly systemd's
     ``WantedBy=multi-user.target`` on each enabled ``mngr-slice@`` instance.
@@ -853,6 +855,7 @@ def build_gen2_box_prep_script(
         management_proxy_static_ips=management_proxy_static_ips,
     )
     ssh_ca_trust_section = render_gen2_ssh_ca_trust_section(ssh_ca_public_key, service_user)
+    tpm_preflight_section = render_gen2_tpm_preflight_section()
     storage_encryption_section = render_gen2_storage_encryption_section()
     storage_relocation_section = render_gen2_storage_relocation_section()
     return f"""\
@@ -872,6 +875,7 @@ if [ ! -f {GEN2_OVMF_CODE_PATH} ]; then
     exit 1
 fi
 
+{tpm_preflight_section}
 # Nested virtualization off at the module level (applies at the next box
 # reboot; the module is never unloaded live -- it has VMs).
 cat > {_GEN2_KVM_MODPROBE_CONF_PATH} <<'MNGR_KVM_CONF'

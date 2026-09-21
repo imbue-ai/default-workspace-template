@@ -192,7 +192,7 @@ verdict REFUSED --detail "..."` as in Step 2.
 
 ### 3b. Launch
 
-Surface your own chat tab first (the Mind app sends the user into this
+Surface your own chat window first (the Mind app sends the user into this
 workspace when it starts an update, and this conversation is where they should
 land). The command detaches a helper that retries until a client is there; it
 is best-effort, and a failure is not a reason to stop:
@@ -427,13 +427,11 @@ affected environments, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
 mngr and the harness plugins), installs or builds the frontend
-bundle, runs the workspace layout migration
-(`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
-there is reported and left to the next boot's run), restarts the services
+bundle, restarts the services
 agent (every apply; the fresh supervisord it brings up reads the merged program
 table, so a program the update adds starts on its own), probes the shell's health
-route and the instances API of every critical app that serves one (the chat, the
-terminal; each at the URL its manifest or its fresh registry row names), probes the
+route and the health route of every critical app the user can open (the chat, the
+terminal; each at the URL its fresh registry row names), probes the
 live UI, refreshes every open view, writes the
 `docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
 reverting the entire merge and restoring the snapshots on any other failure.
@@ -498,9 +496,9 @@ python3 system/scripts/layout.py close si-preview
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 ```
 
-The close goes first: an op addressed to an app the registry no longer holds is refused,
-so once `unpreview` has deregistered the row there is nothing left to close (the tab is
-pruned on its own when the app leaves the inventory).
+The close goes first: nothing takes a window away when its app leaves the registry, so
+once `unpreview` has deregistered the row the preview's window would stay on the desktop
+pointing at a page nothing serves.
 
 **The rest is only for a successful apply (exit 0).** After a rollback the
 worker's branch, worktree and report are the retry path: keep them until the

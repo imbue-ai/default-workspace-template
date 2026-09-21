@@ -10,7 +10,7 @@
 # that misses this budget fails loudly and is rolled back.
 agent_ready_timeout = 45.0
 
-# --- Command defaults ---
+# Command defaults
 
 # Default create command settings -- apply to all mngr create from this repo.
 #
@@ -117,7 +117,7 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 [work_dir_extra_paths]
 ".mngr/settings.local.toml" = "SHARE"
 
-# --- Agent types ---
+# Agent types
 
 # Agent type defaults -- apply to all claude agents created from this repo
 [agent_types.claude]
@@ -439,7 +439,7 @@ settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, s
 # Harness-only instructions, appended to every antigravity agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
 
-# --- Provider configurations ---
+# Provider configurations
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
 
@@ -584,7 +584,7 @@ host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
 
-# --- Create templates ---
+# Create templates
 
 ## these are all for launching the original agent (from outside the sandbox, in the first place)
 
@@ -1690,7 +1690,7 @@ setting__extend = [
 # absent until then, weekly and findings-gated via
 # system/services/caretaker/caretaker_check.sh once enabled) via
 # system/libs/automations/run_automation.sh, and labelled automation=caretaker
-# so it can be found as a singleton (the agent surfaces its own chat tab via
+# so it can be found as a singleton (the agent surfaces its own chat window via
 # system/scripts/layout.py after its first message).
 [create_templates.caretaker]
 transfer = "none"
@@ -1705,7 +1705,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the window does not pop up empty), silently surface your own chat window by running: python3 system/scripts/layout.py open chat --path \"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --desktop it lands on the desktop the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from
