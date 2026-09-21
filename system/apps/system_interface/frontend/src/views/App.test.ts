@@ -10,7 +10,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
-import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  placementRecord,
+  themeMetricsRecord,
+  windowRecord,
+} from "../testing/records";
+import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
 import { App } from "./App";
 
 const CLIENT = "client-1";
@@ -99,24 +107,52 @@ function pressOn(element: HTMLElement): void {
 }
 
 describe("the avatar chooser", () => {
-  it("opens from the pinned entry's menu, and stays closed when dismissed before the catalog answered", async () => {
-    const buddy = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" } });
-    socket.deliver().onAppsUpdated([appRecord("docs"), buddy]);
+  const buddy = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" } });
+
+  /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
+  function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
+    socket.deliver().onAppsUpdated([appRecord("docs"), buddy, ...apps]);
     socket.deliver().onDesktopsUpdated([
       desktopRecord("home", {
         windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
       }),
     ]);
     m.redraw.sync();
+    return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
+  }
+
+  function openEntryMenuRow(entry: HTMLElement, key: string): void {
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    (document.querySelector(`[data-menu-item="${key}"]`) as HTMLElement).click();
+    m.redraw.sync();
+  }
+
+  it("routes the entry menu's style row and the chooser's Design your own... to the store", async () => {
+    const chat = appRecord("chat", { launch_paths: [launchPathRecord({ params: ["message"] })] });
+    const entry = pinnedEntry(chat);
+    openEntryMenuRow(entry, "change-avatar");
+    await settle();
+    m.redraw.sync();
+    (document.querySelector(".avatar-design-own") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+    await settle();
+    const prompt = new URLSearchParams({ message: AVATAR_DESIGN_PROMPT }).toString();
+    expect(api.calls).toContain(`openWindow:home:chat:/new?${prompt}:new:new`);
+
+    openEntryMenuRow(entry, "style-plain");
+    await settle();
+    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:bar:plain:-");
+  });
+
+  it("opens from the pinned entry's menu, and stays closed when dismissed before the catalog answered", async () => {
+    const entry = pinnedEntry();
     let answerCatalog: () => void = () => undefined;
     api.readGate = new Promise((resolve) => {
       answerCatalog = resolve;
     });
-    const entry = document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
-    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
-    m.redraw.sync();
-    (document.querySelector('[data-menu-item="change-avatar"]') as HTMLElement).click();
-    m.redraw.sync();
+    openEntryMenuRow(entry, "change-avatar");
     expect(document.querySelector("[data-avatar-chooser]")).not.toBeNull();
     expect(document.querySelector("[data-avatar-chooser] [role='status']")).not.toBeNull();
 
