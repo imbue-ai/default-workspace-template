@@ -232,7 +232,7 @@ def desktop_with_windows(*windows: Window) -> Desktop:
     )
 
 
-# ---------- the update notice ----------
+# The update notice
 
 # Where the stub update-self script records each call it took.
 STUB_UPDATE_SELF_CALLS_REL: Final[str] = "data/.state/update-apply/stub-calls.jsonl"
