@@ -663,7 +663,7 @@ def test_wake_survives_an_unrunnable_mngr_so_boot_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # `mngr` missing is a live possibility on this path -- an apply interrupted
-    # mid `uv tool install` of the vendored mngr is exactly why the recovery
+    # mid `uv tool install` of the mngr tool is exactly why the recovery
     # runs. main() does not wrap this call, so an escaping FileNotFoundError
     # would kill bootstrap before supervisord starts and boot the container
     # with no services at all.

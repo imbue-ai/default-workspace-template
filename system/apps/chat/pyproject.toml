@@ -106,7 +106,7 @@ venv = ".venv"
 pythonVersion = "3.12"
 strict = ["**/*.py"]
 
-# Ruff config mirrors system/vendor/mngr/pyproject.toml, as the system interface's does.
+# Ruff config mirrors mngr's pyproject.toml, as the system interface's does.
 [tool.ruff]
 line-length = 119
 
