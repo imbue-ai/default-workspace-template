@@ -447,7 +447,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
    * a rebind (an account on the chat's own harness and lane); run at once for a chat with no
    * user turn yet. Pressing the armed account again, or the account the chat runs on, takes the
    * choice back. Each row also carries the default toggle: the starred
-   * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
+   * account is the one a new chat opens on when nothing names one (the launcher tile, a desktop
    * shortcut, an agent's `layout.py open chat`).
    */
   function providerFlyout(chatId: string, current: ProviderAccount | null): m.Vnode {
@@ -801,8 +801,8 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             ? modelFlyout(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
             : null;
 
-      // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's
-      // clipping overlay, so a card that extends past the panel would be cut off at its edge.
+      // The card and its flyout PORTAL to <body>. The chat panel lives inside a clipping
+      // container, so a card that extends past the panel would be cut off at its edge.
       return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout, fastModeModal] })];
     },
   };

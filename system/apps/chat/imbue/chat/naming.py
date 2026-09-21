@@ -15,8 +15,8 @@ clients creating at the same time cannot both mint "Chat 1".
 from collections.abc import Iterable
 from typing import Final
 
-from app_instances.primitives import canonical_name_from_title
-from app_instances.primitives import is_name_conflict as is_title_conflict
+from app_manifest.primitives import canonical_name_from_title
+from app_manifest.primitives import is_name_conflict as is_title_conflict
 
 from imbue.imbue_common.pure import pure
 
@@ -31,7 +31,7 @@ def canonical_agent_name(name: str) -> str:
     """The true-name form of a human-readable chat name ("Chat 2" -> "Chat-2").
 
     The workspace app model's naming rule, shared with every app through the
-    instances library. It mirrors mngr's own canonicalization rather than
+    manifest library. It mirrors mngr's own canonicalization rather than
     importing it: a workspace's mngr may predate free-form names, and
     passing it a name it would reject fails the create outright. Sending the
     canonical name (plus the typed one as a ``display_name`` label) is accepted

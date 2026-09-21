@@ -19,7 +19,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: () => store.chat,
 }));
-vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
+vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 // A mounted tree instantiates its components, so this stand-in has to be a real one
 // (the direct-render tests get away with a bare function).
 vi.mock("../markdown", () => ({ MarkdownContent: { view: () => null } }));

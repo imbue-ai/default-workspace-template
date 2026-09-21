@@ -9,7 +9,7 @@ import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall 
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
 import { openProviderChooser } from "../models/Providers";
-import { openSubagentTab } from "../shell";
+import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
@@ -325,7 +325,7 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
               onclick(e: Event) {
                 e.preventDefault();
                 e.stopPropagation();
-                openSubagentTab(chatId, sessionId, description);
+                openSubagentView(chatId, sessionId);
               },
             },
             "View conversation",

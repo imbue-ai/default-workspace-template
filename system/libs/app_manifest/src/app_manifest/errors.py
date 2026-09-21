@@ -16,3 +16,7 @@ class RegistryReadError(AppManifestError):
 
 class ScopeComputationError(AppManifestError):
     """A creation's footprint cannot be computed: a git command failed, or a config it reads is unparseable."""
+
+
+class AppRegistrationError(AppManifestError):
+    """The registration script could not upsert the app's row: it is missing, failed, or did not finish."""
