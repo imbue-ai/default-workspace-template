@@ -803,6 +803,30 @@ describe("pinned entries", () => {
     expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
   });
 
+  it("navigates this client's view of a linked pinned window as the shell's own desktops record", async () => {
+    const store = await pinnedStore();
+    const desktopsBefore = store.getDesktopsRevision();
+    const loadsBefore = store.getLayoutLoadsRevision();
+    expect(await store.navigateOwnWindow("win-9", "/?doc=4")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
+      `reportWindowLocation:home:win-9:${CLIENT}:/?doc=4:Buddy`,
+    );
+    // A linked window's path is the shared record's, so the answer lands as the shell's desktops record: that
+    // revision moved, the layout's own paths did not.
+    expect(store.getDesktopsRevision()).toBe(desktopsBefore + 1);
+    expect(store.getLayoutLoadsRevision()).toBe(loadsBefore);
+    expect(store.getState().desktops[0].windows.find((window) => window.id === "win-9")?.path).toBe("/?doc=4");
+    expect(store.getState().layout.window_paths["win-9"]).toBeUndefined();
+    // A window the desktops do not hold is nothing to move, and a refusal is told to the user.
+    const callsBefore = api.calls.length;
+    expect(await store.navigateOwnWindow("win-404", "/")).toBe(false);
+    expect(api.calls.length).toBe(callsBefore);
+    api.refusal = "no such client";
+    expect(await store.navigateOwnWindow("win-9", "/?doc=5")).toBe(false);
+    expect(notices).toEqual(["Could not move the window: no such client"]);
+    expect(store.getDesktopsRevision()).toBe(desktopsBefore + 1);
+  });
+
   it("restores a pinned window the client never placed at the frame the shell answered, not the cascade", async () => {
     const store = await pinnedStore();
     expect(store.windowRect("win-9")).toEqual({ x: 460, y: 40, width: 500, height: 720 });
