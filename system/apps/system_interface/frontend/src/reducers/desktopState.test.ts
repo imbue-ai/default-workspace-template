@@ -5,7 +5,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   barEntries,
-  effectiveWindowPath,
+  effectiveWindow,
   effectiveWindowTitle,
   entryLook,
   floatingEntries,
@@ -236,7 +236,7 @@ describe("opens and closes this client made", () => {
     expect(state.desktops[0].windows[2].path).toBe("/");
     expect(state.layout.window_paths).toEqual({ "win-3": { path: "/?doc=5", title: "Five" } });
     expect(isLayoutDirty(state)).toBe(false);
-    expect(effectiveWindowPath(state, independent)).toBe("/?doc=5");
+    expect(effectiveWindow(state, independent).path).toBe("/?doc=5");
     expect(effectiveWindowTitle(state, independent, appRecord("docs"))).toBe("Five");
     expect(effectiveWindowTitle(before, independent, appRecord("docs"))).toBe("Docs");
     expect(taskbarEntries(state).map((entry) => entry.title)).toEqual(["Docs", "Notes", "Five"]);
