@@ -1,6 +1,5 @@
 """``ShellState``: everything the shell's routes and WebSocket loop share, built in ``main.py`` (or by a test)."""
 
-import os
 import threading
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -21,7 +20,7 @@ from imbue.system_interface.avatar.catalog import AvatarCatalogStore
 from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTORY
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
-from imbue.system_interface.avatar.status import agent_events_path
+from imbue.system_interface.avatar.status import agent_events_path_from_environment
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -419,7 +418,3 @@ def build_shell_state(
             broadcaster=broadcaster,
         ),
     )
-
-
-def agent_events_path_from_environment() -> Path:
-    return agent_events_path(os.environ)
