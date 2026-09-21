@@ -209,7 +209,7 @@ Outbound:
 | `apps_updated` | `{"apps": [app, ...]}` | on connect, and when any row or liveness changed |
 | `desktops_updated` | `{"desktops": [desktop, ...]}` | on connect, and after any write of `desktops.json` (a desktop, shortcut, wallpaper, window open or close, or location change) |
 | `placements_updated` | `{"desktop_id", "client_id", "save_id"}` | after any write of a layout file; a window applies it only when `client_id` is its own, the desktop is the one it shows, and `save_id` is not one it minted |
-| `active_desktop_changed` | `{"client_id", "desktop_id"}` | after a `client_state` report or an op changed the client's stored active desktop |
+| `active_desktop_changed` | `{"client_id", "desktop_id"}` | after a `client_state` report, an op, or an arrival (section 5.5) changed the client's stored active desktop |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | only the transient ops `refresh` and `reload_system_interface` (section 8) |
 | `presence_updated` | `{"users": [present_user, ...]}` | on connect, and whenever a user's presence record appears or is removed (section 5.1) |
 
