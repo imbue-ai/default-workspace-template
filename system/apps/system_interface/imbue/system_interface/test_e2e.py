@@ -539,8 +539,8 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     e2e_server: E2EServer, page: Page
 ) -> None:
     """A fresh browser lands on the home desktop over the bundled wallpaper: the seeded shortcut sits in the first
-    cell, nothing is open, the taskbar carries the launcher field and both tray widgets, and the shell soon knows
-    the client with home as its active desktop."""
+    cell, nothing is open, the taskbar carries the launcher field and the Desktops tray widget, and the shell soon
+    knows the client with home as its active desktop."""
     _land(page, e2e_server)
     expect(page).to_have_title("System Interface")
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
@@ -549,7 +549,6 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(_shown_windows(page)).to_have_count(0)
     expect(page.locator("[data-taskbar] [data-launcher-field]")).to_be_visible()
     expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
-    expect(page.locator(f'[data-running-app="{_STUB_APP_NAME}"]')).to_be_visible()
     assert (
         page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
@@ -1036,8 +1035,10 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_shortcut_menu_changes_mode_and_removes_and_the_tray_adds_one_back(e2e_server: E2EServer, page: Page) -> None:
-    """The shortcut's menu flips its mode and removes it; the running app's popover in the tray adds it back."""
+def test_shortcut_menu_changes_mode_and_removes_and_an_agent_op_adds_one_back(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """The shortcut's menu flips its mode and removes it; an agent's ``shortcut set`` op puts it back on the backdrop."""
     _land(page, e2e_server)
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
     shortcut.click(button="right")
@@ -1060,10 +1061,11 @@ def test_shortcut_menu_changes_mode_and_removes_and_the_tray_adds_one_back(e2e_s
         error_message="the shortcut stayed in the desktop record",
     )
 
-    page.locator(f'[data-running-app="{_STUB_APP_NAME}"]').click()
-    popover = page.locator(f'[data-running-app-popover="{_STUB_APP_NAME}"]')
-    expect(popover).to_be_visible(timeout=5000)
-    popover.locator(f'[data-add-shortcut="{_STUB_SHORTCUT_KEY}"]').click()
+    _broadcast_op(
+        e2e_server.base_url,
+        "shortcut_set",
+        {"app": _STUB_APP_NAME, "launch": _STUB_LAUNCH_ID, "mode": "focus", "cell": "0,0"},
+    )
     expect(shortcut).to_be_visible(timeout=10000)
     assert _shortcut_cells(e2e_server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0)}
 
