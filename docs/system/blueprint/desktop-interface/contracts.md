@@ -350,4 +350,4 @@ Data attributes, never classes, so restyling cannot break a test:
 
 ## 13. Where data lives
 
-Unchanged from the workspace app model's section 17: `data/.apps/<name>/` for what an app persists about the user's things (now including `data/.apps/system_interface/wallpapers/`), `data/.state/<name>/` for what a program keeps about this machine (the registry, the shell's desktops, placements, and clients).
+Unchanged from the workspace app model's section 17: `data/.apps/<name>/` for what an app persists about the user's things (now including `data/.apps/system_interface/wallpapers/` and the registered avatar designs at `data/.apps/system_interface/avatars/catalog.json`), `data/.state/<name>/` for what a program keeps about this machine (the registry, the shell's desktops, placements, clients, each client's window paths, and the avatar selection).
