@@ -742,9 +742,9 @@ describe("pinned entries", () => {
       currentRect: { x: 928, y: 732 },
     });
     store.updateFloatingEntryDrag({ x: 110, y: 210 });
-    expect(store.floatingEntryRect("buddy", null)).toEqual({ x: 100, y: 200, width: 56, height: 56 });
+    expect(store.renderedFloatingEntryRect("buddy", null)).toEqual({ x: 100, y: 200, width: 56, height: 56 });
     store.updateFloatingEntryDrag({ x: 5, y: 1000 });
-    expect(store.floatingEntryRect("buddy", null)).toEqual({ x: 0, y: 744, width: 56, height: 56 });
+    expect(store.renderedFloatingEntryRect("buddy", null)).toEqual({ x: 0, y: 744, width: 56, height: 56 });
     store.endFloatingEntryDrag({ x: 110, y: 210 });
     // Landed where it was dropped before the shell has answered.
     expect(store.getGesture()).toBeNull();
@@ -753,7 +753,12 @@ describe("pinned entries", () => {
     expect(api.calls.filter((call) => call.startsWith("setEntryPresentation"))).toEqual([
       "setEntryPresentation:client-1:buddy:floating:plain:0.1,0.25",
     ]);
-    expect(store.floatingEntryRect("buddy", { x: 0.1, y: 0.25 })).toEqual({ x: 100, y: 200, width: 56, height: 56 });
+    expect(store.renderedFloatingEntryRect("buddy", { x: 0.1, y: 0.25 })).toEqual({
+      x: 100,
+      y: 200,
+      width: 56,
+      height: 56,
+    });
     expect(store.gestureRectFor("win-9")).toBeNull();
     // Compact mode has no floating entries to drag.
     store.setThemeMetrics(METRICS, { isCompact: true, isTouch: true });
