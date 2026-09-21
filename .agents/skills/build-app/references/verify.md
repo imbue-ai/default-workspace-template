@@ -19,12 +19,6 @@ python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-te
 python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app_mock.png
 ```
 
-### Auto-Reload Detection
-Starter apps generated with `scaffold_flask_lib.py` enable Werkzeug's reloader (`use_reloader=True`).
-When you edit `runner.py` or templates, changes take effect within ~50ms **without requiring a `supervisorctl restart`**.
-To guarantee you never see stale code, `smoketest_app.py`:
-1. Compares the server's startup timestamp from `http://127.0.0.1:<port>/health` against `runner.py`'s file modification time (`mtime`).
-2. Actively polls until your `--marker` appears in the response body.
 
 ## Alternative / Manual Checks
 
