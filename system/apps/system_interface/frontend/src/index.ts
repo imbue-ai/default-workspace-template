@@ -1,7 +1,7 @@
 import m from "mithril";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
-import { setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
+import { FOCUS_CHAT, announceReadyToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import "./style.css";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
@@ -56,6 +56,12 @@ function bootstrap(): void {
   // shell side of the app contract.
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
+  setEmbedderMessageHandler(FOCUS_CHAT, (message) => {
+    const chatId = message.chatId;
+    if (typeof chatId === "string" && chatId !== "") void desktopStore.focusChat(chatId);
+  });
+  // The handlers are up, so anything the embedder held for this page can come now.
+  announceReadyToEmbedder();
   const rootElement = document.getElementById("app");
   if (rootElement) {
     m.mount(rootElement, {
