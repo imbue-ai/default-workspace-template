@@ -19,7 +19,7 @@ class Config(BaseSettings):
 
     system_interface_host: str = "127.0.0.1"
     system_interface_port: int = 8000
-    # Where the New Tab page's template catalog is fetched from; empty leaves the page without
+    # Where the launcher's template catalog is fetched from; empty leaves the page without
     # a templates section.
     system_interface_template_catalog_url: str = DEFAULT_TEMPLATE_CATALOG_URL
 
