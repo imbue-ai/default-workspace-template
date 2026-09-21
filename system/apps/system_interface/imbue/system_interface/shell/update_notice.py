@@ -217,7 +217,7 @@ class UpdateNoticeWatch(MutableModel):
 
         A rollback in flight is refused because a confirm would close the record the rollback
         is writing its progress and outcome into (the script refuses one under the rollback
-        point's lock too). The band hides both verbs while a rollback runs, so this catches a
+        point's lock too). The banner hides both verbs while a rollback runs, so this catches a
         window that has not seen the progress yet.
         """
         notice = self.current()

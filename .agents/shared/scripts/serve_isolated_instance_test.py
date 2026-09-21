@@ -489,7 +489,7 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     flat = [token for argv in registered for token in argv]
     assert "demo-app" in flat
     assert "demo-preview" in flat
-    # The tab to open (the wrapper's service name) is printed to stdout; its
+    # The app to open (the wrapper's service name) is printed to stdout; its
     # browser origin depends on the workspace host, which is not knowable here.
     assert capsys.readouterr().out.strip() == "demo-preview"
     state = json.loads(_state_path(tmp_path).read_text())
@@ -499,7 +499,7 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
 
 
 def test_up_preview_surfaces_only_the_frame_and_titles_it(tmp_path: Path) -> None:
-    """One preview puts one row on the rail and the tab list, reading as the app
+    """One preview puts one app in the launcher and the window list, reading as the app
     it previews. The inner service keeps its origin (the frame reaches it by
     swapping the hostname label) but is not an app to open: its bare page is the
     same app with nothing marking it as a preview."""
@@ -734,7 +734,7 @@ def test_refresh_reboots_inner_on_same_port_leaving_wrapper_and_services(
     # Exactly the inner command was relaunched -- on the SAME port, no new wrapper.
     assert spawner.detached_spawns == [_LAUNCH]
     assert spawner.detached_envs[0][_PORT_ENV] == str(inner_port)
-    # Services were never deregistered (the tab keeps routing to the same port).
+    # Services were never deregistered (the window keeps routing to the same port).
     assert not runner.ran(*mod.FORWARD_PORT_CMD, "--remove", "--name")
     # State now points at the new inner pid; the wrapper pid is preserved.
     state = json.loads(_state_path(tmp_path).read_text())

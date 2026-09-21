@@ -1467,7 +1467,7 @@ def _settle_rollback_record(
 
     A record with ``progress`` set and no ``outcome`` is what the shell refuses both
     verbs on, so every way out of a rollback has to come through here -- including the
-    ones nobody predicted -- or the notice sits on the user's tabs with no way to close
+    ones nobody predicted -- or the notice sits on the user's desktop with no way to close
     it.
     """
     record.progress = None
@@ -1577,7 +1577,7 @@ def _rollback_last_locked(
     except BaseException as exc:
         # From the progress write above until an outcome is written, the notice reads
         # as a rollback in flight and refuses every verb, so an exception that simply
-        # ended this (detached) script would leave it that way on the user's tabs
+        # ended this (detached) script would leave it that way on the user's desktop
         # forever. Settle it with what happened, keep the copies -- the tree may be
         # half-restored and they are what an agent finishes by hand from -- and let the
         # traceback out to the log the launcher captured.
