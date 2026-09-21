@@ -13,7 +13,7 @@ import {
   resetPresenceForTesting,
   startPresenceHeartbeat,
 } from "./Presence";
-import type { PresentUser } from "./records";
+import { presentUserRecord } from "../testing/records";
 
 interface RecordedRequest {
   url: string;
@@ -44,18 +44,6 @@ function setVisibility(state: "visible" | "hidden"): void {
   Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
   document.dispatchEvent(new Event("visibilitychange"));
 }
-
-const user = (overrides: Partial<PresentUser> = {}): PresentUser => ({
-  user_id: "user-bob-4471",
-  email: "bob@example.com",
-  display_name: "Bob",
-  avatar_url: null,
-  owner: false,
-  session_count: 1,
-  first_seen: "2026-09-19T10:00:00.000000000Z",
-  last_seen: "2026-09-19T10:00:00.000000000Z",
-  ...overrides,
-});
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -152,7 +140,7 @@ describe("startPresenceHeartbeat", () => {
 
 describe("applyPresence", () => {
   it("replaces the connected set wholesale", () => {
-    applyPresence([user(), user({ user_id: "user-owner-9c21", owner: true })]);
+    applyPresence([presentUserRecord("user-bob-4471"), presentUserRecord("user-owner-9c21", { owner: true })]);
     expect(getPresentUsers().map((entry) => entry.user_id)).toEqual(["user-bob-4471", "user-owner-9c21"]);
     applyPresence([]);
     expect(getPresentUsers()).toEqual([]);
