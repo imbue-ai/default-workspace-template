@@ -9,7 +9,8 @@ import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall 
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
 import { openProviderChooser } from "../models/Providers";
-import { openSubagentTab, startChatOnAccount } from "../shell";
+import { openSubagentView } from "../shell";
+import { beginSwitchToAccountId } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -178,6 +179,15 @@ function resolvedResultSignature(
     .join("|");
 }
 
+/** The Chats-store input the auth-error note renders from: whether the chat is known yet, and
+ *  which account it is bound to. It sits outside the event, so the memo below has to carry it --
+ *  the chat list can land after the transcript, and the switch link is only offered once it has. */
+function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): string {
+  if (!event.is_auth_error) return "";
+  const chat = getChatById(chatId);
+  return chat === undefined ? "unknown" : `bound:${chat.active_agent.account_id ?? ""}`;
+}
+
 export function StableAssistantMessage(): m.Component<{
   event: AssistantMessageEvent;
   toolResults: Map<string, ToolResultEvent>;
@@ -187,6 +197,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedToolResultCount = 0;
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
+  let renderedReauthSignature = "";
   let renderedDetailVersion = -1;
   return {
     onbeforeupdate(vnode) {
@@ -208,6 +219,7 @@ export function StableAssistantMessage(): m.Component<{
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
+        reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion
       );
     },
@@ -219,6 +231,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
+      renderedReauthSignature = reauthNoteSignature(event, chatId);
       renderedDetailVersion = getEventDetailVersion(chatId);
 
       return m("div", renderAssistantMessageChildren(event, toolResults, chatId));
@@ -312,7 +325,7 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
               onclick(e: Event) {
                 e.preventDefault();
                 e.stopPropagation();
-                openSubagentTab(chatId, sessionId, description);
+                openSubagentView(chatId, sessionId);
               },
             },
             "View conversation",
@@ -412,17 +425,18 @@ export function renderToolCallBlock(
   });
 }
 
-/** The "sign in again" affordance under an auth failure.
+/** The two ways out under an auth failure: "Sign in again", and the switch link beside it.
  *
- * Resolves the chat's own account from its `account` label, so the chooser opens ON that
- * account and re-authenticates it in place -- every chat bound to it recovers. Without the
- * label (a chat from before accounts, say) it opens the chooser plainly, which is still the
+ * "Sign in again" resolves the chat's own account from its `account` label, so the chooser opens
+ * ON that account and re-authenticates it in place -- every chat bound to it recovers. Without
+ * the label (a chat from before accounts, say) it opens the chooser plainly, which is still the
  * right destination.
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 
 function renderReauthAction(chatId: string): m.Children {
-  const accountId = getChatById(chatId)?.active_agent.account_id ?? "";
+  const chat = getChatById(chatId);
+  const accountId = chat?.active_agent.account_id ?? "";
   return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
     "This provider is no longer working. ",
     m(
@@ -434,25 +448,29 @@ function renderReauthAction(chatId: string): m.Children {
       },
       "Sign in again",
     ),
-    // Two ways out, because only the first one revives THIS conversation: a chat binds to its
-    // account when it is created and nothing rebinds it, so "switch provider" cannot mean
-    // moving this chat -- it means starting a fresh one somewhere that works. Both are offered
-    // because the right choice depends on whether the credential is fixable, which the user
-    // knows and we do not: an expired login is, a spent quota mostly is not.
-    " or ",
-    m(
-      "button",
-      {
-        type: "button",
-        class: REAUTH_ACTION_CLASS,
-        onclick: () =>
-          openProviderChooser({
-            onSignedIn: (chosen) => startChatOnAccount(chosen),
-            brokenAccountId: accountId || undefined,
-          }),
-      },
-      "switch to another provider",
-    ),
+    // Two ways out, because the right one depends on whether the credential is fixable, which
+    // the user knows and we do not: an expired login is, a spent quota mostly is not. The second
+    // moves this chat to the account picked: a rebind for another account on the same harness and
+    // lane, a handoff otherwise. It waits for the chat list, which can land after the transcript:
+    // the move needs the chat, and the chooser fixes which account it refuses when it opens.
+    chat === undefined
+      ? null
+      : [
+          " or ",
+          m(
+            "button",
+            {
+              type: "button",
+              class: REAUTH_ACTION_CLASS,
+              onclick: () =>
+                openProviderChooser({
+                  onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen),
+                  ...(accountId ? { unpickable: { accountId, reason: "failing" as const } } : {}),
+                }),
+            },
+            "switch to another provider",
+          ),
+        ],
     ".",
   ]);
 }

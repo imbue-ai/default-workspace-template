@@ -1,0 +1,1 @@
+Desktop interface phases 6 and 7: the band table's comments describe the file viewer as dufs alone (its Python sidecar for the instances API is gone) and speak of chat and terminal windows rather than tabs. No band values change.
