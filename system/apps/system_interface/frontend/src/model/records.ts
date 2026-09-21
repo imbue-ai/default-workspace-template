@@ -2,8 +2,8 @@
  * The TypeScript mirrors of the shell's records (desktop-interface contracts.md sections 3 to
  * 5): what ``GET /api/desktops``, the placements routes, the client list, and the ``apps_updated``
  * and ``presence_updated`` pushes carry, spelled as the wire spells them (``snake_case``), and the
- * parsers that read a wire document into them. A document of the wrong shape is refused with ``WireShapeError`` rather
- * than read as an empty one: an empty desktop list would be believed.
+ * parsers that read a wire document into them. A document of the wrong shape is refused with
+ * ``WireShapeError`` rather than read as an empty one: an empty desktop list would be believed.
  */
 
 export type WindowState = "NORMAL" | "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZED";
