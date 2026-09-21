@@ -82,8 +82,7 @@ interface CatalogResponse {
   is_stale?: boolean;
 }
 
-// ---------- pure helpers ----------
-
+// pure helpers
 /**
  * The catalog's shelves with their slugs resolved (a slug no template carries is dropped, and a
  * row left empty by that is dropped with it), followed by the "All templates" row.
@@ -118,8 +117,7 @@ export function writeUpParagraphs(text: string): string[] {
     .filter((paragraph) => paragraph !== "");
 }
 
-// ---------- the fetch, one per page load ----------
-
+// the fetch, one per page load
 let state: TemplateCatalogState = { kind: "loading" };
 let isRequested = false;
 
