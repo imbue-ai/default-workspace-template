@@ -436,6 +436,9 @@ def _set_container_timezone(
         try:
             tz_name = cache_path.read_text().strip()
         except FileNotFoundError:
+            logger.info(
+                "No timezone fetched or cached; container keeps the image's zone"
+            )
             return
         except OSError as e:
             logger.warning(
