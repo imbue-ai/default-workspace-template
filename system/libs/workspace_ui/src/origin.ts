@@ -16,8 +16,8 @@
  *
  * The random suffix is the one hostname component that never leaks via CT, so
  * a share cannot be enumerated from the public cert name. Callers resolve an
- * app's NAME to its LABEL via ``labelForApp`` (models/Inventory) before
- * calling this.
+ * app's NAME to its LABEL via ``labelForApp`` (the shell's model/pageUrl)
+ * before calling this.
  *
  * The base is the workspace host COORDINATE -- the ``host-<hex>`` label and
  * everything after it -- NOT ``window.location.host`` verbatim. The shell does
@@ -26,12 +26,12 @@
  * is served, so the shell always runs at ``<shell-label>.<coordinate>``.
  * Deriving relative to ``window.location.host`` verbatim would therefore nest
  * every app under the shell's label (``foo.<shell-label>.host-<hex>...``),
- * which routes back to the shell -- a dockview inside a dockview. Stripping to
+ * which routes back to the shell -- a desktop inside a desktop. Stripping to
  * the coordinate first keeps every app origin a single label deep.
  *
- * Nothing about an origin is ever persisted: saved layouts carry the app's
- * name in a tab's address, and the URL is re-derived from that name's CURRENT label at
- * render time, so a layout stays portable across hosts and shares.
+ * Nothing about an origin is ever persisted: a desktop's windows carry the app's
+ * name and a path, and the URL is re-derived from that name's CURRENT label at
+ * render time, so a desktop stays portable across hosts and shares.
  */
 
 /** A label that starts a workspace coordinate: ``host-<hex>`` (``agent-`` is
