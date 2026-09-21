@@ -780,9 +780,24 @@ def test_the_owner_and_an_anonymous_client_arrive_on_their_recorded_desktop_or_t
     client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
     _record_client(app, "c-owner", "research")
     assert _arrive(client, "c-owner", _OWNER)["desktop_id"] == "research"
-    # Arriving makes no desktop and records no user for either of them.
+    # Arriving makes no desktop and records no user for either of them, but the client is recorded on its landing.
     assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == ["home", "research"]
     assert _shell(app).users.list_users() == []
+    new_client = _shell(app).clients.get_client("c-new")
+    assert new_client is not None and new_client.active_desktop == "home" and new_client.user_id is None
+
+
+def test_a_browser_that_last_arrived_as_the_owner_is_no_returning_client_of_a_visitor(
+    client: FlaskClient, app: Flask
+) -> None:
+    _arrive(client, "c-alice", _ALICE)
+    _record_client(app, "c-alice", "home")
+    # The owner signs in on that browser: the record forgets the visitor and lands where the owner was.
+    assert _arrive(client, "c-alice", _OWNER)["desktop_id"] == "home"
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.user_id is None
+    # The visitor signing in again there is not returning to a desktop of theirs: they land on their own.
+    assert _arrive(client, "c-alice", _ALICE)["desktop_id"] == "alice"
 
 
 def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_clients_land_on_it(
