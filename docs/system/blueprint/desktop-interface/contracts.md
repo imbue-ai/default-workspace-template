@@ -353,7 +353,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launcher-row="launch:<app>:<launch>" \| "window:<window-id>" \| "text:<app>:<launch>"` | each row of the launcher's menu |
 | `data-launch="<app>:<launch>"` | each launch-path and free-text row (the tiles' spelling kept) |
-| `data-launcher-window="<window-id>"` | each window row |
+| `data-launcher-window="<window-id>"`, `data-minimized="true" \| "false"` | each window row, and whether its window is minimized for this client |
 | `data-text-action="primary" \| "secondary"` | the first two free-text rows |
 | `data-highlighted="true" \| "false"`, `data-disabled="true"` | each row's highlight; a disabled free-text row |
 | `data-pinned="true\|false"` | each window's root and each taskbar entry |
