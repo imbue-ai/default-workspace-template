@@ -246,8 +246,8 @@ def bundled_design_source(design: BundledDesign) -> str:
 
 
 def _apply_bundled_expression(root: Element, design: BundledDesign, is_awake: bool) -> None:
-    """The bundled drawings rest with closed eyes and wake with open ones; an original whose eyes are already open
-    ellipses keeps its own highlights and proportions."""
+    """The bundled drawings rest with closed eyes and wake with open ones; a bundled drawing whose eyes are already
+    open ellipses keeps its own highlights and proportions."""
     eyes = root.find(f".//{{{SVG_NAMESPACE}}}g[@class='{_EYES_CLASS}']")
     if eyes is None:
         raise InvalidShellValueError(f"bundled design {design.id} has no {_EYES_CLASS} group")
