@@ -294,6 +294,14 @@ describe("pinned entries", () => {
     });
     expect(barEntries(chosen).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
     expect(floatingEntries(chosen)).toEqual([]);
+    // A style stored while the pin declared it is not drawn once the pin declares plain.
+    const kept = reduceDesktopState(state, {
+      type: "entries_updated",
+      entries: { buddy: { mode: "bar", style: "avatar", position: null } },
+    });
+    const plainPin = appRecord("buddy", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" } });
+    expect(entryLook(kept, pinned, plainPin)?.style).toBe("plain");
+    expect(entryLook(kept, pinned, pinnedApp)?.style).toBe("avatar");
     // An app the shell no longer lists, or one with no pin, reads as a plain bar entry.
     expect(entryLook(state, pinned, undefined)).toEqual({
       mode: "bar",
