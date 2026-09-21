@@ -1215,8 +1215,8 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
 def _visiting_client(
     page: Page, e2e_server: E2EServer, user_id: str, display_name: str, desktop_id: str
 ) -> contextlib.AbstractContextManager[Page]:
-    """A second client whose every request carries a visitor's identity, landed on the visitor's own desktop (a
-    visitor never sees Home)."""
+    """A second client whose every request carries a visitor's identity, landed on the visitor's own desktop
+    rather than on Home (the shell makes one for a first-time visitor)."""
     visitor = RequestIdentity(owner=False, user_id=user_id, email=f"{user_id}@example.com", display_name=display_name)
     return _second_client(page, e2e_server, desktop_id, extra_http_headers=identity_headers(visitor))
 
