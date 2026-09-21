@@ -324,7 +324,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |
 | `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar and launcher |
-| `data-tray-widget="desktops\|running-apps"`, `data-desktop-switch="<id>"` | the tray |
+| `data-tray-widget="desktops"`, `data-desktop-switch="<id>"` | the tray |
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launch="<app>:<launch>"` | launcher tiles (today's `data-launch` spelling kept) |
 

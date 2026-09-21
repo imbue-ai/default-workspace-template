@@ -83,7 +83,6 @@ The `focus` browser shortcut raises this client's most recent browser window on 
 
 ### 3.3 Other defaults
 
-- The Running apps popover's "Add to desktop" hardcodes `focus`; it uses the app's `default_shortcut.mode` when the launch path is the default one and `new` otherwise.
 - `system/test_app_manifests.py` pins the modes and launch paths of section 3.1.
 - The e2e stub app keeps its `focus` seed; the focus tests stay as the coverage of that mode.
 

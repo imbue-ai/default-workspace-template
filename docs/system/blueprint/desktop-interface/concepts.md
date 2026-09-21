@@ -33,7 +33,7 @@ Windows are positioned boxes that a separate live-page layer mirrors; they are n
 | Taskbar | -- (the old "dock" was dockview) | The bar along the bottom: the launcher field, one entry per window, the system tray | Rendered, not stored | dock, panel, shelf |
 | Launcher | New Tab page, start menu | The text field at the taskbar's left and the overlay it opens | Client, transient | start menu, spotlight |
 | System tray | -- | The taskbar's right end, a row of tray widgets | Taskbar | status area |
-| Tray widget | -- | One self-contained thing in the tray; V1 ships Desktops and Running apps | Taskbar | applet, indicator |
+| Tray widget | -- | One self-contained thing in the tray; V1 ships Desktops | Taskbar | applet, indicator |
 | Theme | design system tokens | The token table every component reads: colours, type, radii, metrics | Build-time file in V1 | skin |
 | Compact mode, touch mode | device kind `mobile` | Two render policies, from viewport width and from pointer type | Derived at render time | mobile mode |
 
@@ -44,7 +44,7 @@ The sections below define each one.
 A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **sharing mode**, a **wallpaper**, its **shortcuts**, and its **windows**.
 Everything on a desktop is shared truth: every client sees the same desktops with the same windows, shortcuts, and wallpaper.
 A workspace always has at least one desktop; deleting the last one is refused, and a fresh workspace starts with one default desktop.
-There is no unfiltered "Everything" desktop; the launcher and the Running apps widget are how you reach everything on the machine.
+There is no unfiltered "Everything" desktop; the launcher is how you reach everything on the machine.
 
 The sharing mode is `shared` (the default) or `personal`.
 Today, with one user, the mode changes nothing but the menu that shows it.
@@ -117,7 +117,7 @@ It is an overlay, one per client, closed by a choice, a click outside, or Escape
 Opening something from it opens a window on the active desktop.
 
 The system tray holds the tray widgets, each a self-contained component with one popover.
-V1 ships two: **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, sharing, delete) and **Running apps** (one icon per running app; click lists that app's windows on this desktop and its launch paths).
+V1 ships one: **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, sharing, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
 
 ### 2.9 The word "dock"
 
@@ -158,7 +158,7 @@ flowchart TB
     subgraph rendered["Rendered (browser, not stored)"]
         Backdrop["Backdrop: wallpaper + shortcut grid"]
         Taskbar["Taskbar: launcher field, entries, tray"]
-        Tray["Tray widgets: Desktops, Running apps"]
+        Tray["Tray widgets: Desktops"]
         Page["Live page (one iframe per window)"]
     end
     Desktop -->|holds| Window
@@ -194,7 +194,7 @@ The agent-facing `layout.py` speaks the same verbs, targets exactly one client f
 
 - dockview, its serialized document, the Python editor over it, tab groups, tiled splits, and the vendor CSS overrides.
 - The shell's instance layer: the instances API and the relay verbs, the inventory's instance lists and nudges, provisional and sub-agent instances, referenced-lifetime deletion, the tab rebind route, the `{tab}` placeholder, and the `app:<name>?instance=<key>` address grammar.
-- The left rail and its responsibilities, redistributed: view identity and switching to the Desktops widget; shortcut rows to the backdrop; the All-apps popover and search to the launcher; the tab list to the taskbar entries, the Running apps widget, and the launcher's "On this desktop" section; the row menu to the window menu.
+- The left rail and its responsibilities, redistributed: view identity and switching to the Desktops widget; shortcut rows to the backdrop; the All-apps popover and search to the launcher; the tab list to the taskbar entries and the launcher's "On this desktop" section; the row menu to the window menu.
 - The New Tab page as a panel: the "dock is never empty" rule and launcher retirement. An empty desktop is a backdrop with shortcuts.
 - The Everything view, the per-device seed files, and the stored device kind.
 - The boot-time layout migration; V1 is a hard cutover that ignores the old state files.

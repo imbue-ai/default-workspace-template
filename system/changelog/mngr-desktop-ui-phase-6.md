@@ -19,3 +19,5 @@ Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interfac
 - `forward_port.py` copies `window_closed_path` onto the registry row; `layout.py open --minimized`, an `open` with no client landing unplaced, and the retired `delete` verb's advice naming the apps' own collection. The desktop-interface contracts, plan, and concepts record the window-bound-resources design (`docs/system/specs/window-bound-resources.md`, now implemented).
 
 - `docs/system/specs/window-bound-resources.md` and the contracts record that an app takes the close hint's `path` as proof a window showed the resource it names, closing the gap where a resource closed within its first sweep interval was never collected.
+
+- The desktop-interface blueprint records that the tray ships the Desktops widget alone; the Running apps widget is gone.
