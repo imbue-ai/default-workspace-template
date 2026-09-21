@@ -13,6 +13,7 @@ import { launchPathOf, launchPathWithParams } from "../model/launch";
 import type {
   AppRecord,
   AvatarCatalog,
+  AvatarDesign,
   ClientRecord,
   Desktop,
   DesktopShortcut,
@@ -463,6 +464,11 @@ export class DesktopStore {
     } catch (error) {
       console.warn("[si] could not read the avatar designs", error);
     }
+  }
+
+  /** The designs on offer, read anew on every call so one an agent registered meanwhile is listed. */
+  async fetchAvatarDesigns(): Promise<readonly AvatarDesign[]> {
+    return (await this.deps.api.fetchAvatars()).designs;
   }
 
   /** Choose the workspace's avatar design; every window (this one included) follows the shell's broadcast. */

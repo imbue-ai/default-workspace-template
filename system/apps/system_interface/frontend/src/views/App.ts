@@ -8,7 +8,7 @@
 
 import m from "mithril";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
-import { fetchAvatars, fetchWallpapers } from "../model/api";
+import { fetchWallpapers } from "../model/api";
 import { MESSAGE_PARAM, launchPathOf, launchTilesOf, promptTargetOfTiles } from "../model/launch";
 import type {
   AppRecord,
@@ -306,7 +306,7 @@ export function App(): m.Component<AppAttrs> {
                 look,
                 setMode: (mode) => void current.setEntryMode(window.app, mode),
                 setStyle: (style) => void current.setEntryStyle(window.app, style),
-                changeAvatar: openAvatarChooser,
+                changeAvatar: () => openAvatarChooser(current),
               },
       },
       state.modes.isCompact,
@@ -479,12 +479,12 @@ export function App(): m.Component<AppAttrs> {
       .finally(() => m.redraw());
   }
 
-  /** Read the catalog on every open, so a design an agent registered meanwhile is listed. */
-  function openAvatarChooser(): void {
+  function openAvatarChooser(current: DesktopStore): void {
     avatarChooser = { designs: null, loadError: null };
-    void fetchAvatars()
-      .then((catalog) => {
-        avatarChooser = { designs: catalog.designs, loadError: null };
+    void current
+      .fetchAvatarDesigns()
+      .then((designs) => {
+        avatarChooser = { designs, loadError: null };
       })
       .catch((error: unknown) => {
         console.warn("[si] could not list the avatar designs", error);
