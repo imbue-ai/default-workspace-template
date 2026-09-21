@@ -120,6 +120,11 @@ class AppManifest(FrozenModel):
         description="The app's place among the launcher's leading tiles (lower first); "
         "an app without one follows every ranked app",
     )
+    window_closed_path: LaunchPathValue | None = Field(
+        default=None,
+        description="The path under the app's origin the shell posts to when a window of the app closes; "
+        "an app whose resources live as long as their windows sweeps on it",
+    )
     references: tuple[AppReference, ...] = Field(
         default=(), description="The artifacts outside the app's directory that belong to it"
     )
