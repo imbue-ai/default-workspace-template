@@ -127,6 +127,14 @@ def _get_json(url: str) -> Any:
         return json.loads(response.read())
 
 
+def _post_json(url: str, payload: dict[str, Any]) -> Any:
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.loads(response.read())
+
+
 @contextlib.contextmanager
 def _running_e2e_server(
     tmp_path: Path,
@@ -366,20 +374,12 @@ def _wait_for_window_count(base_url: str, count: int, desktop_id: str = _HOME_DE
 def _broadcast_op(base_url: str, op: str, args: dict[str, Any]) -> dict[str, Any]:
     """POST an op to ``/api/layout/broadcast`` the way ``system/scripts/layout.py`` does, retrying while the shell
     has not yet registered the client the op names (a 404 or 412)."""
-    payload = json.dumps({"op": op, "args": args, "requester": None}).encode()
     answer: dict[str, Any] = {}
 
     def _attempt() -> bool:
-        request = urllib.request.Request(
-            f"{base_url}/api/layout/broadcast",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                answer.update(json.loads(response.read()))
-                return True
+            answer.update(_post_json(f"{base_url}/api/layout/broadcast", {"op": op, "args": args, "requester": None}))
+            return True
         except urllib.error.HTTPError as e:
             if e.code in (404, 412):
                 return False
@@ -1257,14 +1257,7 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
             "alice",
         ]
 
-        deletion = urllib.request.Request(
-            f"{e2e_server.base_url}/api/desktops/alice/delete",
-            data=b"{}",
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(deletion, timeout=5):
-            pass
+        _post_json(f"{e2e_server.base_url}/api/desktops/alice/delete", {})
         visitor.reload()
         expect(visitor.locator('[data-replaced-desktop-notice="Alice"]')).to_be_visible(timeout=15000)
         expect(visitor.locator('[data-desktop-id="alice"]')).to_be_visible()
