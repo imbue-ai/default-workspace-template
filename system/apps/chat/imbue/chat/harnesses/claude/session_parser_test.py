@@ -8,7 +8,7 @@ import pytest
 from imbue.chat.harnesses.claude.session_parser import _SYNTHETIC_MODEL
 from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
-from imbue.chat.harnesses.tool_output import _MAX_PERMISSION_REQUEST_PROBES
+from imbue.chat.harnesses.tool_output import _MAX_ECHOED_REQUEST_PROBES
 
 
 def _make_user_line(uuid: str, timestamp: str, content: str) -> str:
@@ -1181,7 +1181,7 @@ def test_permission_request_probe_loop_is_capped() -> None:
     measured at ~3 s for 100KB of braces before the cap existed. Past the probe
     cap the result is treated as ordinary output -- head-truncated, no request
     attached -- even though a well-formed request sits beyond the wall."""
-    output = "{" * (_MAX_PERMISSION_REQUEST_PROBES * 3) + _make_permission_request_output("hidden beyond the cap")
+    output = "{" * (_MAX_ECHOED_REQUEST_PROBES * 3) + _make_permission_request_output("hidden beyond the cap")
     lines = [_make_tool_result_line("uuid-wall", "2026-01-01T00:00:08Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert "permission_request" not in events[0]
@@ -1192,7 +1192,7 @@ def test_permission_request_within_probe_cap_still_parses() -> None:
     """The cap is headroom, not a hair trigger: a request behind far more
     braces than any legitimate output carries -- but still within the cap --
     is found and preserved just the same."""
-    output = "{" * (_MAX_PERMISSION_REQUEST_PROBES - 10) + _make_permission_request_output(_LONG_RATIONALE)
+    output = "{" * (_MAX_ECHOED_REQUEST_PROBES - 10) + _make_permission_request_output(_LONG_RATIONALE)
     lines = [_make_tool_result_line("uuid-under", "2026-01-01T00:00:09Z", "toolu_1", output)]
     events = parse_lines(lines)
     assert events[0]["permission_request"]["request_id"] == _REQUEST_ID

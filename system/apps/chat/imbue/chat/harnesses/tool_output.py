@@ -124,19 +124,21 @@ def is_tk_lifecycle_anywhere(command: str) -> bool:
     return False
 
 
-_PERMISSION_REQUEST_ID_KEY = '"request_id"'
+# The key every echoed request carries -- a permission request's and a secret request's
+# alike -- which is what makes it the substring guard for both probes.
+_REQUEST_ID_KEY = '"request_id"'
 
-# Ceiling on a preserved permission-request object. Preservation rescues the handful of
+# Ceiling on a preserved echoed-request object. Preservation rescues the handful of
 # fields the card renders; it is not licence to open an unbounded hole in the output
 # limit. A body past this size is left to ordinary head truncation.
-_MAX_PERMISSION_REQUEST_LENGTH = 8000
+_MAX_ECHOED_REQUEST_LENGTH = 8000
 
 # Cap on the candidate `{`s probed in one tool result. Failing probes are not
 # constant-time (each JSONDecodeError rescans up to the error position), so output that is
 # mostly braces would otherwise cost O(braces x length). Legitimate output has only a
 # handful of braces at or before the object's `request_id` key, so 1000 is two to three
 # orders of magnitude of headroom.
-_MAX_PERMISSION_REQUEST_PROBES = 1000
+_MAX_ECHOED_REQUEST_PROBES = 1000
 
 # Stateless and reused across candidate offsets rather than rebuilt per probe.
 _JSON_DECODER = json.JSONDecoder()
@@ -216,14 +218,14 @@ def _find_echoed_object(content: str, is_match: Callable[[dict[str, Any]], bool]
     anything printed after the response). The probe count is capped so pathological
     brace-heavy output cannot stall parsing.
     """
-    marker = content.find(_PERMISSION_REQUEST_ID_KEY)
+    marker = content.find(_REQUEST_ID_KEY)
     if marker < 0:
         return None
     probes = 0
     start = content.find("{")
     while 0 <= start <= marker:
         probes += 1
-        if probes > _MAX_PERMISSION_REQUEST_PROBES:
+        if probes > _MAX_ECHOED_REQUEST_PROBES:
             return None
         try:
             parsed, end = _JSON_DECODER.raw_decode(content, start)
@@ -239,7 +241,7 @@ def _find_echoed_object(content: str, is_match: Callable[[dict[str, Any]], bool]
             return None
         if isinstance(parsed, dict) and is_match(parsed):
             body = content[start:end]
-            if len(body) > _MAX_PERMISSION_REQUEST_LENGTH:
+            if len(body) > _MAX_ECHOED_REQUEST_LENGTH:
                 return None
             return parsed, body
         start = content.find("{", start + 1)
