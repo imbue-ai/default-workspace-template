@@ -32,7 +32,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `params` is an optional array of `{name, label, required}` naming query parameters the shell may append. |
 | `default_shortcut` | table | no | absent | `{launch = "<id>", mode = "focus" \| "new"}`; `launch` names a declared launch path, or `open` when the app declares none. |
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
-| `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; the app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
+| `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
 | `references`, `scope`, `wiring`, `handles` | | | | Unchanged. |
 
 `instances`, `instances_url`, and `actions` are removed; a manifest that carries them fails to load.
