@@ -6,7 +6,6 @@ sweep and after a stop or start. Every change of the inventory is broadcast as o
 """
 
 import json
-import os
 import threading
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -19,14 +18,13 @@ from app_manifest.registry import read_registry
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
-from watchdog.events import FileMovedEvent
-from watchdog.events import FileSystemEvent
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer as _Observer
+from watchdog.observers.api import BaseObserver
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.file_watch import start_file_watch
+from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import app_wire_json
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
@@ -36,43 +34,9 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 LIVENESS_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 
 
-class _RegistryFileHandler(FileSystemEventHandler):
-    """Fires ``on_change`` on mutating events whose path is the registry file.
-
-    Subscribes to the mutation events rather than ``on_any_event``: watchdog's default inotify
-    mask includes the open and close-no-write events a read of the file raises, which would loop.
-    ``forward_port.py`` replaces the file atomically, so moves count too.
-    """
-
-    basename: str
-    on_change: Callable[[], None]
-
-    def _maybe_fire(self, event: FileSystemEvent) -> None:
-        if event.is_directory:
-            return
-        paths = [event.src_path]
-        if isinstance(event, FileMovedEvent):
-            paths.append(event.dest_path)
-        if any(os.path.basename(str(path)) == self.basename for path in paths):
-            self.on_change()
-
-    on_modified = _maybe_fire
-    on_created = _maybe_fire
-    on_deleted = _maybe_fire
-    on_moved = _maybe_fire
-    on_closed = _maybe_fire
-
-
 @pure
 def serialize_apps(entries: Sequence[AppInventoryEntry]) -> list[dict[str, Any]]:
     return [app_wire_json(entry) for entry in entries]
-
-
-def _make_registry_file_handler(basename: str, on_change: Callable[[], None]) -> _RegistryFileHandler:
-    handler = _RegistryFileHandler()
-    handler.basename = basename
-    handler.on_change = on_change
-    return handler
 
 
 class AppInventory(MutableModel):
@@ -97,7 +61,7 @@ class AppInventory(MutableModel):
     _registry_order: list[str] = PrivateAttr(default_factory=list)
     _last_broadcast_json: str | None = PrivateAttr(default=None)
     _is_registry_read: bool = PrivateAttr(default=False)
-    _observer: Any | None = PrivateAttr(default=None)
+    _observer: BaseObserver | None = PrivateAttr(default=None)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_thread: threading.Thread | None = PrivateAttr(default=None)
@@ -120,8 +84,7 @@ class AppInventory(MutableModel):
             self._sweep_thread.join(timeout=5)
             self._sweep_thread = None
         if self._observer is not None:
-            self._observer.stop()
-            self._observer.join(timeout=5)
+            stop_file_watch(self._observer)
             self._observer = None
 
     # Reads
@@ -179,17 +142,8 @@ class AppInventory(MutableModel):
             self._broadcast_if_changed()
 
     def _start_registry_watch(self) -> None:
-        watch_dir = self.registry_path.parent
-        watch_dir.mkdir(parents=True, exist_ok=True)
-        observer = _Observer()
-        observer.schedule(_make_registry_file_handler(self.registry_path.name, self.reload_registry), str(watch_dir))
-        observer.daemon = True
-        try:
-            observer.start()
-        except OSError as e:
-            logger.opt(exception=e).error("Failed to watch the app registry at {}", self.registry_path)
-            return
-        self._observer = observer
+        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        self._observer = start_file_watch(self.registry_path, self.reload_registry)
 
     # Liveness
 
