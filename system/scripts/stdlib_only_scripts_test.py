@@ -50,9 +50,12 @@ def _imported_top_level_modules(script: Path) -> set[str]:
     return modules
 
 
-def _modules_outside_the_stdlib(script: Path, checked: set[Path]) -> set[str]:
-    """Every imported module that is neither standard library nor a sibling script that passes this same check."""
-    checked.add(script)
+def _modules_outside_the_stdlib(script: Path, checked: frozenset[Path] = frozenset()) -> set[str]:
+    """Every imported module that is neither standard library nor a sibling script that passes this same check.
+
+    ``checked`` is the chain of scripts that led here, so an import cycle between siblings ends.
+    """
+    visited = checked | {script}
     offenders: set[str] = set()
     for module in _imported_top_level_modules(script):
         if module in sys.stdlib_module_names:
@@ -60,10 +63,10 @@ def _modules_outside_the_stdlib(script: Path, checked: set[Path]) -> set[str]:
         sibling = script.parent / f"{module}.py"
         if not sibling.is_file():
             offenders.add(module)
-        elif sibling not in checked:
+        elif sibling not in visited:
             offenders.update(
                 f"{module} -> {nested}"
-                for nested in _modules_outside_the_stdlib(sibling, checked)
+                for nested in _modules_outside_the_stdlib(sibling, visited)
             )
     return offenders
 
@@ -76,7 +79,7 @@ def test_a_script_run_with_the_system_python_imports_only_the_standard_library(
     assert script.is_file(), (
         f"{script_name} is listed but does not exist beside this test"
     )
-    offenders = _modules_outside_the_stdlib(script, set())
+    offenders = _modules_outside_the_stdlib(script)
     assert offenders == set(), (
         f"{script_name} runs under the system python3, which cannot import {sorted(offenders)}; "
         "use the standard library (tomllib, json, urllib) instead"
@@ -88,10 +91,10 @@ def test_the_check_sees_a_third_party_import_wherever_it_is(tmp_path: Path) -> N
     script.write_text(
         "import json\n\n\ndef run() -> None:\n    import yaml\n\n    yaml.safe_dump({})\n"
     )
-    assert _modules_outside_the_stdlib(script, set()) == {"yaml"}
+    assert _modules_outside_the_stdlib(script) == {"yaml"}
     sibling = tmp_path / "helper.py"
     sibling.write_text("import tomlkit\n")
     (tmp_path / "caller.py").write_text("from helper import x\n")
-    assert _modules_outside_the_stdlib(tmp_path / "caller.py", set()) == {
+    assert _modules_outside_the_stdlib(tmp_path / "caller.py") == {
         "helper -> tomlkit"
     }
