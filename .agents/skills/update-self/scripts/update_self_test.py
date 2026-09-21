@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
+import tool_env
 import update_apply
 import update_apply_contract
 import update_banding
@@ -1723,7 +1724,10 @@ def _plant_snapshotted_marker(repo_root: Path, **kwargs) -> list:
     """
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
     snapshots = update_environment.take_snapshots(
-        plan, repo_root, _RecordingRunner(), []
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        [],
     )
     _plant_marker(repo_root, snapshots=snapshots, **kwargs)
     return snapshots
@@ -4325,8 +4329,8 @@ def test_only_the_hungry_forward_steps_are_expendable_and_recovery_is_not(
         if c[:2] == ["npm", "ci"] or c[:3] == ["npm", "run", "build"]
     ]
     assert recovery_npm, "recovery should have rebuilt without the expendable tag"
-    # The refresh itself, not just any uv call: `uv tool dir` runs unwrapped
-    # on the forward pass too, so it cannot stand in for the recovery refresh.
+    # The refresh itself, not just any uv call: only the reinstalls and the
+    # sync are what recovery has to rebuild untagged.
     recovery_installs = [c for c in unwrapped if c[:3] == ["uv", "tool", "install"]]
     recovery_syncs = [c for c in unwrapped if c[:2] == ["uv", "sync"]]
     assert len(recovery_installs) == 3, "recovery should reinstall every tool untagged"
@@ -4559,16 +4563,18 @@ def test_only_apply_and_recover_band_themselves(
 # mngr tool and one per Python app).
 # ``uv tool install --reinstall`` rebuilds a tool from its base package alone,
 # so both halves of this are load-bearing: WHICH installation is rebuilt
-# (``_uv_tool_env``, from the console script's own shebang) and WHAT it is
+# (``resolve_tool_destinations``, from the console script's own shebang) and WHAT it is
 # rebuilt with (``_tool_extras``, read back out of uv's receipt). For the mngr
 # tool those extras ARE its plugins.
 
 
-def _with_receipt(
-    runner: _RecordingRunner, tool_dir: Path, tool: str, body: str
-) -> None:
-    """Point ``uv tool dir`` at ``tool_dir`` and give ``tool`` a receipt there."""
-    runner.respond(("uv", "tool", "dir"), _Result(stdout=f"{tool_dir}\n"))
+def _with_receipt(tool: str, body: str) -> None:
+    """Give ``tool`` a receipt in the directory the refresh will install into.
+
+    With nothing resolvable on PATH that is the build's pinned tool home, which
+    ``_isolate_tool_home`` points at this test's ``tmp_path``.
+    """
+    tool_dir = tool_env.tools_dir(tool_env.tool_home())
     (tool_dir / tool).mkdir(parents=True, exist_ok=True)
     (tool_dir / tool / update_layout.RECEIPT).write_text(body)
 
@@ -4582,17 +4588,13 @@ def _install_argv(runner: _RecordingRunner, source_dir: str) -> list[str]:
     )
 
 
-def test_the_refresh_preserves_a_tools_registered_plugins(
-    apply_repo: Path, tmp_path: Path
-) -> None:
+def test_the_refresh_preserves_a_tools_registered_plugins(apply_repo: Path) -> None:
     # A bare --reinstall rebuilds a tool from its base package alone. For the
     # mngr tool the extras ARE its plugins, so dropping them leaves a CLI that
     # cannot parse its own plugin config -- an update that breaks the workspace
     # in a new way while reporting success.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         """
         [tool]
@@ -4620,9 +4622,7 @@ def test_the_refresh_preserves_a_tools_registered_plugins(
     ]
 
 
-def test_the_refresh_registers_the_merged_trees_new_plugins(
-    apply_repo: Path, tmp_path: Path
-) -> None:
+def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) -> None:
     # The receipt names only the plugins a tool was installed with last time.
     # A release that ships a new plugin (opencode, say) merges a settings.toml
     # its agent type needs, and a reinstall from the receipt alone leaves an
@@ -4631,8 +4631,6 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     # receipt already has.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         f"""
         [tool]
@@ -4690,16 +4688,12 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(
     ]
 
 
-def test_the_refresh_repins_the_base_to_the_in_tree_source(
-    apply_repo: Path, tmp_path: Path
-) -> None:
+def test_the_refresh_repins_the_base_to_the_in_tree_source(apply_repo: Path) -> None:
     # A receipt that has lost its editable marker must not make us re-resolve
     # the base from the index -- that would silently swap the workspace's own
     # vendored code for a published release.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         '[tool]\nrequirements = [{ name = "imbue-mngr" }]\n',
     )
@@ -4840,6 +4834,46 @@ def test_the_only_mngr_install_is_never_removed(tmp_path: Path) -> None:
     assert (tools / update_layout.MNGR_TOOL_NAME).is_dir()
 
 
+@pytest.mark.parametrize(
+    ("path_reaches", "home_copy_survives"),
+    [("the-pinned-copy", False), ("the-home-copy", True), ("nothing", True)],
+)
+def test_an_app_tool_home_copy_is_swept_only_once_path_reaches_the_pinned_install(
+    path_reaches: str, home_copy_survives: bool, apply_repo: Path, tmp_path: Path
+) -> None:
+    # The pre-pin installs left a copy of every app tool under $HOME beside the
+    # stale mngr, and a login shell runs those instead of the refreshed ones.
+    # An app's program line resolves through the pinned bin directory, so the
+    # sweep must never remove the copy PATH runs or leave only an unreached
+    # one: with PATH on the $HOME copy, or on nothing, both copies stay.
+    pinned_home = tool_env.tool_home()
+    pinned_shim, pinned_tools = _install_tool(
+        pinned_home, update_layout.TOOL_NAME, update_layout.TOOL_NAME
+    )
+    home_shim, home_tools = _install_tool(
+        tmp_path / "home", update_layout.TOOL_NAME, update_layout.TOOL_NAME
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    if path_reaches == "the-pinned-copy":
+        runner.executables[update_layout.TOOL_NAME] = str(pinned_shim)
+    elif path_reaches == "the-home-copy":
+        runner.executables[update_layout.TOOL_NAME] = str(home_shim)
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        sweep_homes=[tmp_path / "home", pinned_home],
+    )
+
+    assert code == 0
+    assert home_shim.exists() is home_copy_survives
+    assert (home_tools / update_layout.TOOL_NAME).is_dir() is home_copy_survives
+    assert pinned_shim.exists()
+    assert (pinned_tools / update_layout.TOOL_NAME).is_dir()
+
+
 def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4850,11 +4884,11 @@ def test_a_live_apply_sweeps_the_callers_home_and_the_image_builds(
     monkeypatch.setenv("HOME", "/home/user")
     assert update_environment.default_sweep_homes() == [
         Path("/home/user"),
-        Path(update_layout.PROVISIONER_HOME),
+        Path(tool_env.DEFAULT_TOOL_HOME),
     ]
     monkeypatch.delenv("HOME")
     assert update_environment.default_sweep_homes() == [
-        Path(update_layout.PROVISIONER_HOME)
+        Path(tool_env.DEFAULT_TOOL_HOME)
     ]
 
 
@@ -4895,14 +4929,17 @@ def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
     )
 
 
-def test_a_tool_with_no_installation_anywhere_is_left_to_uv(
+def test_a_tool_with_no_installation_anywhere_goes_to_the_pinned_home(
     apply_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """With neither the tool's own executable nor mngr an installed uv tool on
-    PATH there is no installation to aim at, so the install is left to uv's own
-    tool directory and the refresh says so, naming both."""
+    PATH there is nothing to resolve, and uv's own default is the one answer
+    that is always wrong: it follows ``$HOME``, which at runtime is
+    ``/home/user`` and on no PATH. The build pins a home precisely because it
+    cannot trust the one it runs under; the apply aims at the same one."""
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     assert not runner.executables
+    pinned = tool_env.tool_home()
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
@@ -4912,12 +4949,69 @@ def test_a_tool_with_no_installation_anywhere_is_left_to_uv(
         if argv[:4] == ["uv", "tool", "install", "-e"]
         and argv[4] == update_layout.SYSTEM_INTERFACE_DIR
     )
-    assert "UV_TOOL_DIR" not in shell_install_env
-    assert "UV_TOOL_BIN_DIR" not in shell_install_env
+    assert shell_install_env["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned))
+    assert shell_install_env["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned))
     assert (
         f"could not identify the uv tool behind '{update_layout.TOOL_NAME}' (not an "
         f"installed uv tool on PATH) nor the one behind '{update_layout.MNGR_EXECUTABLE}'"
+        f"; installing '{update_layout.TOOL_NAME}' into the build's pinned tool "
+        f"home ({tool_env.bin_dir(pinned)})"
     ) in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("rung", ["own", "beside-mngr", "pinned"])
+def test_the_copy_taken_aside_is_the_environment_the_reinstall_rebuilds(
+    rung: str, apply_repo: Path, tmp_path: Path
+) -> None:
+    """A rollback restores each copy over the directory it was taken from. A copy
+    of any environment but the one the reinstall overwrote would put back the
+    wrong thing and leave the rebuilt one standing, so the two must agree at
+    every rung of the destination resolution."""
+    homes = {
+        "own": tmp_path / "own",
+        "beside-mngr": tmp_path / "mngr",
+        "pinned": tool_env.tool_home(),
+    }
+    for name, home in homes.items():
+        env_dir = tool_env.tools_dir(home) / update_layout.TOOL_NAME
+        env_dir.mkdir(parents=True)
+        (env_dir / update_layout.RECEIPT).write_text("[tool]\nrequirements = []\n")
+        (env_dir / "home.txt").write_text(name)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    if rung in ("own", "beside-mngr"):
+        mngr_shim, _ = _install_tool(
+            homes["beside-mngr"],
+            update_layout.MNGR_TOOL_NAME,
+            update_layout.MNGR_EXECUTABLE,
+        )
+        runner.executables[update_layout.MNGR_EXECUTABLE] = str(mngr_shim)
+    if rung == "own":
+        own_shim, _ = _install_tool(
+            homes["own"], update_layout.TOOL_NAME, update_layout.TOOL_NAME
+        )
+        runner.executables[update_layout.TOOL_NAME] = str(own_shim)
+    observed: list[tuple[str, str]] = []
+
+    def _on_install(argv: list[str]) -> None:
+        if argv[:5] == [
+            "uv",
+            "tool",
+            "install",
+            "-e",
+            update_layout.SYSTEM_INTERFACE_DIR,
+        ]:
+            copy = update_apply_contract.snapshots_root(
+                apply_repo
+            ) / update_environment.tool_snapshot_name(update_layout.TOOL_NAME)
+            env = runner.envs[-1]
+            assert env is not None
+            observed.append((env["UV_TOOL_DIR"], (copy / "home.txt").read_text()))
+
+    runner.on_command = _on_install
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert observed == [(str(tool_env.tools_dir(homes[rung])), rung)]
 
 
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
@@ -4925,40 +5019,19 @@ def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     # receipts); the refresh must still run as the plain install it would
     # otherwise be, for every tool.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
-    runner.respond(("uv", "tool", "dir"), _Result(returncode=1))
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
     assert len(runner.argvs_starting("uv", "tool", "install")) == 3
 
 
-def test_the_refresh_survives_a_uv_that_cannot_be_run_at_all(
-    apply_repo: Path, capsys
-) -> None:
-    # The same verdict as a non-zero `uv tool dir`, reached the other way: uv
-    # missing from the PATH the apply inherited raises rather than exiting.
-    # Reading the extras is best effort, so it must cost the extras and a
-    # warning -- not roll a landed merge back through the last-resort catch.
-    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
-    runner.respond(("uv", "tool", "dir"), FileNotFoundError(2, "No such file", "uv"))
-
-    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
-
-    assert len(runner.argvs_starting("uv", "tool", "install")) == 3
-    assert "could not be run" in capsys.readouterr().err
-
-
-def test_the_refresh_reports_a_receipt_it_cannot_read(
-    apply_repo: Path, tmp_path: Path, capsys
-) -> None:
+def test_the_refresh_reports_a_receipt_it_cannot_read(apply_repo: Path, capsys) -> None:
     # A garbled receipt is not the fresh-install case: we had a tool and lost
     # the record of what it was installed with, so the reinstall below rebuilds
     # it without its plugins. Degrading silently would hand back exactly the
     # plugin-less CLI this refresh exists to prevent, and report success.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
-        runner,
-        tmp_path / "tools",
         update_layout.MNGR_TOOL_NAME,
         "[tool]\nrequirements = [",
     )
@@ -5061,9 +5134,15 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
             "system/apps/system_interface/pyproject.toml",
         ]
     )
-    runner = _RecordingRunner()  # no tools on PATH -> no tool-env targets
+    # No tools on PATH and an empty pinned home -> no tool-env copies.
+    runner = _RecordingRunner()
 
-    snapshots = update_environment.take_snapshots(plan, repo_root, runner, [])
+    snapshots = update_environment.take_snapshots(
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, runner),
+        [],
+    )
 
     assert {record.name for record in snapshots} == {
         "bundle",
@@ -5117,7 +5196,9 @@ def test_snapshots_copy_aside_the_tool_of_a_critical_app_but_not_of_another(
         update_classification.read_app_tools(repo_root),
     )
 
-    targets = update_environment.snapshot_targets(plan, repo_root, runner)
+    targets = update_environment.snapshot_targets(
+        plan, repo_root, update_environment.resolve_tool_destinations(plan, runner)
+    )
 
     assert targets == [("tool-system-interface", shell_tool)]
 
@@ -5128,11 +5209,13 @@ def test_existing_snapshot_copies_are_reused_not_overwritten(tmp_path: Path) -> 
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
-    runner = _RecordingRunner()
-    first = update_environment.take_snapshots(plan, repo_root, runner, [])
+    destinations = update_environment.resolve_tool_destinations(
+        plan, _RecordingRunner()
+    )
+    first = update_environment.take_snapshots(plan, repo_root, destinations, [])
     (repo_root / update_layout.FRONTEND_BUILD_INDEX).write_text("wrecked mid-apply")
 
-    second = update_environment.take_snapshots(plan, repo_root, runner, first)
+    second = update_environment.take_snapshots(plan, repo_root, destinations, first)
 
     assert [record.copy for record in second] == [record.copy for record in first]
     copy_index = Path(first[0].copy) / "index.html"
@@ -5144,7 +5227,10 @@ def test_a_missing_snapshot_target_degrades_to_a_note(tmp_path: Path, capsys) ->
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
     snapshots = update_environment.take_snapshots(
-        plan, repo_root, _RecordingRunner(), []
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        [],
     )
 
     assert snapshots == []
@@ -5170,7 +5256,10 @@ def test_a_copy_that_cannot_be_taken_degrades_to_a_warning(
     plan = _plan(["system/apps/system_interface/frontend/src/App.ts"])
 
     snapshots = update_environment.take_snapshots(
-        plan, repo_root, _RecordingRunner(), []
+        plan,
+        repo_root,
+        update_environment.resolve_tool_destinations(plan, _RecordingRunner()),
+        [],
     )
 
     assert snapshots == []
@@ -5373,8 +5462,46 @@ def test_a_rollback_rebuilds_the_tool_envs_it_could_not_copy_aside(
     ]
     assert len(recovery_installs) == 3
     err = capsys.readouterr().err
-    assert "could not locate the uv tool environment behind 'mngr'" in err
-    assert "could not locate the uv tool environment behind 'system-interface'" in err
+    assert "nothing to copy aside for 'tool-imbue-mngr'" in err
+    assert "nothing to copy aside for 'tool-system-interface'" in err
+
+
+def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
+    apply_repo: Path,
+) -> None:
+    # With nothing resolvable on PATH the refresh installs into the build's
+    # pinned tool home, and `uv tool install --reinstall` rebuilds what stands
+    # there from scratch. So the snapshot has to name that same directory: asked
+    # from PATH alone it copied nothing aside, and the rollback was left
+    # re-resolving the mngr tool over the network -- on a box that often has
+    # none, in the one case where it has just lost its mngr.
+    (apply_repo / ".venv").mkdir()
+    pinned_env = tool_env.tools_dir(tool_env.tool_home()) / update_layout.MNGR_TOOL_NAME
+    pinned_env.mkdir(parents=True)
+    (pinned_env / "marker.txt").write_text("pre-apply")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
+    mngr_install = ["uv", "tool", "install", "-e", update_layout.MNGR_DIR]
+
+    def rebuild_from_scratch(argv: list[str]) -> None:
+        if argv[: len(mngr_install)] == mngr_install:
+            shutil.rmtree(pinned_env)
+            pinned_env.mkdir(parents=True)
+
+    runner.on_command = rebuild_from_scratch
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert (pinned_env / "marker.txt").read_text() == "pre-apply"
+    # Put back by copy, so recovery needed no reinstall of its own: the untagged
+    # calls (recovery's) hold no mngr install.
+    assert [c for c in runner.raw_calls if c[: len(mngr_install)] == mngr_install] == []
 
 
 def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(
