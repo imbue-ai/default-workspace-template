@@ -12,6 +12,7 @@ import {
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
+  pinnedWindowOf,
   reduceDesktopState,
   renderedState,
   taskbarEntries,
@@ -280,6 +281,8 @@ describe("pinned entries", () => {
       position: null,
     });
     expect(entryLook(state, home.windows[0], appRecord("docs"))).toBeNull();
+    expect(pinnedWindowOf(state, "buddy")).toBe(pinned);
+    expect(pinnedWindowOf(state, "docs")).toBeNull();
     expect(barEntries(state).map((entry) => entry.window.id)).toEqual(["win-1", "win-2"]);
     expect(floatingEntries(state).map((entry) => entry.window.id)).toEqual(["win-9"]);
     const chosen = reduceDesktopState(state, {
