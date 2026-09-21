@@ -140,7 +140,6 @@ def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_c
     assert response.status_code == 200
     assert response.mimetype == "text/javascript"
     assert response.text == TEST_APP_CONTRACT_SOURCE
-    # The page imports it by that same-origin path, never from the shell's origin.
     assert 'import("/_static/app_contract.js")' in pages_client.get("/").text
 
 

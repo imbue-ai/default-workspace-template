@@ -98,9 +98,8 @@ describe("a window drag", () => {
     expect(preview.style.display).toBe("none");
   });
 
-  // Mithril diffs a render against the last render, not the DOM: with no redraw between the begin and
-  // the end, the end render finds the same rectangle (a cancel) or the same hidden preview (a snap
-  // release) it rendered at the begin and writes nothing, so the paint itself must have put them right.
+  // A render diffs against the last render, not the DOM, so the paint at the end or the cancel must put the
+  // window and the preview right itself.
   it("puts the window back and hides the preview when cancelled, with no redraw in between", () => {
     const { listener, element, preview } = beginDrag();
     m.redraw.sync();

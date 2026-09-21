@@ -23,7 +23,7 @@ export function rectStyle(rect: PixelRect): RectStyle {
   };
 }
 
-/** Write a rectangle onto an element outside any redraw; a later render of the same rectangle changes nothing. */
+/** Write a rectangle onto an element outside any redraw. */
 export function applyRectStyle(element: HTMLElement, rect: PixelRect): void {
   Object.assign(element.style, rectStyle(rect));
 }
