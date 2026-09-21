@@ -237,6 +237,26 @@ def _shown_chat(page: Page) -> FrameLocator:
     return _chat(page, None)
 
 
+def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
+    """Post one op to the shell's op route, as an agent does. The route's status: 200 for an applied op, the
+    refusal's code for a 404 or 412 (a window or client the shell does not know yet), 0 when unreachable."""
+    request = urllib.request.Request(
+        f"{server.shell_url}/api/layout/broadcast",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 412):
+            return int(e.code)
+        raise AssertionError(f"op refused with HTTP {e.code}: {e.read().decode(errors='replace')}") from e
+    except (TimeoutError, urllib.error.URLError):
+        return 0
+
+
 def _open_fixture_chat_by_op(server: RunningWorkspace, client_id: str) -> None:
     """Show the fixture chat the way the agent-side auto-open does: the desktop ``navigate`` op pointing the app's
     pinned window at the chat for the client, then ``restore`` of it; with no pinned window on the desktop (this
@@ -244,31 +264,13 @@ def _open_fixture_chat_by_op(server: RunningWorkspace, client_id: str) -> None:
     shell has registered the client."""
     chat_id = ChatId(FIXTURE_AGENT_ID)
 
-    def _post(body: dict[str, Any]) -> int:
-        """The op route's status: 200 for an applied op, the refusal's code otherwise, 0 when unreachable."""
-        request = urllib.request.Request(
-            f"{server.shell_url}/api/layout/broadcast",
-            data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                return int(response.status)
-        except urllib.error.HTTPError as e:
-            if e.code in (404, 412):
-                return int(e.code)
-            raise AssertionError(f"op refused with HTTP {e.code}: {e.read().decode(errors='replace')}") from e
-        except (TimeoutError, urllib.error.URLError):
-            return 0
-
     def _attempt() -> bool:
-        navigated = _post(navigate_pinned_op_body(chat_id, client_id))
+        navigated = _post_op(server, navigate_pinned_op_body(chat_id, client_id))
         if navigated == 404:
-            return _post(open_chat_op_body(chat_id, client_id)) == 200
+            return _post_op(server, open_chat_op_body(chat_id, client_id)) == 200
         if navigated != 200:
             return False
-        _post(restore_pinned_op_body(client_id))
+        _post_op(server, restore_pinned_op_body(client_id))
         return True
 
     wait_for(_attempt, timeout=15.0, poll_interval=0.2, error_message="the open op never succeeded")
@@ -653,6 +655,39 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
         expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_root_reports_the_selection_alone(
+    tmp_path: Path, page: Page
+) -> None:
+    """The root's ``draft`` param off a ``navigate`` (the desktop's "Design your own..."), with the chat it lands in
+    already selected: the text goes into that chat's composer, unsent, and the window's stored path goes back to the
+    selection alone, so a reload of the window drafts nothing again (pinned-taskbar-entries plan section 4.7)."""
+    with _running_e2e_server(tmp_path) as server:
+        _open_fixture_chat(page, server)
+        expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        assert _the_chat_window(server)["path"] == _FIXTURE_ROOT_PATH
+        client_id = _client_id(page)
+        _wait_for_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
+
+        draft = "Draw me a seal"
+        navigated = _post_op(
+            server,
+            {
+                "op": "navigate",
+                "args": {
+                    "window": _the_chat_window(server)["id"],
+                    "path": "/?" + urllib.parse.urlencode({"draft": draft}),
+                    "client": client_id,
+                },
+                "requester": None,
+            },
+        )
+        assert navigated == 200
+        expect(_chat(page).locator(".message-input-textbox")).to_have_value(draft, timeout=15000)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        assert _chat(page).locator(".message-user", has_text=draft).count() == 0
 
 
 # starting a chat
