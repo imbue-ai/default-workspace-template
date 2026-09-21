@@ -12,6 +12,7 @@ carries no cookie and the forwarder refuses it across origins.
 
 import html
 import json
+import re
 from pathlib import Path
 from typing import Final
 
@@ -59,6 +60,10 @@ PTY_APP_NAME: Final[AppName] = AppName("terminal-pty")
 # The JSON script element the page reads off itself: the session it frames (or none) and the
 # origin label it derives the pty's origin from, as ``PageConfig`` dumps them.
 _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
+
+# The template's placeholders, filled in one pass so that a title or a config carrying a
+# placeholder's text is not itself filled.
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH)__")
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <html lang="en">
@@ -235,12 +240,13 @@ def render_page(config: PageConfig) -> str:
     title = config.page.title if config.page is not None else _EMPTY_TITLE
     # `</` cannot appear inside a script element's text, whatever the JSON quoting says.
     encoded = json.dumps(config.model_dump(mode="json")).replace("</", "<\\/")
-    return (
-        _PAGE_TEMPLATE.replace("__TITLE__", html.escape(title))
-        .replace("__CONFIG_ID__", _CONFIG_ELEMENT_ID)
-        .replace("__CONFIG__", encoded)
-        .replace("__CONTRACT_PATH__", APP_CONTRACT_ROUTE)
-    )
+    values = {
+        "TITLE": html.escape(title),
+        "CONFIG_ID": _CONFIG_ELEMENT_ID,
+        "CONFIG": encoded,
+        "CONTRACT_PATH": APP_CONTRACT_ROUTE,
+    }
+    return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
 
 def _workdir(raw: str) -> Workdir | None:

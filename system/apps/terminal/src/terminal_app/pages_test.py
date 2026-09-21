@@ -166,3 +166,15 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
     raw_config = page_html[start : page_html.index("</script>", start)]
     assert "</script" not in raw_config
     assert json.loads(raw_config)["page"]["pty_label"] == "</script>"
+
+
+def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
+    title = "__CONTRACT_PATH__ and __CONFIG__"
+    page = SessionPage(name="terminal-1", title=title, pty_path="/?arg=session", pty_label="pty")
+
+    page_html = render_page(PageConfig(session="terminal-1", page=page))
+
+    assert f"<title>{title}</title>" in page_html
+    start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
+    assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
+    assert 'import("/_static/app_contract.js")' in page_html
