@@ -17,7 +17,8 @@ from its own uv tool environment (`system/scripts/build_workspace.sh`), serving 
 
 - `GET /`: the page (the frontend's build, `src/getting_started/static/index.html`; a
   placeholder until it is built), with its bundle under `/assets/`.
-- `GET /api/health`: `{"status", "is_frontend_built"}`, the probe the update apply polls.
+- `GET /api/health`: `{"status", "is_frontend_built"}`, the app's liveness probe (the update
+  apply's post-restart probes cover critical apps only, which this one is not).
 - `GET /api/templates-catalog`: the template catalog (`catalog/README.md` at the repo root),
   fetched from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (the shell's old variable name, kept
   so nothing outside the workspace changes), reused for six hours, and kept as a last good
