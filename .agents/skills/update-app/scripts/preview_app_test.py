@@ -32,20 +32,20 @@ _CHAT_MANIFEST = """
 name = "chat"
 display_name = "Chat"
 icon = "icon.svg"
-instances = true
 critical = true
 priority = "chat"
 
-[[actions]]
+[[launch_paths]]
 id = "new"
 label = "New Chat"
+path = "/new"
 
 [preview]
-command = ["chat-app", "--secondary", "--nudge-shell-url", "{shell_url}"]
+command = ["chat-app", "--secondary"]
 env = {CHAT_PORT = "{port:main}", CHAT_HOST = "{host}", CHAT_DATA_DIR = "{copy:data}"}
 copies = {data = "data/.apps/chat"}
 health_path = "/api/health"
-open_path = "/{key}"
+open_path = "/?chat={key}"
 open_path_takes_key = true
 """
 
@@ -188,22 +188,14 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     assert _flag_values(argv, "--health-path") == ["/api/health"]
     assert _flag_values(argv, "--service-name") == ["chat-preview-app"]
     assert _flag_values(argv, "--preview-service-name") == ["chat-preview"]
-    assert _flag_values(argv, "--inner-path") == ["/agent-1"]
-    # The shared script's placeholders pass through; this script's own are filled (no shell
-    # preview is up, so the nudge target is empty).
+    assert _flag_values(argv, "--inner-path") == ["/?chat=agent-1"]
+    # The shared script's placeholders pass through untouched.
     assert _flag_values(argv, "--env") == [
         "CHAT_PORT={port:main}",
         "CHAT_HOST={host}",
         "CHAT_DATA_DIR={copy:data}",
     ]
-    assert _launch(argv) == [
-        "uv",
-        "run",
-        "chat-app",
-        "--secondary",
-        "--nudge-shell-url",
-        "",
-    ]
+    assert _launch(argv) == ["uv", "run", "chat-app", "--secondary"]
 
 
 def test_a_preview_that_opens_on_an_instance_needs_its_key(tmp_path: Path) -> None:
@@ -260,8 +252,6 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
                             "name": "chat",
                             "url": "http://localhost:8010",
                             "label": "chat-live",
-                            "instances_url": "http://localhost:8010",
-                            "instances": True,
                         },
                         {
                             "name": "terminal",
@@ -298,32 +288,15 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
     rows = _shell_registry_rows(tmp_path)
     # The chat's row points at its preview, under the preview's own origin label; the rest is live.
     assert rows["chat"]["url"] == "http://127.0.0.1:40001"
-    assert rows["chat"]["instances_url"] == "http://127.0.0.1:40001"
     assert rows["chat"]["label"] == "chat-preview-x1y2"
     assert rows["terminal"] == {
         "name": "terminal",
         "url": "http://localhost:7681",
         "label": "terminal-live",
     }
-    # The chat booted before any shell preview was up, so its nudge target is empty; a chat
-    # previewed after the shell would name it.
-    assert _launch(runner.up_argv("chat-preview"))[-1] == ""
     assert (
         mod.live_preview_url(tmp_path, "system_interface") == "http://127.0.0.1:40002"
     )
-    runner.calls.clear()
-    assert (
-        mod.up(
-            "chat",
-            worktree,
-            tmp_path,
-            instance_key="agent-1",
-            runner=runner,
-            dump_registry=_dump_registry,
-        )
-        == 0
-    )
-    assert _launch(runner.up_argv("chat-preview"))[-1] == "http://127.0.0.1:40002"
 
 
 def test_another_passs_preview_of_the_same_app_is_refused_and_the_same_worktrees_is_not(
@@ -448,33 +421,6 @@ def test_a_failed_sibling_stops_the_boot_before_the_app_itself(tmp_path: Path) -
         == 1
     )
     assert runner.ups() == ["chat-preview"]
-
-
-def test_a_sibling_whose_instances_api_has_its_own_port_is_refused_before_anything_boots(
-    tmp_path: Path,
-) -> None:
-    """The registry copy can only point a sibling's instances API at its preview's main port,
-    which is wrong for an app that serves that API elsewhere (the terminal's sidecar)."""
-    worktree = _write_worktree(tmp_path)
-    terminal_dir = worktree / "system" / "apps" / "terminal"
-    terminal_dir.mkdir(parents=True)
-    (terminal_dir / "app.toml").write_text(
-        'name = "terminal"\ndisplay_name = "Terminal"\nicon = "icon.svg"\ninstances = true\n'
-        'instances_url = "http://127.0.0.1:7682"\n'
-    )
-    (terminal_dir / "icon.svg").write_text(_ICON)
-    runner = _RecordingRunner(tmp_path)
-
-    with pytest.raises(mod.PreviewError, match="terminal"):
-        mod.up(
-            "system_interface",
-            worktree,
-            tmp_path,
-            with_apps=["terminal"],
-            runner=runner,
-            dump_registry=_dump_registry,
-        )
-    assert runner.ups() == []
 
 
 def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(

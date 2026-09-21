@@ -1,9 +1,8 @@
 """``apply`` lands a prepared merge and makes the live workspace consistent with
 it, as one deterministic, idempotent, rollback-on-failure motion: merge,
 state snapshots, dependency refresh, provisioner run, frontend build (or the
-worker's already-built bundle), pre-flight, the workspace layout migration
-(warning-only), restart, health probes, the version-history ledger entry, and
-the environment converge. On any failure it
+worker's already-built bundle), pre-flight, restart, health probes, the
+version-history ledger entry, and the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
 
@@ -89,7 +88,6 @@ from update_layout import (
     FRONTEND_BUNDLES,
     FRONTEND_DIR,
     FRONTEND_LIB_DIR,
-    LAYOUT_MIGRATION_SCRIPT,
     MANIFEST_FILENAME,
     NPM_LOCKFILE,
     NPM_ROOT_DIR,
@@ -102,13 +100,13 @@ from update_ledger import LedgerCommitError, write_version_history_entry
 from update_probes import (
     HEALTH_PATH,
     SHELL_PROGRAM,
-    CriticalInstanceApp,
     describe_app_frontend_failure,
     describe_frontend_failure,
     has_chat_program,
     preflight,
     preflight_chat,
-    read_critical_instance_apps,
+    read_critical_apps,
+    read_critical_programs,
     refresh_workspace_view,
     wait_settled,
 )
@@ -124,7 +122,6 @@ from update_runtime import (
     diff_name_status,
     git_out,
     run_checked,
-    tail,
 )
 
 # Per-step wall-clock budgets for the forward apply steps. Nothing about an
@@ -143,10 +140,6 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 _RESTART_TIMEOUT_SECONDS = 600.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
-
-# The layout migration reads and writes a handful of small JSON files; anything
-# past this is a hang.
-_LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
 
 
 def _restore_tree(
@@ -461,40 +454,6 @@ def _install_or_build_bundles(
     )
 
 
-def _migrate_workspace_layouts(repo_root: Path, runner: Runner) -> str | None:
-    """Run the merged tree's layout migration; return why it failed, or ``None``.
-
-    Warning-only by design: the migration never overwrites an output that
-    holds anything (the app stores only gain records), leaves the old store
-    untouched, and runs again at every boot behind its own marker, so a
-    failure here is a retry later, never a reason to roll an otherwise healthy
-    update back. Never raises: a hang and a spawn failure both come back as
-    the reason.
-    """
-    argv = ["python3", LAYOUT_MIGRATION_SCRIPT, "run"]
-    try:
-        result = runner.run(
-            argv,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_LAYOUT_MIGRATION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return (
-            f"python3 {LAYOUT_MIGRATION_SCRIPT} did not finish within "
-            f"{_LAYOUT_MIGRATION_TIMEOUT_SECONDS:g}s"
-        )
-    except OSError as exc:
-        return f"python3 {LAYOUT_MIGRATION_SCRIPT} could not be run ({exc})"
-    returncode = getattr(result, "returncode", 0)
-    if returncode == 0:
-        return None
-    stderr = tail((getattr(result, "stderr", "") or "").strip(), 20)
-    return f"python3 {LAYOUT_MIGRATION_SCRIPT} failed (exit {returncode}): {stderr}"
-
-
 class RecoveryOutcome(NamedTuple):
     """What a rollback's recovery confirmed.
 
@@ -687,18 +646,17 @@ def _recover_running_state(
             )
         # Settled, not point-in-time, for the same reason as the apply path: a
         # single 200 can land while supervisord is still turning the pid over. Every
-        # critical app with an instances API is held beside the shell, read off the
+        # critical app the user can open is held beside the shell, read off the
         # restored tree: a tree whose manifests declare none is confirmed by the
         # shell alone.
-        instance_apps = read_critical_instance_apps(repo_root)
         unsettled = wait_settled(
             http,
             repo_root,
             runner,
             sleeper,
             shell_url=f"{base_url}{HEALTH_PATH}",
-            programs=[SHELL_PROGRAM, *(app.program for app in instance_apps)],
-            instance_apps=instance_apps,
+            programs=sorted({SHELL_PROGRAM, *read_critical_programs(repo_root)}),
+            app_names=read_critical_apps(repo_root),
             require_stable_pid=live_service_restarted,
         )
         if unsettled is not None:
@@ -928,7 +886,7 @@ def apply_update(
         marker.phase_timings[phase] = now()
         write_marker(marker, repo_root, now)
 
-    # --- Land the merge (skipped when already landed: idempotent re-entry). ---
+    # Land the merge (skipped when already landed: idempotent re-entry).
     if not is_merge_landed:
         merge_argv = (
             ["git", "merge", "--ff-only", merge_ref]
@@ -1130,17 +1088,6 @@ def apply_update(
             )
             _advance(PHASE_BUILT)
 
-        # The merged tree's layout migration runs before the restart, so the
-        # restarted shell reads migrated state at once rather than after the
-        # boot-time run; a failure is reported and left to that run.
-        migration_failure = _migrate_workspace_layouts(repo_root, runner)
-        if migration_failure is not None:
-            sys.stderr.write(
-                f"warning: {migration_failure}\nContinuing without rolling back: "
-                "the migration never overwrites an output that holds anything, "
-                "leaves the old store untouched, and runs again at the next boot.\n"
-            )
-
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and
         # the chat both import the workspace libraries and re-read
@@ -1161,23 +1108,22 @@ def apply_update(
             timeout=_RESTART_TIMEOUT_SECONDS,
         )
         _advance(PHASE_RESTARTED)
-        # Every critical app that serves instances restarts with the shell (all are
-        # the services agent's programs), so each one's instances API answering is
-        # the update's health too: the chat is the process that imports mngr, and
-        # the terminal is what the not-built placeholder hands over. Which apps
-        # those are comes from the merged tree's manifests; where each is reached
-        # follows the registry as the app re-registers. The verdict is settled
-        # state -- several consecutive healthy answers on unchanging supervisord
-        # pids -- and the failure names what the last poll found.
-        instance_apps = read_critical_instance_apps(repo_root)
+        # Every critical app the user can open restarts with the shell (all are the
+        # services agent's programs), so each one's health route answering is the
+        # update's health too: the chat is the process that imports mngr, and the
+        # terminal is what the not-built placeholder hands over. Which apps those
+        # are comes from the merged tree's manifests; where each is reached follows
+        # the registry as the app re-registers. The verdict is settled state --
+        # several consecutive healthy answers on unchanging supervisord pids -- and
+        # the failure names what the last poll found.
         unsettled = wait_settled(
             http,
             repo_root,
             runner,
             sleeper,
             shell_url=f"{resolved_base}{HEALTH_PATH}",
-            programs=[SHELL_PROGRAM, *(app.program for app in instance_apps)],
-            instance_apps=instance_apps,
+            programs=sorted({SHELL_PROGRAM, *read_critical_programs(repo_root)}),
+            app_names=read_critical_apps(repo_root),
             require_stable_pid=True,
         )
         if unsettled is not None:
@@ -1336,7 +1282,7 @@ def apply_update(
         )
         return 3
 
-    # --- Post-success bookkeeping (update-self mode only). -----------------------
+    # Post-success bookkeeping (update-self mode only).
     if target_ref is not None:
         # For the fast-forward landing the merge commit IS the worker branch's
         # tip, so the sha is re-derivable on any re-run -- which is what keeps
@@ -1748,9 +1694,7 @@ def _run_rollback(
             ).strip()
             sys.stderr.write(f"warning: supervisorctl restart reported: {stderr}\n")
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_CHECKING)
-    instance_apps = [
-        app for app in read_critical_instance_apps(repo_root) if app.name in record.apps
-    ]
+    app_names = [name for name in read_critical_apps(repo_root) if name in record.apps]
     unsettled = wait_settled(
         http,
         repo_root,
@@ -1758,12 +1702,12 @@ def _run_rollback(
         sleeper,
         shell_url=f"{resolved_base}{HEALTH_PATH}",
         programs=sorted({SHELL_PROGRAM, *programs}),
-        instance_apps=instance_apps,
+        app_names=app_names,
         require_stable_pid=bool(programs),
     )
     if unsettled is None:
         unsettled = _describe_restored_frontend_failure(
-            http, repo_root, resolved_base, sleeper, programs, instance_apps
+            http, repo_root, resolved_base, sleeper, programs, app_names
         )
     if unsettled is not None:
         write_emergency(
@@ -1796,11 +1740,11 @@ def _describe_restored_frontend_failure(
     resolved_base: str,
     sleeper: Callable[[float], None],
     programs: Sequence[str],
-    instance_apps: Sequence[CriticalInstanceApp],
+    app_names: Sequence[str],
 ) -> str | None:
     """Why a restored app serves no page, or ``None`` when every restored one does.
 
-    The settled verdict asks the shell's health and each app's instances API, both
+    The settled verdict asks the shell's health and each app's health route, both
     of which answer over a missing bundle: a restored copy that did not restore the
     page (the copy emptied, say) would otherwise read as a rollback that worked,
     and the copies would be discarded on that word.
@@ -1809,8 +1753,8 @@ def _describe_restored_frontend_failure(
         shell_failure = describe_frontend_failure(http, resolved_base, sleeper)
         if shell_failure is not None:
             return shell_failure
-    for app in instance_apps:
-        app_failure = describe_app_frontend_failure(http, repo_root, app)
+    for app_name in app_names:
+        app_failure = describe_app_frontend_failure(http, repo_root, app_name)
         if app_failure is not None:
             return app_failure
     return None

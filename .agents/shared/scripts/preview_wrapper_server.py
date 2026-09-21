@@ -2,10 +2,10 @@
 """Tiny static server that wraps a registered service in a labeled "preview" frame.
 
 A pre-merge preview is just another registered service served raw at its own
-browser origin, so by default it renders as a bare tab -- visually
+browser origin, so by default it renders as a bare window -- visually
 indistinguishable from the live interface. This server wraps that inner
 service in a chrome page that frames it on all four sides: an accent border +
-a header label marking the tab as a *preview of a proposed change*, with the
+a header label marking the window as a *preview of a proposed change*, with the
 inner service held in a bordered "stage" iframe inside that frame.
 
 It is deliberately service-agnostic. Given any inner service name already
@@ -59,7 +59,7 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
   * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; }}
   /* The amber accent surrounds the previewed app on all four sides (a frame),
-     with the label as a header inside it -- so the whole tab reads as a
+     with the label as a header inside it -- so the whole window reads as a
      contained preview, not just a page with a header strip. */
   body {{
     display: flex; flex-direction: column; gap: 8px;

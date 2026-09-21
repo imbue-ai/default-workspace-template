@@ -55,6 +55,7 @@ from imbue.minds_admin.slices.operator_identity import OPERATOR_IDENTITY_DIR_ENV
 from imbue.minds_admin.slices.operator_identity import operator_wireguard_key_path
 from imbue.mngr.utils.polling import poll_for_value
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
+from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
 
 MANAGEMENT_SSH_PORT: Final[int] = 22
@@ -501,6 +502,24 @@ def resolve_box_management_address(*, public_address: str, wireguard_address: st
             "Found overlay address {} unreachable; dialing the public address {}", wireguard_address, public_address
         )
     return chosen
+
+
+@pure
+def assert_dial_reaches_locked_down_box(dial: BoxManagementDial, public_address: str) -> None:
+    """Refuse the public-address fallback for a box whose prep has just locked its public ``:22`` down.
+
+    Once the lockdown is live, only a tunnel or an overlay route can reach the box;
+    a dial that fell through to the public address would fail every later round
+    trip, and a setup that pressed on would mark an unreachable box ``ready``.
+    """
+    if dial.host == public_address:
+        raise BareMetalProvisioningError(
+            f"the box locked its public :22 down but neither the userspace WireGuard tunnel nor the overlay "
+            f"route reached it, so only the public address {public_address} was left to dial; the box is not "
+            "manageable in this state. Check that its WireGuard port (udp/51820) is reachable from here (a "
+            "supplier-side UDP filter on the box's IP is one cause), then re-run the setup or prep, which "
+            "resumes at the prep"
+        )
 
 
 def resolve_server_management_dial(server: BareMetalServer) -> BoxManagementDial:

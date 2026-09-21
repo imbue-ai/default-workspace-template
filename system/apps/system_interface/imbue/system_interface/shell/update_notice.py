@@ -34,11 +34,11 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.system_interface.file_watch import start_file_watch
+from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRecordError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
-from imbue.system_interface.shell.file_watch import stop_watch
-from imbue.system_interface.shell.file_watch import watch_file
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # The record the apply keeps (``update_apply_contract.LastGoodRecord`` in the update-self
@@ -187,10 +187,13 @@ class UpdateNoticeWatch(MutableModel):
 
     def start(self) -> None:
         self._last_announced = self.current()
-        self._observer = watch_file(self.record_path, self._on_record_changed)
+        # The watch is on the record's directory, which a workspace that has never kept a rollback point lacks.
+        self.record_path.parent.mkdir(parents=True, exist_ok=True)
+        self._observer = start_file_watch(self.record_path, self._on_record_changed)
 
     def stop(self) -> None:
-        stop_watch(self._observer)
+        if self._observer is not None:
+            stop_file_watch(self._observer)
         self._observer = None
 
     def _on_record_changed(self) -> None:

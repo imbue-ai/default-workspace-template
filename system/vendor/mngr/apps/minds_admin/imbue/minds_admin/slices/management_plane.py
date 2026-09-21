@@ -32,6 +32,9 @@ _WIREGUARD_PRIVATE_KEY_PATH: Final[str] = "/etc/wireguard/wg0.key"
 _WIREGUARD_PUBLIC_KEY_PATH: Final[str] = "/etc/wireguard/wg0.pub"
 WIREGUARD_CONFIG_PATH: Final[str] = "/etc/wireguard/wg0.conf"
 WIREGUARD_PUBLIC_KEY_MARKER: Final[str] = "MNGR_WIREGUARD_PUBLIC_KEY"
+# Echoed by the prep once the ``:22`` lockdown is live on the box, so the CLI's
+# post-prep round trips know the public address can no longer be dialed.
+MANAGEMENT_LOCKDOWN_MARKER: Final[str] = "MNGR_MANAGEMENT_LOCKDOWN installed"
 
 # The management lockdown's nftables policy: its own table (never the
 # per-VM ``mngr_slices`` table, which the slice helper owns), loaded from a
@@ -243,7 +246,14 @@ cat > {_MANAGEMENT_NFT_POLICY_PATH} <<'MNGR_MGMT_NFT'
 {policy_text}\
 MNGR_MGMT_NFT
 nft -f {_MANAGEMENT_NFT_POLICY_PATH}
+echo "{MANAGEMENT_LOCKDOWN_MARKER}"
 """
+
+
+@pure
+def is_management_lockdown_in_prep_output(stdout: str) -> bool:
+    """Whether a prep run's stdout carries the ``MANAGEMENT_LOCKDOWN_MARKER`` line (the ``:22`` lockdown went live)."""
+    return any(line.strip() == MANAGEMENT_LOCKDOWN_MARKER for line in stdout.splitlines())
 
 
 @pure

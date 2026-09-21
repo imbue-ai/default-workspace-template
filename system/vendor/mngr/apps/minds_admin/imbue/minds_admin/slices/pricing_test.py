@@ -1,14 +1,24 @@
+from collections.abc import Mapping
+from collections.abc import Sequence
 from decimal import Decimal
+from typing import AbstractSet
+from typing import Any
 
 import pytest
 
+from imbue.minds_admin.slices.pricing import assert_plan_orderable_for_slices
+from imbue.minds_admin.slices.pricing import assert_storage_supported_for_slices
 from imbue.minds_admin.slices.pricing import compute_order_pricing
 from imbue.minds_admin.slices.pricing import compute_slice_pricing_rows
 from imbue.minds_admin.slices.pricing import compute_storage_usable_gb
 from imbue.minds_admin.slices.pricing import describe_storage_raid_level
+from imbue.minds_admin.slices.pricing import is_game_range_plan
+from imbue.minds_admin.slices.pricing import is_supported_slice_storage
 from imbue.minds_admin.slices.pricing import parse_availability_delivery
 from imbue.minds_admin.slices.pricing import parse_memory_gb
 from imbue.minds_admin.slices.pricing import parse_storage_disk_groups
+from imbue.mngr_imbue_cloud.data_types import SlicePricingRow
+from imbue.mngr_imbue_cloud.errors import BareMetalConfigError
 from imbue.mngr_imbue_cloud.errors import OvhCatalogPricingError
 
 # OVH catalog prices are in micro-units: $1.00 == 100_000_000.
@@ -264,10 +274,22 @@ def _slice_availabilities() -> list[dict]:
     ]
 
 
-def test_compute_slice_pricing_rows_sorts_by_price_per_slice_and_computes_sizing() -> None:
-    rows = compute_slice_pricing_rows(
-        _slice_catalog(), _slice_availabilities(), {"vin", "hil"}, memory_per_slice_gb=8, cpu_overcommit_ratio=2.0
+def _default_table_rows(
+    catalog: Mapping[str, Any], availabilities: Sequence[Mapping[str, Any]], allowed_regions: AbstractSet[str]
+) -> list[SlicePricingRow]:
+    """Rows priced the way the default `server pricing` table is: 8GB slices, 2x CPU overcommit, 2x NVMe mirrors only."""
+    return compute_slice_pricing_rows(
+        catalog,
+        availabilities,
+        allowed_regions,
+        memory_per_slice_gb=8,
+        cpu_overcommit_ratio=2.0,
+        is_every_storage_included=False,
     )
+
+
+def test_compute_slice_pricing_rows_sorts_by_price_per_slice_and_computes_sizing() -> None:
+    rows = _default_table_rows(_slice_catalog(), _slice_availabilities(), {"vin", "hil"})
     # 64GB is vin-only; 32GB is in both regions -> 3 rows (one per server x RAM x region), cheapest first.
     assert {(row.server_ram_gb, row.region) for row in rows} == {(64, "vin"), (32, "vin"), (32, "hil")}
 
@@ -288,10 +310,33 @@ def test_compute_slice_pricing_rows_sorts_by_price_per_slice_and_computes_sizing
     assert cheapest.storage_options == ()
 
 
+def _with_game_range_twin(
+    catalog: Mapping[str, Any], availabilities: Sequence[Mapping[str, Any]]
+) -> tuple[dict[str, Any], list[Mapping[str, Any]]]:
+    """The RISE-2 fixture plus a GAME-range twin plan sharing its product and add-ons, orderable in vin."""
+    game_plan = {**catalog["plans"][0], "planCode": "24risegame02-v1-us", "invoiceName": "RISE-GAME-2"}
+    game_availability = {
+        "planCode": "24risegame02-v1-us",
+        "memory": "ram-32g-ecc-3200",
+        "storage": "softraid-2x512nvme",
+        "datacenters": [{"datacenter": "vin", "availability": "1H-high"}],
+    }
+    return {**catalog, "plans": [*catalog["plans"], game_plan]}, [*availabilities, game_availability]
+
+
+def test_compute_slice_pricing_rows_never_prices_game_range_plans() -> None:
+    catalog, availabilities = _with_game_range_twin(_slice_catalog(), _slice_availabilities())
+
+    rows = _default_table_rows(catalog, availabilities, {"vin", "hil"})
+
+    # The twin is orderable and would be the cheapest row (no setup fee on its
+    # add-ons either), yet only the RISE-2 rows appear.
+    assert {row.plan_code for row in rows} == {"24rise02-v1-us"}
+    assert len(rows) == 3
+
+
 def test_compute_slice_pricing_rows_splits_rows_per_region_with_distinct_delivery() -> None:
-    rows = compute_slice_pricing_rows(
-        _slice_catalog(), _slice_availabilities(), {"vin", "hil"}, memory_per_slice_gb=8, cpu_overcommit_ratio=2.0
-    )
+    rows = _default_table_rows(_slice_catalog(), _slice_availabilities(), {"vin", "hil"})
     by_region = {row.region: row for row in rows if row.server_ram_gb == 32}
     # 32GB/2x512nvme is 72H in vin but 1H-low in hil, so the per-region rows carry different delivery times.
     assert by_region["vin"].delivery_hours == 72 and by_region["vin"].stock_level == ""
@@ -299,9 +344,7 @@ def test_compute_slice_pricing_rows_splits_rows_per_region_with_distinct_deliver
 
 
 def test_compute_slice_pricing_rows_lists_storage_upgrades_as_per_slice_deltas() -> None:
-    rows = compute_slice_pricing_rows(
-        _slice_catalog(), _slice_availabilities(), {"vin", "hil"}, memory_per_slice_gb=8, cpu_overcommit_ratio=2.0
-    )
+    rows = _default_table_rows(_slice_catalog(), _slice_availabilities(), {"vin", "hil"})
     # The 2x1920nvme upgrade is only available in vin for the 32GB config.
     thirty_two_gb_vin = next(row for row in rows if row.server_ram_gb == 32 and row.region == "vin")
     assert thirty_two_gb_vin.base_storage_label == "softraid-2x512nvme"
@@ -318,9 +361,7 @@ def test_compute_slice_pricing_rows_lists_storage_upgrades_as_per_slice_deltas()
 
 
 def test_compute_slice_pricing_rows_filters_by_region() -> None:
-    rows = compute_slice_pricing_rows(
-        _slice_catalog(), _slice_availabilities(), {"hil"}, memory_per_slice_gb=8, cpu_overcommit_ratio=2.0
-    )
+    rows = _default_table_rows(_slice_catalog(), _slice_availabilities(), {"hil"})
     # Only the 32GB/2x512nvme combo is available in hil; the 64GB combo (vin-only) is excluded.
     assert [(row.server_ram_gb, row.region) for row in rows] == [(32, "hil")]
 
@@ -379,9 +420,7 @@ def test_compute_slice_pricing_rows_uses_cheapest_viable_storage_when_smallest_i
         }
         for storage in ("softraid-2x240nvme", "softraid-2x1920nvme")
     ]
-    rows = compute_slice_pricing_rows(
-        catalog, availabilities, {"vin"}, memory_per_slice_gb=8, cpu_overcommit_ratio=2.0
-    )
+    rows = _default_table_rows(catalog, availabilities, {"vin"})
     assert len(rows) == 1
     row = rows[0]
     # 128GB box, 8GB slices: (128-8)*1024 // (8*1024 + 512) = 14 slots after host reserve.
@@ -439,9 +478,7 @@ def test_compute_slice_pricing_rows_matches_addons_whose_suffix_differs_from_pla
             "datacenters": [{"datacenter": "vin", "availability": "1H-high"}],
         }
     ]
-    rows = compute_slice_pricing_rows(
-        catalog, availabilities, {"vin"}, memory_per_slice_gb=8, cpu_overcommit_ratio=2.0
-    )
+    rows = _default_table_rows(catalog, availabilities, {"vin"})
     assert len(rows) == 1
     assert rows[0].plan_code == "24sys012-v1-us"
     assert rows[0].server_ram_gb == 32
@@ -450,6 +487,149 @@ def test_compute_slice_pricing_rows_matches_addons_whose_suffix_differs_from_pla
 
 def test_compute_slice_pricing_rows_skips_when_slice_larger_than_server_ram() -> None:
     rows = compute_slice_pricing_rows(
-        _slice_catalog(), _slice_availabilities(), {"vin", "hil"}, memory_per_slice_gb=128, cpu_overcommit_ratio=2.0
+        _slice_catalog(),
+        _slice_availabilities(),
+        {"vin", "hil"},
+        memory_per_slice_gb=128,
+        cpu_overcommit_ratio=2.0,
+        is_every_storage_included=False,
     )
+    assert rows == []
+
+
+def test_compute_slice_pricing_rows_treats_unknown_availability_as_unorderable() -> None:
+    # OVH answers ``unknown`` for a config it no longer stocks in a datacenter, so such a combo must
+    # never be a row's base storage: the row would price a config nobody can buy.
+    availabilities = [
+        {
+            "planCode": "24rise02-v1-us",
+            "memory": "ram-32g-ecc-3200",
+            "storage": "softraid-2x512nvme",
+            "datacenters": [{"datacenter": "vin", "availability": "unknown"}],
+        },
+        {
+            "planCode": "24rise02-v1-us",
+            "memory": "ram-32g-ecc-3200",
+            "storage": "softraid-2x1920nvme",
+            "datacenters": [{"datacenter": "vin", "availability": "1H-high"}],
+        },
+    ]
+    rows = _default_table_rows(_slice_catalog(), availabilities, {"vin"})
+    assert len(rows) == 1
+    # The cheaper 2x512 is skipped as unorderable, so the row is priced on the 2x1920 that can be bought.
+    assert rows[0].base_storage_label == "softraid-2x1920nvme"
+    assert rows[0].delivery_hours == 1 and rows[0].stock_level == "high"
+    assert rows[0].storage_options == ()
+
+
+@pytest.mark.parametrize(
+    "storage_code, is_supported",
+    [
+        ("softraid-2x960nvme", True),
+        ("softraid-2x1920nvme-24sys03-v1-us", True),
+        ("SOFTRAID-2X3840NVME", True),
+        ("softraid-3x1920nvme", False),
+        ("softraid-4x960nvme", False),
+        ("softraid-2x4000sa", False),
+        ("hybridsoftraid-2x6000sa-2x960nvme", False),
+        ("hardraid-3x960ssd", False),
+        ("softraid-2x960nvme-2x6000sa", False),
+        ("noraid-0", False),
+    ],
+)
+def test_is_supported_slice_storage_accepts_only_two_drive_nvme_mirrors(storage_code: str, is_supported: bool) -> None:
+    assert is_supported_slice_storage(storage_code) is is_supported
+
+
+@pytest.mark.parametrize(
+    "plan_code, is_game",
+    [
+        ("24risegame022-v1-us", True),
+        ("24sysgame01-v1-us", True),
+        ("24skgame-v1-eu", True),
+        ("24RISEGAME022-V1-US", True),
+        ("24rise01-v2-us", False),
+        ("24sys042-us", False),
+        ("24sys03-v1-us", False),
+        ("24sk50-v1-us", False),
+    ],
+)
+def test_is_game_range_plan_matches_every_game_range_and_no_other(plan_code: str, is_game: bool) -> None:
+    assert is_game_range_plan(plan_code) is is_game
+
+
+def test_assert_plan_orderable_for_slices_refuses_game_range_plans_with_the_reasons() -> None:
+    with pytest.raises(BareMetalConfigError) as exc_info:
+        assert_plan_orderable_for_slices("24risegame022-v1-us")
+    message = str(exc_info.value)
+    assert "24risegame022-v1-us" in message
+    assert "GAME-range" in message
+    assert "WireGuard" in message
+    assert "1 Gbit/s port" in message
+
+    assert_plan_orderable_for_slices("24sys042-us")
+
+
+def test_assert_storage_supported_for_slices_names_the_storage_and_the_supported_shape() -> None:
+    assert_storage_supported_for_slices("softraid-2x1920nvme")
+    with pytest.raises(BareMetalConfigError, match="two-drive NVMe software mirror") as exc_info:
+        assert_storage_supported_for_slices("softraid-3x4000sa")
+    assert "softraid-3x4000sa" in str(exc_info.value)
+
+
+def _sata_and_nvme_catalog() -> dict:
+    catalog = _slice_catalog()
+    plan = catalog["plans"][0]
+    storage_family = next(family for family in plan["addonFamilies"] if family["name"] == "storage")
+    storage_family["addons"].append("softraid-2x1000sa-24rise02-v1-us")
+    catalog["addons"].append(
+        {
+            "planCode": "softraid-2x1000sa-24rise02-v1-us",
+            "invoiceName": "2x1000 SATA SoftRAID",
+            "pricings": [_install(0), _renew(0, 0, 1)],
+        }
+    )
+    return catalog
+
+
+def _sata_and_nvme_availabilities() -> list[dict]:
+    return [
+        {
+            "planCode": "24rise02-v1-us",
+            "memory": "ram-32g-ecc-3200",
+            "storage": storage,
+            "datacenters": [{"datacenter": "vin", "availability": "1H-high"}],
+        }
+        for storage in ("softraid-2x1000sa", "softraid-2x1920nvme")
+    ]
+
+
+def test_compute_slice_pricing_rows_ignores_unsupported_storage_by_default() -> None:
+    # The SATA mirror is the cheapest in-region storage, but the slice tooling cannot lay it out, so the
+    # default table prices the row on the 2x NVMe mirror and never lists the SATA config as an upgrade.
+    rows = _default_table_rows(_sata_and_nvme_catalog(), _sata_and_nvme_availabilities(), {"vin"})
+    assert len(rows) == 1
+    assert rows[0].base_storage_label == "softraid-2x1920nvme"
+    assert rows[0].recurring_monthly_usd == Decimal(80 + 36)
+    assert rows[0].storage_options == ()
+
+
+def test_compute_slice_pricing_rows_prices_every_storage_when_asked() -> None:
+    rows = compute_slice_pricing_rows(
+        _sata_and_nvme_catalog(),
+        _sata_and_nvme_availabilities(),
+        {"vin"},
+        memory_per_slice_gb=8,
+        cpu_overcommit_ratio=2.0,
+        is_every_storage_included=True,
+    )
+    assert len(rows) == 1
+    # With every storage in play the cheapest (SATA) is the base and the NVMe mirror is an upgrade.
+    assert rows[0].base_storage_label == "softraid-2x1000sa"
+    assert [option.label for option in rows[0].storage_options] == ["softraid-2x1920nvme"]
+
+
+def test_compute_slice_pricing_rows_drops_a_config_whose_only_storage_is_unsupported() -> None:
+    sata_only = [entry for entry in _sata_and_nvme_availabilities() if entry["storage"] == "softraid-2x1000sa"]
+    rows = _default_table_rows(_sata_and_nvme_catalog(), sata_only, {"vin"})
     assert rows == []

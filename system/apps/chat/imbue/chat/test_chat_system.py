@@ -60,7 +60,7 @@ def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp
     keeps its list through the observer's death, and recovers when a new observer takes over.
 
     An isolated host dir has no agents, so the list is empty; what the test pins is the
-    instances API's readiness and the health field's account of the stream, over the real
+    chat list's readiness and the health field's account of the stream, over the real
     ``mngr observe`` rather than a held lock.
     """
     if shutil.which("mngr") is None:
@@ -74,7 +74,7 @@ def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp
     client = create_application(state).test_client()
     try:
         manager._start_follow()
-        assert client.get("/_instances").status_code == 503
+        assert client.get("/api/chats").status_code == 503
         wait_for(lambda: "holds the lock" in _agent_events(client)["detail"], timeout=10.0)
 
         with _running_observer(host_dir, tmp_path / "work", observer_log):
@@ -83,15 +83,15 @@ def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp
                 timeout=90.0,
                 error_message=f"the chat never folded the observer's opening snapshot; see {observer_log}",
             )
-            listed = client.get("/_instances")
+            listed = client.get("/api/chats")
             assert listed.status_code == 200
-            assert listed.get_json() == {"instances": []}
+            assert listed.get_json() == {"chats": []}
 
         # The observer is gone. Nothing changes under the follower's directory watch, so the
         # outage is noticed by the fallback poll (ten seconds); the list stays served meanwhile.
         wait_for(lambda: "exited" in _agent_events(client)["detail"], timeout=30.0)
         assert not _agent_events(client)["is_stream_healthy"]
-        assert client.get("/_instances").status_code == 200
+        assert client.get("/api/chats").status_code == 200
 
         with _running_observer(host_dir, tmp_path / "work", observer_log):
             wait_for(

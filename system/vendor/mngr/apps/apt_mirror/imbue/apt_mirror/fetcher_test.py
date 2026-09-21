@@ -5,6 +5,7 @@ from imbue.apt_mirror.errors import AptMirrorError
 from imbue.apt_mirror.errors import AptMirrorTransientUpstreamError
 from imbue.apt_mirror.errors import AptMirrorUpstreamError
 from imbue.apt_mirror.fetcher import HttpUpstreamFetcher
+from imbue.apt_mirror.fetcher import open_http_upstream_fetcher
 
 
 def _fetcher_answering(status_code: int, content: bytes = b"") -> HttpUpstreamFetcher:
@@ -49,3 +50,11 @@ def test_is_served_uses_head_requests() -> None:
     fetcher = HttpUpstreamFetcher(client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert fetcher.is_served("https://mirror.example.test/artifacts/a") is True
     assert seen_methods == ["HEAD"]
+
+
+def test_open_http_upstream_fetcher_closes_its_client_on_exit() -> None:
+    with open_http_upstream_fetcher(timeout_seconds=37.0) as fetcher:
+        client = fetcher.client
+        assert not client.is_closed
+        assert client.timeout == httpx.Timeout(37.0)
+    assert client.is_closed

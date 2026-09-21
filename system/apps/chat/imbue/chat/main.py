@@ -7,11 +7,8 @@ from types import FrameType
 from typing import Final
 
 import httpx
-from app_instances.nudge import ShellNudger
-from app_instances.nudge import ThreadedNudger
-from app_instances.nudge import shell_base_url
-from app_instances.sidecar import register_app
 from app_manifest.primitives import AppUrl
+from app_manifest.registry import register_app
 from flask import Flask
 from loguru import logger as _loguru_logger
 
@@ -33,10 +30,10 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
-from imbue.chat.instances import CHAT_APP_NAME
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.server import create_application
+from imbue.chat.shell_client import shell_base_url
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -82,8 +79,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help=(
             "Boot without side effects, for the update apply's pre-flight check: no account "
             "reconciliation (it reaps sign-in processes), no agent manager (no follower of the "
-            "agent observer, no sweep, no memory prioritizer, no nudges to the shell), and no "
-            "registration"
+            "agent observer, no sweep, no memory prioritizer), and no registration"
         ),
     )
     parser.add_argument(
@@ -92,15 +88,10 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help=(
             "Boot as a second chat beside the live one (a preview): follows the same agent "
             "observer and reads the live accounts, but reconciles no accounts, writes no memory "
-            "scores, runs no automatic compaction, starts or resumes no switch, opens no tabs, registers "
-            "nothing, and nudges no shell unless --nudge-shell-url names one; point CHAT_DATA_DIR "
+            "scores, runs no automatic compaction, starts or resumes no switch, opens no windows, "
+            "reports no client activity to the shell, and registers nothing; point CHAT_DATA_DIR "
             "at a scratch copy so its writes never land in the live data"
         ),
-    )
-    parser.add_argument(
-        "--nudge-shell-url",
-        default="",
-        help="With --secondary, the shell (a preview shell) to nudge about instance-list changes",
     )
     return parser.parse_args(argv)
 
@@ -131,7 +122,7 @@ def build_production_state(
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=data_dir / STAMPS_FILENAME),
-        # The tab of a chat the Mind app starts is opened through the shell, and which chats
+        # The window of a chat the Mind app starts is opened through the shell, and which chats
         # have had theirs is remembered beside the stamps so a restart never re-pops one.
         auto_open=None
         if is_secondary
@@ -155,6 +146,7 @@ def build_production_state(
         include_filters=include_filters,
         exclude_filters=exclude_filters,
         agent_manager=agent_manager,
+        is_secondary=is_secondary,
         chat_settings=chat_settings,
         event_queues=event_queues,
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
@@ -238,8 +230,8 @@ def main() -> None:
     Under ``--secondary`` the app is a second chat beside the live one: it follows the
     same observer and tracks the same agents, but withholds the writes a second instance
     must not make (the account reconcile, the memory scores, the registration, the
-    automatic compaction, the switches, the tab auto-opening) and nudges only the
-    shell ``--nudge-shell-url`` names.
+    automatic compaction, the switches, the window auto-opening, the client-activity
+    reports to the shell).
     """
     args = _parse_args(None)
     config = load_config()
@@ -255,17 +247,6 @@ def main() -> None:
     state = state_of(application)
 
     if not args.preflight:
-        # The chat app tells the shell when its instance list changes (contracts.md section
-        # 5). Installed here, at the process entry point, so a manager a test builds nudges
-        # nobody; on a thread of its own, so an agent event never waits on the shell. A
-        # secondary chat nudges only a shell that was named for it: the live shell lists
-        # the live chat's instances, not a preview's.
-        nudge_shell_url = args.nudge_shell_url if args.secondary else shell_base_url()
-        if nudge_shell_url:
-            state.agent_manager.set_nudger(
-                ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=nudge_shell_url))
-            )
-
         # Follow the agent observer's event stream now that the app is assembled. This is
         # the one place the follower is started; ``build_application`` only constructs, so
         # tests that build an app never follow anything.
@@ -285,9 +266,8 @@ def main() -> None:
     # SSE streaming.
     server = make_threaded_server(config.chat_host, config.chat_port, application)
 
-    # Registered once the socket is bound and just before serving, so the shell's first
-    # fetch after the registration finds the app answering (a 503 until the agent list is
-    # known, never a refused connection).
+    # Registered once the socket is bound and just before serving, so a window the shell opens
+    # on the chat right after the registration finds the app answering.
     if not (args.no_register or args.preflight or args.secondary):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
     server.serve_forever()

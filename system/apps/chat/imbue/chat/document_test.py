@@ -1,14 +1,9 @@
-"""The chat document over the chat app's real Flask app: the page, its probe route, and the instances API."""
+"""The chat document over the chat app's real Flask app: the page, its probe route, and the client-activity report."""
 
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from app_instances.sidecar import serve_in_background
-from app_instances.testing import LOOPBACK_HOST
-from app_instances.testing import RecordingNudger
-from app_instances.testing import free_port
-from app_instances.testing import wait_until
 from flask.testing import FlaskClient
 
 from imbue.chat.agent_manager import AgentManager
@@ -27,6 +22,8 @@ from imbue.chat.state import ChatAppState
 from imbue.chat.testing import RecordingClientActivityShell
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import serve_app
+from imbue.chat.testing import wait_until_true
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -130,75 +127,15 @@ def test_the_health_route_reports_the_bundle(tmp_path: Path) -> None:
     assert health["agent_events"]["is_stream_healthy"] is False
 
 
-def test_the_instances_api_lists_the_chat(tmp_path: Path) -> None:
-    chat_id = _agent_id()
-    client, _ = _client(tmp_path, chat_id)
-
-    response = client.get("/_instances")
-
-    assert response.status_code == 200
-    (record,) = response.get_json()["instances"]
-    assert record["key"] == chat_id
-    assert record["url"] == f"/{chat_id}"
-    assert record["title"] == "Chat 1"
-    assert record["status"] == "idle"
-    assert record["lifetime"] == "explicit"
-    assert record["renameable"] is True
-
-
-def test_the_instances_api_is_not_ready_before_the_first_discovery(tmp_path: Path) -> None:
-    _write_bundle(tmp_path)
-    state = build_test_state()
-    state.static_directory = tmp_path
-    client = create_application(state).test_client()
-
-    response = client.get("/_instances")
-
-    assert response.status_code == 503
-    assert "detail" in response.get_json()
-
-
-def test_a_subagent_create_answers_the_record_and_nudges(tmp_path: Path) -> None:
-    chat_id = _agent_id()
-    client, manager = _client(tmp_path, chat_id)
-    nudger = RecordingNudger()
-    manager.set_nudger(nudger)
-    session_id = uuid4().hex
-
-    response = client.post(
-        "/_instances",
-        json={"action": "subagent", "params": {"parent": chat_id, "session": session_id, "description": "Docs"}},
-    )
-
-    assert response.status_code == 201
-    assert response.get_json()["instance"]["key"] == f"{chat_id}.{chat_id}.{session_id}"
-    assert response.get_json()["instance"]["title"] == "Subagent: Docs"
-    assert nudger.nudge_count == 1
-    listed = client.get("/_instances").get_json()["instances"]
-    assert [record["key"] for record in listed] == [chat_id, f"{chat_id}.{chat_id}.{session_id}"]
-
-
-def test_a_location_report_is_refused_for_the_chat(tmp_path: Path) -> None:
-    chat_id = _agent_id()
-    client, _ = _client(tmp_path, chat_id)
-    response = client.post(f"/_instances/{chat_id}/location", json={"path": "/elsewhere"})
-    assert response.status_code == 400
-
-
-def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view() -> None:
+def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_desktop() -> None:
     chat_id = ChatId("agent-1")
-    framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
+    framed = SendMessageRequest(message="hello", client_id="c1", desktop_id="home")
     assert is_client_activity_reportable(framed)
     assert not is_client_activity_reportable(SendMessageRequest(message="hello", client_id="c1"))
-    assert not is_client_activity_reportable(SendMessageRequest(message="hello", active_layout="alpha"))
-    # The shell's report needs the device kind too; without it the post would only be refused.
-    assert not is_client_activity_reportable(
-        SendMessageRequest(message="hello", client_id="c1", active_layout="alpha")
-    )
+    assert not is_client_activity_reportable(SendMessageRequest(message="hello", desktop_id="home"))
     assert client_activity_report(chat_id, framed) == {
         "client_id": "c1",
-        "device_kind": "desktop",
-        "view_id": "alpha",
+        "desktop_id": "home",
         "kind": "message",
         "app": "chat",
         "key": "agent-1",
@@ -208,11 +145,68 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view() -> None
 
 def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch: pytest.MonkeyPatch) -> None:
     chat_id = ChatId("agent-1")
-    framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
+    framed = SendMessageRequest(message="hello", client_id="c1", desktop_id="home")
     shell = RecordingClientActivityShell()
-    port = free_port()
-    with serve_in_background(LOOPBACK_HOST, port, shell.application):
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", f"http://{LOOPBACK_HOST}:{port}")
+    with serve_app(shell.application) as served:
+        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
         _record_client_message_activity(chat_id, SendMessageRequest(message="unframed"))
+        # A secondary chat's send is as framed as any, and still reaches no shell.
+        _record_client_message_activity(chat_id, framed, is_secondary=True)
         _record_client_message_activity(chat_id, framed)
-        assert wait_until(lambda: shell.received == [client_activity_report(chat_id, framed)], timeout_seconds=5.0)
+        wait_until_true(
+            lambda: shell.received == [client_activity_report(chat_id, framed)], 5.0, "the client-activity report"
+        )
+
+
+def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = tmp_path / "registry" / "apps.toml"
+    registry.parent.mkdir()
+    registry.write_text(
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\nlabel = "terminal-x7k9q2w1"\n\n'
+        '[[apps]]\nname = "terminal-pty"\nurl = "http://localhost:7683"\nlabel = "terminal-pty-a1b2c3d4"\ninternal = true\n'
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path / "static", chat_id)
+
+    response = client.get(f"/{chat_id}")
+
+    assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="terminal-pty-a1b2c3d4">' in response.text
+
+
+def test_the_root_and_new_serve_the_chat_root_document(tmp_path: Path) -> None:
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path, chat_id)
+    (tmp_path / "root.html").write_text("<html><head></head><body>root</body></html>")
+
+    root = client.get("/?chat=" + chat_id)
+    new = client.get("/new?message=hello")
+
+    for response in (root, new):
+        assert response.status_code == 200
+        assert response.headers[FRONTEND_BUILT_HEADER] == "true"
+        assert response.headers["Cache-Control"] == "no-store"
+        assert "root</body>" in response.text
+        assert CHAT_ID_META_NAME not in response.text
+        assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="">' in response.text
+
+
+def test_the_root_without_a_bundle_is_the_not_built_placeholder(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, _agent_id())
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+
+
+def test_rename_route_maps_the_managers_refusals(tmp_path: Path) -> None:
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path, chat_id)
+
+    # A name with no usable characters is the manager's own refusal, answered as a bad request.
+    unusable = client.post(f"/api/chats/{chat_id}/rename", json={"title": "---"})
+    assert unusable.status_code == 400
+    assert "usable" in unusable.get_json()["detail"]
+    assert client.post(f"/api/chats/{chat_id}/rename", json={"title": ""}).status_code == 400
+    assert client.post(f"/api/chats/{_agent_id()}/rename", json={"title": "x"}).status_code == 404

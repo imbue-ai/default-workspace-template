@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 from inline_snapshot import snapshot
 
+from imbue.apt_mirror.testing import write_template_checkout
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.imbue_common.model_update import to_update
 from imbue.minds_admin.cli.server import BakeRowLedger
@@ -32,6 +33,7 @@ from imbue.minds_admin.cli.server import assert_gen2_box_storage_is_encrypted
 from imbue.minds_admin.cli.server import box_script_provisioning_error_or_none
 from imbue.minds_admin.cli.server import build_box_ssh_argv
 from imbue.minds_admin.cli.server import build_box_tier_audit_report
+from imbue.minds_admin.cli.server import build_image_build_create_args
 from imbue.minds_admin.cli.server import build_pool_host_destroy_report
 from imbue.minds_admin.cli.server import build_registered_server
 from imbue.minds_admin.cli.server import choose_storage_passphrase
@@ -42,6 +44,7 @@ from imbue.minds_admin.cli.server import gen2_register_disk_shortfall_or_none
 from imbue.minds_admin.cli.server import plaintext_gen2_box_ids
 from imbue.minds_admin.cli.server import reap_orphan_slices
 from imbue.minds_admin.cli.server import resolve_bake_management_trust_and_key
+from imbue.minds_admin.cli.server import resolve_from_tag_image_build_args
 from imbue.minds_admin.cli.server import resolve_slice_container_runtime
 from imbue.minds_admin.cli.server import run_outcome_workers_in_bounded_threads
 from imbue.minds_admin.cli.server import server
@@ -358,6 +361,61 @@ def test_register_refuses_a_gen2_service_user_override_before_any_db_connection(
     assert result.exit_code == 2
     assert "--slice-service-user" in result.output
     assert GEN2_SLICE_SERVICE_USER in result.output
+
+
+def _order_args(storage: str, *varied_args: str, plan_code: str = "24sys03-v1-us") -> list[str]:
+    """An `order` invocation for a plausible box, minus the options a test varies."""
+    return [
+        "order",
+        "--plan-code",
+        plan_code,
+        "--region",
+        "hil",
+        "--memory-gb",
+        "128",
+        "--storage",
+        storage,
+        "--dry-run",
+        *varied_args,
+    ]
+
+
+def test_order_refuses_unsupported_storage_before_touching_ovh_unless_overridden(
+    _cleared_ovh_and_activation_env: None,
+) -> None:
+    # A SATA mirror, a 3-disk mirror and a hybrid pair are all shapes the gen-2
+    # reinstall layout cannot produce; each is refused as a usage error before
+    # any credential is resolved or any cart is built (so no charge, no prompt).
+    for storage in ("softraid-3x4000sa", "softraid-3x1920nvme", "hybridsoftraid-2x6000sa-2x960nvme"):
+        refused = CliRunner().invoke(server, _order_args(storage))
+        assert refused.exit_code == 2, refused.output
+        assert "two-drive NVMe software mirror" in refused.output
+        assert "--allow-unsupported-storage" in refused.output
+    # With the override, or a 2x NVMe mirror, the guard steps aside and the command
+    # reaches credential resolution, which (with no credentials in the environment)
+    # is the first thing to fail.
+    for varied_args in (("softraid-3x4000sa", "--allow-unsupported-storage"), ("softraid-2x1920nvme",)):
+        passed_guard = CliRunner().invoke(server, _order_args(*varied_args))
+        assert passed_guard.exit_code == 1, passed_guard.output
+        assert "two-drive NVMe software mirror" not in passed_guard.output
+        assert "No OVH credentials found" in passed_guard.output
+
+
+def test_order_refuses_game_range_plans_before_touching_ovh_with_no_override(
+    _cleared_ovh_and_activation_env: None,
+) -> None:
+    refused = CliRunner().invoke(server, _order_args("softraid-2x960nvme", plan_code="24risegame022-v1-us"))
+    assert refused.exit_code == 2, refused.output
+    assert "GAME-range" in refused.output
+    assert "No OVH credentials found" not in refused.output
+    # There is deliberately no flag that lets a GAME-range order through.
+    assert "--allow" not in refused.output
+
+
+def test_pricing_command_exposes_the_any_storage_flag() -> None:
+    result = CliRunner().invoke(server, ["pricing", "--help"])
+    assert result.exit_code == 0
+    assert "--any-storage" in result.output
 
 
 def test_order_command_exposes_dry_run_flag() -> None:
@@ -1190,3 +1248,39 @@ def test_box_script_provisioning_error_is_unwrapped_from_its_concurrency_group()
     assert box_script_provisioning_error_or_none(unrelated) is None
     mixed = ConcurrencyExceptionGroup("box script", [refused, RuntimeError("worker died")])
     assert box_script_provisioning_error_or_none(mixed) is None
+
+
+def test_from_tag_image_build_args_override_a_floating_base_with_its_snapshots_pinned_base(tmp_path: Path) -> None:
+    """A tag through minds-v0.6.2 floats ``FROM python:3.12-slim-trixie`` on the 20260725T000000Z snapshot."""
+    checkout = write_template_checkout(tmp_path, "FROM python:3.12-slim-trixie\nRUN true\n", "20260725T000000Z\n")
+
+    assert resolve_from_tag_image_build_args(checkout) == snapshot(
+        (
+            "--build-context=python:3.12-slim-trixie=docker-image://python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de",
+        )
+    )
+
+
+def test_from_tag_image_build_args_are_empty_when_the_tag_pins_its_own_base(tmp_path: Path) -> None:
+    checkout = write_template_checkout(
+        tmp_path, "FROM python:3.12-slim-trixie@sha256:" + "a" * 64 + "\nRUN true\n", "20990101T000000Z\n"
+    )
+
+    assert resolve_from_tag_image_build_args(checkout) == ()
+
+
+def test_from_tag_image_build_args_refuse_a_floating_base_with_no_recorded_pin(tmp_path: Path) -> None:
+    checkout = write_template_checkout(tmp_path, "FROM python:3.12-slim-trixie\nRUN true\n", "20990101T000000Z\n")
+
+    with pytest.raises(click.UsageError, match="20990101T000000Z"):
+        resolve_from_tag_image_build_args(checkout)
+
+
+def test_image_build_create_args_forward_each_build_arg_through_a_dash_b() -> None:
+    assert build_image_build_create_args(()) == []
+    assert build_image_build_create_args(("--build-context=a=docker-image://a@sha256:0", "--no-cache")) == [
+        "-b",
+        "--build-context=a=docker-image://a@sha256:0",
+        "-b",
+        "--no-cache",
+    ]

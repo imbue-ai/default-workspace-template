@@ -1,152 +1,127 @@
-"""Tests for ``ShellState``: the referenced-lifetime deletion, and that an app's list shrinking takes no tab away."""
+"""Tests for ``ShellState``: the stale-client prune it runs at start and on its interval."""
 
 from datetime import timedelta
 from pathlib import Path
 
-from app_instances.data_types import InstanceLifetime
-from app_instances.testing import StubInstanceSource
-from app_instances.testing import wait_until
+from app_manifest.primitives import AppName
 
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
+from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
-from imbue.system_interface.shell.inventory import HttpInstanceFetcher
-from imbue.system_interface.shell.primitives import Address
+from imbue.system_interface.shell.data_types import StoredWindowPath
+from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DeviceKind
-from imbue.system_interface.shell.primitives import ViewId
+from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import WindowPath
+from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
+from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PATH
 from imbue.system_interface.shell.testing import build_inventory
-from imbue.system_interface.shell.testing import instance_record
-from imbue.system_interface.shell.testing import layout_showing
-from imbue.system_interface.shell.testing import registry_row_toml
-from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import placement_record
+from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-
-_STUB_1 = Address("app:stub?instance=stub-1")
-_STUB_2 = Address("app:stub?instance=stub-2")
-
-
-def _shell_over_stub(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_app_url: str, clock: list[float]
-) -> ShellState:
-    registry_path = write_registry(
-        tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True, actions=[("new", "New")])
-    )
-    inventory = build_inventory(registry_path, broadcaster, fetcher=HttpInstanceFetcher(), clock=lambda: clock[0])
-    inventory.refetch_now("stub")
-    return build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=inventory, repo_root=tmp_path / "repo"
-    )
-
-
-def test_unreferenced_referenced_instances_are_deleted_after_the_grace_period(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_source: StubInstanceSource, stub_app_url: str
-) -> None:
-    stub_source.records.extend(
-        [
-            instance_record("stub-1", lifetime=InstanceLifetime.REFERENCED),
-            instance_record("stub-2", lifetime=InstanceLifetime.REFERENCED),
-            instance_record("stub-3", lifetime=InstanceLifetime.EXPLICIT),
-        ]
-    )
-    clock = [1000.0]
-    shell = _shell_over_stub(tmp_path, broadcaster, stub_app_url, clock)
-    try:
-        shell.projects.create_project("Alpha", "#111111", 0, ())
-        shell.projects.add_tab("alpha", _STUB_1)
-        first = shell.layouts.save_browser_layout("everything", "c1", layout_showing(_STUB_2), None, TEST_NOW)
-        # Everything is referenced, and stub-3 is explicit: nothing goes.
-        assert shell.delete_unreferenced_instances() == []
-        assert first is not None
-        shell.layouts.save_browser_layout("everything", "c1", layout_showing(), first.updated_at, TEST_NOW)
-        # stub-2 is unreferenced now but within its grace period.
-        assert shell.delete_unreferenced_instances() == []
-        clock[0] += 60.0
-        assert shell.delete_unreferenced_instances() == [_STUB_2]
-        assert [str(record.key) for record in stub_source.records] == ["stub-1", "stub-3"]
-        assert shell.inventory.listed_addresses() == {_STUB_1, Address("app:stub?instance=stub-3")}
-    finally:
-        shell.stop()
-
-
-def test_a_refused_delete_keeps_the_instance_listed_for_the_next_sweep(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_source: StubInstanceSource, stub_app_url: str
-) -> None:
-    stub_source.records.append(instance_record("stub-1", lifetime=InstanceLifetime.REFERENCED))
-    clock = [1000.0]
-    shell = _shell_over_stub(tmp_path, broadcaster, stub_app_url, clock)
-    try:
-        clock[0] += 60.0
-        stub_source.is_ready = False
-        assert shell.delete_unreferenced_instances() == []
-        assert [str(record.key) for record in stub_source.records] == ["stub-1"]
-        assert shell.inventory.listed_addresses() == {_STUB_1}
-        stub_source.is_ready = True
-        assert shell.delete_unreferenced_instances() == [_STUB_1]
-        assert stub_source.records == []
-    finally:
-        shell.stop()
-
-
-def test_an_instance_its_app_stops_listing_keeps_its_tabs_and_layouts_until_it_is_listed_again(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_source: StubInstanceSource, stub_app_url: str
-) -> None:
-    """Missing from a list is not deleted: an app can drop an instance for a moment (a new chat
-    before the observe stream reports its agent), so only an explicit delete takes a tab away."""
-    stub_source.records.extend([instance_record("stub-1"), instance_record("stub-2")])
-    shell = _shell_over_stub(tmp_path, broadcaster, stub_app_url, [0.0])
-    shell.projects.create_project("Alpha", "#111111", 0, ())
-    shell.projects.add_tab("alpha", _STUB_1)
-    shell.projects.add_tab("alpha", _STUB_2)
-    shell.layouts.save_browser_layout("alpha", "c1", layout_showing(_STUB_1, _STUB_2), None, TEST_NOW)
-    shell.start()
-    try:
-        stub_source.records = [record for record in stub_source.records if str(record.key) != "stub-1"]
-        shell.inventory.refetch_now("stub")
-        assert shell.inventory.listed_addresses() == {_STUB_2}
-
-        assert shell.projects.get_project("alpha").tabs == (_STUB_1, _STUB_2)
-        kept = shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP)
-        assert set(instance_panel_params_by_id(kept.dockview)) == {"p0", "p1"}
-
-        stub_source.records.append(instance_record("stub-1"))
-        shell.inventory.refetch_now("stub")
-        assert shell.inventory.listed_addresses() == {_STUB_1, _STUB_2}
-    finally:
-        shell.stop()
 
 
 def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, stub_app_url: str
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    registry_path = write_registry(tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True))
+    registry_path = write_two_app_registry(tmp_path)
     inventory = build_inventory(registry_path, broadcaster)
     built = build_shell_state(
         tmp_path / "state", registry_path, broadcaster, inventory=inventory, repo_root=tmp_path / "repo"
     )
     shell = built.model_copy_update(to_update(built.field_ref().client_prune_interval_seconds, 0.05))
     stale_at = TEST_NOW - CLIENT_RETENTION - timedelta(days=1)
+    (home,) = shell.list_desktops()
+    window_id = WindowId("win-0000000000000001")
     shell.clients.record_report(
-        ClientStateReport(client_id=ClientId("old"), device_kind=DeviceKind.DESKTOP, active_view=ViewId("everything")),
-        stale_at,
+        ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")), stale_at
     )
-    shell.layouts.save_browser_layout("everything", "old", layout_showing(_STUB_1), None, stale_at)
+    shell.placements.save_browser_layout("home", "old", (placement_record(window_id),), None, {window_id}, stale_at)
+    shell.window_paths.set_path(
+        ClientId("old"),
+        window_id,
+        StoredWindowPath(path=WindowPath("/x"), title=WindowTitle("")),
+        lambda: {window_id},
+    )
     shell.start()
     try:
-        # The prune at start took the stale client and its layout file.
+        # The prune at start took the stale client, its layout file, and its window paths.
         assert shell.clients.get_client("old") is None
-        assert shell.layouts.all_client_layouts() == []
+        assert shell.placements.read_layout(home.id, "old", {window_id}).placements == ()
+        assert shell.window_paths.read_paths(ClientId("old"), {window_id}) == {}
         # A client that goes stale while the shell runs is taken by the periodic prune.
         shell.clients.record_report(
-            ClientStateReport(
-                client_id=ClientId("later"), device_kind=DeviceKind.DESKTOP, active_view=ViewId("everything")
-            ),
-            stale_at,
+            ClientStateReport(client_id=ClientId("later"), active_desktop=DesktopId("home")), stale_at
         )
-        assert wait_until(lambda: shell.clients.get_client("later") is None, timeout_seconds=5.0)
+        wait_for(
+            lambda: shell.clients.get_client("later") is None,
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the periodic prune never took the stale client",
+        )
     finally:
         shell.stop()
+
+
+def _shell_recording_hints(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, hints: list[WindowClosedHint]
+) -> ShellState:
+    registry_path = write_two_app_registry(tmp_path)
+    built = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    return built.model_copy_update(to_update(built.field_ref().close_hint_poster, hints.append))
+
+
+def _open(shell: ShellState, desktop_id: str, app: str, path: str) -> WindowId:
+    request = WindowOpenRequest(app=AppName(app), path=WindowPath(path), client_id=ClientId("laptop"))
+    return shell.open_window(desktop_id, request, is_minimized=False).window.id
+
+
+def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    hints: list[WindowClosedHint] = []
+    shell = _shell_recording_hints(tmp_path, broadcaster, hints)
+    (home,) = shell.list_desktops()
+    terminal_window = _open(shell, home.id, "terminal", "/?session=terminal-1")
+    files_window = _open(shell, home.id, "files", "/notes/")
+
+    assert shell.close_window(home.id, terminal_window) is True
+    assert hints == [
+        WindowClosedHint(
+            app="terminal",
+            url=f"{TEST_TERMINAL_URL}{TEST_TERMINAL_WINDOW_CLOSED_PATH}",
+            body={"path": "/?session=terminal-1", "window_id": str(terminal_window), "desktop_id": "home"},
+        )
+    ]
+    # A second close of the same window is idempotent and tells nobody; the files row names no path.
+    assert shell.close_window(home.id, terminal_window) is False
+    assert shell.close_window(home.id, files_window) is True
+    assert len(hints) == 1
+
+
+def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    hints: list[WindowClosedHint] = []
+    shell = _shell_recording_hints(tmp_path, broadcaster, hints)
+    shell.list_desktops()
+    work = shell.desktops.create_desktop("Work", "#123456", 1, (), ())
+    first = _open(shell, work.id, "terminal", "/?session=terminal-1")
+    second = _open(shell, work.id, "terminal", "/?session=terminal-2")
+    _open(shell, work.id, "files", "/")
+
+    shell.delete_desktop(work.id)
+
+    assert [(hint.body["window_id"], hint.body["desktop_id"]) for hint in hints] == [
+        (str(first), "work"),
+        (str(second), "work"),
+    ]

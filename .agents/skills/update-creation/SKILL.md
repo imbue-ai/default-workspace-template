@@ -47,8 +47,8 @@ exploratory work is NOT an update candidate.
 
 `type` is `skill`, `app`, or `service`. It drives where the worker looks
 (`type-<TYPE>.md`) and the **go-live** strategy (Step 4): skill → cross-reference
-sweep is part of the edit, nothing else; app → refresh the tab (a background
-service has no tab -- restart it instead). A critical app (the shell, the chat,
+sweep is part of the edit, nothing else; app → refresh the window (a background
+service has no window -- restart it instead). A critical app (the shell, the chat,
 the terminal, or an app whose manifest says `critical = true`) is `type: app`
 too, but it reaches this flow only from `update-app`'s careful flow
 (`references/critical-app.md`), which calls into Steps 1-3 for the orchestration
@@ -218,8 +218,8 @@ Then merge `mngr/update-$TARGET`, destroy the worker per `lead-proxy.md`
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
   of the change). If the target is a built-in upstream skill, note the local
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
-- **service**: refresh the tab (`python3 system/scripts/layout.py refresh
-  <service-name>`).
+- **service**: refresh its window (`python3 system/scripts/layout.py refresh
+  --app <service-name>`).
 - **a critical app**: do **not** merge or go live here -- the careful flow
   (`update-app/references/critical-app.md`) drives the live preview loop and
   the go-live through the atomic update apply. (It uses this flow for Steps 1-3

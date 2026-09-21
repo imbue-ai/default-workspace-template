@@ -1,5 +1,7 @@
 # Test plan: exercising the critical-app-editing branch end to end
 
+> **Merged onto the desktop interface (September 2026).** This document was written against the tabbed shell (Dockview tabs, the New Tab page, the rail, the instances API). The branch was then merged onto main's desktop interface (`docs/system/blueprint/desktop-interface/`), where windows replace tabs, launch paths replace actions and instances, the terminal is split into `terminal` and `terminal-pty`, and `manage-desktop` replaces `manage-layout`. The features below landed as described except where the desktop changed them: the preview shell refuses only an app's stop and start and the update notice's verbs (everything else edits the preview's own state copy or reaches only its own windows); the settled verdict polls each critical app's `/api/health` rather than an instances API; the chat preview opens on `/?chat={key}` and reports no client activity; the terminal preview is the wrapper pages alone, booted `--with terminal-pty`; the update notice lives in the desktop state and is delivered over the shell socket; and `{shell_url}` and the chat's `--nudge-shell-url` are gone with the instances API they served. Tabbed-shell names in the text below are the historical record.
+
 Companion to `plan-critical-app-editing.md`, whose "Manual scenario" section describes
 the original, then-unrun scenario. The completed testing is recorded here. This plan
 covers everything on the branch that can be tested without an agent following the

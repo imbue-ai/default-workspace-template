@@ -14,7 +14,7 @@ This is the shared substrate under two service flows:
 
 Both are the same motion: launch the service on a free port, with environment
 overrides that isolate its writable state, wait until it is healthy, and
-(optionally) surface it to the user as a labeled "preview" tab. The only thing
+(optionally) surface it to the user as a labeled "preview" window. The only thing
 that differs is *what* is launched and *how* its state is isolated -- so this
 script is deliberately unopinionated and takes all of that as parameters. The
 calling skill supplies the specifics.
@@ -29,11 +29,11 @@ The two shapes:
 - **Preview (surface to the user).** Add ``--service-name`` to also register the
   instance as a service (served raw at its own browser origin), and
   ``--preview-service-name`` + ``--preview-title`` to wrap it in a labeled
-  "preview" frame (``preview_wrapper_server.py``) the user opens as a tab. With
+  "preview" frame (``preview_wrapper_server.py``) the user opens as a window. With
   a wrapper, the inner service registers ``--internal`` -- only the frame is an
-  app to open, so one preview adds one row to the rail and the tab list rather
-  than two -- and the frame registers ``--preview-title`` as its display name,
-  so it reads as the app it previews rather than as its service name.
+  app to open, so one preview adds one app to the launcher and the window list
+  rather than two -- and the frame registers ``--preview-title`` as its display
+  name, so it reads as the app it previews rather than as its service name.
   Registered names become hostname labels, so they must be DNS-safe: lowercase
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
@@ -61,7 +61,7 @@ Usage:
 
 ``refresh`` re-boots the inner server (only) on its existing port so a rebuild or
 edit is picked up in place -- the port, the wrapper frame, the service
-registrations, and the user's tab all stay put.
+registrations, and the user's window all stay put.
 
 Ports, copies, and placeholders: every ``--port-env`` names a free port the
 instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
@@ -196,12 +196,12 @@ _BOOT_MARKER_PREFIX = "===== boot "
 # nothing else bands it: it inherits the launching shell's band, and every Claude
 # bash command self-tags AGENT_SUBPROCESS (900). That makes the surface the user is
 # actually looking at the first non-browser thing shed under memory pressure, with
-# nothing re-polling health afterwards to tell them their tab went dead.
+# nothing re-polling health afterwards to tell them their window went dead.
 _OOM_TAG_SCRIPT = "system/services/oom_priority/bin/oom_tag_service.py"
 # The band every user-created service shares. A served instance is exactly that.
 # The tradeoff is deliberate: at 200 the instance outlives every agent, including
 # the lead driving it. The alternative kills the surface under the user's eyes
-# first, which is the one loss that stays invisible until they stare at a dead tab.
+# first, which is the one loss that stays invisible until they stare at a dead window.
 _OOM_SERVICE_KEY = "user"
 
 
@@ -355,7 +355,7 @@ class Spawner:
     """Indirection over ``subprocess.Popen`` for detached servers.
 
     Every server this script starts must outlive the ``up`` invocation (so the
-    user can explore the tab / the agent can drive the port), so all spawns are
+    user can explore the window / the agent can drive the port), so all spawns are
     detached and later killed by ``down`` via the recorded pid.
     """
 
@@ -691,7 +691,7 @@ def _register_service(
         service_name,
         "--url",
         f"http://localhost:{port}",
-        "--no-icon",  # short-lived preview tabs; the generic monogram is fine
+        "--no-icon",  # short-lived preview windows; the generic monogram is fine
     ]
     if internal:
         argv.append("--internal")
@@ -1015,12 +1015,12 @@ def up(
 
     # What the caller needs on stdout: the preview's service name when
     # previewing (its browser origin is derived from the workspace host, which
-    # is not knowable server-side -- open the tab by service name, e.g. via
+    # is not knowable server-side -- open the window by service name, e.g. via
     # layout.py open), else the instance's own loopback URL.
     if preview_requested:
         sys.stdout.write(f"{preview_service_name}\n")
         sys.stderr.write(
-            f"preview up: open the '{preview_service_name}' service tab, e.g. "
+            f"preview up: open the '{preview_service_name}' service window, e.g. "
             f"`python3 system/scripts/layout.py open "
             f"{preview_service_name}` (serving {cwd} "
             f"on port {inner_port}, wrapped on port {wrapper_port}). Opening it "
@@ -1098,16 +1098,16 @@ def refresh(
 
     This is the in-place update motion: the caller has rebuilt/edited the code the
     inner server runs from, and wants the live instance to pick it up *without*
-    changing its port, tearing down the wrapper, or moving the user's tab. We stop
+    changing its port, tearing down the wrapper, or moving the user's window. We stop
     the inner server (``pids[0]``), wait for it to release its port, relaunch the
     exact command recorded at ``up`` time on the same port, and re-probe health.
     The wrapper (``pids[1]``, if any) and both service registrations are left
     untouched -- since the port is unchanged, they keep routing to the new
-    process. The caller reloads the tab's iframe itself (this never touches it).
+    process. The caller reloads the window's iframe itself (this never touches it).
 
     Returns 0 once the rebooted inner server is healthy; 1 if there is no
     refreshable instance, the old server survived SIGKILL, or the new one did not
-    come up (in which case the preview tab shows an error until the underlying
+    come up (in which case the preview window shows an error until the underlying
     build is fixed and refresh is retried -- but nothing else was disturbed).
     """
     state_path = _state_path(repo_root, name)
@@ -1196,7 +1196,7 @@ def refresh(
     if not probe.is_healthy:
         sys.stderr.write(
             f"refresh: inner server did not become healthy on port {port} after "
-            "reboot. The preview tab will show an error until the underlying "
+            "reboot. The preview window will show an error until the underlying "
             "build boots; fix it and refresh again.\n"
             f"{probe.describe()}\n"
             f"{_log_excerpt(Path(inner_log))}"
@@ -1204,7 +1204,7 @@ def refresh(
         return 1
     sys.stderr.write(
         f"refresh: inner server for '{name}' rebooted on port {port}; reload the "
-        "tab to see the current build.\n"
+        "window to see the current build.\n"
     )
     return 0
 
@@ -1227,7 +1227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     up_parser = subparsers.add_parser(
-        "up", help="Boot an isolated instance (optionally as a previewable tab)."
+        "up", help="Boot an isolated instance (optionally as a previewable window)."
     )
     up_parser.add_argument(
         "--name",
@@ -1296,7 +1296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--service-name",
         default=None,
         help="Register the instance as a service under this name (needed to "
-        "surface it as a tab; the name becomes a hostname label, so it must be "
+        "surface it as a window; the name becomes a hostname label, so it must be "
         "DNS-safe: lowercase letters/digits and single hyphens, no underscores, "
         "not starting with 'host-' or 'agent-'). Omit for a bare instance "
         "reached directly on its port.",
@@ -1304,7 +1304,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     up_parser.add_argument(
         "--preview-service-name",
         default=None,
-        help="Register the labeled preview-frame wrapper as this service (the tab "
+        help="Register the labeled preview-frame wrapper as this service (the window "
         "the user opens). Requires --service-name and --preview-title.",
     )
     up_parser.add_argument(
@@ -1335,7 +1335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     refresh_parser = subparsers.add_parser(
         "refresh",
         help="Re-boot the inner server on its existing port (to pick up a rebuild "
-        "/ edit) without changing the port, wrapper, or the user's tab.",
+        "/ edit) without changing the port, wrapper, or the user's window.",
     )
     refresh_parser.add_argument(
         "--name", required=True, help="The name passed to 'up'."

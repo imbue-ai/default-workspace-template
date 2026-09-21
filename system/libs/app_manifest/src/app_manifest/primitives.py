@@ -1,6 +1,8 @@
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Final, Self
+from urllib.parse import quote
 
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
@@ -27,14 +29,15 @@ RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
 MAX_DISPLAY_NAME_LENGTH: Final[int] = 64
 
-ACTION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
-# Where the shell reaches an app's instances API: loopback only, one port a socket can listen on.
-INSTANCES_URL_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^http://(?:127\.0\.0\.1|localhost):(?P<port>[0-9]{1,5})$"
-)
-MIN_PORT: Final[int] = 1
-MAX_PORT: Final[int] = 65535
+# A launch path is a path under the app's origin that the shell opens a window at: rooted
+# with one slash (``//`` would read as another host), no query string (the shell appends the
+# params as one), and nothing a URL would have to escape: only RFC 3986's path characters
+# (alphanumerics, ``-._~``, the sub-delimiters, ``:@``, and ``/``), which ``quote`` leaves as they are.
+MAX_LAUNCH_PATH_LENGTH: Final[int] = 2048
+_LAUNCH_PATH_FORBIDDEN_CHARACTERS: Final[frozenset[str]] = frozenset({"?", "#"})
+_LAUNCH_PATH_SAFE_CHARACTERS: Final[str] = "/-._~!$&'()*+,;=:@"
 
 PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$"
@@ -44,6 +47,33 @@ ICON_SUFFIX: Final[str] = ".svg"
 
 # A name in a preview table: a port name or a copy key, referenced by placeholder.
 PREVIEW_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+# The workspace's naming scheme, as the chat app applies it to chats and the terminal to its
+# sessions: a user types a human-readable title, and the true name every path, session, and key
+# is built from is a deterministic canonical form of it. Everything that is neither a safe-name
+# character nor a space is stripped; spaces survive so each run of them becomes one dash.
+_CANONICAL_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-zA-Z0-9 _-]+")
+_CANONICAL_SPACES_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s+")
+
+
+@pure
+def canonical_name_from_title(title: str) -> str:
+    """The true-name form of a human-readable title ("My Build" -> "My-Build"); "" when nothing usable remains."""
+    stripped = _CANONICAL_STRIP_PATTERN.sub("", title.strip())
+    return _CANONICAL_SPACES_PATTERN.sub("-", stripped).strip("-_")
+
+
+@pure
+def is_name_conflict(candidate_title: str, taken_names: Iterable[str]) -> bool:
+    """Whether ``candidate_title`` collides with a taken name: canonical forms compared case-insensitively.
+
+    The casefold makes the check stricter than tmux's or mngr's own uniqueness, refusing
+    near-duplicates ("build" beside "Build") that would only confuse.
+    """
+    candidate_key = canonical_name_from_title(candidate_title).casefold()
+    return any(
+        canonical_name_from_title(name).casefold() == candidate_key
+        for name in taken_names
+    )
 
 
 @pure
@@ -103,13 +133,13 @@ class DisplayName(str):
         )
 
 
-class ActionId(str):
-    """The id of an action an app declares: lowercase, starts alphanumeric, at most 32 characters."""
+class LaunchPathId(str):
+    """The id of a launch path an app declares: lowercase, starts alphanumeric, at most 32 characters."""
 
     def __new__(cls, value: str) -> Self:
-        if not ACTION_ID_PATTERN.fullmatch(value):
+        if not LAUNCH_PATH_ID_PATTERN.fullmatch(value):
             raise InvalidManifestValueError(
-                f"invalid action id {value!r}: ids match ^[a-z0-9][a-z0-9-]{{0,31}}$ (lowercase, no leading hyphen)"
+                f"invalid launch path id {value!r}: ids match ^[a-z0-9][a-z0-9-]{{0,31}}$ (lowercase, no leading hyphen)"
             )
         return super().__new__(cls, value)
 
@@ -122,19 +152,27 @@ class ActionId(str):
         )
 
 
-class InstancesUrl(str):
-    """Where the shell reaches an app's instances API: a loopback origin with a port."""
+@pure
+def _describe_launch_path_problem(value: str) -> str | None:
+    """Return why ``value`` cannot be a launch path, or None when it can."""
+    if not value.startswith("/") or value.startswith("//"):
+        return f"invalid launch path {value!r}: a launch path starts with a single '/'"
+    if len(value) > MAX_LAUNCH_PATH_LENGTH:
+        return f"invalid launch path {value!r}: at most {MAX_LAUNCH_PATH_LENGTH} characters"
+    if any(character in _LAUNCH_PATH_FORBIDDEN_CHARACTERS for character in value):
+        return f"invalid launch path {value!r}: no query string or fragment; the shell appends the params"
+    if quote(value, safe=_LAUNCH_PATH_SAFE_CHARACTERS) != value:
+        return f"invalid launch path {value!r}: nothing a URL would escape (no whitespace, quotes, or non-ASCII)"
+    return None
+
+
+class LaunchPathValue(str):
+    """A path under an app's origin that a window opens at: rooted, no query string, nothing to escape."""
 
     def __new__(cls, value: str) -> Self:
-        match = INSTANCES_URL_PATTERN.fullmatch(value)
-        if match is None:
-            raise InvalidManifestValueError(
-                f"invalid instances_url {value!r}: expected http://127.0.0.1:<port> or http://localhost:<port>"
-            )
-        if not MIN_PORT <= int(match.group("port")) <= MAX_PORT:
-            raise InvalidManifestValueError(
-                f"invalid instances_url {value!r}: the port must be between {MIN_PORT} and {MAX_PORT}"
-            )
+        problem = _describe_launch_path_problem(value)
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
         return super().__new__(cls, value)
 
     @classmethod

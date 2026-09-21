@@ -118,7 +118,7 @@ from imbue.mngr_modal.errors import ModalMngrError
 from imbue.mngr_modal.errors import ModalSandboxDiedMngrError
 from imbue.mngr_modal.errors import ModalSandboxTimeoutMngrError
 from imbue.mngr_modal.errors import NoSnapshotsModalMngrError
-from imbue.mngr_modal.routes.deployment import deploy_function
+from imbue.mngr_modal.routes.deployment import ensure_function_deployed
 from imbue.mngr_modal.routes.deployment import get_function_url
 from imbue.mngr_modal.ssh_utils import add_host_to_known_hosts
 from imbue.mngr_modal.ssh_utils import create_pyinfra_host
@@ -547,9 +547,7 @@ class ModalProviderInstance(BaseProviderInstance):
         """Get the path to the known_hosts file for this provider instance."""
         return self._keys_dir / "known_hosts"
 
-    # =========================================================================
     # Host Volume Methods
-    # =========================================================================
 
     @property
     def _host_volume_prefix(self) -> str:
@@ -730,9 +728,7 @@ class ModalProviderInstance(BaseProviderInstance):
             return None
         return HostVolume.model_construct(volume=volume)
 
-    # =========================================================================
     # Volume-based Host Record Methods
-    # =========================================================================
 
     def get_state_volume(self) -> ModalVolume:
         """Get the state volume for persisting host records and agent data.
@@ -1273,13 +1269,11 @@ class ModalProviderInstance(BaseProviderInstance):
             if self.config.is_persistent:
                 snapshot_url_future = Future()
                 if os.environ.get("MNGR_MODAL_DISABLE_SNAPSHOT_DEPLOY", "0") != "1":
-                    # it's a little sad that we're constantly re-deploying this, but it's a bit too easy to make mistakes otherwise
-                    #  (eg, we might end up with outdated code at that endpoint, which would be hard to debug)
                     concurrency_group.start_new_thread(
                         _set_result,
                         (
                             snapshot_url_future,
-                            lambda: deploy_function(
+                            lambda: ensure_function_deployed(
                                 "snapshot_and_shutdown", self.app_name, self.environment_name, self._modal_interface
                             ),
                         ),
@@ -1587,9 +1581,7 @@ log "=== Shutdown script completed ==="
             docker_build_args=tuple(parsed.docker_build_arg),
         )
 
-    # =========================================================================
     # Tag Management Helpers
-    # =========================================================================
 
     def _build_sandbox_tags(
         self,
@@ -1894,9 +1886,7 @@ log "=== Shutdown script completed ==="
             )
         )
 
-    # =========================================================================
     # Name Uniqueness
-    # =========================================================================
 
     def _check_host_name_is_unique(self, name: HostName) -> None:
         """Check that no non-destroyed host on this provider already uses the given name."""
@@ -1908,9 +1898,7 @@ log "=== Shutdown script completed ==="
 
         check_host_name_is_unique(self.name, name, host_records, running_host_ids)
 
-    # =========================================================================
     # Core Lifecycle Methods
-    # =========================================================================
 
     @handle_modal_auth_error
     def create_host(
@@ -2432,9 +2420,7 @@ log "=== Shutdown script completed ==="
         self._evict_cached_host(host_id)
         self._host_record_cache_by_id.pop(host_id, None)
 
-    # =========================================================================
     # Discovery Methods
-    # =========================================================================
 
     def to_offline_host(self, host_id: HostId) -> OfflineHost:
         host_record = self._read_host_record(host_id)
@@ -2868,9 +2854,7 @@ log "=== Shutdown script completed ==="
             gpu=None,
         )
 
-    # =========================================================================
     # Optimized Listing
-    # =========================================================================
 
     def get_host_and_agent_details(
         self,
@@ -3198,9 +3182,7 @@ log "=== Shutdown script completed ==="
             plugin={},
         )
 
-    # =========================================================================
     # Snapshot Methods
-    # =========================================================================
 
     def _record_snapshot(
         self,
@@ -3381,9 +3363,7 @@ log "=== Shutdown script completed ==="
 
         logger.info("Deleted snapshot", snapshot_id=str(snapshot_id))
 
-    # =========================================================================
     # Volume Methods
-    # =========================================================================
 
     @staticmethod
     def _volume_id_for_name(modal_volume_name: str) -> VolumeId:
@@ -3440,9 +3420,7 @@ log "=== Shutdown script completed ==="
                 return
         raise MngrError(f"Volume {volume_id} not found")
 
-    # =========================================================================
     # Host Mutation Methods
-    # =========================================================================
 
     def get_host_tags(
         self,
@@ -3589,9 +3567,7 @@ log "=== Shutdown script completed ==="
 
         return host_obj
 
-    # =========================================================================
     # Connector Method
-    # =========================================================================
 
     def get_connector(
         self,
@@ -3625,9 +3601,7 @@ log "=== Shutdown script completed ==="
             private_key_path,
         )
 
-    # =========================================================================
     # Lifecycle Methods
-    # =========================================================================
 
     def close(self) -> None:
         """Clean up the Modal app context.
