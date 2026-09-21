@@ -24,9 +24,9 @@ export class FakeDesktopApi implements DesktopApi {
   clients: { id: string; active_desktop: string | null }[] = [];
   /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
    *  the desktops as the shell would), and the name of the one it replaced. */
-  arrival: { createdDesktop: Desktop | null; replacedDesktopName: string | null } = {
-    createdDesktop: null,
-    replacedDesktopName: null,
+  arrival: Pick<ClientArrival, "created_desktop" | "replaced_desktop_name"> = {
+    created_desktop: null,
+    replaced_desktop_name: null,
   };
   /** ``<desktop>/<client>`` -> the stored layout. */
   readonly layouts = new Map<string, Layout>();
@@ -233,15 +233,15 @@ export class FakeDesktopApi implements DesktopApi {
   async arriveClient(clientId: string): Promise<ClientArrival> {
     this.calls.push(`arriveClient:${clientId}`);
     this.refuse();
-    const created = this.arrival.createdDesktop;
+    const created = this.arrival.created_desktop;
     if (created !== null && !this.desktops.some((desktop) => desktop.id === created.id)) {
       this.desktops = [...this.desktops, created];
     }
     const recorded = this.clients.find((client) => client.id === clientId)?.active_desktop ?? null;
     return {
-      desktopId: created?.id ?? recorded ?? this.desktops[0]?.id ?? null,
-      createdDesktop: created,
-      replacedDesktopName: this.arrival.replacedDesktopName,
+      desktop_id: created?.id ?? recorded ?? this.desktops[0]?.id ?? null,
+      created_desktop: created,
+      replaced_desktop_name: this.arrival.replaced_desktop_name,
     };
   }
 

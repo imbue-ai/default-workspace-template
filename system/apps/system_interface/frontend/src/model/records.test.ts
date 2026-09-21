@@ -49,16 +49,16 @@ describe("parseDesktop", () => {
 describe("parseClientArrival", () => {
   it("reads the arrival with and without a seeded desktop, and refuses the wrong shape", () => {
     const plain = parseClientArrival({ desktop_id: "home", created_desktop: null, replaced_desktop_name: null });
-    expect(plain).toEqual({ desktopId: "home", createdDesktop: null, replacedDesktopName: null });
+    expect(plain).toEqual({ desktop_id: "home", created_desktop: null, replaced_desktop_name: null });
     const seeded = parseClientArrival({
       desktop_id: "alice",
       created_desktop: { ...DESKTOP_WIRE, id: "alice", name: "Alice" },
       replaced_desktop_name: "Alice",
     });
-    expect(seeded.createdDesktop?.name).toBe("Alice");
-    expect(seeded.replacedDesktopName).toBe("Alice");
+    expect(seeded.created_desktop?.name).toBe("Alice");
+    expect(seeded.replaced_desktop_name).toBe("Alice");
     expect(
-      parseClientArrival({ desktop_id: null, created_desktop: null, replaced_desktop_name: null }).desktopId,
+      parseClientArrival({ desktop_id: null, created_desktop: null, replaced_desktop_name: null }).desktop_id,
     ).toBeNull();
     expect(() => parseClientArrival({ desktop_id: 7 })).toThrow(WireShapeError);
   });

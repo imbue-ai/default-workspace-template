@@ -124,9 +124,9 @@ export interface ClientRecord {
 /** What the shell answers when this client's page arrives (contracts.md section 5.5): where it lands, the desktop
  *  seeded for a first-time user, and the name of the user's earlier desktop when it had been deleted meanwhile. */
 export interface ClientArrival {
-  readonly desktopId: string | null;
-  readonly createdDesktop: Desktop | null;
-  readonly replacedDesktopName: string | null;
+  readonly desktop_id: string | null;
+  readonly created_desktop: Desktop | null;
+  readonly replaced_desktop_name: string | null;
 }
 
 export interface WallpaperListing {
@@ -336,12 +336,12 @@ export function parseClientRecord(raw: unknown): ClientRecord {
 export function parseClientArrival(raw: unknown): ClientArrival {
   const record = asObject(raw, "arrival");
   return {
-    desktopId: asOptionalString(record.desktop_id, "arrival.desktop_id"),
-    createdDesktop:
+    desktop_id: asOptionalString(record.desktop_id, "arrival.desktop_id"),
+    created_desktop:
       record.created_desktop === null || record.created_desktop === undefined
         ? null
         : parseDesktop(record.created_desktop),
-    replacedDesktopName: asOptionalString(record.replaced_desktop_name, "arrival.replaced_desktop_name"),
+    replaced_desktop_name: asOptionalString(record.replaced_desktop_name, "arrival.replaced_desktop_name"),
   };
 }
 
