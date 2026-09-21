@@ -130,7 +130,7 @@ REF=$(latchkey curl .../api/v1/app/version | jq -er .workspace_template_ref) || 
 
 OP=$(latchkey curl -XPOST .../api/v1/workspaces \
   -H 'Content-Type: application/json' \
-  -d "{\"git_url\": \"<template-repo-url>\", \"branch\": \"$REF\"}" | jq -r .operation_id)
+  -d '{"git_url": "<template-repo-url>", "branch": "'"$REF"'"}' | jq -r .operation_id)
 
 # Poll create status (DONE -> the workspace is ready; FAILED -> read .error):
 latchkey curl .../api/v1/workspaces/operations/create/$OP | jq '{status, is_done, agent_id, error}'
@@ -140,22 +140,26 @@ latchkey curl -N .../api/v1/workspaces/operations/create/$OP/logs
 
 `git_url` is required (typically the template repo a fresh mind is built from).
 
-**Always send `branch`, and take it from `GET /api/v1/app/version`.** Never the
-newest tag upstream: a release the app has not been updated to yet speaks a
-protocol it does not know, and the app caps `update-self` at its own version for
-exactly that reason. An omitted `branch` means the repository's own default
-branch, for the workspace template as for any other repo -- no app version fills
-it in for you -- so leaving it out makes the new workspace whatever that branch
-holds that day: unreleased code, stamped with the app's release anyway, because
-the version a create records falls back to the app's own when no branch was
-named. Only an `imbue_cloud` create escapes that, and only because leasing a
+**Creating from the workspace template: always send `branch`, taken from `GET
+/api/v1/app/version`.** Never the newest tag upstream: a release the app has not
+been updated to yet speaks a protocol it does not know, and the app caps
+`update-self` at its own version for exactly that reason. An omitted `branch`
+means the repository's own default branch -- on a local create no app version
+fills it in for you -- so leaving it out makes the new workspace whatever that
+branch holds that day: unreleased code, stamped with the app's release anyway,
+because the version a create records falls back to the app's own when no branch
+was named. Only an `imbue_cloud` create escapes that, and only because leasing a
 pre-baked host makes it resolve a release of its own.
 
-**If the version read fails, do not create the workspace.** An app that cannot
-say which release it supports cannot be handed one it understands, and a
-fallback here lands the user in exactly the unreleased-code case above. Tell
-them the Mind app needs updating (or restarting, if the gateway was simply
-unreachable) and stop.
+**If that read fails, do not create the workspace.** An app that cannot say
+which release it supports cannot be handed one it understands, and a fallback
+here lands the user in exactly the unreleased-code case above. Tell them the
+Mind app needs updating (or restarting, if the gateway was simply unreachable)
+and stop.
+
+**Any other repository takes its own refs.** A `minds-v*` release exists only in
+the workspace template, so send a ref that repo actually has, or omit `branch`
+and take its default branch.
 
 Many other optional fields exist (`host_name`, `launch_mode`, `account_id`,
 `region`, `backup_*`) -- see `CreateWorkspaceRequest` in the schema. A `400`
