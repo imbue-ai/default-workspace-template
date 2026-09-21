@@ -118,6 +118,7 @@ from imbue.minds_admin.slices.bare_metal_prep import parse_storage_partition_gib
 from imbue.minds_admin.slices.box_access import BoxManagementDial
 from imbue.minds_admin.slices.box_access import MANAGEMENT_SSH_PORT
 from imbue.minds_admin.slices.box_access import activated_management_tier_or_none
+from imbue.minds_admin.slices.box_access import assert_dial_reaches_locked_down_box
 from imbue.minds_admin.slices.box_access import close_box_management_tunnels
 from imbue.minds_admin.slices.box_access import resolve_box_management_dial
 from imbue.minds_admin.slices.box_access import resolve_server_management_dial
@@ -129,22 +130,27 @@ from imbue.minds_admin.slices.ci_slice_sweep import CiSliceSweepReport
 from imbue.minds_admin.slices.ci_slice_sweep import DEFAULT_CI_SLICE_MAX_AGE_HOURS
 from imbue.minds_admin.slices.ci_slice_sweep import sweep_ci_slices_on_box
 from imbue.minds_admin.slices.cutover_types import bake_tag_generation_error_or_none
+from imbue.minds_admin.slices.management_plane import is_management_lockdown_in_prep_output
 from imbue.minds_admin.slices.management_plane import parse_wireguard_public_key_from_prep_output
 from imbue.minds_admin.slices.operator_identity import ManagementIdentityResolver
 from imbue.minds_admin.slices.operator_identity import management_identities
 from imbue.minds_admin.slices.ordering import DEFAULT_REINSTALL_OS_TEMPLATE
 from imbue.minds_admin.slices.ordering import GEN2_REINSTALL_OS_TEMPLATE
+from imbue.minds_admin.slices.ordering import assert_box_link_speed_sufficient
 from imbue.minds_admin.slices.ordering import build_and_assign_eco_cart
 from imbue.minds_admin.slices.ordering import build_gen2_reinstall_storage
 from imbue.minds_admin.slices.ordering import checkout_eco_cart
 from imbue.minds_admin.slices.ordering import delete_cart_quietly
 from imbue.minds_admin.slices.ordering import derive_server_specs
 from imbue.minds_admin.slices.ordering import derive_uplink_mbps_from_option_codes
+from imbue.minds_admin.slices.ordering import read_dedicated_server_link_speed_mbps
 from imbue.minds_admin.slices.ordering import start_os_reinstall
 from imbue.minds_admin.slices.ordering import summarize_checkout_prices
 from imbue.minds_admin.slices.ordering import wait_for_dedicated_server_address
 from imbue.minds_admin.slices.ordering import wait_for_order_service_name
 from imbue.minds_admin.slices.ordering import wait_for_os_reinstall
+from imbue.minds_admin.slices.pricing import assert_plan_orderable_for_slices
+from imbue.minds_admin.slices.pricing import assert_storage_supported_for_slices
 from imbue.minds_admin.slices.pricing import compute_slice_pricing_rows
 from imbue.minds_admin.slices.storage_encryption import STORAGE_UNLOCKED_MARKER
 from imbue.minds_admin.slices.storage_encryption import parse_storage_encryption_from_prep_output
@@ -190,6 +196,7 @@ from imbue.mngr_imbue_cloud.primitives import OVH_US_DATACENTER_CODES
 from imbue.mngr_imbue_cloud.primitives import PoolHostDestroyOutcomeStatus
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DELIVERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DRAINING
+from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_FAILED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_ORDERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
@@ -975,10 +982,15 @@ def _management_target_after_prep(
     The box's WireGuard key is recorded first (so a run that dies after this
     point resumes over the overlay instead of the now locked-down public
     ``:22``), then the management resolver picks the dial, falling back to the
-    public address for a box that has no overlay yet.
+    public address for a box that has no overlay yet. When the prep reports
+    that it locked ``:22`` down, that fallback is refused: the box would be
+    unreachable, and the run must fail rather than mark it ready.
     """
     _record_box_wireguard_public_key(dsn, server_id, prep_stdout)
-    dial = resolve_server_management_dial(_fetch_server_or_raise(dsn, server_id))
+    prepped_server = _fetch_server_or_raise(dsn, server_id)
+    dial = resolve_server_management_dial(prepped_server)
+    if is_management_lockdown_in_prep_output(prep_stdout):
+        assert_dial_reaches_locked_down_box(dial, str(prepped_server.public_address))
     return _BoxSshTarget(
         host=dial.host,
         port=dial.port,
@@ -3922,6 +3934,11 @@ def warm_box_image_cache(
 def set_status(server_id: str, status: str, database_url: str | None) -> None:
     """Advance a server's lifecycle status (resumable order->delivered->installing->ready).
 
+    Also the deliberate way out of ``failed``, where ``await-delivery`` records a
+    delivered box the slice fleet cannot use (a port below the fleet's floor, or
+    one OVH reports no ``linkSpeed`` for): once the port is verified out of
+    band, ``--status delivered`` lets ``setup`` proceed.
+
     ``draining`` is refused here: a bare status flip would leave the box's
     ``available`` rows leasable, which is what ``server drain`` exists to
     prevent (it destroys them and force-stops the leased workspaces too).
@@ -4158,12 +4175,31 @@ def _format_slice_pricing_table(rows: list[SlicePricingRow]) -> str:
     show_default=True,
     help="OVH catalog to price (eco = the RISE/SYS/KS bare-metal line we carve slices on).",
 )
-def pricing(regions: tuple[str, ...], memory_per_slice_gb: int, cpu_overcommit: float, catalog_name: str) -> None:
+@click.option(
+    "--any-storage",
+    "is_every_storage_included",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also price storage configs the slice tooling cannot use (SATA, hybrid SATA+NVMe, 3+ disks, "
+        "hardware RAID). By default only two-drive NVMe software mirrors (softraid-2x<size>nvme) are "
+        "considered, so every row's base storage is a config that can actually be ordered and prepped."
+    ),
+)
+def pricing(
+    regions: tuple[str, ...],
+    memory_per_slice_gb: int,
+    cpu_overcommit: float,
+    catalog_name: str,
+    is_every_storage_included: bool,
+) -> None:
     """Print a per-slice pricing table for OVH bare-metal plans (read-only; never places an order).
 
     Each row is a server x RAM config; price/slice = (month-to-month + setup/12) / slots, sorted cheapest
     first, with delivery time + stock from OVH availability and storage-upgrade options at the end of each
-    row. The OVH credentials come from the activated tier's ovh Vault entry (or the OVH_* env vars).
+    row. Only configs OVH reports as orderable count (``unavailable``, ``comingSoon`` and ``unknown``
+    statuses are skipped), and only two-drive NVMe mirrors unless ``--any-storage`` is passed. The OVH
+    credentials come from the activated tier's ovh Vault entry (or the OVH_* env vars).
     """
     config = resolve_ovh_config()
     allowed_regions = frozenset(regions) if regions else OVH_US_DATACENTER_CODES
@@ -4174,15 +4210,25 @@ def pricing(regions: tuple[str, ...], memory_per_slice_gb: int, cpu_overcommit: 
     catalog_path = f"/order/catalog/public/{catalog_name}?{urlencode({'ovhSubsidiary': client.subsidiary})}"
     catalog = client.call_api("GET", catalog_path)
     availabilities = client.call_api("GET", "/dedicated/server/datacenter/availabilities")
-    rows = compute_slice_pricing_rows(catalog, availabilities, allowed_regions, memory_per_slice_gb, cpu_overcommit)
+    rows = compute_slice_pricing_rows(
+        catalog,
+        availabilities,
+        allowed_regions,
+        memory_per_slice_gb,
+        cpu_overcommit,
+        is_every_storage_included=is_every_storage_included,
+    )
 
     region_label = ",".join(sorted(allowed_regions))
+    storage_label = "any storage" if is_every_storage_included else "2x NVMe mirrors only"
     if not rows:
-        write_human_line(f"No orderable plans found in region(s) {region_label} at {memory_per_slice_gb}GB/slice.")
+        write_human_line(
+            f"No orderable plans found in region(s) {region_label} at {memory_per_slice_gb}GB/slice ({storage_label})."
+        )
         return
     header = (
         f"OVH bare-metal slice pricing -- {memory_per_slice_gb}GB/slice, "
-        f"{cpu_overcommit}x CPU overcommit, region(s) {region_label} (catalog '{catalog_name}')"
+        f"{cpu_overcommit}x CPU overcommit, region(s) {region_label}, {storage_label} (catalog '{catalog_name}')"
     )
     write_human_line(f"{header}\n{_format_slice_pricing_table(rows)}")
 
@@ -4230,6 +4276,27 @@ def _wait_for_ssh_ready(
         )
     if not is_ready:
         raise BareMetalProvisioningError(f"SSH to {server_address} not ready within {timeout_seconds:.0f}s")
+
+
+def _require_orderable_slice_config(plan_code: str, storage: str, *, is_unsupported_storage_allowed: bool) -> None:
+    """Refuse, as a usage error, an order for a box the slice fleet cannot run.
+
+    Runs before any credential is resolved or any cart exists, so such a box is
+    never charged for by accident. The GAME-range refusal has no override; the
+    storage-shape one steps aside for ``--allow-unsupported-storage``.
+    """
+    try:
+        assert_plan_orderable_for_slices(plan_code)
+    except BareMetalConfigError as exc:
+        raise click.UsageError(str(exc)) from exc
+    if is_unsupported_storage_allowed:
+        return
+    try:
+        assert_storage_supported_for_slices(storage)
+    except BareMetalConfigError as exc:
+        raise click.UsageError(
+            f"{exc}, or pass --allow-unsupported-storage if you are deliberately ordering a box for layout work"
+        ) from exc
 
 
 @server.command(name="order")
@@ -4301,6 +4368,17 @@ def _wait_for_ssh_ready(
         "code; pass it explicitly only when that code carries no rate."
     ),
 )
+@click.option(
+    "--allow-unsupported-storage",
+    "is_unsupported_storage_allowed",
+    is_flag=True,
+    default=False,
+    help=(
+        "Order a storage config other than a two-drive NVMe software mirror (softraid-2x<size>nvme). "
+        "Refused by default: the gen-2 reinstall layout and the slice carves only support that shape, so "
+        "such a box cannot be prepped without layout work. For deliberate layout development only."
+    ),
+)
 @click.option("--database-url", default=None, help="Pool DSN (else resolved from env/activated minds env).")
 def order(
     plan_code: str,
@@ -4314,6 +4392,7 @@ def order(
     yes: bool,
     is_dry_run: bool,
     uplink_mbps: int | None,
+    is_unsupported_storage_allowed: bool,
     database_url: str | None,
 ) -> None:
     """Order a bare-metal server from OVH (THIS CHARGES the account) and record it at status 'ordered'.
@@ -4321,10 +4400,12 @@ def order(
     Builds + assigns the eco cart, shows the real OVH price preview for confirmation, places the order, and
     inserts a bare_metal_servers row (specs derived from the catalog). Then run ``await-delivery`` + ``setup``.
     Any mandatory option family with more than one offer (e.g. bandwidth, vrack) must be chosen explicitly
-    via ``--option``. The OVH credentials and the pool DSN resolve from the activated tier (OVH_* env vars /
+    via ``--option``. The storage must be a two-drive NVMe mirror unless ``--allow-unsupported-storage`` is
+    passed. The OVH credentials and the pool DSN resolve from the activated tier (OVH_* env vars /
     ``--database-url`` override). Pass ``--dry-run`` to price + preview only (no charge, no prompt, no DB
     write); ``--dry-run`` wins over ``--yes``.
     """
+    _require_orderable_slice_config(plan_code, storage, is_unsupported_storage_allowed=is_unsupported_storage_allowed)
     config = resolve_ovh_config()
     client = build_ovh_client(config)
     catalog_path = f"/order/catalog/public/eco?{urlencode({'ovhSubsidiary': client.subsidiary})}"
@@ -4463,6 +4544,11 @@ def await_delivery(server_id: str, database_url: str | None) -> None:
     """Wait for OVH to deliver an ordered server (assign a serviceName + IP), then mark it 'delivered'.
 
     Resumable: a no-op if the server is already delivered. Delivery can take a while (often ~1h).
+
+    The delivered box's physical port speed (OVH's ``linkSpeed``, which the
+    catalog never states) is checked against the fleet's floor before the row
+    advances: a slower box is recorded at ``failed`` with its coordinates, so
+    ``setup`` never reinstalls it and the operator can cancel it.
     """
     dsn = resolve_pool_database_url(database_url)
     server = _fetch_server_or_raise(dsn, server_id)
@@ -4475,6 +4561,21 @@ def await_delivery(server_id: str, database_url: str | None) -> None:
     client = build_ovh_client(resolve_ovh_config())
     service_name = wait_for_order_service_name(client, order_id=int(server.ovh_order_id))
     address = wait_for_dedicated_server_address(client, service_name=service_name)
+    link_speed_mbps = read_dedicated_server_link_speed_mbps(client, service_name)
+    try:
+        assert_box_link_speed_sufficient(link_speed_mbps, service_name)
+    except BareMetalConfigError as exc:
+        _update_server_fields(
+            dsn,
+            server_id,
+            ovh_service_name=service_name,
+            public_address=address,
+            status=SERVER_STATUS_FAILED,
+        )
+        raise BareMetalProvisioningError(
+            f"server {server_id} ({service_name}, {address}) was marked '{SERVER_STATUS_FAILED}': {exc}"
+        ) from exc
+    logger.info("Delivered box {} reports a {} Mbit/s port", service_name, link_speed_mbps)
     _update_server_fields(
         dsn,
         server_id,
@@ -4609,6 +4710,13 @@ def setup_server_to_ready(
     if str(server.status) == SERVER_STATUS_READY:
         write_human_line(f"Server {server_id} is already ready ({server.ovh_service_name}).")
         return
+    if str(server.status) == SERVER_STATUS_FAILED:
+        raise BareMetalProvisioningError(
+            f"server {server_id} is '{SERVER_STATUS_FAILED}' (where `await-delivery` records a delivered box the "
+            f"slice fleet cannot use, e.g. one on too slow a port); cancel its renewal and delete its row, or "
+            f"deliberately override with `minds-admin server set-status --server-id {server_id} "
+            f"--status {SERVER_STATUS_DELIVERED}` before re-running setup"
+        )
     if str(server.status) not in (SERVER_STATUS_DELIVERED, SERVER_STATUS_INSTALLING):
         raise BareMetalProvisioningError(
             f"server {server_id} is {server.status}; run `await-delivery` until it is 'delivered' first"
