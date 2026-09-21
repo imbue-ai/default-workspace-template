@@ -127,7 +127,7 @@ class SecretFileName(str):
     """The ``<file>`` of ``data/.secrets/<file>.env``: a lowercase slug."""
 
     def __new__(cls, value: str) -> Self:
-        if not SECRET_FILE_NAME_PATTERN.match(value):
+        if not SECRET_FILE_NAME_PATTERN.fullmatch(value):
             raise InvalidSecretRequestError(
                 f"file name {value!r} must be lowercase letters, digits and hyphens, starting with a letter or digit"
             )
@@ -142,7 +142,7 @@ class SecretVariableName(str):
     """An environment variable name: a POSIX shell identifier."""
 
     def __new__(cls, value: str) -> Self:
-        if not SECRET_VARIABLE_NAME_PATTERN.match(value):
+        if not SECRET_VARIABLE_NAME_PATTERN.fullmatch(value):
             raise InvalidSecretRequestError(
                 f"variable name {value!r} must be letters, digits and underscores, not starting with a digit"
             )

@@ -160,7 +160,7 @@ def _validated_declaration(raw: object, source: str) -> tuple[str, list[str], st
     file = declaration.get("file")
     variables = declaration.get("variables")
     note = declaration.get("note", "")
-    if not isinstance(file, str) or not _SECRET_FILE_RE.match(file):
+    if not isinstance(file, str) or not _SECRET_FILE_RE.fullmatch(file):
         raise SecretDeclarationError(
             f"{source}: secret file {file!r} must be lowercase letters, digits and hyphens"
         )
@@ -173,7 +173,7 @@ def _validated_declaration(raw: object, source: str) -> tuple[str, list[str], st
         not isinstance(variables, list)
         or not names
         or len(names) != len(variables)
-        or not all(_VARIABLE_NAME_RE.match(name) for name in names)
+        or not all(_VARIABLE_NAME_RE.fullmatch(name) for name in names)
     ):
         raise SecretDeclarationError(
             f"{source}: secret {file!r} must list at least one variable name (letters, digits, underscores)"

@@ -142,6 +142,11 @@ def test_a_submit_must_name_exactly_the_requested_variables(tmp_path: Path) -> N
         ("svc", ["1A"], "why"),
         ("svc", ["A", "A"], "why"),
         ("svc", ["A"], "   "),
+        # `$` also matches before a trailing newline, so the anchors are not enough
+        # on their own: a name ending in one would become a path, or an env line,
+        # that nothing downstream can read.
+        ("svc\n", ["A"], "why"),
+        ("svc", ["A\n"], "why"),
     ],
 )
 def test_malformed_filings_are_refused(tmp_path: Path, file: str, variables: list[str], rationale: str) -> None:

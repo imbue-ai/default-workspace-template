@@ -131,7 +131,7 @@ def _validate_secrets_file(name: str) -> None:
     # The name is spliced into the program's `bash -c` string as
     # data/.secrets/<name>.env, so anything outside the slug would break the
     # command or name a file the secret card can never write.
-    if not SECRET_FILE_NAME_RE.match(name):
+    if not SECRET_FILE_NAME_RE.fullmatch(name):
         sys.exit(
             f"error: --secrets-file {name!r} must be lowercase letters, digits and "
             "hyphens, starting with a letter or digit "

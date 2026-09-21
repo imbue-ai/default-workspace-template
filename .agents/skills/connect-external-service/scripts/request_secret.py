@@ -97,12 +97,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def validate_arguments(file: str, variables: list[str], rationale: str) -> str | None:
     """The reason the arguments are unusable, or None."""
-    if not FILE_NAME_RE.match(file):
+    if not FILE_NAME_RE.fullmatch(file):
         return f"--file {file!r} must be lowercase letters, digits and hyphens, starting with a letter or digit"
     if not variables:
         return "at least one --var NAME is required"
     for name in variables:
-        if not VARIABLE_NAME_RE.match(name):
+        if not VARIABLE_NAME_RE.fullmatch(name):
             return f"--var {name!r} must be letters, digits and underscores, not starting with a digit"
     if len(set(variables)) != len(variables):
         return "--var names must be distinct"
