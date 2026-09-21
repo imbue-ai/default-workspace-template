@@ -23,8 +23,13 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
   params) serves the same document, and the root creates the chat and selects
-  it client-side. The root drives its inner frames through the page's
-  same-origin embed API (`frontend/src/embedApi.ts`) and forwards their
+  it client-side. A `draft` query parameter on the root (the `root` launch
+  path's one param, what the desktop's "Design your own..." hands the pinned
+  chat window) puts its text, unsent, into the composer of the chat the URL
+  selects (else the shown one, else the most recently active one, else a chat
+  the root creates for it), and the root then reports the selection alone, so
+  a reload drafts nothing again. The root drives its inner frames through the
+  page's same-origin embed API (`frontend/src/embedApi.ts`) and forwards their
   `minds:`, `shell:focused`, and `shell:open` messages through
   `frontend/src/root/relay.ts`, the one module the embed ratchet allows.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
