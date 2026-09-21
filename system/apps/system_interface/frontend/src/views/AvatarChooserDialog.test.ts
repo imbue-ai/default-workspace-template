@@ -42,7 +42,7 @@ describe("AvatarChooserDialog", () => {
     const source = dialog.querySelector("[data-avatar-source]") as HTMLAnchorElement;
     expect(source.getAttribute("href")).toBe("/api/avatars/mine/source.svg");
     expect(source.getAttribute("download")).toBe("");
-    expect(source.getAttribute("title")).toBe("/tmp/mine.svg");
+    expect(source.getAttribute("data-hover-tooltip")).toBe("/tmp/mine.svg");
   });
 
   it("starts the design chat, or says why it cannot", () => {

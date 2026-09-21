@@ -114,7 +114,7 @@ export const AvatarChooserDialog: m.Component<AvatarChooserDialogAttrs> = {
             class: "type-helper mt-2 inline-block text-secondary underline",
             "data-avatar-source": "",
             href: avatarSourceUrl(attrs.selected),
-            title: selected?.source_path ?? "The original artwork",
+            ...hoverTooltipAttrs(selected?.source_path ?? null),
             // Present and empty: the route's Content-Disposition names the file.
             download: "",
           },
