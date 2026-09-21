@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from flask import Flask
+from flask.testing import FlaskClient
 from loguru import logger as loguru_logger
 from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
@@ -20,8 +22,11 @@ from playwright.sync_api import sync_playwright
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.testing import FORTRESS_CHROMIUM_PATH
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import PIPELINE_BASE_URL
@@ -206,6 +211,19 @@ def browser(
         # without it a mid-teardown error can leak the browser subprocess
         # into session_cleanup's leaked-child check.
         browser_instance.close()
+
+
+@pytest.fixture
+def app(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> Flask:
+    """The shell app over the two-app registry, its state (the avatar catalog and selection included) under
+    ``tmp_path``; a test module with a shell of its own defines ``app`` itself."""
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
+    return shell_application(tmp_path, inventory, broadcaster)
+
+
+@pytest.fixture
+def client(app: Flask) -> FlaskClient:
+    return app.test_client()
 
 
 @pytest.fixture
