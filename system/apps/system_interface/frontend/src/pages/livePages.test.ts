@@ -487,6 +487,45 @@ describe("the contract", () => {
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
   });
 
+  it("does not move an independent window's page while its desktop's layout is still being read", async () => {
+    const [home, work] = api.desktops;
+    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
+    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-4")] });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    renderChrome("win-4");
+    layer.reconcile();
+    const frame = frameOf("win-4");
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    await store.switchDesktop("work");
+    layer.reconcile();
+    spy.mockClear();
+    // Back to home with its layout held open: a desktops update meanwhile knows no stored path for the page.
+    let answerLayout: () => void = () => undefined;
+    api.placementsGate = new Promise((resolve) => {
+      answerLayout = resolve;
+    });
+    const switching = store.switchDesktop("home");
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(store.getState().isLayoutLoaded).toBe(false);
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_NAVIGATE);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    answerLayout();
+    await switching;
+    renderChrome("win-4");
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_NAVIGATE);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+  });
+
   it("raises the window of a page that says it took focus", () => {
     store.restoreWindow("win-2");
     layer.reconcile();
