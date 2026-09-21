@@ -14,6 +14,7 @@ from typing import Final
 from debian.debian_support import Version
 
 from imbue.apt_mirror.data_types import ARTIFACTS_PREFIX
+from imbue.apt_mirror.data_types import DockerfileBaseImage
 from imbue.apt_mirror.data_types import InstalledPackage
 from imbue.apt_mirror.data_types import PackagesIndexEntry
 from imbue.apt_mirror.data_types import ReleaseFileEntry
@@ -28,8 +29,8 @@ _ARCHIVE_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9-]*$")
 # Artifact names and versions are single path segments of the characters that
 # appear in release names (``gvisor``, ``20260601``, ``0.11.7``, ``v1.2.1``).
 _ARTIFACT_SEGMENT_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
-# An image reference pinned by content digest: ``<name>[:tag]@sha256:<64 hex digits>``.
-_DIGEST_PINNED_IMAGE_REF_RE: Final[re.Pattern[str]] = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+# The content digest an image reference pins: the part after ``@`` in ``<name>[:tag]@sha256:<64 hex digits>``.
+_IMAGE_DIGEST_RE: Final[re.Pattern[str]] = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 # Index files under dists/ that are never frozen: source packages, installer
 # images, and pdiff histories (apt falls back to the full index when pdiffs
@@ -254,6 +255,44 @@ def find_packages_newer_than_or_absent_from_index(
 
 
 @pure
+def parse_image_reference(image_ref: str) -> DockerfileBaseImage:
+    """Split ``<name>[:tag][@sha256:<digest>]`` into its name and optional digest.
+
+    Raises AptMirrorTemplateBaseImageError when the reference is empty or
+    carries an ``@`` that is not followed by a full sha256 digest (a truncated
+    digest, or an unexpanded ``${VAR}``): such a reference is not pinned, and
+    reading it as a floating one would hide the typo.
+    """
+    image_name, separator, digest = image_ref.partition("@")
+    if not image_name:
+        raise AptMirrorTemplateBaseImageError(f"image reference {image_ref!r} names no image")
+    if not separator:
+        return DockerfileBaseImage(image_name=image_name, digest=None)
+    if not _IMAGE_DIGEST_RE.match(digest):
+        raise AptMirrorTemplateBaseImageError(
+            f"image reference {image_ref!r} is not digest-pinned (expected image@sha256:<64 hex digits>)"
+        )
+    return DockerfileBaseImage(image_name=image_name, digest=digest)
+
+
+@pure
+def parse_dockerfile_from_image(dockerfile_text: str) -> DockerfileBaseImage:
+    """The image reference of a Dockerfile's first ``FROM`` line, whether it pins a digest or floats on its tag.
+
+    Raises AptMirrorTemplateBaseImageError when there is no ``FROM`` line or
+    its reference is malformed (see :func:`parse_image_reference`).
+    """
+    for line in dockerfile_text.splitlines():
+        tokens = line.split()
+        if not tokens or tokens[0].upper() != "FROM":
+            continue
+        # FROM may carry options (``--platform=...``) ahead of the reference.
+        operands = [token for token in tokens[1:] if not token.startswith("--")]
+        return parse_image_reference(operands[0] if operands else "")
+    raise AptMirrorTemplateBaseImageError("Dockerfile has no FROM line")
+
+
+@pure
 def parse_dockerfile_base_image(dockerfile_text: str) -> str:
     """The digest-pinned image reference of a Dockerfile's first ``FROM`` line.
 
@@ -262,19 +301,13 @@ def parse_dockerfile_base_image(dockerfile_text: str) -> str:
     Debian point release under a frozen apt snapshot, which is exactly the
     breakage the pin exists to prevent.
     """
-    for line in dockerfile_text.splitlines():
-        tokens = line.split()
-        if not tokens or tokens[0].upper() != "FROM":
-            continue
-        # FROM may carry options (``--platform=...``) ahead of the reference.
-        operands = [token for token in tokens[1:] if not token.startswith("--")]
-        image_ref = operands[0] if operands else ""
-        if not _DIGEST_PINNED_IMAGE_REF_RE.match(image_ref):
-            raise AptMirrorTemplateBaseImageError(
-                f"Dockerfile base image {image_ref!r} is not digest-pinned (expected image@sha256:<64 hex digits>)"
-            )
-        return image_ref
-    raise AptMirrorTemplateBaseImageError("Dockerfile has no FROM line")
+    base_image = parse_dockerfile_from_image(dockerfile_text)
+    if not base_image.is_digest_pinned:
+        raise AptMirrorTemplateBaseImageError(
+            f"Dockerfile base image {base_image.image_ref!r} is not digest-pinned "
+            "(expected image@sha256:<64 hex digits>)"
+        )
+    return base_image.image_ref
 
 
 @pure

@@ -114,9 +114,12 @@ stop kinds (migration 042).
   current-format migration is in flight, so clearing the whole dir is safe
   then -- never mid-migration.
 - The workspace version floor is `minds-v0.3.10`: older workspaces are refused
-  by the preflight. Ask their owners to run `update-self`, or accept losing
-  them. A workspace created from a branch rather than a release tag holds no
-  tags; its version is then read from its vendored mngr's `FALLBACK_BRANCH`.
+  by the preflight. Ask their owners to run `update-self`; the ones that do
+  not are archived and retired instead of migrated (see "Retiring the
+  workspaces the migrate cannot take" below). A workspace created from a
+  branch rather than a release tag holds no tags; its version is then read
+  from its vendored mngr's `FALLBACK_BRANCH`, and one that names no version
+  either way is retired the same way.
 - Every workspace must be on the `home/` volume layout: the migrate transplants
   the data disk only, and a slow-path-rebuilt workspace on the legacy layout
   keeps `/home/user` in the container's writable layer, so it would come back
@@ -126,7 +129,15 @@ stop kinds (migration 042).
   this remedy. Staging had three such workspaces out of eight (2026-09-15).
 - Templates before `minds-v0.5.0` bake only through the migrate's image seed
   (they name settings fields today's mngr renamed, and create a boot chat the
-  pool bake refuses); the seed tolerates both. A gen-1 row that was stopped on
+  pool bake refuses); the seed tolerates both. Every template through
+  `minds-v0.6.2` also floats `FROM python:3.12-slim-trixie`, whose Docker Hub
+  tag has moved past the `20260725T000000Z` snapshot they all pin, so the seed
+  builds such a tag against the base recorded for its snapshot
+  (`PINNED_BASE_IMAGE_REF_BY_APT_SNAPSHOT_TIMESTAMP` in
+  `apps/apt_mirror/imbue/apt_mirror/template_base_image.py`, passed to
+  `docker build` as a `--build-context` override; imbue-ai/mngr-internal#1143).
+  A floating tag whose snapshot has no recorded base is refused before
+  anything is carved: add the entry and re-run. A gen-1 row that was stopped on
   no box when migration 039 ran carries `disk_gb = 44` (039's fallback); the
   migrate restamps it from the measured disk at the harvest.
 - Migration announcement (per cohort, not per tier): the workspace stops,
@@ -240,6 +251,59 @@ room -- so keep at least one gen-1 box per region until the rollback horizon
 is declared closed. **Work done on gen-2 after the migration is lost**:
 rollback is for migrations judged failed promptly, not a general gen-2 ->
 gen-1 path (a workspace with real gen-2 work gets fixed forward).
+
+## Retiring the workspaces the migrate cannot take
+
+A workspace whose version is below the floor (`minds-v0.3.9` and older) or
+that names no `minds-v*` release tag at all is never migrated. It is archived
+for its owner, then retired (stopped for good, so it no longer occupies a
+gen-1 slot), then released once the owner is confirmed covered. Every step is
+per workspace and independent of the migrate; parallel invocations on
+different workspaces are fine (each holds only its own row's lock).
+
+1. `minds-admin archives candidates`: every gen-1 row with its verdict.
+   `RETIRE` rows (a live probe of the running container decided) are the
+   targets; `UNKNOWN_UNTIL_STARTED` rows are stopped workspaces baked below
+   the floor that may have updated themselves -- archive them with
+   `--start-stopped`, whose manifest records the live version, and retire
+   only the ones the manifest shows below the floor.
+2. `minds-admin archives create --yes-i-mean-<tier> --workspace <host_db_id>
+   [--start-stopped]`: reads the workspace without changing it (its volume
+   is read from a read-only btrfs snapshot taken for the run; the container
+   keeps running) and streams one zip into the tier bucket under
+   `<prefix>archives/<host_id>/<stamp>/workspace.zip` with a `manifest.json`
+   beside it. The zip holds `volume/` (the persistent volume: `home/` on the
+   current layout, `host_dir/` and `agents/` on the legacy one) and
+   `container-layer/` (everything the container wrote outside the volume:
+   the legacy layout's home dotfiles with Claude's transcripts, `/var/log/mngr`,
+   the supervisor logs), minus host_backup's regenerable-cache excludes, plus
+   a `README.txt`. The owner's email is looked up on the SuperTokens core and
+   recorded (`--owner-email` / `--skip-owner-lookup` override that). Safe to
+   run against a box you do not intend to touch otherwise: try it on one
+   workspace first and inspect the result.
+3. Check it: `minds-admin archives list --workspace <id>` (size, entry and
+   skip counts, version, the object) and `minds-admin archives download
+   --workspace <id> --out <dir>` to open the zip.
+4. `minds-admin workspaces retire <host_db_id>`: the product's admin stop
+   stamped `retired`. The owner's start answers 409 `workspace_retired`, the
+   desktop shows "Retired" with no Start control and points at the
+   workspace's backups (or at support), and the operator start refuses it
+   too (`workspaces set-stop-kind <id> idle` first is the deliberate way
+   back). The retention finalize frees its gen-1 slot within the tier's
+   stop-retention window, so the box can be drained and repaved like any
+   other; the row's stop artifact stays in the bucket until the release.
+5. `minds-admin archives links` mints a 7-day download link for the newest
+   archive of every workspace (or `--workspace <id>` for some) and writes
+   `~/.minds-<env>/archives/reports/archive-links-<stamp>.{md,csv}`, the
+   document support answers from; links are minted on demand, so re-run it
+   for a fresh set (the presigning ceiling is seven days).
+6. Once the owner is confirmed covered: `minds-admin workspaces release
+   <host_db_id>` runs the owner's destroy chain (the stop artifact is
+   deleted, the row dropped, the workspace record tombstoned so the
+   desktop's "Recently destroyed" page and any restic backup stay available
+   for 30 days). The archives under `archives/` are untouched by the release
+   and by the planned `cutover/` deletion; delete them 90 days after the last
+   release (`next_deploy.md` carries the dated item).
 
 ## Repaving emptied boxes
 

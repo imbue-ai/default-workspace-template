@@ -1,5 +1,5 @@
 /**
- * The shared hover lift for the New Tab page's two offers, a template card and a "Start something"
+ * The shared hover lift for the launcher's two offers, a template card and a "Start something"
  * tile. Everything here shares ``HOVER_LIFT_TRANSITION`` so the pieces cannot drift out of time.
  *
  * The transition names ``scale``, not ``transform``: a ``scale-*`` utility sets the standalone

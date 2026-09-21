@@ -40,8 +40,12 @@ operator start, or `minds-admin workspaces set-stop-kind <id> idle` on a row
 the cutover has not parked, ends it; the owner's start answers 409
 `workspace_under_maintenance` and the
 desktop shows "Maintenance" with no Start control), `idle` (an operator stop
-to free capacity -- `server drain`; the user starts it) or `suspension` (the
-suspend fan-out; unsuspend rewrites it to `idle`). Every start clears it. The
+to free capacity -- `server drain`; the user starts it), `suspension` (the
+suspend fan-out; unsuspend rewrites it to `idle`) or `retired` (a workspace
+the gen-2 migration cannot take, archived for its owner and stopped for good
+-- `minds-admin workspaces retire`; nobody starts it, the owner's start
+answers 409 `workspace_retired` and the desktop shows "Retired" pointing at
+the backups). Every start clears it. The
 desktop's unattended recovery never starts a cloud machine whose connector
 status is `stopping`, `stopped` or `starting`: those states only come from a
 requested stop.

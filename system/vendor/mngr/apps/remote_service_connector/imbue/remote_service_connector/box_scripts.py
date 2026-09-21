@@ -63,6 +63,8 @@ def render_upload_script(instance_name: str, disk_name: str) -> str:
         + f"""\
 upload_one() {{
     local src="$1" object="$2" name="$3"
+    # This run's readings only: an earlier run's tap must never be read as ours.
+    rm -f "$TD/$name.sha" "$TD/$name.bytes"
     zstd -q -T0 -c "$src" \\
         | age -e -r "$WS_AGE_RECIPIENT" \\
         | tee >(sha256sum | awk '{{print $1}}' > "$TD/$name.sha") >(wc -c | tr -d ' ' > "$TD/$name.bytes") \\
@@ -137,6 +139,8 @@ trap 'rm -f "$IDF"' EXIT
 
 download_one() {{
     local object="$1" target="$2" name="$3" expected="$4"
+    # This run's readings only: an earlier run's tap must never be read as ours.
+    rm -f "$TD/$name.sha" "$TD/$name.bytes"
     s5cmd --endpoint-url "$WS_S3_ENDPOINT" cat "s3://$WS_BUCKET/$WS_KEY_PREFIX/$object" \\
         | tee >(sha256sum | awk '{{print $1}}' > "$TD/$name.sha") \\
         | age -d -i "$IDF" \\

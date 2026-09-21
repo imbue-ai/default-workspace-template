@@ -16,8 +16,8 @@ Provisioning and utility scripts:
 - Claude Code features with no counterpart on the other harnesses
   (`claude_status_line.sh`, `claude_update_plugin.sh`), wired in
   `.claude/settings.json`.
-- Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
-  layout ops), `message_chat.py` (send a message to a chat by its id through
+- Utility scripts: `forward_port.py` (port registry), `layout.py` (the
+  desktop's window and shortcut ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`), `with_secrets.py` (run a command
   with one `data/.secrets/<name>.env` file's variables in its environment; the
@@ -28,10 +28,7 @@ Provisioning and utility scripts:
   `welcome_count.py` (the number of times the welcome skill has run, which
   varies its greeting), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
-  interface changes), `migrate_claude_auth.py` (one-time auth migration),
-  `migrate_workspace_layouts.py` (one-time carry-over of the old per-agent
-  projects and layouts into the shell's state files; see
-  `docs/system/README.md`).
+  interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - The changelog gate: `check_changelog_entries.py`.
 
