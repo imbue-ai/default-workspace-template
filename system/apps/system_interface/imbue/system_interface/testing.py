@@ -227,7 +227,7 @@ def build_test_state(
     runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
     and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
-    the read-only preview shell. ``repo_root`` is where the update notice reads its record
+    the preview shell, which refuses the verbs that would reach the live workspace. ``repo_root`` is where the update notice reads its record
     and finds the update-self script (a fresh temp directory by default, so no test reads the
     real workspace's). The template catalog is disabled (no URL) unless a
     ``template_catalog_fetcher`` is given, so no test reaches the network for it; with one, the

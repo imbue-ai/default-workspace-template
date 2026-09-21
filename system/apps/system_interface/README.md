@@ -252,8 +252,8 @@ routes every edit through `update-app`'s careful flow
 (`.agents/skills/update-app/references/critical-app.md`): the change is made in
 an isolated worktree, **previewed** to the user as a window
 (`preview_app.py up --app system_interface --worktree <dir>` boots
-`system-interface --preview` from the worktree, read-only over a seeded copy of
-the live state directory and a copied registry, and registers it with a labeled
+`system-interface --preview` from the worktree, over a seeded copy of the live
+state directory and a copied registry, and registers it with a labeled
 wrapper page as the `system_interface-preview` app; `down` tears it down),
 hardened by a background worker at approval, and applied through the general
 **update apply** shared with the `update-self` flow:
