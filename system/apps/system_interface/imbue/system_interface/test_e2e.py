@@ -1214,8 +1214,8 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
 ) -> None:
     """A pinned app's window is on the home desktop from the first read and on a desktop created later; its
     taskbar entry is there with nothing open, a click restores the window at the cascade frame, another
-    minimizes it; the window has no close control, its menus offer no Close, the close chord minimizes it, and an
-    agent's close is refused."""
+    minimizes it; the window's close control and both menus' Close minimize it rather than closing it, as does the
+    close chord, and an agent's close is refused."""
     with _running_e2e_server(tmp_path, pin=("plain", "linked", "bar")) as server:
         _land(page, server)
         pinned = _pinned_window(server.base_url)
@@ -1232,15 +1232,25 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         window = _window(page, pinned["id"])
         expect(window).to_be_visible(timeout=15000)
         expect(window).to_have_attribute("data-pinned", "true")
-        expect(window.locator('[data-window-control="close"]')).to_have_count(0)
         expect(window.locator('[data-window-control="minimize"]')).to_be_visible()
         assert _page_frame(page, pinned["id"]).url == f"{server.pinned_url}{_PINNED_HOME_PATH}"
+        # The close control stays, out of habit's way: on a pinned window it minimizes.
+        window.locator('[data-window-control="close"]').click()
+        expect(_shown_windows(page)).to_have_count(0)
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+        entry.click()
+        expect(window).to_be_visible(timeout=15000)
         window.locator('[data-window-control="menu"]').click()
         expect(page.locator('[data-floating="window-menu"]')).to_be_visible(timeout=5000)
-        expect(page.locator('[data-floating="window-menu"] [data-menu-item="close"]')).to_have_count(0)
-        page.keyboard.press("Escape")
-        expect(_open_entry_menu(page, entry).locator('[data-menu-item="close"]')).to_have_count(0)
-        page.keyboard.press("Escape")
+        page.locator('[data-floating="window-menu"] [data-menu-item="close"]').click()
+        expect(_shown_windows(page)).to_have_count(0)
+        entry.click()
+        expect(window).to_be_visible(timeout=15000)
+        _open_entry_menu(page, entry).locator('[data-menu-item="close"]').click()
+        expect(_shown_windows(page)).to_have_count(0)
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+        entry.click()
+        expect(window).to_be_visible(timeout=15000)
 
         # The close chord minimizes the pinned window rather than closing it; the entry click brings it back.
         page.evaluate("() => window.postMessage({ type: 'minds:close-active-tab' }, '*')")

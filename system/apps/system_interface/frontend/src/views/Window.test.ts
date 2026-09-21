@@ -50,10 +50,10 @@ describe("Window", () => {
     expect(element.querySelector('[data-window-control="close"]')).not.toBeNull();
   });
 
-  it("a pinned window is marked and has no close control", () => {
+  it("a pinned window is marked and keeps its close control", () => {
     const element = render({ window: windowRecord("win-1", "docs", "/", { is_pinned: true }) });
     expect(element.getAttribute("data-pinned")).toBe("true");
-    expect(element.querySelector('[data-window-control="close"]')).toBeNull();
+    expect(element.querySelector('[data-window-control="close"]')).not.toBeNull();
     expect(element.querySelector('[data-window-control="minimize"]')).not.toBeNull();
   });
 

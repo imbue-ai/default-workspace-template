@@ -303,7 +303,7 @@ export function App(): m.Component<AppAttrs> {
         app !== undefined && current.canStopApp(app)
           ? (action) => void current.setAppLifecycle(app.name, action)
           : null,
-      close: window.is_pinned ? null : () => void current.closeWindow(windowId),
+      close: () => void current.closeOrMinimizeWindow(windowId),
     });
     return m(Menu, {
       anchor,
@@ -334,7 +334,7 @@ export function App(): m.Component<AppAttrs> {
         minimize: () => current.minimizeWindow(windowId),
         maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
         unmaximize: () => current.toggleMaximized(windowId),
-        close: window.is_pinned ? null : () => void current.closeWindow(windowId),
+        close: () => void current.closeOrMinimizeWindow(windowId),
         presentation:
           look === null
             ? null
@@ -623,7 +623,7 @@ export function App(): m.Component<AppAttrs> {
         current.toggleMaximized(windowId);
         return;
       case "close":
-        void current.closeWindow(windowId);
+        void current.closeOrMinimizeWindow(windowId);
         return;
       case "menu":
         openMenu =

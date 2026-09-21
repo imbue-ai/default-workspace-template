@@ -42,12 +42,19 @@ describe("windowMenuEntries", () => {
     ).toEqual(["refresh", "|", "close"]);
   });
 
-  it("offers no Close for a pinned window", () => {
-    expect(
-      keysOf(
-        windowMenuEntries(appRecord("docs"), { refresh: vi.fn(), share: null, setAppLifecycle: null, close: null }),
-      ),
-    ).toEqual(["refresh"]);
+  it("offers Close whatever the caller does with it (a pinned window's minimizes)", () => {
+    const close = vi.fn();
+    const entries = windowMenuEntries(appRecord("docs"), {
+      refresh: vi.fn(),
+      share: null,
+      setAppLifecycle: null,
+      close,
+    });
+    expect(keysOf(entries)).toEqual(["refresh", "|", "close"]);
+    const row = entries.find((entry) => entry !== MENU_DIVIDER && entry.key === "close");
+    if (row === undefined || row === MENU_DIVIDER) throw new Error("no close row");
+    row.run();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("offers only Refresh and Close for a window of an app the shell no longer lists", () => {
@@ -83,7 +90,7 @@ describe("taskbarEntryMenuEntries", () => {
       taskbarEntryMenuEntries(
         {
           ...actions,
-          close: null,
+          close: vi.fn(),
           isMinimized: options.isMinimized ?? false,
           isMaximized: false,
           presentation: { look, setMode, setStyle, changeAvatar },
@@ -94,7 +101,7 @@ describe("taskbarEntryMenuEntries", () => {
       { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
       { isMinimized: true },
     );
-    expect(keysOf(inBar)).toEqual(["restore", "maximize", "|", "float", "style-plain", "change-avatar"]);
+    expect(keysOf(inBar)).toEqual(["restore", "maximize", "|", "float", "style-plain", "change-avatar", "|", "close"]);
     expect(rowOf(inBar, "style-plain").label).toBe("Show as plain entry");
     expect(rowOf(inBar, "change-avatar").label).toBe("Change avatar...");
     rowOf(inBar, "change-avatar").run();
@@ -104,16 +111,16 @@ describe("taskbarEntryMenuEntries", () => {
     rowOf(inBar, "style-plain").run();
     expect(setStyle).toHaveBeenCalledWith("plain");
     const floating = pinnedEntries({ mode: "floating", style: "plain", declaredStyle: "avatar", position: null });
-    expect(keysOf(floating)).toEqual(["minimize", "maximize", "|", "move-to-taskbar", "style-avatar"]);
+    expect(keysOf(floating)).toEqual(["minimize", "maximize", "|", "move-to-taskbar", "style-avatar", "|", "close"]);
     expect(rowOf(floating, "style-avatar").label).toBe("Show as avatar");
     // A pin declaring no style offers no style row; compact mode offers no float row either.
     const plainPin = pinnedEntries({ mode: "bar", style: "plain", declaredStyle: "plain", position: null });
-    expect(keysOf(plainPin)).toEqual(["minimize", "maximize", "|", "float"]);
+    expect(keysOf(plainPin)).toEqual(["minimize", "maximize", "|", "float", "|", "close"]);
     const compact = pinnedEntries(
       { mode: "floating", style: "plain", declaredStyle: "plain", position: null },
       { isCompact: true },
     );
-    expect(keysOf(compact)).toEqual(["minimize"]);
+    expect(keysOf(compact)).toEqual(["minimize", "|", "close"]);
   });
 
   it("offers Restore or Minimize, Maximize or Restore size, and Close", () => {
@@ -131,10 +138,10 @@ describe("taskbarEntryMenuEntries", () => {
     ]);
   });
 
-  it("offers no Close for a pinned window's entry", () => {
+  it("offers Close for a pinned window's entry too (the caller minimizes it)", () => {
     expect(
-      keysOf(taskbarEntryMenuEntries({ ...actions, close: null, isMinimized: true, isMaximized: false }, false)),
-    ).toEqual(["restore", "maximize"]);
+      keysOf(taskbarEntryMenuEntries({ ...actions, close: vi.fn(), isMinimized: true, isMaximized: false }, false)),
+    ).toEqual(["restore", "maximize", "|", "close"]);
   });
 
   it("drops the maximize verbs in compact mode, where every window is maximized", () => {

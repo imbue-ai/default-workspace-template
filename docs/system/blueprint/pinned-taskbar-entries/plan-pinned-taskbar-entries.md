@@ -68,8 +68,8 @@ It is shared like every window, and it has the same id for every client.
 Both new fields are additive with defaults, `is_pinned = false` and `scope = "linked"`, so a V1 `desktops.json` reads unchanged and the file keeps version 1.
 
 Pinned windows are never closed.
-The close route answers `409` for one, the agent `close` op is refused with the fix named (minimize instead), the close control is absent from its title bar, and Close is absent from its window menu and its entry's context menu.
-The minds close chord, which closes the focused window, minimizes a pinned one instead.
+The close route answers `409` for one and the agent `close` op is refused with the fix named (minimize instead).
+The human-facing controls keep their shape so habit is not punished: the title bar's close control, the window menu's Close, the entry menu's Close, and the minds close chord all minimize a pinned window instead of closing it.
 Deleting a desktop still deletes its pinned windows with it.
 
 The shell reconciles pinned windows on read, extending the rule that creates the `Home` desktop.
@@ -184,7 +184,7 @@ The first restore of a window the client has never placed lands at the cascade f
 
 ### 4.4 Menus
 
-The pinned entry's context menu is the taskbar entry menu with Close removed and the presentation verbs added, so it stays consistent with every other entry:
+The pinned entry's context menu is the taskbar entry menu with the presentation verbs added, so it stays consistent with every other entry:
 
 1. Restore or Minimize
 2. Maximize or Restore size (absent in compact mode)
@@ -192,9 +192,12 @@ The pinned entry's context menu is the taskbar entry menu with Close removed and
 4. Float or Move to taskbar (absent in compact mode)
 5. Show as plain entry or Show as <style>, when the pin declares a style
 6. Change avatar..., when the current style is `avatar`
+7. divider
+8. Close, which minimizes the pinned window
 
-The pinned window's own menu is the V1 window menu without Close: Refresh, Share, Stop or Start.
-Its title bar has minimize and maximize but no close control.
+The pinned window's own menu is the V1 window menu: Refresh, Share, Stop or Start, Close; its Close minimizes.
+Its title bar has minimize, maximize, and close; the close control minimizes too.
+Taking the control away was tried and confused people, who reached for maximize by habit instead.
 There are no keyboard shortcuts for any of this in this version.
 
 ### 4.5 Independent windows in the browser
@@ -390,7 +393,7 @@ Nothing else in the chat app changes: its root page keeps reporting the selected
 Landed with the implementation:
 
 - concepts.md 2.2: path and title are shared for a linked window; an independent window keeps them per client, with the home path shared.
-- concepts.md 2.7: a pinned window's title bar has no close control.
+- concepts.md 2.7: a pinned window's close control and Close rows minimize it.
 - concepts.md 2.8 and plan 4.10: the taskbar shows one entry per window; a pinned window's entry may be drawn in the bar with a style or floating above the windows.
 - concepts.md decision 6 gains the same sentence; decision 14 names the independent scope as its exception.
 - plan 4.5: close is refused for a pinned window.

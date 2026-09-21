@@ -106,7 +106,7 @@ No status indicator.
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
 The window menu offers Refresh, Share, Stop and Start the app, and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
-A pinned window's title bar has no close control and its menu no Close: it is never closed, only minimized.
+A pinned window keeps its close control and its menus' Close, and each minimizes it: it is never closed, only minimized.
 
 ### 2.8 Taskbar, launcher, system tray, tray widgets
 
