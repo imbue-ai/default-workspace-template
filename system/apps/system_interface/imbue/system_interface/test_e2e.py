@@ -396,11 +396,14 @@ def _client_id(page: Page) -> str:
     return client_id
 
 
-def _land(page: Page, server: E2EServer, query: str = "") -> None:
-    """Open the shell and wait for the home desktop's backdrop and its seeded shortcut."""
+def _land(page: Page, server: E2EServer, query: str = "", desktop_id: str = _HOME_DESKTOP_ID) -> None:
+    """Open the shell and wait for the desktop's backdrop (home's unless said otherwise) and the seeded shortcut,
+    which every desktop seeded from home carries too."""
     page.goto(f"{server.base_url}/{query}")
-    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
-    expect(page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{desktop_id}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{desktop_id}"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible(
+        timeout=15000
+    )
 
 
 def _window(page: Page, window_id: str) -> Locator:
@@ -524,12 +527,15 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
 
 
 @contextlib.contextmanager
-def _second_client(page: Page, e2e_server: E2EServer, **context_args: Any) -> Generator[Page, None, None]:
-    """A page of a second browser context (its own client id), landed on the shell and closed with the context."""
+def _second_client(
+    page: Page, e2e_server: E2EServer, desktop_id: str = _HOME_DESKTOP_ID, **context_args: Any
+) -> Generator[Page, None, None]:
+    """A page of a second browser context (its own client id), landed on the shell (on ``desktop_id``) and closed
+    with the context."""
     context = _second_context(page, **context_args)
     try:
         other_page = context.new_page()
-        _land(other_page, e2e_server)
+        _land(other_page, e2e_server, desktop_id=desktop_id)
         yield other_page
     finally:
         context.close()
@@ -1211,20 +1217,12 @@ def _visitor_headers(user_id: str, display_name: str) -> dict[str, str]:
     return {IDENTITY_HEADER: json.dumps(identity)}
 
 
-@contextlib.contextmanager
 def _visiting_client(
     page: Page, e2e_server: E2EServer, user_id: str, display_name: str, desktop_id: str
-) -> Generator[Page, None, None]:
-    """A page of a second browser context whose every request carries a visitor's identity, opened on the shell and
-    waited for on the visitor's own desktop (the shared landing helper waits for Home, which a visitor never sees)."""
-    context = _second_context(page, extra_http_headers=_visitor_headers(user_id, display_name))
-    try:
-        visitor = context.new_page()
-        visitor.goto(f"{e2e_server.base_url}/")
-        expect(visitor.locator(f'[data-desktop-id="{desktop_id}"]')).to_be_visible(timeout=15000)
-        yield visitor
-    finally:
-        context.close()
+) -> contextlib.AbstractContextManager[Page]:
+    """A second client whose every request carries a visitor's identity, landed on the visitor's own desktop (a
+    visitor never sees Home)."""
+    return _second_client(page, e2e_server, desktop_id, extra_http_headers=_visitor_headers(user_id, display_name))
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1237,7 +1235,6 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
     expect(_window(page, home_window)).to_be_visible(timeout=15000)
 
     with _visiting_client(page, e2e_server, "user-alice", "Alice", "alice") as visitor:
-        expect(visitor.locator(f'[data-desktop-id="alice"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
         desktops = _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]
         (alice,) = [desktop for desktop in desktops if desktop["id"] == "alice"]
         assert alice["name"] == "Alice"
