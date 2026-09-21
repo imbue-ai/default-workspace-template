@@ -104,7 +104,17 @@ export const AvatarChooserDialog: m.Component<AvatarChooserDialogAttrs> = {
         onDismiss: attrs.onClose,
         onEscape: attrs.onClose,
         card: { "data-avatar-chooser": "", role: "dialog", "aria-label": "Choose avatar" },
-        actions: m(Button, { variant: "primary", extra: "avatar-chooser-done", onclick: attrs.onClose }, "Done"),
+        actions: m(
+          Button,
+          {
+            variant: "primary",
+            extra: "avatar-chooser-done",
+            onclick: attrs.onClose,
+            // The menu row that opened the dialog is gone on the same redraw, so focus starts in the dialog.
+            oncreate: (created) => (created.dom as HTMLButtonElement).focus(),
+          },
+          "Done",
+        ),
       },
       [
         designGrid(attrs),
