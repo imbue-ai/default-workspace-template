@@ -136,8 +136,8 @@ is sent `shell:navigate` when an agent points its window elsewhere.
 The backdrop shows the active desktop's shortcuts and windows; each window is
 an iframe of an app page under a title bar with the page's title and the
 window menu. The taskbar shows the desktop switcher, one entry per window of
-the active desktop, the launcher button, and the tray (running apps, the
-update-staleness banner). Desktops are created, renamed, recoloured,
+the active desktop, the launcher button, and the tray (the desktop
+switcher, the update-staleness banner). Desktops are created, renamed, recoloured,
 re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
 removed on the backdrop.
 

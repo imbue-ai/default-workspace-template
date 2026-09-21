@@ -32,7 +32,7 @@ The full definitions are in [concepts.md](concepts.md); this table is the vocabu
 | Launch path | A path under an app's origin that the manifest declares as a way to start something |
 | Taskbar | The bottom bar: launcher field, window entries, system tray |
 | Launcher | The taskbar's text field and the overlay it opens |
-| Tray widget | One component of the system tray; V1: Desktops, Running apps |
+| Tray widget | One component of the system tray; V1: Desktops |
 | Live page | The one iframe a client keeps for one window |
 | Compact mode, touch mode | Render policies from viewport width and pointer type |
 
@@ -217,14 +217,14 @@ Creating switches the creating client to the new desktop.
 ### 4.9 Shortcut gestures
 
 Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove).
-Adding a shortcut: the launcher's tiles and the Running apps popover offer "Add to desktop" for each launch path, placed at the first free cell in reading order.
+Adding a shortcut: the launcher's tiles offer "Add to desktop" for each launch path, placed at the first free cell in reading order.
 
 ### 4.10 The taskbar
 
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
-The tray's widgets are Desktops and Running apps (concepts.md 2.8); each is one component with one popover, and adding a third is adding a component to a list.
+The tray's one widget is Desktops (concepts.md 2.8); it is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
 ### 4.11 The launcher
@@ -298,7 +298,7 @@ The update apply's post-restart probes change from "every critical app's instanc
 - `store/`: the one implementation class, `DesktopStore`, holding the client's state (desktops, apps, the active desktop's layout, live pages, the gesture in progress, the open overlay), applying reducers, saving with debounce and conflict handling, and subscribing to the socket. Nothing else holds mutable state.
 - `pages/`: the live-page layer (`livePages.ts`), keyed by window id: create once, position, show and hide, make inert, navigate, destroy.
 - `gestures/`: `pointerGestures.ts`, the one module that listens to pointer events for window drag, resize, and shortcut drag, behind a `GestureSource` interface that yields `{begin, move, end}` with deltas, so it can be swapped for interact.js without touching a reducer.
-- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `DesktopsWidget`, `RunningAppsWidget`, `DesktopSettingsDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
+- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `DesktopsWidget`, `DesktopSettingsDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
 - `relay.ts`, `embed.ts`: unchanged.
 - `App.ts`, `index.ts`: wiring.
 
@@ -428,7 +428,7 @@ A grep for `dockview`, `New Tab`, and `app:chat?instance` in `apps/minds` finds 
 
 - **Reducers and geometry**: vitest over pure functions, plus the shared JSON vectors of 5.3, which `desktop_document_test.py` runs too.
 - **Backend**: unit tests beside each module; `test_layout_pipeline.py` for every agent op end to end.
-- **End to end**: `test_e2e.py` (Playwright, the real bundle, a registry of stub apps that are static pages speaking the contract): every open path, every window gesture and its persistence across reload, snap and un-snap, a second client seeing a window minimized, URL following across two clients with and without in-app navigation, shortcut drag with collision, desktop create, settings, and delete, the launcher's search and tiles, and the Desktops and Running apps widgets. Every scenario runs again at a phone viewport with touch emulation, asserting compact and touch behaviour.
+- **End to end**: `test_e2e.py` (Playwright, the real bundle, a registry of stub apps that are static pages speaking the contract): every open path, every window gesture and its persistence across reload, snap and un-snap, a second client seeing a window minimized, URL following across two clients with and without in-app navigation, shortcut drag with collision, desktop create, settings, and delete, the launcher's search and tiles, and the Desktops widget. Every scenario runs again at a phone viewport with touch emulation, asserting compact and touch behaviour.
 - **Ratchets**: postMessage confinement (now allowing the chat root's relay), the shell names no app, the shell imports no mngr, and a new one: no literal pixel metric in `views/` or `reducers/`.
 - **Selectors** the minds e2e runner and these suites share are data attributes on the taskbar, entries, windows, shortcuts, and launcher, listed in contracts.md section 12.
 
