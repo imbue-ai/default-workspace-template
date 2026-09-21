@@ -1,7 +1,7 @@
 ---
 name: migrate-workspace
 description: "Bring everything from another (older, broken, or replaced) workspace of the user's into this one -- their apps, skills, documents, data, scheduled automations, and every past chat. Use when the user says anything like 'move my stuff over from my old workspace', 'I made a new mind, bring everything across', 'my old workspace is broken, start me fresh', 'import my other mind', or -- asked from the OLD side -- 'I'd like to move to a new workspace'. Requires the other workspace to be startable, since the transfer runs over a live connection to it."
-compatibility: Requires latchkey (the minds-api gateway) plus ssh/ssh-keygen for the live session, and mngr (vendored) for recreating the old chats.
+compatibility: Requires latchkey (the minds-api gateway) plus ssh/ssh-keygen for the live session, and mngr for recreating the old chats.
 metadata:
   author: imbue
 ---
@@ -423,10 +423,10 @@ an assumption:
 - **Nothing shifted on the source** during the copy (if the user declined
   quiescence): re-run the baseline diff with `--refresh` and re-sync anything new.
 
-Open the migrated **apps** as tabs in default positions
-(`python3 system/scripts/layout.py open app:<name>`).
-Do **not** open the recreated chats -- there can be many, and a wall of tabs is
-worse than none. Reproducing the old workspace's arrangement is out of scope;
+Open the migrated **apps** as windows in default positions
+(`python3 system/scripts/layout.py open <name>`).
+Do **not** open the recreated chats -- there can be many, and a wall of windows
+is worse than none. Reproducing the old workspace's arrangement is out of scope;
 offer to lay things out if the user asks.
 
 **The AI-integration review.** For each `ai` finding: rewrite the call site onto

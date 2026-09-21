@@ -1,4 +1,7 @@
 import os
+import subprocess
+import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Final
@@ -10,15 +13,17 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
 
+from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import Pin
 from app_manifest.manifest import describe_validation_error
-from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.primitives import DisplayName
-from app_manifest.primitives import InstancesUrl
+from app_manifest.primitives import LaunchPathId
+from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
 
 # The registry's location, exactly as system/scripts/forward_port.py and
@@ -27,14 +32,33 @@ from app_manifest.primitives import PriorityName
 DEFAULT_APPS_FILE: Final[str] = "data/.state/apps.toml"
 ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 
+# The browser-side app contract module (desktop-interface contracts.md section 7), where the
+# shell's frontend build writes it, relative to the repo root every supervised program runs
+# from. An app page imports it from its own origin, so every app serves this one file at
+# ``APP_CONTRACT_ROUTE`` itself: a module import is a fetch without cookies, which the desktop
+# client's forwarder and the share gateway refuse across origins.
+SHELL_APP_CONTRACT_PATH: Final[Path] = Path(
+    "system/apps/system_interface/imbue/system_interface/static/_static/app_contract.js"
+)
+APP_CONTRACT_ROUTE: Final[str] = "/_static/app_contract.js"
 
-class RegistryAction(FrozenModel):
-    """An action as copied onto a registry row: the id, the label, and the names of its params."""
+# The registration script, relative to the repo root every supervised program runs from.
+FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
 
-    id: ActionId = Field(description="The declared action id")
-    label: NonEmptyStr = Field(description="The action's user-facing label")
+# Registration is one local file write; past the first threshold it is suspicious, past the
+# second it is broken.
+REGISTRATION_SLOW_SECONDS: Final[float] = 2.0
+REGISTRATION_TIMEOUT_SECONDS: Final[float] = 15.0
+
+
+class RegistryLaunchPath(FrozenModel):
+    """A launch path as copied onto a registry row: the id, the label, the path, and the names of its params."""
+
+    id: LaunchPathId = Field(description="The declared launch path id")
+    label: NonEmptyStr = Field(description="The launch path's user-facing label")
+    path: LaunchPathValue = Field(description="The path under the app origin")
     params: tuple[NonEmptyStr, ...] = Field(
-        default=(), description="The names of the create body's documented params, in manifest order"
+        default=(), description="The names of the query parameters the shell may append, in manifest order"
     )
 
 
@@ -54,14 +78,18 @@ class RegistryRow(FrozenModel):
     internal: bool = Field(default=False, description="Hidden from every open surface")
     program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
     display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
-    instances: bool = Field(default=False, description="Whether the app serves the instances API")
-    instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served; absent reads as url")
     critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
-    actions: tuple[RegistryAction, ...] = Field(default=(), description="The declared create actions")
+    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
+    launch_paths: tuple[RegistryLaunchPath, ...] = Field(
+        default=(), description="The paths the desktop interface opens windows at"
+    )
     launcher_rank: int | None = Field(
-        default=None, description="The app's place among the New Tab page's leading tiles; absent reads as none"
+        default=None, description="The app's place among the launcher's leading tiles; absent reads as none"
+    )
+    pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when its manifest declares one")
+    window_closed_path: LaunchPathValue | None = Field(
+        default=None, description="Where the shell posts a closed window of the app; absent means no post"
     )
 
 
@@ -100,3 +128,48 @@ def read_registry(path: Path) -> list[RegistryRow]:
                 describe_validation_error(e),
             )
     return rows
+
+
+def read_origin_label(path: Path, name: AppName) -> str:
+    """The origin label of the app registered as ``name``, or "" when none is, or the registry cannot be read.
+
+    Read per page load rather than watched: a label is minted once per workspace and the
+    registry is one small file, and an unreadable registry costs the page the origin it wanted
+    to derive, never the page.
+    """
+    try:
+        rows = read_registry(path)
+    except RegistryReadError as e:
+        logger.warning("Could not read the app registry for the origin label of {}: {}", name, e)
+        return ""
+    for row in rows:
+        if row.name == name:
+            return row.label
+    return ""
+
+
+def register_app(manifest_path: Path, app_url: AppUrl) -> None:
+    """Upsert the app's registry row through ``forward_port.py --manifest``; raises AppRegistrationError when that fails.
+
+    Run under this interpreter from the repo root, the way every app's entry point registers itself
+    at startup (the supervisord program lines of apps with no entry point run the script directly).
+    """
+    if not FORWARD_PORT_SCRIPT.is_file():
+        raise AppRegistrationError(
+            f"registration script {FORWARD_PORT_SCRIPT} not found; the app must run from the repo root"
+        )
+    command = [sys.executable, str(FORWARD_PORT_SCRIPT), "--manifest", str(manifest_path), "--url", app_url]
+    started_at = time.monotonic()
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=REGISTRATION_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as e:
+        raise AppRegistrationError(
+            f"registration of {manifest_path} did not finish within {REGISTRATION_TIMEOUT_SECONDS}s"
+        ) from e
+    elapsed = time.monotonic() - started_at
+    if completed.returncode != 0:
+        raise AppRegistrationError(
+            f"registration of {manifest_path} failed with exit code {completed.returncode}: {completed.stderr.strip()}"
+        )
+    if elapsed > REGISTRATION_SLOW_SECONDS:
+        logger.warning("Registered {} slowly, in {:.1f}s", manifest_path, elapsed)

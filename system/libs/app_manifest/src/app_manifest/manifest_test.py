@@ -7,6 +7,9 @@ from pydantic import ValidationError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import (
     AppManifest,
+    EntryMode,
+    LocationScope,
+    PinStyle,
     ShortcutMode,
     load_manifest,
     manifest_icon_path,
@@ -21,21 +24,22 @@ def _full_manifest_data() -> dict[str, object]:
         "name": "files",
         "display_name": "File Viewer",
         "icon": "icon.svg",
-        "instances": True,
-        "instances_url": "http://127.0.0.1:8301",
         "critical": False,
         "priority": "files",
         "program": "files",
         "internal": False,
-        "default_shortcut": {"action": "new", "mode": "focus"},
-        "actions": [
+        "default_shortcut": {"launch": "new", "mode": "focus"},
+        "launch_paths": [
             {
                 "id": "new",
                 "label": "New File Viewer",
+                "path": "/",
                 "params": [{"name": "path", "label": "Path", "required": False}],
             }
         ],
         "launcher_rank": 20,
+        "pin": {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"},
+        "window_closed_path": "/api/window-closed",
     }
 
 
@@ -45,15 +49,185 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.name == "files"
     assert manifest.display_name == "File Viewer"
     assert manifest.icon == "icon.svg"
-    assert manifest.instances is True
-    assert manifest.instances_url == "http://127.0.0.1:8301"
     assert manifest.priority == "files"
     assert manifest.program == "files"
     assert manifest.default_shortcut is not None
     assert manifest.default_shortcut.mode is ShortcutMode.FOCUS
-    assert [action.id for action in manifest.actions] == ["new"]
-    assert manifest.actions[0].params[0].name == "path"
+    assert manifest.default_shortcut.launch == "new"
+    assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/")]
+    assert manifest.launch_paths[0].params[0].name == "path"
     assert manifest.launcher_rank == 20
+    assert manifest.pin is not None
+    assert manifest.pin.path == "/"
+    assert manifest.pin.style is PinStyle.AVATAR
+    assert manifest.pin.scope is LocationScope.INDEPENDENT
+    assert manifest.pin.default_mode is EntryMode.FLOATING
+    assert manifest.window_closed_path == "/api/window-closed"
+
+
+def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> None:
+    manifest = AppManifest.model_validate(
+        {"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {"path": "/inbox"}}
+    )
+    assert manifest.pin is not None
+    assert (manifest.pin.path, manifest.pin.style, manifest.pin.scope, manifest.pin.default_mode) == (
+        "/inbox",
+        PinStyle.PLAIN,
+        LocationScope.LINKED,
+        EntryMode.BAR,
+    )
+    with pytest.raises(ValidationError, match="path"):
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": {}})
+
+
+@pytest.mark.parametrize(
+    ("pin", "field"),
+    [
+        ({"path": "/?chat=1"}, "path"),
+        ({"path": "inbox"}, "path"),
+        ({"path": "/", "style": "dot"}, "style"),
+        ({"path": "/", "scope": "personal"}, "scope"),
+        ({"path": "/", "default_mode": "hidden"}, "default_mode"),
+        ({"path": "/", "position": {"x": 0.5, "y": 0.5}}, "position"),
+    ],
+)
+def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
+
+
+def test_window_closed_path_follows_the_launch_path_rule() -> None:
+    with pytest.raises(ValidationError, match="no query string"):
+        AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})
+
+
+def test_duplicate_launch_path_ids_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="launch path ids must be unique"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [
+                    {"id": "new", "label": "New", "path": "/new"},
+                    {"id": "new", "label": "Again", "path": "/again"},
+                ],
+            }
+        )
+
+
+def test_the_open_launch_path_id_is_reserved_for_the_synthesized_root() -> None:
+    with pytest.raises(ValidationError, match="reserved"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": "open", "label": "Open", "path": "/"}],
+            }
+        )
+
+
+@pytest.mark.parametrize("launch_path_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"])
+def test_launch_path_ids_follow_the_id_rule(launch_path_id: str) -> None:
+    with pytest.raises(ValidationError, match="invalid launch path id"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": launch_path_id, "label": "New", "path": "/new"}],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "new",
+        "//new",
+        "/new?message=hi",
+        "/new#top",
+        "/new one",
+        "/new\t",
+        "/a%20b",
+        '/a"b',
+        "/café",
+        "/" + "a" * 2048,
+    ],
+)
+def test_launch_path_values_are_rooted_query_free_and_unescaped(path: str) -> None:
+    with pytest.raises(ValidationError, match="invalid launch path"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": "new", "label": "New", "path": path}],
+            }
+        )
+
+
+@pytest.mark.parametrize("path", ["/", "/new", "/folders/inbox", "/a-b_c.d~", "/a:b@c!$&'()*+,;="])
+def test_launch_path_values_that_follow_the_rule_are_accepted(path: str) -> None:
+    manifest = AppManifest.model_validate(
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "launch_paths": [{"id": "new", "label": "New", "path": path}],
+        }
+    )
+    assert manifest.launch_paths[0].path == path
+
+
+def test_default_shortcut_launch_must_name_a_declared_launch_path() -> None:
+    with pytest.raises(ValidationError, match="default_shortcut.launch"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": "new", "label": "New", "path": "/new"}],
+                "default_shortcut": {"launch": "other", "mode": "new"},
+            }
+        )
+
+
+def test_default_shortcut_launch_open_is_allowed_only_without_declared_launch_paths() -> None:
+    rooted = AppManifest.model_validate(
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "default_shortcut": {"launch": "open", "mode": "focus"},
+        }
+    )
+    assert rooted.default_shortcut is not None
+    assert rooted.default_shortcut.launch == "open"
+
+    with pytest.raises(ValidationError, match="default_shortcut.launch"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "launch_paths": [{"id": "new", "label": "New", "path": "/new"}],
+                "default_shortcut": {"launch": "open", "mode": "focus"},
+            }
+        )
+
+
+def test_default_shortcut_requires_a_launch() -> None:
+    with pytest.raises(ValidationError, match="launch"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "default_shortcut": {"mode": "focus"},
+            }
+        )
 
 
 @pytest.mark.parametrize("rank", [0, -3, "ten", 1.5])
@@ -67,15 +241,15 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
         {"name": "news", "display_name": "News", "icon": "icon.svg"}
     )
 
-    assert manifest.instances is False
-    assert manifest.instances_url is None
     assert manifest.critical is False
     assert manifest.priority == "user"
     assert manifest.program == "news"
     assert manifest.internal is False
     assert manifest.default_shortcut is None
-    assert manifest.actions == ()
+    assert manifest.launch_paths == ()
     assert manifest.launcher_rank is None
+    assert manifest.pin is None
+    assert manifest.window_closed_path is None
     assert manifest.handles == {}
 
 
@@ -157,127 +331,6 @@ def test_icon_must_be_a_relative_svg_path(icon: str) -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "instances_url",
-    [
-        "https://127.0.0.1:8301",
-        "http://0.0.0.0:8301",
-        "http://127.0.0.1",
-        "http://127.0.0.1:8301/",
-        "127.0.0.1:8301",
-        "http://127.0.0.1:0",
-        "http://127.0.0.1:70000",
-        "http://127.0.0.1:8301\n",
-    ],
-)
-def test_instances_url_must_be_a_bare_loopback_origin_with_a_usable_port(
-    instances_url: str,
-) -> None:
-    with pytest.raises(ValidationError, match="invalid instances_url"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "instances": True,
-                "instances_url": instances_url,
-            }
-        )
-
-
-def test_instances_url_requires_instances() -> None:
-    with pytest.raises(ValidationError, match="instances_url is only allowed"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "instances_url": "http://localhost:9000",
-            }
-        )
-
-
-def test_actions_are_forbidden_for_a_single_instance_app() -> None:
-    with pytest.raises(ValidationError, match="actions are only allowed"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "actions": [{"id": "new", "label": "New"}],
-            }
-        )
-
-
-def test_duplicate_action_ids_are_rejected() -> None:
-    with pytest.raises(ValidationError, match="unique"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "instances": True,
-                "actions": [
-                    {"id": "new", "label": "New"},
-                    {"id": "new", "label": "Again"},
-                ],
-            }
-        )
-
-
-@pytest.mark.parametrize("action_id", ["New", "-new", "", "a" * 33, "new tab", "new\n"])
-def test_action_ids_follow_the_id_rule(action_id: str) -> None:
-    with pytest.raises(ValidationError, match="invalid action id"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "instances": True,
-                "actions": [{"id": action_id, "label": "New"}],
-            }
-        )
-
-
-def test_default_shortcut_must_name_a_declared_action() -> None:
-    with pytest.raises(ValidationError, match="default_shortcut.action"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "instances": True,
-                "actions": [{"id": "new", "label": "New"}],
-                "default_shortcut": {"action": "other", "mode": "new"},
-            }
-        )
-
-
-def test_default_shortcut_open_is_allowed_only_for_a_single_instance_app() -> None:
-    single = AppManifest.model_validate(
-        {
-            "name": "news",
-            "display_name": "News",
-            "icon": "icon.svg",
-            "default_shortcut": {"action": "open", "mode": "focus"},
-        }
-    )
-    assert single.default_shortcut is not None
-    assert single.default_shortcut.action == "open"
-
-    with pytest.raises(ValidationError, match="default_shortcut.action"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "instances": True,
-                "actions": [{"id": "new", "label": "New"}],
-                "default_shortcut": {"action": "open", "mode": "focus"},
-            }
-        )
-
-
 def test_default_shortcut_mode_must_be_focus_or_new() -> None:
     with pytest.raises(ValidationError, match="mode"):
         AppManifest.model_validate(
@@ -285,7 +338,7 @@ def test_default_shortcut_mode_must_be_focus_or_new() -> None:
                 "name": "news",
                 "display_name": "News",
                 "icon": "icon.svg",
-                "default_shortcut": {"action": "open", "mode": "always"},
+                "default_shortcut": {"launch": "open", "mode": "always"},
             }
         )
 
@@ -362,7 +415,7 @@ def test_load_manifest_reports_a_missing_file(tmp_path: Path) -> None:
         load_manifest(tmp_path / "nope.toml")
 
 
-# --- references and scope -------------------------------------------------------
+# references and scope
 
 _REFERENCING_MANIFEST = """
 name = "news"
