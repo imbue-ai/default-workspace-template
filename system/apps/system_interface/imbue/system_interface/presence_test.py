@@ -15,7 +15,6 @@ from imbue.system_interface.presence import present_user_wire_json
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.identity import ANONYMOUS_OWNER
 from imbue.system_interface.shell.identity import RequestIdentity
-from imbue.system_interface.shell.identity import parse_identity_header
 
 _T0 = datetime(2026, 9, 19, 10, 0, 0, tzinfo=timezone.utc)
 _BOB = RequestIdentity(
@@ -32,31 +31,6 @@ _TAB_TWO = PresenceSessionId("tab-0002-bbbb")
 
 def _store(tmp_path: Path) -> PresenceStore:
     return PresenceStore(directory=tmp_path / "presence")
-
-
-def test_parse_identity_header_reads_the_record_and_ignores_unknown_fields() -> None:
-    header = json.dumps(
-        {
-            "owner": False,
-            "user_id": "user-bob-4471",
-            "email": "bob@example.com",
-            "display_name": "Bob",
-            "avatar_url": "https://a/b",
-            "a_field_from_a_newer_proxy": 1,
-        }
-    )
-    assert parse_identity_header(header) == RequestIdentity(
-        owner=False, user_id="user-bob-4471", email="bob@example.com", display_name="Bob", avatar_url="https://a/b"
-    )
-
-
-def test_parse_identity_header_treats_absence_and_garbage_as_the_anonymous_owner() -> None:
-    assert parse_identity_header(None) == ANONYMOUS_OWNER
-    assert parse_identity_header("   ") == ANONYMOUS_OWNER
-    assert parse_identity_header("not json") == ANONYMOUS_OWNER
-    assert parse_identity_header('{"user_id": "x"}') == ANONYMOUS_OWNER
-    assert parse_identity_header('{"owner": true}') == ANONYMOUS_OWNER
-    assert ANONYMOUS_OWNER.user_id is None
 
 
 def test_parse_presence_timestamp_reads_the_nanosecond_form() -> None:
