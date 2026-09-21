@@ -387,25 +387,25 @@ class ShellState(MutableModel):
         them, seeded now when they have none or when the one they had has been deleted (which the outcome names),
         unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock."""
         known = self.users.get_user(user_id)
-        desktop_ids = {desktop.id for desktop in desktops}
+        desktop_by_id = {desktop.id: desktop for desktop in desktops}
+        own_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
         created: Desktop | None = None
         replaced_desktop_name: str | None = None
-        if known is not None and known.desktop_id in desktop_ids:
-            own_desktop_id = known.desktop_id
-            own_desktop_name = known.desktop_name
-            kept = desktop_kept_by_returning_client(record, user_id, desktop_ids)
-            landing = kept if kept is not None else own_desktop_id
+        if own_desktop is not None:
+            kept = desktop_kept_by_returning_client(record, user_id, desktop_by_id.keys())
+            landing = kept if kept is not None else own_desktop.id
         else:
             created = self._create_desktop_for_user(identity, desktops, now)
-            own_desktop_id = created.id
-            own_desktop_name = created.name
+            own_desktop = created
             landing = created.id
             replaced_desktop_name = known.desktop_name if known is not None else None
+        # The record carries the desktop's name as it stands at this arrival, so a notice after a deletion names
+        # the desktop as the user last saw it, renames included.
         self.users.record_user(
             UserRecord(
                 user_id=user_id,
-                desktop_id=own_desktop_id,
-                desktop_name=own_desktop_name,
+                desktop_id=own_desktop.id,
+                desktop_name=own_desktop.name,
                 email=identity.email,
                 display_name=identity.display_name,
                 last_seen=now,

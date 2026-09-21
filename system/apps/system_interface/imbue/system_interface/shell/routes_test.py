@@ -849,9 +849,18 @@ def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_repo
     client: FlaskClient, app: Flask
 ) -> None:
     _arrive(client, "c-alice", _ALICE)
+    # She renames her desktop and comes back once, so the shell knows it by the new name when it goes.
+    renamed = client.post("/api/desktops/alice/settings", json={"name": "Alice's Lab", "color": "#16A34A", "glyph": 1})
+    assert renamed.status_code == 200
+    assert _arrive(client, "c-alice", _ALICE) == {
+        "desktop_id": "alice",
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
     assert client.post("/api/desktops/alice/delete").status_code == 200
     again = _arrive(client, "c-alice", _ALICE)
-    assert again["desktop_id"] == "alice" and again["replaced_desktop_name"] == "Alice"
+    assert again["desktop_id"] == "alice" and again["replaced_desktop_name"] == "Alice's Lab"
     assert again["created_desktop"]["name"] == "Alice"
     # A client of hers that had a record was moved along with her.
-    assert _shell(app).clients.get_client("c-alice").active_desktop == "alice"
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.active_desktop == "alice"

@@ -49,7 +49,9 @@ class UserRecord(FrozenModel):
 
     user_id: UserId = Field(description="The account's user id, as the identity header carries it")
     desktop_id: DesktopId = Field(description="The desktop made for the user, where their new clients land")
-    desktop_name: str = Field(description="The name that desktop was created with, for the notice when it is gone")
+    desktop_name: str = Field(
+        description="That desktop's name as of the user's last arrival, for the notice when it is gone"
+    )
     email: str | None = Field(default=None, description="The verified email as of the user's last arrival")
     display_name: str | None = Field(default=None, description="The display name as of the user's last arrival")
     last_seen: AwareDatetime = Field(description="When a client of the user last arrived")
