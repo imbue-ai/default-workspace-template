@@ -18,6 +18,9 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
+from imbue.system_interface.shell.close_hints import WindowClosedHint
+from imbue.system_interface.shell.close_hints import post_window_closed_hint
+from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
@@ -78,6 +81,11 @@ class ShellState(MutableModel):
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
+    )
+    close_hint_poster: Callable[[WindowClosedHint], None] = Field(
+        default=post_window_closed_hint,
+        frozen=True,
+        description="How an app is told a window of its closed; a test records the hints instead",
     )
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -234,8 +242,12 @@ class ShellState(MutableModel):
         return WindowOpenOutcome(window=window, is_new=True)
 
     def close_window(self, desktop_id: str, window_id: WindowId) -> bool:
-        """Close a window for everyone: off the desktop and out of every client's layout of it; False when the
-        desktop did not hold it (idempotent)."""
+        """Close a window for everyone: off the desktop and out of every client's layout of it, and its app told;
+        False when the desktop did not hold it (idempotent)."""
+        desktop = self.get_desktop(desktop_id)
+        closing = next((window for window in desktop.windows if window.id == window_id), None)
+        if closing is None:
+            return False
         outcome = self.desktops.close_window(desktop_id, window_id)
         if not outcome.is_written:
             return False
@@ -243,7 +255,18 @@ class ShellState(MutableModel):
         self.broadcast_desktops_updated()
         self._broadcast_placements_written(rewritten)
         logger.info("Closed window {} on desktop {} ({} layout(s) rewritten)", window_id, desktop_id, len(rewritten))
+        self._hint_windows_closed(desktop.id, (closing,))
         return True
+
+    def _hint_windows_closed(self, desktop_id: DesktopId, windows: Sequence[Window]) -> None:
+        """Tell each closed window's app, when its row names a window_closed_path (spec section 4.6)."""
+        for window in windows:
+            entry = self.inventory.entry(str(window.app))
+            if entry is None:
+                continue
+            hint = window_closed_hint(entry, desktop_id, window)
+            if hint is not None:
+                self.close_hint_poster(hint)
 
     def report_window_location(
         self, desktop_id: str, window_id: WindowId, path: WindowPath, title: WindowTitle
@@ -265,6 +288,7 @@ class ShellState(MutableModel):
                 self.set_client_active_desktop(client.id, outcome.fallback_desktop_id)
         self.broadcast_desktops_updated()
         logger.info("Deleted desktop {} (fallback {})", desktop_id, outcome.fallback_desktop_id)
+        self._hint_windows_closed(outcome.deleted.id, outcome.deleted.windows)
         return outcome
 
     def set_client_active_desktop(self, client_id: ClientId, desktop_id: DesktopId) -> bool:
