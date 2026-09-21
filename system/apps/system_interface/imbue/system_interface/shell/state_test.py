@@ -43,7 +43,7 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
         # The prune at start took the stale client, its layout file, and its window paths.
         assert shell.clients.get_client("old") is None
         assert shell.placements.read_layout(home.id, "old", {window_id}).placements == ()
-        assert shell.window_paths.read_paths("old", {window_id}) == {}
+        assert shell.window_paths.read_paths(ClientId("old"), {window_id}) == {}
         # A client that goes stale while the shell runs is taken by the periodic prune.
         shell.clients.record_report(
             ClientStateReport(client_id=ClientId("later"), active_desktop=DesktopId("home")), stale_at

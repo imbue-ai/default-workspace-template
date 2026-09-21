@@ -204,12 +204,12 @@ class ShellState(MutableModel):
         desktop = self.get_desktop(desktop_id)
         return self.placements.read_layout(desktop_id, client_id, {window.id for window in desktop.windows})
 
-    def read_window_paths(self, desktop: Desktop, client_id: str) -> dict[WindowId, StoredWindowPath]:
+    def read_window_paths(self, desktop: Desktop, client_id: ClientId) -> dict[WindowId, StoredWindowPath]:
         """The client's stored paths and titles for the desktop's independent windows, by window id."""
         independent = {window.id for window in desktop.windows if window.scope is LocationScope.INDEPENDENT}
         return self.window_paths.read_paths(client_id, independent)
 
-    def effective_window_for_client(self, desktop: Desktop, window: Window, client_id: str) -> Window:
+    def effective_window_for_client(self, desktop: Desktop, window: Window, client_id: ClientId) -> Window:
         """The window as ``client_id`` sees it: an independent window at the client's own path and title."""
         return effective_window(window, self.read_window_paths(desktop, client_id).get(window.id))
 

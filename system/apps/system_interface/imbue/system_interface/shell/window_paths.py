@@ -41,10 +41,10 @@ class WindowPathStore(MutableModel):
 
     state_directory: Path = Field(frozen=True, description="The shell's state directory")
 
-    def _path(self, client_id: str) -> Path:
+    def _path(self, client_id: ClientId) -> Path:
         return self.state_directory / WINDOW_PATHS_DIRNAME / f"{client_id}{_FILE_SUFFIX}"
 
-    def _read_unlocked(self, client_id: str) -> WindowPathsDocument:
+    def _read_unlocked(self, client_id: ClientId) -> WindowPathsDocument:
         raw = read_json_object(self._path(client_id))
         if raw is None:
             return WindowPathsDocument(version=WINDOW_PATHS_FILE_VERSION, windows={})
@@ -62,7 +62,9 @@ class WindowPathStore(MutableModel):
             return WindowPathsDocument(version=WINDOW_PATHS_FILE_VERSION, windows={})
         return document
 
-    def read_paths(self, client_id: str, live_window_ids: AbstractSet[WindowId]) -> dict[WindowId, StoredWindowPath]:
+    def read_paths(
+        self, client_id: ClientId, live_window_ids: AbstractSet[WindowId]
+    ) -> dict[WindowId, StoredWindowPath]:
         """The client's stored paths for the windows that still exist, by window id."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked(client_id)
