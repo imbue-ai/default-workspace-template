@@ -427,12 +427,12 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function replacedDesktopNotice(current: DesktopStore, desktop: Desktop | null): m.Children {
-    const replacedDesktopName = current.getReplacedDesktopName();
-    if (replacedDesktopName === null || desktop === null) return null;
+  function replacedDesktopNotice(current: DesktopStore): m.Children {
+    const replaced = current.getReplacedDesktop();
+    if (replaced === null) return null;
     return m(ReplacedDesktopNotice, {
-      replacedDesktopName,
-      currentDesktopName: desktop.name,
+      replacedDesktopName: replaced.replacedName,
+      currentDesktopName: replaced.seededName,
       onDismiss: () => current.dismissReplacedDesktopNotice(),
     });
   }
@@ -622,7 +622,7 @@ export function App(): m.Component<AppAttrs> {
         openMenu?.kind === "desktops" ? desktopsMenu(current, openMenu.anchor) : null,
         openMenu?.kind === "desktop" ? desktopMenu(current, openMenu.desktopId, openMenu.anchor) : null,
         settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
-        replacedDesktopNotice(current, desktop),
+        replacedDesktopNotice(current),
       ]);
     },
   };

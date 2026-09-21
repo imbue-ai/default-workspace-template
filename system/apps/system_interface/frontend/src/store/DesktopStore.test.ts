@@ -79,21 +79,29 @@ describe("bootstrap", () => {
     expect(store.getState().activeDesktopId).toBe("work");
     expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
     expect(store.getState().isLayoutLoaded).toBe(true);
-    expect(store.getReplacedDesktopName()).toBeNull();
+    expect(store.getReplacedDesktop()).toBeNull();
   });
 
   it("lands a first-time user on the desktop the shell seeded for them, and notices a replaced one until dismissed", async () => {
-    const seeded = desktopRecord("alice", { name: "Alice" });
+    const seeded = desktopRecord("alice-2", { name: "Alice 2" });
     api.arrival = { createdDesktop: seeded, replacedDesktopName: "Alice" };
     const redraws: number[] = [];
     const store = await startedStore(() => redraws.push(1));
-    expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["home", "work", "alice"]);
-    expect(store.getState().activeDesktopId).toBe("alice");
-    expect(store.getReplacedDesktopName()).toBe("Alice");
+    expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["home", "work", "alice-2"]);
+    expect(store.getState().activeDesktopId).toBe("alice-2");
+    expect(store.getReplacedDesktop()).toEqual({ replacedName: "Alice", seededName: "Alice 2" });
     const before = redraws.length;
     store.dismissReplacedDesktopNotice();
-    expect(store.getReplacedDesktopName()).toBeNull();
+    expect(store.getReplacedDesktop()).toBeNull();
     expect(redraws.length).toBe(before + 1);
+  });
+
+  it("the notice names the seeded desktop even when a deep link lands the client elsewhere", async () => {
+    api.arrival = { createdDesktop: desktopRecord("alice", { name: "Alice" }), replacedDesktopName: "Alice" };
+    const store = makeStore();
+    await store.start({ desktopId: "work", open: null, launch: null });
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(store.getReplacedDesktop()).toEqual({ replacedName: "Alice", seededName: "Alice" });
   });
 
   it("falls back to the first desktop when the arrival cannot be settled", async () => {
