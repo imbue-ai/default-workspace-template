@@ -5,6 +5,7 @@
  * frame), the client-state report, and the reconnect after a close.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { presentUserRecord } from "../testing/records";
 import { ShellSocket } from "./socket";
 import type { SocketHandlers } from "./socket";
 
@@ -94,8 +95,11 @@ describe("ShellSocket", () => {
     current().receive({ type: "desktops_updated", desktops: [] });
     current().receive({ type: "placements_updated", desktop_id: "home", client_id: "client-1", save_id: "s-1" });
     current().receive({ type: "active_desktop_changed", client_id: "client-1" });
+    const bob = presentUserRecord("user-bob-4471", { display_name: "Bob" });
+    current().receive({ type: "presence_updated", users: [bob] });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onDesktopsUpdated).toHaveBeenCalledWith([]);
+    expect(handlers.onPresenceUpdated).toHaveBeenCalledWith([bob]);
     expect(handlers.onPlacementsUpdated).toHaveBeenCalledWith({
       desktopId: "home",
       clientId: "client-1",
