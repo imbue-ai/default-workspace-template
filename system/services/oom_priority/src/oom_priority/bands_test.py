@@ -57,6 +57,7 @@ _BUILTIN_SERVICE_ORDER = (
     "xvfb",
     "browser",
     "files",
+    "getting-started",
 )
 
 
