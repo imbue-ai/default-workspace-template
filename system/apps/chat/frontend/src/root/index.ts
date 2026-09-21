@@ -6,7 +6,8 @@
  *
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
  * title as its location, handles ``shell:navigate`` by changing the selection (a ``draft`` in the
- * path goes, unsent, into a chat's composer), and drives its
+ * path goes, unsent, into a chat's composer; the ``send`` launch path opens the picker over the
+ * chats and sends the text to the one picked), and drives its
  * inner pages directly (they share an origin) with the shell's handshake and its shown and
  * hidden states, so each page's presence reports key on the chat it shows. The inner pages'
  * own ``minds:``, ``shell:focused``, and sub-agent ``shell:open`` messages go up through
@@ -36,8 +37,10 @@ import {
   openProviderChooser,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
+import { sendMessage } from "../models/Response";
 import { ChatRail } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
+import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
@@ -46,9 +49,11 @@ import type { ChatRow } from "./rows";
 import {
   draftFromSearch,
   isNewChatPath,
+  isSendPath,
   newChatParamsFromSearch,
   rootPathFor,
   selectionFromSearch,
+  sendTextFromSearch,
 } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
 
@@ -62,6 +67,8 @@ let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
 let isRootShown = true;
 let pool: InnerFramePool | null = null;
+// The text the ``send`` launch path handed the root, while its picker is open; null otherwise.
+let pendingSendText: string | null = null;
 // The chats started from this root: on top of the list until their first message.
 const startedHere = new Set<string>();
 const compactQuery = window.matchMedia(`(max-width: ${COMPACT_MAX_WIDTH_PX}px)`);
@@ -152,6 +159,35 @@ function takeDraft(text: string, requestedChatId: string | null): void {
   draftInto(chatId, text);
 }
 
+/** The ``send`` launch path (launcher-and-getting-started plan section 4.5): the picker opens over the list with the
+ *  text; picking a chat sends the text there through the ordinary send and selects it, dismissing reports the
+ *  selection alone, and an empty text is a no-op that reports the selection. Either way the window's stored path
+ *  goes back to the selection, so a reload sends nothing again. */
+function takeSend(text: string): void {
+  reportedLocation = null;
+  if (text === "") {
+    select(selectedChatId);
+    return;
+  }
+  pendingSendText = text;
+  m.redraw();
+}
+
+function sendPendingTo(chatId: string): void {
+  const text = pendingSendText;
+  pendingSendText = null;
+  if (text === null) return;
+  select(chatId);
+  sendMessage(chatId, text).catch((error: unknown) => {
+    alert(`Failed to send the message: ${(error as Error).message}`);
+  });
+}
+
+function dismissSend(): void {
+  pendingSendText = null;
+  select(selectedChatId);
+}
+
 function onChatsUpdated(): void {
   const rows = rowsFromSnapshots(getChats(), getProvisionalChats());
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
@@ -216,6 +252,9 @@ const ChatRoot: m.Component = {
                 : null,
             ]),
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
+        pendingSendText === null
+          ? null
+          : m(SendPicker, { rows, text: pendingSendText, onPick: sendPendingTo, onDismiss: dismissSend }),
       ],
     );
   },
@@ -261,6 +300,10 @@ function connectRootToShell(): void {
         startNewChat(params.accountId, params.message);
         return;
       }
+      if (isSendPath(target.pathname, "")) {
+        takeSend(sendTextFromSearch(target.search));
+        return;
+      }
       const draft = draftFromSearch(target.search);
       if (draft !== "") {
         takeDraft(draft, selectionFromSearch(target.search));
@@ -288,13 +331,24 @@ function bootstrap(): void {
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   const isNew = isNewChatPath(window.location.pathname, getBasePath());
-  selectedChatId = isNew ? null : selectionFromSearch(window.location.search);
+  const isSend = isSendPath(window.location.pathname, getBasePath());
+  selectedChatId = isNew || isSend ? null : selectionFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
   reportLocation();
   if (isNew) {
     const params = newChatParamsFromSearch(window.location.search);
     // Accounts decide where the chat starts; a create before they load would run on none.
     void accountsLoaded.then(() => startNewChat(params.accountId, params.message));
+    return;
+  }
+  if (isSend) {
+    // The picker lists the chats; opened before they load it would offer nothing.
+    const text = sendTextFromSearch(window.location.search);
+    const onceListedForSend = (): void => {
+      removeChatsUpdatedListener(onceListedForSend);
+      takeSend(text);
+    };
+    addChatsUpdatedListener(onceListedForSend);
     return;
   }
   const draft = draftFromSearch(window.location.search);
