@@ -34,7 +34,7 @@ Registration calls the loopback-only `POST /api/avatars` with `{id, label, svg, 
 - `GET /api/avatars`: `{designs: [{id, label, source_path}], selected, default}`; bundled designs have `source_path: null`.
 - `GET /api/avatars/<id>/image.svg?mood=idle|working&preview=1`: the passive image; a preview holds every pose still. Unknown ids answer 404, an unknown mood 400.
 - `GET /api/avatars/<id>/source.svg`: the original, as an attachment.
-- `POST /api/avatars`: loopback-only registration (201); 400 for invalid input, 403 for a caller off the loopback.
+- `POST /api/avatars`: loopback-only registration (201); 400 for invalid input, 403 for a caller off the loopback, 413 for a body past the size bound (a design is at most 256 KiB).
 - `POST /api/avatar-selection` with `{design}`: writes the workspace's choice to `data/.state/system_interface/avatar_selection.json` and broadcasts `avatar_selection_changed {design}` to every window; an unknown id answers 400.
 
 The mood is pushed, never fetched: every window receives `avatar_status {mood, is_stale}` on connect and whenever either changes. It is folded from the agents event file the mngr observer (run by the chat app) writes at `$MNGR_HOST_DIR/events/mngr/agents/events.jsonl` (`~/.mngr` when unset), with plain JSON parsing and no mngr import.
