@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from imbue.system_interface.avatar.catalog import AvatarCatalogStore
 from imbue.system_interface.avatar.catalog import DesignRegistration
 from imbue.system_interface.avatar.catalog import MAX_REGISTERED_DESIGNS
+from imbue.system_interface.avatar.catalog import _MAX_CATALOG_BYTES
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.primitives import DesignId
@@ -73,6 +74,17 @@ def test_the_catalog_never_grows_past_its_bound(tmp_path: Path) -> None:
     with pytest.raises(InvalidShellValueError, match="replace one"):
         store.register(_registration("one-too-many"))
     store.register(_registration("design-0", "Replaced"))
+
+
+def test_an_oversized_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Path) -> None:
+    directory = tmp_path / "avatars"
+    directory.mkdir()
+    with (directory / "catalog.json").open("wb") as stream:
+        stream.truncate(_MAX_CATALOG_BYTES + 1)
+    store = AvatarCatalogStore(directory=directory)
+    assert [listing.id for listing in store.entries()] == [design.id for design in BUNDLED_DESIGNS]
+    with pytest.raises(InvalidShellValueError, match="storage bound"):
+        store.register(_registration("mine"))
 
 
 def test_an_invalid_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Path) -> None:
