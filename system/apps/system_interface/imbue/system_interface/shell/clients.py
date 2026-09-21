@@ -44,7 +44,7 @@ class _StoredClient(FrozenModel):
     """One entry of the ``clients`` map (the id is the key)."""
 
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
-    last_seen: datetime = Field(description="When the client last reported")
+    last_seen: datetime = Field(description="When the client last arrived or reported")
     user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
 
 

@@ -37,7 +37,7 @@ class ClientRecord(FrozenModel):
 
     id: ClientId = Field(description="The client's stored id")
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
-    last_seen: AwareDatetime = Field(description="When the client last reported")
+    last_seen: AwareDatetime = Field(description="When the client last arrived or reported")
     user_id: UserId | None = Field(
         default=None,
         description="The signed-in visitor the client last arrived as; None for the owner or an anonymous client",

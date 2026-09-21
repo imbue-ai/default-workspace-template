@@ -358,13 +358,15 @@ class ShellState(MutableModel):
             shared_landing = resolve_active_desktop(record, desktops)
             if shared_landing is None:
                 return None
-            user_id = visiting_user_id(identity)
-            if user_id is None:
-                return ClientArrivalOutcome(
-                    desktop_id=shared_landing, created_desktop=None, replaced_desktop_name=None
-                )
             now = datetime.now(timezone.utc)
-            outcome = self._land_visiting_user(user_id, identity, record, desktops, now)
+            user_id = visiting_user_id(identity)
+            outcome = (
+                self._land_visiting_user(user_id, identity, record, desktops, now)
+                if user_id is not None
+                else ClientArrivalOutcome(desktop_id=shared_landing, created_desktop=None, replaced_desktop_name=None)
+            )
+            # Every arrival stamps the user it came as (None for the owner), so the returning-client rule never
+            # reads a user the browser has since stopped being.
             recorded = self.clients.record_arrival(client_id, user_id, outcome.desktop_id, now)
         if outcome.created_desktop is not None:
             self.broadcast_desktops_updated()
