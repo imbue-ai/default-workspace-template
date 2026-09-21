@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.primitives import UserId
 
 IDENTITY_HEADER: Final[str] = "X-Imbue-Identity"
 
@@ -51,7 +52,9 @@ def parse_identity_header(header_value: str | None) -> RequestIdentity:
 
 
 @pure
-def is_visiting_user(identity: RequestIdentity) -> bool:
-    """Whether the requester is a signed-in user other than the owner: the one kind of requester who gets a desktop of
-    their own on arrival (desktop plan section 3.10)."""
-    return not identity.owner and identity.user_id is not None
+def visiting_user_id(identity: RequestIdentity) -> UserId | None:
+    """The user id of a signed-in requester other than the owner, the one kind of requester who gets a desktop of
+    their own on arrival (desktop plan section 3.10); None for the owner and for a requester with no account."""
+    if identity.owner or identity.user_id is None:
+        return None
+    return UserId(identity.user_id)

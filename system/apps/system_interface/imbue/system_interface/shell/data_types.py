@@ -308,7 +308,7 @@ class PlacementsEditOutcome(FrozenModel):
 class ClientArrivalOutcome(FrozenModel):
     """What a client's arrival came to: the desktop it lands on, and the desktop made for its user when one was."""
 
-    desktop_id: DesktopId | None = Field(description="Where the client lands; None while the workspace has no desktop")
+    desktop_id: DesktopId = Field(description="Where the client lands")
     created_desktop: Desktop | None = Field(description="The desktop seeded for a first-time user, else None")
     replaced_desktop_name: str | None = Field(
         description="The name of the user's earlier desktop when it had been deleted and a fresh one was seeded"

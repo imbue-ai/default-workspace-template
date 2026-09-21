@@ -24,6 +24,7 @@ from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
+from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import Desktop
@@ -54,7 +55,7 @@ from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.identity import RequestIdentity
-from imbue.system_interface.shell.identity import is_visiting_user
+from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
@@ -344,58 +345,70 @@ class ShellState(MutableModel):
             self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
         return outcome.is_active_desktop_changed
 
-    def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome:
+    def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
         """Where a client whose shell page just loaded lands (desktop plan section 3.10): the owner and anonymous
         clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
         seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
-        while a returning client of theirs keeps the desktop it was on."""
+        while a returning client of theirs keeps the desktop it was on. None while the workspace has no desktop."""
         # The whole read-decide-write runs under the state lock (re-entrant, so the stores' own takes nest): two
         # arrivals of one new user at once (a browser restoring its tabs) must not both seed a desktop for them.
         with STATE_FILES_LOCK:
             desktops = self.list_desktops()
             record = self.clients.get_client(client_id)
-            if not desktops:
-                return ClientArrivalOutcome(desktop_id=None, created_desktop=None, replaced_desktop_name=None)
-            if not is_visiting_user(identity):
+            shared_landing = resolve_active_desktop(record, desktops)
+            if shared_landing is None:
+                return None
+            user_id = visiting_user_id(identity)
+            if user_id is None:
                 return ClientArrivalOutcome(
-                    desktop_id=resolve_active_desktop(record, desktops),
-                    created_desktop=None,
-                    replaced_desktop_name=None,
+                    desktop_id=shared_landing, created_desktop=None, replaced_desktop_name=None
                 )
-            assert identity.user_id is not None
             now = datetime.now(timezone.utc)
-            user_id = UserId(identity.user_id)
-            known = self.users.get_user(user_id)
-            desktop_ids = {desktop.id for desktop in desktops}
-            created: Desktop | None = None
-            replaced_desktop_name: str | None = None
-            if known is not None and known.desktop_id in desktop_ids:
-                own_desktop_id = known.desktop_id
-                own_desktop_name = known.desktop_name
-                kept = desktop_kept_by_returning_client(record, user_id, desktop_ids)
-                landing = kept if kept is not None else own_desktop_id
-            else:
-                created = self._create_desktop_for_user(identity, desktops, now)
-                own_desktop_id = created.id
-                own_desktop_name = created.name
-                landing = created.id
-                replaced_desktop_name = known.desktop_name if known is not None else None
-            self.users.record_user(
-                UserRecord(
-                    user_id=user_id,
-                    desktop_id=own_desktop_id,
-                    desktop_name=own_desktop_name,
-                    email=identity.email,
-                    display_name=identity.display_name,
-                    last_seen=now,
-                )
-            )
-            outcome = self.clients.record_arrival(client_id, user_id, landing, now)
-        if created is not None:
+            outcome = self._land_visiting_user(user_id, identity, record, desktops, now)
+            recorded = self.clients.record_arrival(client_id, user_id, outcome.desktop_id, now)
+        if outcome.created_desktop is not None:
             self.broadcast_desktops_updated()
         # A client that already had a record may have other windows open on the desktop it was moved off.
-        if record is not None and outcome.is_active_desktop_changed:
-            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(landing))
+        if record is not None and recorded.is_active_desktop_changed:
+            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(outcome.desktop_id))
+        return outcome
+
+    def _land_visiting_user(
+        self,
+        user_id: UserId,
+        identity: RequestIdentity,
+        record: ClientRecord | None,
+        desktops: Sequence[Desktop],
+        now: datetime,
+    ) -> ClientArrivalOutcome:
+        """Where a visiting user's client lands, with the user's record brought up to date: the desktop made for
+        them, seeded now when they have none or when the one they had has been deleted (which the outcome names),
+        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock."""
+        known = self.users.get_user(user_id)
+        desktop_ids = {desktop.id for desktop in desktops}
+        created: Desktop | None = None
+        replaced_desktop_name: str | None = None
+        if known is not None and known.desktop_id in desktop_ids:
+            own_desktop_id = known.desktop_id
+            own_desktop_name = known.desktop_name
+            kept = desktop_kept_by_returning_client(record, user_id, desktop_ids)
+            landing = kept if kept is not None else own_desktop_id
+        else:
+            created = self._create_desktop_for_user(identity, desktops, now)
+            own_desktop_id = created.id
+            own_desktop_name = created.name
+            landing = created.id
+            replaced_desktop_name = known.desktop_name if known is not None else None
+        self.users.record_user(
+            UserRecord(
+                user_id=user_id,
+                desktop_id=own_desktop_id,
+                desktop_name=own_desktop_name,
+                email=identity.email,
+                display_name=identity.display_name,
+                last_seen=now,
+            )
+        )
         return ClientArrivalOutcome(
             desktop_id=landing, created_desktop=created, replaced_desktop_name=replaced_desktop_name
         )
