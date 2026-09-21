@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appRecord,
+  chatLikeAppRecord,
   desktopRecord,
   launchPathRecord,
   layoutRecord,
@@ -20,21 +21,7 @@ import {
 
 const MODES = { isCompact: false, isTouch: false };
 
-const chatty = appRecord("chatty", {
-  launcher_rank: 10,
-  pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
-  launch_paths: [
-    launchPathRecord({ id: "root", label: "Chatty", path: "/", params: ["draft"] }),
-    launchPathRecord({ id: "new", label: "New Chatty", path: "/new", params: ["message"], text_param: "message" }),
-    launchPathRecord({
-      id: "send",
-      label: "Send to chatty...",
-      path: "/send",
-      params: ["message"],
-      text_param: "message",
-    }),
-  ],
-});
+const chatty = chatLikeAppRecord("chatty");
 const terminal = appRecord("terminal", {
   launcher_rank: 40,
   launch_paths: [launchPathRecord({ id: "new", label: "New Terminal", path: "/new" })],

@@ -3,7 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appRecord, desktopRecord, launchPathRecord, windowRecord } from "../testing/records";
+import { appRecord, chatLikeAppRecord, desktopRecord, launchPathRecord, windowRecord } from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
 import { defaultHighlightIndex, launcherRowsOf } from "../reducers/launcherRows";
@@ -13,21 +13,7 @@ import type { LauncherMenuAttrs } from "./LauncherMenu";
 
 afterEach(unmountViews);
 
-const chatty = appRecord("chatty", {
-  launcher_rank: 10,
-  pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
-  launch_paths: [
-    launchPathRecord({ id: "root", label: "Chatty", path: "/" }),
-    launchPathRecord({ id: "new", label: "New Chatty", path: "/new", params: ["message"], text_param: "message" }),
-    launchPathRecord({
-      id: "send",
-      label: "Send to chatty...",
-      path: "/send",
-      params: ["message"],
-      text_param: "message",
-    }),
-  ],
-});
+const chatty = chatLikeAppRecord("chatty");
 const terminal = appRecord("terminal", { launch_paths: [launchPathRecord({ id: "new", label: "New Terminal" })] });
 
 function stateWithWindows(): DesktopState {
