@@ -25,7 +25,7 @@ Fresh paired branches in mngr and default-workspace-template, replacing the syst
 * The observer becomes `agent-observer`, a manifest-less supervised service in the chat's memory band; every chat instance follows it, using the follower landed in the mngr branch first. `--stream-events` stays in mngr. While the observer is down the chat serves its last known list and reports degraded.
 * One chat preview mechanism: a `--secondary` chat built from the worktree (no account reconcile, no OOM writes, no nudges, no registration, scratch data dir, live accounts read), tracking everything the live chat tracks, opened on the user's current conversation, with real sends allowed. When both bundles changed, the preview shell's copied registry points at that secondary chat.
 * A preview shell gets a seeded copy of the live state dir plus a copied registry, refuses mutating relay verbs, and hides them.
-* After an apply from the careful flow, the shell shows a notice per critical app included in its rollback (both frontend bundle owners when both bundles are replaced), or a top banner for the shell itself: recently updated, roll back or everything seems good. Only a person closes it. The rollback point and its snapshots are kept whole until it is closed, a rollback runs, or the next apply replaces it. Rollback restores the kept point and restarts only the touched programs through supervisorctl; a rollback that needs the services agent restarted restores the files and names the command for an agent. The outcome goes into the notice's own record, not to the driving agent. update-self keeps its own run record and raises no notice.
+* After an apply from the careful flow, the shell shows one top banner naming every critical app included in its rollback (both frontend bundle owners when both bundles are replaced): recently updated, roll back or everything seems good. It is one banner, not a notice per app, because the rollback point is one and takes every named app back together. Only a person closes it. The rollback point and its snapshots are kept whole until it is closed, a rollback runs, or the next apply replaces it. Rollback restores the kept point and restarts only the touched programs through supervisorctl; a rollback that needs the services agent restarted restores the files and names the command for an agent. The outcome goes into the notice's own record, not to the driving agent. update-self keeps its own run record and raises no notice.
 * Carry forward all of the old branch's fixes that still apply: serve_isolated_instance refresh, verified teardown, OOM band and boot logs; create_worker `--branch` and reading the worker's branch from mngr; the settled post-restart verdict; the unknown-`/api` 404; the three doc defects; the prototype taxonomy; the "layout.py open shows the user" rule; the update-app verify timing. Only the FOLLOW-mode health gate and the pre-flight FOLLOW environment are dropped.
 * mngr side: the observe read side including the follower, the `initial_branch` widening, and notify's probe, merged from the old mngr branch.
 * Done means the automated suites plus a scripted manual scenario in a real workspace, with findings recorded in this folder.
@@ -42,7 +42,7 @@ Fresh paired branches in mngr and default-workspace-template, replacing the syst
 - **The observer is its own program.** `mngr observe` runs as `agent-observer`, a supervised service. The chat app no longer spawns an observer; it follows the event file the program writes, through the follower mngr now exports. There is no second code path: the live chat and a preview chat are the same reader. A dead observer is restarted by supervisord and the chat resumes on the next snapshot, where today the live chat's agent view freezes for good.
 - **Chat previews are a secondary chat.** `chat-app --secondary` boots the worktree's chat against the live agents: it follows the observer, reads the live accounts, tracks every agent the live chat tracks, and withholds the writes a second instance must not make (account reconcile, OOM scores, shell nudges, registration; its stores live in a scratch copy). The user opens it on the conversation they are in. Sends are real, since the change under review may be about what happens when a message is sent.
 - **A preview shell is the real workspace with one app swapped, read-only.** It boots against a seeded copy of the live shell's state directory and a copied registry whose rows for previewed sibling apps point at their previews, refuses the relay verbs that would act on live instances, and hides them.
-- **The apply keeps its rollback point, and the shell offers it back.** An apply from the careful flow leaves its snapshots and a record of what it touched in place. The shell shows a notice on every tab of a touched critical app (a banner for the shell itself): recently updated, roll back or everything seems good. Only a person closes it. Rollback is the apply's own forward revert plus snapshot restore, restarting only the touched programs through supervisorctl, so the shell needs no mngr.
+- **The apply keeps its rollback point, and the shell offers it back.** An apply from the careful flow leaves its snapshots and a record of what it touched in place. The shell shows one top banner naming the touched critical apps: recently updated, roll back or everything seems good. Only a person closes it. Rollback is the apply's own forward revert plus snapshot restore, restarting only the touched programs through supervisorctl, so the shell needs no mngr.
 - **Carried forward from the old branch.** The isolated-instance script's refresh, verified teardown, memory band and boot logs; `create_worker.py --branch` and reading the worker's branch back from mngr; the settled post-restart health verdict; the unknown-`/api` 404 on the shell; the prototype taxonomy in interactive-delivery; the "opening a tab shows the user" rule; update-app's verify timing; the three doc defects.
 
 ## Expected behavior
@@ -79,10 +79,10 @@ Fresh paired branches in mngr and default-workspace-template, replacing the syst
 
 ### The notice and rollback
 
-- After an apply run by the careful flow, every tab of a critical app whose program or bundle the apply changed carries a band above the page: "This app was updated a moment ago. If something is not working, you can go back to the previous version." with "Roll back" and "Everything seems good". A shell update shows the same as a top banner.
-- "Everything seems good" discards the kept snapshots and the record; the band goes away on every window.
-- "Roll back" asks for confirmation naming the update and the apps it touched, then runs the rollback: the merge is reverted forward (work committed since is kept), the snapshots are restored, the touched programs are restarted through supervisorctl, health is probed, and the record keeps the outcome until the person closes it. The band shows progress and then the outcome.
-- A rollback whose diff reaches the bootstrap or the services agent's own setup restores the files, skips the restart, and the band says an agent must restart the workspace and names the command.
+- After an apply run by the careful flow, one banner across the top of the workspace names every critical app whose program or bundle the apply changed: "Chat was updated a moment ago. If something is not working, you can go back to the previous version." (or "Chat and the workspace interface were updated...", or "The workspace was updated..." when the apply touched no app) with "Roll back" and "Everything seems good". No tab carries a notice of its own.
+- "Everything seems good" discards the kept snapshots and the record; the banner goes away on every window.
+- "Roll back" asks for confirmation naming the update and the apps it touched, then runs the rollback: the merge is reverted forward (work committed since is kept), the snapshots are restored, the touched programs are restarted through supervisorctl, health is probed, and the record keeps the outcome until the person closes it. The banner shows progress and then the outcome.
+- A rollback whose diff reaches the bootstrap or the services agent's own setup restores the files, skips the restart, and the banner says an agent must restart the workspace and names the command.
 - If the rollback's own probes fail, the apply's existing emergency path applies and the staleness banner takes over.
 - The next apply, from any flow, replaces the kept record and snapshots. update-self's applies keep no record and raise no notice.
 - The outcome of a rollback is written into the kept record (`last-good.json`), where the notice shows it; the driving agent is not messaged.
@@ -189,8 +189,8 @@ Specified in the mngr repo's `blueprint/critical-app-editing/plan-critical-app-e
 - `server.py`: the unknown-`/api` 404 (carried).
 - `ws_broadcaster.py`: `update_notice_changed`.
 - `update_staleness.py`: unchanged; the preview shell's staleness banner is suppressed (`is_preview`).
-- Frontend: `models/UpdateNotice.ts` (fetch, socket, confirm, rollback with its confirmation dialog, progress and outcome states); `views/UpdateNoticeBand.ts` rendered inside every `IframePanel` whose app is named in the record, and `views/UpdateNoticeBanner.ts` for the shell itself beside `UpdateStalenessBanner`; `tabMenu.ts`, `Sidebar.ts`, `AllAppsPicker.ts`, and `NewTabLauncher.ts` hide the mutating verbs when `is_preview`; tests beside each.
-- `shell/routes_test.py`, `test_e2e.py` (the notice band from a seeded record over stub apps; the preview refusals), `test_project_ratchets.py` (no new mngr imports, no app names), `test_embed_ratchets.py`.
+- Frontend: `models/UpdateNotice.ts` (fetch, socket, confirm, rollback with its confirmation dialog, progress and outcome states); `views/UpdateNoticeBanner.ts`, the one notice, beside `UpdateStalenessBanner`; `tabMenu.ts`, `Sidebar.ts`, `AllAppsPicker.ts`, and `NewTabLauncher.ts` hide the mutating verbs when `is_preview`; tests beside each.
+- `shell/routes_test.py`, `test_e2e.py` (the notice banner from a seeded record over stub apps; the preview refusals), `test_project_ratchets.py` (no new mngr imports, no app names), `test_embed_ratchets.py`.
 - `README.md` and the changelog entry.
 
 ### `system/apps/terminal`
@@ -217,7 +217,7 @@ Specified in the mngr repo's `blueprint/critical-app-editing/plan-critical-app-e
 2. **The observer program and the chat as a follower.** `agent-observer` in supervisord and the bands; the chat's agent manager follows the file; `--secondary`, `CHAT_DATA_DIR`, and the health field; the chat's tests. Working system: the workspace runs as before, and a killed observer no longer freezes the chat.
 3. **Previews for every app.** `PreviewSpec` in app_manifest; the three built-ins' tables; the scaffold's table; the carried isolated-instance work plus copies, named ports and inner path; `preview_app.py`; the shell's `--preview` refusals and hidden verbs; the terminal's `--no-register`. Working system: `preview_app.py up --app chat --worktree <dir>` shows a secondary chat in a labeled tab; the same for the shell and the terminal.
 4. **Routing and the careful flow.** update-app's manifest step and `references/critical-app.md`; `create_worker.py --branch`; the update-creation, heal-creation, worker-reference, interactive-delivery, manage-layout, CLAUDE.md, and build-app edits; delete update-system-interface and its script. Working system: a critical app change runs end to end through preview, harden, and the existing apply.
-5. **The kept rollback point and the notice.** `LastGoodRecord`, `--keep-rollback-point`, `rollback-last`, `confirm-last`, the settled verdict; the shell's routes, watcher, socket message, band and banner; the reference's notice section. Working system: an apply from the careful flow raises the notice, and both buttons work, including a rollback that restarts only the chat.
+5. **The kept rollback point and the notice.** `LastGoodRecord`, `--keep-rollback-point`, `rollback-last`, `confirm-last`, the settled verdict; the shell's routes, watcher, socket message, and banner; the reference's notice section. Working system: an apply from the careful flow raises the notice, and both buttons work, including a rollback that restarts only the chat.
 6. **Docs, contracts, and validation.** The contracts amendments, READMEs, changelogs; the manual scenario run in a real workspace with its findings recorded in this folder; fixes from it.
 
 ## Testing strategy
@@ -230,19 +230,19 @@ Specified in the mngr repo's `blueprint/critical-app-editing/plan-critical-app-e
 - `create_worker_test.py`: the carried `--branch` and `read_worker_branch` cases.
 - `update_self_test.py`: the record written only with `--keep-rollback-point`; a plain apply discards a previous record; `rollback-last` restores snapshots and restarts exactly the recorded programs; the `needs_system_services_restart` case skips the restart and records the command; `confirm-last` discards; `wait_settled` resets on a pid change and passes on a stable streak across several programs.
 - Chat: the follower fold over events written by mngr's writer (a full snapshot, a state change, a removal, a truncated file); boot with no writer holding the lock reports degraded and folds once a snapshot arrives; the observer dying mid-run keeps the last list and reports degraded; `--secondary` reconciles nothing, registers nothing, nudges only the given URL, and refuses OOM writes; `CHAT_DATA_DIR` moves the stamps and the instances store.
-- Shell: the preview refusals on every relay verb and app verb; the notice routes over a seeded record; the rollback route spawns the script and answers 202; the inventory's `is_preview`; frontend vitest for the band, the banner, the confirmation dialog, and the hidden verbs.
+- Shell: the preview refusals on every relay verb and app verb; the notice routes over a seeded record; the rollback route spawns the script and answers 202; the inventory's `is_preview`; frontend vitest for the banner, the confirmation dialog, and the hidden verbs.
 - Bands: `agent-observer` resolves to the chat's band.
 
 ### Integration and system tests
 
 - `test_chat_system.py`: the two-server fixture with a real `mngr observe` writing the events file; the chat's instances API lists the agents the observer reports; restarting the observer under the chat leaves the list intact and the health field flips degraded and back.
-- Shell `test_e2e.py`: over stub apps, a seeded record renders the band on the right tabs and the banner for the shell; "Everything seems good" clears it everywhere; a preview shell hides the verbs and refuses them.
+- Shell `test_e2e.py`: over stub apps, a seeded record renders one banner naming its apps and no notice on any tab; "Everything seems good" clears it everywhere; a preview shell hides the verbs and refuses them.
 - Terminal: `test_terminal_app.py` boots with `--no-register` and two custom ports.
 - The apply's tests over a fixture tree: an apply with `--keep-rollback-point` leaves snapshots and the record; the rollback path restores them.
 
 ### Manual scenario (run once before merge, findings recorded here)
 
-- A chat change (a composer behaviour) through the careful flow: preview opens on the lead's own conversation, a message sent from the preview reaches the agent, harden, apply, the band appears on every chat tab, "Roll back" restores the previous chat and only the chat program restarts, then the same change re-applied and confirmed.
+- A chat change (a composer behaviour) through the careful flow: preview opens on the lead's own conversation, a message sent from the preview reaches the agent, harden, apply, the banner appears naming the chat, "Roll back" restores the previous chat and only the chat program restarts, then the same change re-applied and confirmed.
 - A shell change (the New Tab page) through preview, harden, apply, the banner, and confirm.
 - A workspace_ui change previewed as the shell with the chat.
 - A terminal change through preview and apply.
@@ -256,7 +256,7 @@ Findings: this scenario has not been run. The implementation was validated by th
 - The observer not yet up when the chat boots (supervisord starts them together).
 - A snapshot larger than the atomic append size mid-write.
 - A preview started while another pass's preview is up.
-- A rollback that touches the shell: the shell answers, then restarts itself; the browser reconnects and the band shows the outcome.
+- A rollback that touches the shell: the shell answers, then restarts itself; the browser reconnects and the banner shows the outcome.
 - A rollback into a tree without `agent-observer`.
 - The kept snapshots' disk use if a notice is never closed.
 - `MINDS_APPS_FILE` respected by every registry reader the preview shell uses (the inventory, `layout.py`, `forward_port.py`).
