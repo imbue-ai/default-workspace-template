@@ -321,10 +321,18 @@ class ShellState(MutableModel):
                 self.broadcast_desktops_updated()
             return next(candidate for candidate in outcome.desktop.windows if candidate.id == window_id)
         stored = StoredWindowPath(path=path, title=title)
-        independent = {candidate.id for candidate in desktop.windows if candidate.scope is LocationScope.INDEPENDENT}
-        if self.window_paths.set_path(client_id, window_id, stored, independent):
+        if self.window_paths.set_path(client_id, window_id, stored, self._independent_window_ids()):
             self.broadcaster.broadcast_placements_updated(str(desktop.id), str(client_id), mint_save_id())
         return effective_window(window, stored)
+
+    def _independent_window_ids(self) -> set[WindowId]:
+        """The independent windows of every desktop: the entries a client's window-paths file may still name."""
+        return {
+            window.id
+            for desktop in self.desktops.list_desktops()
+            for window in desktop.windows
+            if window.scope is LocationScope.INDEPENDENT
+        }
 
     def delete_desktop(self, desktop_id: str) -> DesktopDeleteOutcome:
         """Delete a desktop with its windows and every client's layout of it, and move the clients on it to the
