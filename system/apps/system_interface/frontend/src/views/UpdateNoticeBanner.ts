@@ -1,11 +1,10 @@
 /**
  * The update notice, shown once as a top banner beside the staleness banner: the apply kept one
  * rollback point for everything it touched, and only a person closes it. The banner names what
- * the apply touched, since a rollback takes all of it back together. Three states, all read off
- * the notice the socket keeps current: open (Roll back / Everything seems good), a rollback
- * running (its progress, no verbs), and settled (the outcome, and Close). Roll back asks first,
- * naming the update and what it restarts. The notice and the apps' names are read off the
- * store's state, which the socket keeps current.
+ * the apply touched, since a rollback takes all of it back together. Three states, read off the
+ * notice in the store's state, which the socket keeps current: open (Roll back / Everything
+ * seems good), a rollback running (its progress, no verbs), and settled (the outcome, and
+ * Close). Roll back asks first, naming the update and what it restarts.
  */
 
 import m from "mithril";
