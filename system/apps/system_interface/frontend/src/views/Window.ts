@@ -25,8 +25,7 @@ import type { WindowControl } from "./TitleBar";
 
 // The handles' sizes are theme tokens (contracts.md section 11): an edge is a strip of
 // --desk-resize-edge overhanging the border by --desk-resize-overhang, inset from the corners,
-// which are --desk-resize-corner squares over the same overhang. The corners come last in
-// RESIZE_EDGES, so they win where an edge would reach them. Spelled out in full: Tailwind
+// which are --desk-resize-corner squares over the same overhang. Spelled out in full: Tailwind
 // generates only the utilities it finds as literal class names.
 const EDGE_CLASS: Readonly<Record<ResizeEdge, string>> = {
   n: "-top-(--desk-resize-overhang) inset-x-(--desk-resize-edge-inset) h-(--desk-resize-edge) cursor-ns-resize",
