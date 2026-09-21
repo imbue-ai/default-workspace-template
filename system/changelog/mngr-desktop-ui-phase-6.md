@@ -13,3 +13,5 @@ Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interfac
 - The auto-open in `.mngr/settings.toml` posts the desktop's `open` of the chat at `/?chat=<id>`.
 
 - Docs: `docs/system/README.md` points at the desktop plan as the current direction; the plan records that every phase has landed; `contracts.md` describes the contract module without `open(address)`; `system/apps/README.md` and `system/libs/README.md` describe the desktop-era layout.
+
+- Adds the spec `docs/system/specs/window-bound-resources.md`: every seeded shortcut opens a new window of its app (the chat's is its chat list), a terminal and the one browser live as long as a window shows them and are collected by their own apps, and agents open a window for what they use.
