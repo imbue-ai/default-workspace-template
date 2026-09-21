@@ -3,7 +3,7 @@
 This is the spec for reshaping the desktop's launcher and for moving its "Start something" and "Start from a template" content into an app of its own.
 The launcher stays the text field at the taskbar's left, but the panel it opens becomes a compact menu of rows in which something is always highlighted: Enter runs the highlighted row, and when nothing matches what was typed, Enter starts a new chat with the typed text and Ctrl+Enter sends it to an existing chat.
 Both land in the chat window the desktop already has, the pinned one, rather than opening another.
-The intents and the template catalog become the Getting Started app, an ordinary registered app whose window opens once, on the very first visit, beside the welcome chat.
+The intents and the template catalog become the Getting Started app, an ordinary registered app that opens its own window once per workspace, for the first client to connect, beside the welcome chat.
 
 It is written for the people and agents implementing it, and it is the reference the implementation is judged against.
 It builds on the desktop interface V1 ([plan](../desktop-interface/plan-desktop-interface.md), [concepts](../desktop-interface/concepts.md), [contracts](../desktop-interface/contracts.md)), on the pinned windows of the [pinned-taskbar-entries plan](../pinned-taskbar-entries/plan-pinned-taskbar-entries.md), and on the shortcut rules of the [window-bound-resources spec](../../specs/window-bound-resources.md), and amends those documents where section 12 says.
@@ -41,7 +41,7 @@ The Getting Started page never names the chat either: it asks the shell to start
 | Primary and secondary text action | The first and second free-text rows in order; Enter's fallthrough and Ctrl+Enter's target |
 | Highlight | The one row Enter runs; always exactly one while the menu is open and non-empty |
 | Getting Started | The app holding the intents and the template catalog |
-| First-visit window | A window an app's manifest asks for on the desktop a workspace is born with, opened once, ordinary thereafter |
+| First-visit window | The window Getting Started opens for itself once per workspace, on the first desktop, for the first connected client; an ordinary window thereafter |
 
 ## 3. The model
 
@@ -96,36 +96,22 @@ A launch-path row runs its launch path in one of two modes, decided by the manif
 
 On a stock machine "Chat" raises the pinned chat window and "New Terminal", "New File Viewer", and "Open Browser" open windows.
 
-### 3.4 First-visit windows
+### 3.4 The first-visit window
 
-An app's manifest may ask for one window on the desktop a workspace is born with:
+Getting Started opens its own window once per workspace, the way the chat app surfaces the welcome chat (`imbue/chat/auto_open.py`): from the app, through the loopback op route, for the first client that connects.
+The shell learns nothing new; no manifest field, no shell state, and no placement rule are added for this.
 
-```toml
-[first_window]
-path = "/"
-```
+On startup the app starts one background thread that, while the window has not yet been delivered, polls the shell's client list (`GET /api/clients`) and, once a connected client is listed, posts two ops targeting that client on the first desktop (the first entry of `GET /api/desktops`):
 
-`path` obeys the pin's rule: a page under the app's origin, launch-path-shaped (no query string), safe to open any number of times, opened without settling.
-The table has no other field in this version.
+1. `open` with `app = getting-started`, `path = /`, `if_present = focus`, which answers the window id (an open of the same path twice answers the same window, so a retry is harmless);
+2. `place` of that window with `frame = 0.12,0.05,0.33,0.9`, the left complement of the pinned frame (contracts 4.2), which shows it normal at that frame on top of the client's stack.
 
-The shell honours it once per app per workspace.
-`desktops.json` gains a top-level `seeded_first_windows`, a list of app names, default `[]`, and the file stays at version 1.
-On every read of the desktops after the registry has been read (the same read that seeds `Home` and reconciles pinned windows), for each registered, non-internal app whose row carries a `first_window` and whose name is not in `seeded_first_windows`, the shell appends an ordinary window at the declared path to the **first** desktop (`is_pinned` false, `scope` linked, `is_settling` false, title empty) and adds the name to the list; a write happens only when something was added, and is broadcast once after the read.
-An app that registers late is seeded on the next read after the registry change, once.
-The window is ordinary from then on: closing it removes it for everyone, and nothing ever seeds it again.
-A new desktop never gets one; deleting `Home` deletes it with the desktop.
-
-A first-visit window's placement follows the pinned frame's precedent (contracts 4.2).
-For a client whose layout of the desktop has **never been written** (a layout whose `updated_at` is null, contracts 5.4), the layout answer places every first-visit window still on the desktop at `FIRST_WINDOW_FRAME`, state `NORMAL`, **not minimized**, at the start of the list (the bottom of the stack); a client whose layout has been written follows the ordinary rule, minimized at the cascade.
-The frame is the shell's constant beside `PINNED_WINDOW_FRAME`, the left complement of it:
-
-```python
-FIRST_WINDOW_FRAME: Final[Frame] = Frame(x=0.12, y=0.05, width=0.33, height=0.9)
-```
+Delivery is remembered in a ledger, `data/.state/getting-started/first_window.json` (`{"is_delivered": true}`), written once both ops were accepted; a restart of the app with the ledger present opens nothing, and closing the window never brings it back.
+A shell that cannot be reached, or that refuses an op, is retried on the next poll for as long as the window is undelivered.
+The window is ordinary from the moment it exists: closing it removes it for everyone, and a second client's first visit sees it minimized in its taskbar, as it sees any window opened elsewhere.
 
 `x` clears the one-column shortcut grid (the grid inset plus one cell width, 112px, is under 0.12 of any backdrop 940px or wider; a narrower backdrop overlaps the column's edge, which is accepted).
-The op route's edits of a never-written layout start from the same effective layout, so an agent op (the welcome chat's `restore` of the pinned window) writes the first-visit window's placement beside its own rather than dropping it.
-Because the pinned window's default placement is minimized and the first-visit window's is shown, the welcome chat's `restore` raises the chat over Getting Started, which is the arrangement wanted: Getting Started on the left, the chat over the right half, the chat focused.
+The chat's welcome-chat restore and this open flush independently once a client connects, so which of the two windows ends on top is not fixed; the two frames do not overlap, so only the focus differs, which is accepted.
 
 ### 3.5 The launcher's rows
 
@@ -146,7 +132,7 @@ Running any row closes the menu and clears the field.
 
 ### 3.6 The Getting Started app
 
-An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), with one launch path, `open` at `/`, a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, `critical = false`, and a `first_window` at `/`.
+An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), with one launch path, `open` at `/`, a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, `critical = false`, and the first-visit opener of section 3.4.
 Its page holds, top to bottom: a search field over its own content; "Start something", the eight intent tiles of today's `startSomething.ts`; "Start from a template", the catalog shelves of today's `TemplateShelves.ts`.
 Picking a template shows the template's detail as a page inside the app (today's `TemplateDetailModal`, with a back control instead of a close), whose two actions are "Make it mine" and "Create a new machine from it".
 Every tile and both actions start a chat with a seeded text through `shell:start-with-text` (section 3.7); the Getting Started window stays where it is and the chat comes up beside it.
@@ -168,11 +154,10 @@ When the machine has no free-text row the shell tells the user through its notif
 
 | Fact or verb | Owner |
 |---|---|
-| Which launch paths take typed text, and which param; which app wants a first-visit window, and where | The app's manifest, through the registry |
+| Which launch paths take typed text, and which param | The app's manifest, through the registry |
 | The order of the free-text rows | Derived: launcher app order, then manifest order |
-| Whether a first-visit window has been seeded | Shell, shared (`seeded_first_windows`) |
-| The first-visit window itself | Shell, shared, an ordinary window once seeded |
-| Its frame for a client that has never arranged the desktop | Shell, the constant `FIRST_WINDOW_FRAME`; written on the client's first save or an op's first edit |
+| Whether the first-visit window has been opened; opening and placing it | The Getting Started app, in its ledger and through the op route |
+| The first-visit window itself | Shell, shared, an ordinary window once opened |
 | The launcher's rows, highlight, and query | Derived in the browser, transient |
 | The intents, the template catalog, the detail page | The Getting Started app |
 | Which chat a sent text goes to | The chat app, in its picker |
@@ -183,7 +168,7 @@ When the machine has no free-text row the shell tells the user through its notif
 - Enter never starts a chat while a launch-path or window row is highlighted; it never does nothing while a free-text row is enabled.
 - A free-text row never opens a second window of an app that has a pinned window on the active desktop.
 - The shell package and its frontend name no app; the free-text rows and the pinned-first rule are read from manifests and windows.
-- A first-visit window is seeded at most once per app per workspace, and only onto the first desktop.
+- Getting Started opens its first-visit window at most once per workspace, and only onto the first desktop.
 - The shell serves nothing about templates or intents.
 
 ## 4. Behaviour
@@ -237,19 +222,17 @@ The user reads the chat's first turn beside the tiles they came from.
 
 ### 4.5 Sending a text to an existing chat
 
-Ctrl+Enter, or the "Send to chat..." row, runs the chat's `send` launch path with the text (section 9): the pinned chat window is pointed at `/?send=<text>` and restored.
+Ctrl+Enter, or the "Send to chat..." row, runs the chat's `send` launch path with the text (section 8): the pinned chat window is pointed at `/send?message=<text>` and restored.
 The chat root shows a picker over its list, a typeahead over every chat's title; Enter or a click sends the text to that chat, selects it, and reports `/?chat=<id>`; Escape dismisses the picker and reports the selection alone, so the text is dropped.
 Sending is the chat app's ordinary send, so a stopped chat is started by it as any send starts one.
 
 ### 4.6 First visit
 
-A fresh workspace's first read after the registry seeds `Home` with its shortcuts, its pinned chat window, and the Getting Started first-visit window.
-The first client connects, fetches its layout of `Home` (never written), and is answered with Getting Started shown at `FIRST_WINDOW_FRAME` and the pinned chat window minimized at `PINNED_WINDOW_FRAME`.
-The chat app's auto-open then navigates and restores the pinned window for that client, whose op edit writes the client's layout from the effective one: Getting Started on the left, the chat over the right half and on top.
-The client's first fetch and the chat's op may land in either order; both converge, because the op writes the effective layout and the fetch that follows its broadcast reads what it wrote.
-A second client's first visit sees the same two placements, less the chat's restore, which the ledger delivered once; closing Getting Started on any client removes it for all.
-
-A client whose layout of `Home` was written before Getting Started registered (a race the reconcile's late seeding covers) sees the window minimized in its taskbar, like any window opened elsewhere.
+A fresh workspace's first read after the registry seeds `Home` with its shortcuts and its pinned chat window.
+The first client connects and fetches its layout of `Home` (never written), and is answered with the pinned chat window minimized at `PINNED_WINDOW_FRAME`.
+The chat app's auto-open then navigates and restores the pinned window for that client, and the Getting Started app's opener opens and places its window for the same client (section 3.4): Getting Started on the left, the chat over the right half.
+The two land in either order; both are op edits of the same client's layout under the shell's lock, so both placements survive whichever comes second.
+A second client's first visit sees the pinned window minimized and the Getting Started window minimized in its taskbar; closing Getting Started on any client removes it for all.
 
 ### 4.7 Compact and touch
 
@@ -271,16 +254,13 @@ Long press replaces nothing here, since the menu has no context menus.
 
 ### 5.1 Manifest and registry
 
-- `app_manifest`: `LaunchPath` gains `text_param: LaunchParamName | None` (default None, validated against `params`); `AppManifest` and `RegistryRow` gain `first_window: FirstWindow | None`, a table with `path: LaunchPathValue`.
-- `forward_port.py` copies `text_param` into each launch path's row entry and the `first_window` table onto the row, refusing a malformed table the way it refuses a malformed `pin`.
-- The inventory's `app` object and `apps_updated` carry `text_param` on each launch path (`null` when absent) and `first_window` (the table or `null`).
+- `app_manifest`: a `LaunchParamName` primitive (a non-empty string) types `LaunchParam.name`, and `LaunchPath` gains `text_param: LaunchParamName | None` (default None, validated against `params`); `RegistryLaunchPath` gains `text_param`.
+- `forward_port.py` copies `text_param` into each launch path's row entry when the manifest declares one.
+- The inventory's `app` object and `apps_updated` carry `text_param` on each launch path (`null` when absent).
 
 ### 5.2 State
 
-- `desktops.json`: `seeded_first_windows: [app name, ...]`, default `[]`, version unchanged.
-- `desktop_document.py`: `first_window(app_name, path, now)` (the record a seed creates) and `with_first_windows_seeded(document, first_windows, now)` over the whole document (it edits the first desktop and the list; not pure, since it mints a window id), answering the document and whether it changed; `FIRST_WINDOW_FRAME`.
-- `ShellState.list_desktops()` runs the seed after the pinned reconcile, under the state lock, writing and broadcasting only on change.
-- The placements read (the layout route and the op route's edits of a never-written layout) answers first-visit windows on the desktop at `FIRST_WINDOW_FRAME`, shown, for a layout that has never been written; the check is "no layout file for this client and desktop", which is what "never written" means today.
+- Nothing changes in the shell's state files or its placement rules: the first-visit window is an ordinary window the Getting Started app opens through the op route (section 3.4).
 - `template_catalog.py`, its route, its config field, and its tests leave the shell.
 
 ### 5.3 Routes and messages
@@ -294,8 +274,9 @@ Nothing else changes on the wire beyond the fields of 5.1 and the state of 5.2.
 
 Following the V1 layering:
 
-- `model/records.ts`: `text_param` on `LaunchPath`, `first_window` on `AppRecord`, and their parsers.
-- `model/launch.ts`: `freeTextRowsOf(apps)` (section 3.1's order), `isPinHomeLaunch(app, launchPath)`, and `textPathOf(launchPath, text)` with the 2048 bound answered as a disabled reason; `promptTargetOfTiles` and `MESSAGE_PARAM` go, since the text param is declared.
+- `model/records.ts`: `text_param` on `LaunchPath` and its parser.
+- `model/search.ts` moves to `system/libs/workspace_ui/src/search.ts`: the launcher, the Getting Started page, and the chat's picker all match text the same way, so the shell imports it from the library like the other frontends.
+- `model/launch.ts`: `freeTextRowsOf(apps)` (section 3.1's order), one classifier `launchRowKindOf(app, launchPath)` answering `text`, `focus`, or `new` in that order (a launch path with a `text_param` is a free-text row whatever its path; only then does a path equal to the pin's home path make a focus row), and `textPathOf(launchPath, text)` with the 2048 bound answered as a disabled reason; `promptTargetOfTiles` and `MESSAGE_PARAM` go, since the text param is declared.
 - `reducers/launcherRows.ts`, new: the rows of section 3.5 and the highlight rule as pure functions over the state and the query, with `moveHighlight(rows, index, delta)`.
 - `store/DesktopStore.ts`: `runFreeTextRow(row, text)` (pinned-first, over `navigateOwnWindow` and `restoreWindow`, else `openLaunchPath`), `runLaunchRow(row)` (focus or new by section 3.3), and the handler for `shell:start-with-text`, which is `runFreeTextRow` on the primary action.
 - `views/LauncherField.ts`: the placeholder and the key handling of 4.8; the query and the highlight index stay transient state of `App.ts`, as the query is today.
@@ -323,14 +304,15 @@ The `.launcher-tile` class goes with the tiles.
 ## 7. The Getting Started app
 
 - **Package:** `system/apps/getting_started`, a Flask app with its own `pyproject.toml`, installed as its own uv tool like the chat, run by a `[program:getting-started]` drop-in in `system/supervisord.conf.d/` that registers `system/apps/getting_started/app.toml` through `forward_port.py --manifest` and binds `127.0.0.1:8030` (free: the shell has 8000, the chat 8010, the browser 8081, the file viewer 8300, the terminal 7681 and 7683).
-- **Manifest:** section 3.6, plus `priority = "user"` (the band a non-critical app takes by default) and an icon in the house style.
+- **Manifest:** section 3.6, plus `priority = "getting-started"`, a new entry of `oom_priority.bands.SERVICE_BANDS` just above the file viewer's (a shed page costs one reload, so it is the most expendable built-in service), and an icon in the house style. `test_app_manifests.py` refuses a built-in in the `user` band, which is why the app gets a band of its own.
 - **Routes:** `GET /` (the page), `GET /api/health`, `GET /api/templates-catalog` (moved from the shell), and `GET /_static/app_contract.js` from `SHELL_APP_CONTRACT_PATH`, as the terminal and the browser serve it.
+- **First-visit opener:** the thread and ledger of section 3.4, started with the app and stopped with it.
 - **Frontend:** a third member of the npm workspace, Mithril over `workspace_ui`, importing the contract module from its own origin; it connects to the shell on load, reports `/` with the title `Getting Started`, declares no navigation capability (it has one page, and a navigate reloads it), and posts `shell:start-with-text` from every tile and action.
   The search field at its top filters the intents by title and description and the templates by title, description, and author (today's `searchStartOptions` and `searchTemplates`), swapping the sections for results as the New Tab page did.
   The detail page is the template's drawing, write-up, requirements, and repository with a back control; its actions post the adopt message (`/use-template <url>`) and the create-machine message of today's `LauncherOverlay.ts`.
 - **Catalog:** today's `template_catalog.py` and its tests move here unchanged in behaviour; the cache file moves to `data/.state/getting-started/template_catalog.json` (the state directory follows the registered name, as `data/.state/<name>/` does); the config reads `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` with today's default, with a `CLEANUP:` note to rename the variable once the minds side sets a neutral one.
-- **Build and apply:** `system/scripts/build_workspace.sh` builds the third frontend and installs the tool; the update apply's bundle list and its pre-flight boot learn the app; `test_app_manifests.py` and contracts section 2's table gain its row.
-- **Data:** nothing under `data/.apps/getting_started/`; the app persists nothing of the user's.
+- **Build and apply:** `system/scripts/build_workspace.sh` already builds every npm workspace member and installs every app with a manifest and a pyproject, so it needs no change; the update apply's bundle list (`update_layout.FRONTEND_BUNDLES`) gains the app's bundle, so the apply installs and verifies it. No pre-flight boot is added: the chat's exists because the chat imports mngr and its plugins, and this app imports only Flask and httpx, so the post-restart health probe covers it. `test_app_manifests.py` and contracts section 2's table gain its row.
+- **Data:** nothing under `data/.apps/getting-started/`; the app persists nothing of the user's. Its machine state (the catalog cache and the first-visit ledger) lives under `data/.state/getting-started/`.
 
 ## 8. The chat app
 
@@ -341,13 +323,13 @@ The `.launcher-tile` class goes with the tiles.
   [[launch_paths]]
   id = "send"
   label = "Send to chat..."
-  path = "/"
-  params = [{name = "send", label = "Message to send", required = false}]
-  text_param = "send"
+  path = "/send"
+  params = [{name = "message", label = "Message to send", required = false}]
+  text_param = "message"
   ```
 
-- Two launch paths share the path `/` (`root` and `send`); ids are unique in a manifest and paths are not constrained, so the manifest allows it, and the root tells the two apart by the query.
-- The root handles `?send=<text>` on load and on `shell:navigate`, before selection: it opens the picker of 4.5 over the list, sends on pick through its ordinary send, selects the chat, and reports `/?chat=<id>`; on dismissal it reports the selection alone.
+- `/send` is its own path, served by the chat backend as the root is served at `/new`, so no launch path shares the pin's home path but `root`, and the two free-text rows read alike (`/new?message=`, `/send?message=`).
+- The root handles `/send?message=<text>` on load and on `shell:navigate`, before selection: it opens the picker of 4.5 over the list, sends on pick through its ordinary send, selects the chat, and reports `/?chat=<id>`; on dismissal it reports the selection alone.
   A `send` with no text is a no-op that reports the selection.
 - `root` keeps `draft`; nothing else changes.
   The desktop shortcut still opens a second chat list (window-bound-resources decision 15), which this design leaves alone.
@@ -355,17 +337,16 @@ The `.launcher-tile` class goes with the tiles.
 ## 9. mngr-side changes
 
 In the mngr repository, on the branch of the same name: the Electron e2e runner (`apps/minds/imbue/minds/desktop_client/e2e_workspace_runner.py`) finds the new-chat and new-terminal tiles by `.launcher-tile[data-launch=...]` and waits for a new chat frame after pressing the chat tile.
-It changes to `[data-launch="chat:new"]` and `[data-launch="terminal:new"]` rows, expects the new chat inside the pinned window's root frame rather than in a new window, and expects a Getting Started window on a fresh workspace's first visit beside the welcome chat.
+It changes to `[data-launch="chat:new"]` and `[data-launch="terminal:new"]` rows, expects the new chat inside the pinned window's root frame rather than in a new window, and waits for a Getting Started window on a fresh workspace's first visit beside the welcome chat.
 `apps/minds/docs/design.md`'s "further chats start from the desktop's launcher" stays true; the workspace glossary gains Getting Started among the built-in apps.
 
 ## 10. Testing
 
-- **Manifest and registry:** `text_param` validated against `params`, the `first_window` table and its refusals, the registry copies, the inventory fields.
+- **Manifest and registry:** `text_param` validated against `params`, the registry copy, the inventory field.
 - **Reducers:** the rows and the highlight of section 3.5 over fixtures: empty query, a matching launch path, a matching window on another desktop, no match (primary highlighted), a disabled secondary with empty text, the 2048 bound, wrap-around.
 - **Store:** `runFreeTextRow` against the fake shell, pinned (a location write for this client and a restore) and unpinned (an open at the launch path); `runLaunchRow` focus and new; `shell:start-with-text` reaching the primary action.
-- **Shell:** the seed on a fresh document, a late-registering app, no second seed after a close, no seed on a created desktop, `Home`'s deletion; the layout answer for a never-written layout and for a written one; the op route's first edit keeping the first-visit placement.
-- **End to end** (`test_e2e.py`, with a stub app declaring a `text_param` on a launch path and another declaring a `first_window`): the menu opens with launch-path and free-text rows; typing filters and moves the highlight; Enter on a highlighted launch path opens its window; Enter with no match points the stub's pinned window at the text path and restores it; Ctrl+Enter runs the secondary; a fresh workspace's first client sees the first-visit window shown at the left frame and the pinned window minimized at the right; a phone viewport shows the menu full width and the free-text rows tappable.
-- **Getting Started:** unit tests beside the moved catalog module; a frontend test per view; an e2e scenario opening a tile and asserting the chat's pinned window is pointed at `/new?message=...` while the Getting Started window keeps its placement.
+- **End to end** (`test_e2e.py`, with a pinned stub app declaring a `text_param` on two launch paths): the menu opens with launch-path and free-text rows; typing filters and moves the highlight; Enter on a highlighted launch path opens its window; Enter with no match points the stub's pinned window at the text path and restores it; Ctrl+Enter runs the secondary; a phone viewport shows the menu full width and the free-text rows tappable.
+- **Getting Started:** unit tests beside the moved catalog module and the opener (delivered once, held while no client is connected, retried after a refusal, the ledger read back); a frontend test per view; the routes serve the page, the health probe, the catalog, and the contract module.
 - **Chat:** the `send` path's picker in `test_e2e.py`: pick sends and selects, Escape drops.
 - **Ratchets:** the no-app-name rule holds (the shell reads `text_param` and pins, never `chat`); the pixel-metric rule holds through the new token.
 
@@ -373,22 +354,21 @@ It changes to `[data-launch="chat:new"]` and `[data-launch="terminal:new"]` rows
 
 Each step leaves the tree green; the whole is one pull request per repository.
 
-1. `app_manifest`, `forward_port.py`, the inventory: `text_param` and `first_window`; the chat manifest's `text_param` on `new`.
+1. `app_manifest`, `forward_port.py`, the inventory: `text_param`; the chat manifest's `text_param` on `new`.
 2. The shell's frontend: the rows reducer, the store's two run methods, `LauncherMenu` replacing `LauncherOverlay`, the field's keys, the token, the selectors; the e2e launcher scenarios rewritten.
    The intents and templates leave the shell in this step, so the launcher is briefly without them until step 4 lands in the same pull request.
 3. The contract message and its store handler.
-4. The Getting Started app, with the catalog module and the intent, shelf, detail, and art modules moved in; build and apply plumbing; its manifest with the `first_window`.
-5. The shell's first-visit seeding and placement rule.
-6. The chat's `send` launch path and picker.
-7. Documents (section 12), changelog entries for `system_interface`, `chat`, `app_manifest`, `getting_started`, `system`, and `.agents`, and the mngr-side pull request.
-8. Manual verification in a fresh dev workspace: the first visit's two windows; Enter, Ctrl+Enter, and a tile from a laptop and a phone.
+4. The Getting Started app, with the catalog module and the intent, shelf, detail, and art modules moved in; build and apply plumbing; its manifest, its band, and its first-visit opener.
+5. The chat's `send` launch path and picker.
+6. Documents (section 12), changelog entries for `system_interface`, `chat`, `app_manifest`, `getting_started`, `system`, and `.agents`, and the mngr-side pull request.
+7. Manual verification in a fresh dev workspace: the first visit's two windows; Enter, Ctrl+Enter, and a tile from a laptop and a phone.
 
 ## 12. Amendments to existing documents
 
 - concepts.md 2.8 and plan 4.11: the launcher's resting content is the menu of section 3.5, not the New Tab page; the "Start something" and "Start from a template" content is the Getting Started app's.
-- concepts.md 2.6 and contracts section 2: `text_param` on a launch path and the `first_window` table; the built-in manifests table gains Getting Started and the chat's `send`.
-- contracts 4.1: `seeded_first_windows`; 4.2: the first-visit frame rule; 5.1: `GET /api/templates-catalog` removed; 5.5: the inventory fields; 7: `shell:start-with-text`; 11: the menu width token; 12: the selectors of 6.2.
-- plan 3.2: the first read also seeds first-visit windows; plan 15: "a richer launcher" stays deferred, the New Tab sections are no longer the launcher's.
+- concepts.md 2.6 and contracts section 2: `text_param` on a launch path; the built-in manifests table gains Getting Started and the chat's `send`.
+- contracts 5.1: `GET /api/templates-catalog` removed; 5.5: the inventory field; 7: `shell:start-with-text`; 11: the menu width token; 12: the selectors of 6.2.
+- plan 15: "a richer launcher" stays deferred, the New Tab sections are no longer the launcher's.
 - The window-bound-resources spec's section 9: "hiding the chat's `new` tile from the launcher" is resolved here (it is the primary text action); its decision 1 and concepts.md decision 15: Getting Started's shortcut is the second focus-mode shortcut beside the browser's, for the same reason (one window is what it is for).
 - `system/apps/system_interface/README.md`: the launcher section and the routes list; `system/apps/README.md`: Getting Started among the built-in apps; the `manage-desktop` skill: nothing (no new op).
 - `catalog/README.md`: the catalog is fetched by the Getting Started app.
@@ -398,7 +378,7 @@ Each step leaves the tree green; the whole is one pull request per repository.
 - Searching inside apps from the launcher (an app-declared search route), as the desktop plan already defers.
 - Ordering apps by recent use; the shell has no activity data.
 - The idempotency key for launch paths on linked windows (issue #646).
-- A first-visit window on later desktops, or a per-user first visit.
+- A first-visit window on later desktops, for later clients, or a per-user first visit; a manifest-declared first window the shell would seed itself.
 - Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" leaves with the tiles and returns when a row menu is designed.
 - The chat shortcut opening a second chat list while a pinned one exists.
 - Multi-line composition in the field; the chat's composer is for that.
