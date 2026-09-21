@@ -591,7 +591,6 @@ describe("gestures", () => {
     expect(redraws).toBe(afterBegin);
     store.endWindowMove({ x: 200, y: 200 });
     expect(redraws).toBeGreaterThan(afterBegin);
-    // Once the gesture is over the window's rectangle is its placement's again.
     expect(store.gestureRectFor("win-1")).toBeNull();
     expect(store.windowRect("win-1")).toEqual(store.renderedRect(placementOf(store.getState().layout, "win-1")));
 

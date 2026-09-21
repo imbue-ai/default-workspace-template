@@ -6,8 +6,7 @@ and the session's title to the shell, and re-points the frame when the shell ask
 navigate. ``/new`` allocates a terminal and redirects to its page. The pty's origin is derived
 in the browser from the label this module reads out of the registry, the way every app page
 derives another app's origin; the contract module the page speaks to the shell with is served
-from this origin (``/_static/app_contract.js``, the shell's build output), since a module import
-carries no cookie and the forwarder refuses it across origins.
+from this origin (``APP_CONTRACT_ROUTE``, the shell's build output).
 """
 
 import html

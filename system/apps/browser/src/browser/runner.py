@@ -243,12 +243,7 @@ def index() -> Response:
 
 
 def app_contract() -> Response:
-    """The shell's app contract module (desktop-interface contracts.md section 7), served from this origin.
-
-    The viewer imports it as a module, and a module import is a fetch without cookies, which the
-    desktop client's forwarder and the share gateway refuse across origins; so the one file the
-    shell's frontend build writes is served here too.
-    """
+    """The shell's built app contract module, served from this origin (see ``SHELL_APP_CONTRACT_PATH`` for why)."""
     if not SHELL_APP_CONTRACT_PATH.is_file():
         return _error({"error": f"the workspace shell's frontend is not built: {SHELL_APP_CONTRACT_PATH} is missing"}, 404)
     # Flask resolves a relative path against the package directory, not the repo root the path names.

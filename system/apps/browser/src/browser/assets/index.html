@@ -1123,8 +1123,7 @@ registerProcessor('pb', PB);`;
 </script>
 <script type="module">
   // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
-  // section 7), imported from this page's own origin (the daemon serves the shell's built
-  // module; a cross-origin module import carries no cookie and the forwarder refuses it). The
+  // section 7), imported from this page's own origin, which the daemon serves it from. The
   // window's path says WHICH browser this page shows and its title is that browser's name; what
   // the browser itself is looking at stays inside the streamed pixels. A session switch is a
   // whole new stream, so this page declares no navigation capability and the shell reloads the
