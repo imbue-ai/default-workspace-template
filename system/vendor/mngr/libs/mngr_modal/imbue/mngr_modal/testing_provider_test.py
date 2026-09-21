@@ -6,7 +6,9 @@ Modal credentials or SSH connections.
 """
 
 import contextlib
+import hashlib
 import json
+import shlex
 import subprocess
 import sys
 from collections.abc import Generator
@@ -25,6 +27,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.config.data_types import MngrContext
@@ -50,6 +53,9 @@ from imbue.mngr.primitives import VolumeId
 from imbue.mngr.providers.listing_utils import build_listing_collection_script
 from imbue.mngr.providers.listing_utils import parse_optional_float
 from imbue.mngr.providers.listing_utils import parse_optional_int
+from imbue.mngr.providers.ssh_host_setup import SSHD_START_OPTIONS
+from imbue.mngr.providers.ssh_host_setup import build_check_and_install_packages_command
+from imbue.mngr.providers.ssh_host_setup import build_configure_ssh_command
 from imbue.mngr.utils.testing import SHARED_MODAL_ENV_NAME_VAR
 from imbue.mngr.utils.testing import generate_test_environment_name
 from imbue.mngr.utils.testing import read_shared_modal_env_name
@@ -81,7 +87,10 @@ from imbue.mngr_modal.instance import _parse_volume_spec
 from imbue.mngr_modal.instance import _substitute_dockerfile_build_args
 from imbue.mngr_modal.plugin import register_provider_backend
 from imbue.mngr_modal.routes.deployment import deploy_function
+from imbue.mngr_modal.routes.deployment import ensure_function_deployed
 from imbue.mngr_modal.routes.deployment import get_function_url
+from imbue.mngr_modal.routes.deployment import get_route_script_path
+from imbue.mngr_modal.routes.deployment import get_source_marker_function_name
 from imbue.mngr_modal.testing import make_host_record
 from imbue.mngr_modal.testing import make_sandbox_with_tags
 from imbue.mngr_modal.testing import make_snapshot
@@ -94,6 +103,7 @@ from imbue.modal_proxy.data_types import FileEntry
 from imbue.modal_proxy.data_types import FileEntryType as ProxyFileEntryType
 from imbue.modal_proxy.data_types import StreamType
 from imbue.modal_proxy.errors import ModalProxyError
+from imbue.modal_proxy.errors import ModalProxyInternalError
 from imbue.modal_proxy.errors import ModalProxyInvalidError
 from imbue.modal_proxy.errors import ModalProxyNotFoundError
 from imbue.modal_proxy.errors import ModalProxyRateLimitError
@@ -106,9 +116,11 @@ from imbue.modal_proxy.interface import SandboxInterface
 from imbue.modal_proxy.interface import VolumeInterface
 from imbue.modal_proxy.log_utils import ModalLoguruWriter
 from imbue.modal_proxy.testing import FakeExecOutput
+from imbue.modal_proxy.testing import FakeExecProcess
 from imbue.modal_proxy.testing import FakeImage
 from imbue.modal_proxy.testing import FakeModalInterface
 from imbue.modal_proxy.testing import FakeSandbox
+from imbue.modal_proxy.testing import FakeSandboxRefusedHostProvisioningError
 from imbue.modal_proxy.testing import FakeVolume
 
 
@@ -140,9 +152,7 @@ class _RateLimitingVolumeStub(VolumeInterface):
         pass
 
 
-# ---------------------------------------------------------------------------
 # Host Record CRUD Tests
-# ---------------------------------------------------------------------------
 
 
 def test_write_and_read_host_record(testing_provider: ModalProviderInstance) -> None:
@@ -241,9 +251,7 @@ def test_save_failed_host_record(testing_provider: ModalProviderInstance) -> Non
     assert record.ssh_host is None
 
 
-# ---------------------------------------------------------------------------
 # Agent Persistence Tests
-# ---------------------------------------------------------------------------
 
 
 def test_persist_and_list_agent_data(testing_provider: ModalProviderInstance) -> None:
@@ -325,9 +333,7 @@ def test_persist_agent_without_id_logs_warning(testing_provider: ModalProviderIn
     assert agents == []
 
 
-# ---------------------------------------------------------------------------
 # Volume Operations Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_state_volume(testing_provider: ModalProviderInstance) -> None:
@@ -475,9 +481,7 @@ def test_delete_host_volume(
     testing_provider._delete_host_volume(host_id)
 
 
-# ---------------------------------------------------------------------------
 # Host Name Uniqueness Tests
-# ---------------------------------------------------------------------------
 
 
 def test_check_host_name_unique_no_conflicts(testing_provider: ModalProviderInstance) -> None:
@@ -503,9 +507,7 @@ def test_check_host_name_unique_destroyed_host_ok(testing_provider: ModalProvide
     testing_provider._check_host_name_is_unique(HostName("reusable-name"))
 
 
-# ---------------------------------------------------------------------------
 # Sandbox Cache Tests
-# ---------------------------------------------------------------------------
 
 
 def test_sandbox_cache_by_id(
@@ -568,9 +570,7 @@ def test_reset_caches(
     assert host_id not in testing_provider._sandbox_cache_by_id
 
 
-# ---------------------------------------------------------------------------
 # Sandbox Listing Tests
-# ---------------------------------------------------------------------------
 
 
 def test_list_sandboxes(
@@ -621,9 +621,7 @@ def test_find_sandbox_returns_none_when_not_found(
     assert testing_provider._find_sandbox_by_name(HostName("nonexistent")) is None
 
 
-# ---------------------------------------------------------------------------
 # Image Building Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_modal_image_definition_default(testing_provider: ModalProviderInstance) -> None:
@@ -655,9 +653,7 @@ def test_get_modal_image_definition_with_secrets(
     assert image.get_object_id() is not None
 
 
-# ---------------------------------------------------------------------------
 # Discovery Tests
-# ---------------------------------------------------------------------------
 
 
 def test_discover_hosts_with_running_sandbox(
@@ -782,9 +778,7 @@ def test_discover_hosts_and_agents_excludes_destroyed(
     assert len(result) == 0
 
 
-# ---------------------------------------------------------------------------
 # get_host and to_offline_host Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_host_by_id_offline(testing_provider: ModalProviderInstance) -> None:
@@ -836,9 +830,7 @@ def test_to_offline_host_not_found(testing_provider: ModalProviderInstance) -> N
         testing_provider.to_offline_host(HostId.generate())
 
 
-# ---------------------------------------------------------------------------
 # Host Resources Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_host_resources_with_config(testing_provider: ModalProviderInstance) -> None:
@@ -870,9 +862,7 @@ def test_get_host_resources_no_config(testing_provider: ModalProviderInstance) -
     assert resources.memory_gb == 1.0
 
 
-# ---------------------------------------------------------------------------
 # Snapshot Tests
-# ---------------------------------------------------------------------------
 
 
 def test_list_snapshots(testing_provider: ModalProviderInstance) -> None:
@@ -937,9 +927,7 @@ def test_create_snapshot_no_sandbox_raises(testing_provider: ModalProviderInstan
         testing_provider.create_snapshot(host_id)
 
 
-# ---------------------------------------------------------------------------
 # Stop Host Tests
-# ---------------------------------------------------------------------------
 
 
 def test_stop_host_with_sandbox(
@@ -975,9 +963,7 @@ def test_stop_host_no_sandbox(testing_provider: ModalProviderInstance) -> None:
     testing_provider.stop_host(host_id, create_snapshot=False)
 
 
-# ---------------------------------------------------------------------------
 # Destroy Host Tests
-# ---------------------------------------------------------------------------
 
 
 def test_destroy_host(
@@ -1014,9 +1000,7 @@ def test_destroy_host(
     assert agents == []
 
 
-# ---------------------------------------------------------------------------
 # Delete Host Tests
-# ---------------------------------------------------------------------------
 
 
 def test_delete_host(testing_provider: ModalProviderInstance) -> None:
@@ -1031,9 +1015,7 @@ def test_delete_host(testing_provider: ModalProviderInstance) -> None:
     assert testing_provider._read_host_record(host_id, use_cache=False) is None
 
 
-# ---------------------------------------------------------------------------
 # On Connection Error Tests
-# ---------------------------------------------------------------------------
 
 
 def test_on_connection_error_clears_caches(
@@ -1055,9 +1037,7 @@ def test_on_connection_error_clears_caches(
     assert host_id not in testing_provider._host_by_id_cache
 
 
-# ---------------------------------------------------------------------------
 # Modal Name Derivation Tests
-# ---------------------------------------------------------------------------
 
 
 def test_derive_modal_names_environment_name_derived_from_prefix(
@@ -1103,9 +1083,7 @@ def test_derive_modal_names_truncates_long_app_name(
     assert len(app_name) <= MODAL_NAME_MAX_LENGTH
 
 
-# ---------------------------------------------------------------------------
 # Shared Modal env tests (MNGR_TEST_SHARED_MODAL_ENV_NAME)
-# ---------------------------------------------------------------------------
 
 
 def test_read_shared_modal_env_name_returns_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1365,9 +1343,7 @@ def test_production_import_does_not_load_modal_proxy_testing() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Backend App Registry Tests
-# ---------------------------------------------------------------------------
 
 
 def test_app_registry_caches_apps(
@@ -1438,9 +1414,7 @@ def test_get_volume_for_app_not_registered(
         ModalProviderBackend.get_volume_for_app("nonexistent", modal_interface)
 
 
-# ---------------------------------------------------------------------------
 # Start Host Tests
-# ---------------------------------------------------------------------------
 
 
 def test_start_host_no_snapshots_raises(testing_provider: ModalProviderInstance) -> None:
@@ -1473,22 +1447,107 @@ def test_start_host_not_found_raises(testing_provider: ModalProviderInstance) ->
         testing_provider.start_host(HostId.generate())
 
 
-# ---------------------------------------------------------------------------
 # Create Host Error Path Tests
-# ---------------------------------------------------------------------------
 
 
-def test_create_host_raises_on_ssh_setup_failure(
-    testing_provider: ModalProviderInstance,
+class _SshSetupFailingSandbox(FakeSandbox):
+    """A sandbox that answers every command without executing it and fails the SSH configuration step."""
+
+    def exec(
+        self,
+        *args: str,
+        stdout: StreamType = StreamType.PIPE,
+        stderr: StreamType = StreamType.PIPE,
+    ) -> ExecProcess:
+        if "/etc/ssh" in " ".join(args):
+            return FakeExecProcess(completed_output="sh: /etc/ssh: read-only file system", completed_exit_code=1)
+        return FakeExecProcess()
+
+
+class _SshSetupFailingFakeModalInterface(FakeModalInterface):
+    def _build_sandbox(self, sandbox_id: str) -> FakeSandbox:
+        return _SshSetupFailingSandbox(sandbox_id=sandbox_id)
+
+
+def test_create_host_surfaces_a_failed_ssh_setup_as_a_mngr_error(
+    temp_mngr_ctx: MngrContext,
+    tmp_path: Path,
+    cg: ConcurrencyGroup,
 ) -> None:
-    """create_host raises when SSH setup fails in the testing environment.
+    """The sandbox comes up but its SSH configuration command fails; create_host reports that step."""
+    fake_modal = _SshSetupFailingFakeModalInterface(root_dir=tmp_path / "modal_testing", concurrency_group=cg)
+    provider = make_testing_provider(temp_mngr_ctx, fake_modal)
+    try:
+        with pytest.raises(ConcurrencyExceptionGroup) as excinfo:
+            provider.create_host(HostName("ssh-setup-fails"))
+    finally:
+        fake_modal.cleanup()
 
-    The sandbox is created successfully (FakeModalInterface doesn't need real
-    Modal), but SSH setup fails because the testing sandbox can't start sshd
-    as a non-root user. This verifies the error propagation path.
+    assert excinfo.group_contains(MngrError, match="configure SSH in sandbox")
+
+
+@pytest.mark.parametrize(
+    ("argv", "is_prefixable"),
+    [
+        pytest.param(("sh", "-c", build_check_and_install_packages_command("/opt/mngr-host-dir")), True, id="install"),
+        pytest.param(
+            (
+                "sh",
+                "-c",
+                build_configure_ssh_command("root", "ssh-ed25519 AAAAclient", "PRIVATE", "ssh-ed25519 AAAAhost"),
+            ),
+            True,
+            id="configure-ssh",
+        ),
+        pytest.param(("/usr/sbin/sshd", "-D", *shlex.split(SSHD_START_OPTIONS)), False, id="start-sshd"),
+    ],
+)
+def test_fake_sandbox_refuses_to_run_host_provisioning_on_the_test_machine(
+    testing_modal: FakeModalInterface,
+    tmp_path: Path,
+    argv: tuple[str, ...],
+    is_prefixable: bool,
+) -> None:
+    """Every production bring-up command is refused before anything runs.
+
+    The fake executes argv on the machine running the tests; as root, these
+    commands would replace its sshd host key, overwrite root's authorized_keys
+    and apt-install packages. A marker file prepended to the shell commands
+    proves nothing of the command ran, not just that an error came back.
     """
-    with pytest.raises((MngrError, OSError, ExceptionGroup)):
-        testing_provider.create_host(HostName("will-fail"))
+    marker = tmp_path / f"ran-{uuid4().hex}"
+    if is_prefixable:
+        argv = (argv[0], argv[1], f"touch '{marker}' && {argv[2]}")
+    image = testing_modal.image_debian_slim()
+    app = testing_modal.app_create("provisioning-refusal")
+    sandbox = testing_modal.sandbox_create(image=image, app=app, timeout=300, cpu=1.0, memory=1024)
+
+    try:
+        with pytest.raises(FakeSandboxRefusedHostProvisioningError, match="refuses to run host provisioning"):
+            sandbox.exec(*argv)
+    finally:
+        testing_modal.cleanup()
+
+    assert not marker.exists()
+
+
+def test_create_host_through_the_plain_fake_never_provisions_the_test_machine(
+    testing_provider: ModalProviderInstance,
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """Driving the real create_host through the unmodified fake stops at the first bring-up command.
+
+    Bring-up would otherwise replace the provider's host dir with a symlink to
+    the sandbox volume mount and go on to re-key the machine's sshd.
+    """
+    host_dir = temp_mngr_ctx.config.default_host_dir
+
+    with pytest.raises(ConcurrencyExceptionGroup) as excinfo:
+        testing_provider.create_host(HostName("never-provisions"))
+
+    assert excinfo.group_contains(FakeSandboxRefusedHostProvisioningError)
+    assert host_dir.is_dir()
+    assert not host_dir.is_symlink()
 
 
 class _ImageRejectingFakeModalInterface(FakeModalInterface):
@@ -1681,9 +1740,7 @@ def test_create_host_reports_the_build_failure_even_if_its_logs_cannot_be_fetche
         failing_modal.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # Properties and Config Tests
-# ---------------------------------------------------------------------------
 
 
 def test_provider_properties(testing_provider: ModalProviderInstance) -> None:
@@ -1716,9 +1773,7 @@ def test_list_running_host_ids_empty(
     assert running_ids == set()
 
 
-# ---------------------------------------------------------------------------
 # Certified Host Data Update Tests
-# ---------------------------------------------------------------------------
 
 
 def test_on_certified_host_data_updated(testing_provider: ModalProviderInstance) -> None:
@@ -1749,9 +1804,7 @@ def test_on_certified_host_data_updated_not_found(testing_provider: ModalProvide
         testing_provider._on_certified_host_data_updated(host_id, data)
 
 
-# ---------------------------------------------------------------------------
 # Offline Host from Host Record Tests
-# ---------------------------------------------------------------------------
 
 
 def test_create_host_from_host_record(testing_provider: ModalProviderInstance) -> None:
@@ -1767,9 +1820,7 @@ def test_create_host_from_host_record(testing_provider: ModalProviderInstance) -
     assert offline.get_name() == "offline-test"
 
 
-# ---------------------------------------------------------------------------
 # Host Volume Name Derivation Tests
-# ---------------------------------------------------------------------------
 
 
 def test_host_volume_name_derivation(testing_provider: ModalProviderInstance) -> None:
@@ -1779,9 +1830,7 @@ def test_host_volume_name_derivation(testing_provider: ModalProviderInstance) ->
     assert len(name) <= 64
 
 
-# ---------------------------------------------------------------------------
 # ModalVolume Wrapper Tests
-# ---------------------------------------------------------------------------
 
 
 def test_modal_volume_wrapper(testing_provider: ModalProviderInstance) -> None:
@@ -1813,9 +1862,7 @@ def test_modal_volume_translates_rate_limit_error_to_mngr_error() -> None:
         vol.listdir("/any")
 
 
-# ---------------------------------------------------------------------------
 # Tag Operations Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_host_tags_from_sandbox(
@@ -2021,9 +2068,7 @@ def test_rename_host_without_sandbox(
     assert updated.certified_host_data.host_name == "offline-new"
 
 
-# ---------------------------------------------------------------------------
 # Delete Snapshot Tests
-# ---------------------------------------------------------------------------
 
 
 def test_delete_snapshot_removes_from_record(
@@ -2067,9 +2112,7 @@ def test_delete_snapshot_host_not_found_raises(
         testing_provider.delete_snapshot(HostId.generate(), SnapshotId("some-snap"))
 
 
-# ---------------------------------------------------------------------------
 # get_host Edge Cases Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_host_by_id_uses_cache(
@@ -2110,9 +2153,7 @@ def test_get_host_by_name_not_in_records_raises(
         testing_provider.get_host(HostName("not-this-one"))
 
 
-# ---------------------------------------------------------------------------
 # Discover Hosts with Multiple States Tests
-# ---------------------------------------------------------------------------
 
 
 def test_discover_hosts_mixed_states(
@@ -2220,9 +2261,7 @@ def test_discover_hosts_and_agents_mixed_states(
             assert agents[0].agent_name == "agent-one"
 
 
-# ---------------------------------------------------------------------------
 # ModalProviderApp Tests
-# ---------------------------------------------------------------------------
 
 
 def test_modal_provider_app_get_captured_output(
@@ -2285,9 +2324,7 @@ def test_provider_instance_close(
     testing_provider.close()
 
 
-# ---------------------------------------------------------------------------
 # Volume Wrapper Edge Cases Tests
-# ---------------------------------------------------------------------------
 
 
 def test_proxy_file_entry_type_file_maps_to_volume_file() -> None:
@@ -2300,9 +2337,7 @@ def test_proxy_file_entry_type_directory_maps_to_volume_directory() -> None:
     assert result == FileType.DIRECTORY
 
 
-# ---------------------------------------------------------------------------
 # Parsing Helper Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -2321,9 +2356,7 @@ def testparse_optional_float(value: str, expected: float | None) -> None:
     assert parse_optional_float(value) == expected
 
 
-# ---------------------------------------------------------------------------
 # Parse Build Args (testing_provider specific) Tests
-# ---------------------------------------------------------------------------
 
 
 def test_parse_build_args_dockerfile_flag(
@@ -2391,9 +2424,7 @@ def test_parse_build_args_unknown_arg_raises(
         testing_provider._parse_build_args(["--unknown-arg=value"])
 
 
-# ---------------------------------------------------------------------------
 # Backend Module-Level Function Tests
-# ---------------------------------------------------------------------------
 
 
 def test_create_environment(tmp_path: Path, cg: ConcurrencyGroup) -> None:
@@ -2527,9 +2558,7 @@ def test_backend_get_start_args_help() -> None:
     assert "No start arguments" in help_text
 
 
-# ---------------------------------------------------------------------------
 # Deploy Function Tests
-# ---------------------------------------------------------------------------
 
 
 def test_deploy_function(
@@ -2594,9 +2623,7 @@ def test_get_function_url_without_deploy_fails_fast_on_not_found(
     assert interface.not_found_remaining == 4
 
 
-# ---------------------------------------------------------------------------
 # Volume Listing and Deletion Tests
-# ---------------------------------------------------------------------------
 
 
 def test_list_volumes(
@@ -2636,9 +2663,7 @@ def test_delete_volume_not_found_raises(
         testing_provider.delete_volume(VolumeId.generate())
 
 
-# ---------------------------------------------------------------------------
 # get_connector Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_connector_not_found_raises(
@@ -2666,9 +2691,7 @@ def test_get_connector_failed_host_raises(
         testing_provider.get_connector(host_id)
 
 
-# ---------------------------------------------------------------------------
 # _build_modal_volumes Tests
-# ---------------------------------------------------------------------------
 
 
 def test_build_modal_volumes(
@@ -2684,9 +2707,7 @@ def test_build_modal_volumes(
     assert "/mnt/other" in volumes
 
 
-# ---------------------------------------------------------------------------
 # _build_modal_secrets_from_env Tests
-# ---------------------------------------------------------------------------
 
 
 def test_build_modal_secrets_from_env_empty(testing_modal: FakeModalInterface) -> None:
@@ -2699,9 +2720,7 @@ def test_build_modal_secrets_from_env_missing_var(testing_modal: FakeModalInterf
         _build_modal_secrets_from_env(["DEFINITELY_NOT_SET_VAR_12345"], testing_modal)
 
 
-# ---------------------------------------------------------------------------
 # _substitute_dockerfile_build_args Tests
-# ---------------------------------------------------------------------------
 
 
 def test_substitute_dockerfile_build_args() -> None:
@@ -2721,9 +2740,7 @@ def test_substitute_dockerfile_build_args_bad_format() -> None:
         _substitute_dockerfile_build_args("FROM debian", ["bad_format"])
 
 
-# ---------------------------------------------------------------------------
 # _build_image_from_dockerfile_contents Tests
-# ---------------------------------------------------------------------------
 
 
 def test_build_image_from_dockerfile_contents(
@@ -2750,9 +2767,7 @@ def test_build_image_from_dockerfile_no_layer_caching(
     assert image.get_object_id() is not None
 
 
-# ---------------------------------------------------------------------------
 # SandboxConfig Tests
-# ---------------------------------------------------------------------------
 
 
 def test_sandbox_config_effective_cidr_allowlist_default() -> None:
@@ -2770,9 +2785,7 @@ def test_sandbox_config_effective_cidr_allowlist_explicit() -> None:
     assert config.effective_cidr_allowlist == ["10.0.0.0/8", "192.168.0.0/16"]
 
 
-# ---------------------------------------------------------------------------
 # _parse_volume_spec Tests
-# ---------------------------------------------------------------------------
 
 
 def test_parse_volume_spec_valid() -> None:
@@ -2791,9 +2804,7 @@ def test_parse_volume_spec_empty_parts() -> None:
         _parse_volume_spec(":/mnt/data")
 
 
-# ---------------------------------------------------------------------------
 # Agent Listing Edge Cases
-# ---------------------------------------------------------------------------
 
 
 def test_list_persisted_agent_data_skips_invalid_json(
@@ -2812,9 +2823,7 @@ def test_list_persisted_agent_data_skips_invalid_json(
     assert agents == []
 
 
-# ---------------------------------------------------------------------------
 # discover_hosts with Running Sandbox Tests
-# ---------------------------------------------------------------------------
 
 
 def test_discover_hosts_running_sandbox_without_host_record(
@@ -2852,9 +2861,7 @@ def test_close_nonexistent_app() -> None:
     ModalProviderBackend.close_app("this-app-does-not-exist")
 
 
-# ---------------------------------------------------------------------------
 # Backend get_name / get_config_class Tests
-# ---------------------------------------------------------------------------
 
 
 def test_backend_get_name() -> None:
@@ -2865,9 +2872,7 @@ def test_backend_get_config_class() -> None:
     assert ModalProviderBackend.get_config_class() is ModalProviderConfig
 
 
-# ---------------------------------------------------------------------------
 # get_host_resources with host record Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_host_resources_fractional_cpu(testing_provider: ModalProviderInstance) -> None:
@@ -2883,9 +2888,7 @@ def test_get_host_resources_fractional_cpu(testing_provider: ModalProviderInstan
     assert resources.memory_gb == 0.5
 
 
-# ---------------------------------------------------------------------------
 # Backend register_provider_backend Hook Test
-# ---------------------------------------------------------------------------
 
 
 def test_register_provider_backend_hook() -> None:
@@ -2895,9 +2898,7 @@ def test_register_provider_backend_hook() -> None:
     assert registration.load() is ModalProviderBackend
 
 
-# ---------------------------------------------------------------------------
 # HostRecord Model Test
-# ---------------------------------------------------------------------------
 
 
 def test_host_record_roundtrip() -> None:
@@ -2926,9 +2927,7 @@ def test_host_record_roundtrip() -> None:
     assert loaded.config.gpu == "a100"
 
 
-# ---------------------------------------------------------------------------
 # ModalProviderApp Integration Test
-# ---------------------------------------------------------------------------
 
 
 def test_modal_provider_app_full_lifecycle(
@@ -2970,9 +2969,7 @@ def test_modal_provider_app_full_lifecycle(
     modal.cleanup()
 
 
-# ---------------------------------------------------------------------------
 # Snapshot with Pre-populated Host Cache Tests
-# ---------------------------------------------------------------------------
 
 
 def test_create_snapshot_with_cached_offline_host(
@@ -3055,9 +3052,7 @@ def test_stop_host_with_snapshot_using_cached_host(
     assert updated.certified_host_data.stop_reason == "STOPPED"
 
 
-# ---------------------------------------------------------------------------
 # discover_hosts Detailed Coverage Tests
-# ---------------------------------------------------------------------------
 
 
 def test_discover_hosts_handles_sandbox_without_valid_tags(
@@ -3092,9 +3087,7 @@ def test_get_modal_image_definition_from_dockerfile_with_context(
     assert image.get_object_id() is not None
 
 
-# ---------------------------------------------------------------------------
 # get_host_resources with Missing Record Tests
-# ---------------------------------------------------------------------------
 
 
 def test_get_host_resources_missing_record(
@@ -3125,9 +3118,7 @@ def test_get_host_resources_missing_record(
     assert resources.cpu.frequency_ghz is None
 
 
-# ---------------------------------------------------------------------------
 # _get_modal_image_definition with docker_build_args Test
-# ---------------------------------------------------------------------------
 
 
 def test_get_modal_image_definition_from_dockerfile_with_build_args(
@@ -3143,9 +3134,7 @@ def test_get_modal_image_definition_from_dockerfile_with_build_args(
     assert image.get_object_id() is not None
 
 
-# ---------------------------------------------------------------------------
 # discover_hosts with Empty Result Test
-# ---------------------------------------------------------------------------
 
 
 def test_discover_hosts_empty_volume_and_no_sandboxes(
@@ -3156,14 +3145,10 @@ def test_discover_hosts_empty_volume_and_no_sandboxes(
     assert discovered == []
 
 
-# ---------------------------------------------------------------------------
 # HostRecord with failed host -- ensure we handle the None config case
-# ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
 # _build_listing_collection_script Tests
-# ---------------------------------------------------------------------------
 
 
 def test_build_listing_script_uses_host_dir() -> None:
@@ -3363,3 +3348,111 @@ def test_bring_up_command_still_blames_the_command_when_the_sandbox_is_alive(
     assert not isinstance(exc_info.value, ModalSandboxDiedMngrError)
     assert "Failed to do the thing (exit code 3)" in str(exc_info.value)
     assert _COMMAND_FAILURE_OUTPUT in str(exc_info.value)
+
+
+# Ensure Function Deployed Tests
+
+
+def test_ensure_function_deployed_does_not_redeploy_an_app_already_carrying_this_source(
+    tmp_path: Path,
+    cg: ConcurrencyGroup,
+) -> None:
+    """An app already carrying this source must not be deployed to again."""
+    interface = FakeModalInterface(root_dir=tmp_path / "modal_deployed", concurrency_group=cg)
+    app_name = f"test-app-{uuid4().hex}"
+    interface.register_deployed_function(get_source_marker_function_name("snapshot_and_shutdown"), app_name=app_name)
+    interface.register_deployed_function(
+        "snapshot_and_shutdown", app_name=app_name, url="https://testing.modal.run/snapshot_and_shutdown"
+    )
+
+    url = ensure_function_deployed("snapshot_and_shutdown", app_name, None, interface)
+
+    assert url == "https://testing.modal.run/snapshot_and_shutdown"
+    assert interface.get_deployments() == ()
+
+
+def test_ensure_function_deployed_deploys_into_an_app_that_has_no_deployment(
+    tmp_path: Path,
+    cg: ConcurrencyGroup,
+) -> None:
+    interface = FakeModalInterface(root_dir=tmp_path / "modal_empty", concurrency_group=cg)
+    app_name = f"test-app-{uuid4().hex}"
+
+    url = ensure_function_deployed("snapshot_and_shutdown", app_name, None, interface)
+
+    assert "snapshot_and_shutdown" in url
+    deployments = interface.get_deployments()
+    assert len(deployments) == 1
+    assert deployments[0].extra_env["MNGR_MODAL_SOURCE_MARKER_NAME"] == get_source_marker_function_name(
+        "snapshot_and_shutdown"
+    )
+
+
+def test_ensure_function_deployed_redeploys_when_the_app_carries_other_source(
+    tmp_path: Path,
+    cg: ConcurrencyGroup,
+) -> None:
+    """A marker for different source means the deployed endpoint is stale, so redeploy."""
+    interface = FakeModalInterface(root_dir=tmp_path / "modal_stale", concurrency_group=cg)
+    app_name = f"test-app-{uuid4().hex}"
+    interface.register_deployed_function("deployed_source_0123456789abcdef", app_name=app_name)
+    interface.register_deployed_function(
+        "snapshot_and_shutdown", app_name=app_name, url="https://testing.modal.run/stale"
+    )
+
+    url = ensure_function_deployed("snapshot_and_shutdown", app_name, None, interface)
+
+    assert url != "https://testing.modal.run/stale"
+    assert len(interface.get_deployments()) == 1
+
+
+def test_ensure_function_deployed_deploys_when_the_endpoint_does_not_resolve(
+    tmp_path: Path,
+    cg: ConcurrencyGroup,
+) -> None:
+    """The gate fails closed: a marker without a resolvable endpoint still deploys."""
+    interface = FakeModalInterface(root_dir=tmp_path / "modal_marker_only", concurrency_group=cg)
+    app_name = f"test-app-{uuid4().hex}"
+    interface.register_deployed_function(get_source_marker_function_name("snapshot_and_shutdown"), app_name=app_name)
+
+    url = ensure_function_deployed("snapshot_and_shutdown", app_name, None, interface)
+
+    assert "snapshot_and_shutdown" in url
+    assert len(interface.get_deployments()) == 1
+
+
+def test_source_marker_function_name_tracks_the_deployed_script(tmp_path: Path) -> None:
+    """The marker names the script's bytes, so any edit to the script changes it."""
+    name = get_source_marker_function_name("snapshot_and_shutdown")
+    digest = hashlib.sha256(get_route_script_path("snapshot_and_shutdown").read_bytes()).hexdigest()
+
+    assert name == f"deployed_source_{digest[:16]}"
+    assert name.isidentifier()
+
+
+class _UnreadableModalInterface(FakeModalInterface):
+    """FakeModalInterface whose marker lookups fail outright."""
+
+    def is_function_deployed(
+        self,
+        name: str,
+        *,
+        app_name: str,
+        environment_name: str | None = None,
+    ) -> bool:
+        raise ModalProxyInternalError("please contact support@modal.com (Error code: TESTCODE)")
+
+
+def test_ensure_function_deployed_deploys_when_the_marker_cannot_be_read(
+    tmp_path: Path,
+    cg: ConcurrencyGroup,
+) -> None:
+    """An unreadable answer must cost no more than no answer: deploy, do not fail the caller."""
+    interface = _UnreadableModalInterface(root_dir=tmp_path / "modal_unreadable", concurrency_group=cg)
+    app_name = f"test-app-{uuid4().hex}"
+    interface.register_deployed_function(get_source_marker_function_name("snapshot_and_shutdown"), app_name=app_name)
+
+    url = ensure_function_deployed("snapshot_and_shutdown", app_name, None, interface)
+
+    assert "snapshot_and_shutdown" in url
+    assert len(interface.get_deployments()) == 1

@@ -22,6 +22,7 @@ from pydantic import PrivateAttr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.local_process import RunningProcess
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.modal_proxy.data_types import FileEntry
 from imbue.modal_proxy.data_types import FileEntryType
@@ -42,9 +43,7 @@ from imbue.modal_proxy.interface import SecretInterface
 from imbue.modal_proxy.interface import VolumeInterface
 from imbue.modal_proxy.log_utils import ModalLoguruWriter
 
-# ---------------------------------------------------------------------------
 # Object implementations
-# ---------------------------------------------------------------------------
 
 
 class FakeExecOutput(ExecOutput):
@@ -57,22 +56,23 @@ class FakeExecOutput(ExecOutput):
 
 
 class FakeExecProcess(ExecProcess):
-    """Exec process backed by a ConcurrencyGroup-managed process."""
+    """Exec process backed by a ConcurrencyGroup-managed process, or by an already-known outcome."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    _completed_text: str = PrivateAttr(default="")
+    completed_output: str = Field(default="", description="Stdout of a command that already finished")
+    completed_exit_code: int = Field(default=0, description="Exit code of a command that already finished")
     _running_process: RunningProcess | None = PrivateAttr(default=None)
 
     def get_stdout(self) -> ExecOutput:
         if self._running_process is not None:
             return FakeExecOutput(output_text=self._running_process.read_stdout())
-        return FakeExecOutput(output_text=self._completed_text)
+        return FakeExecOutput(output_text=self.completed_output)
 
     def wait(self) -> int:
         if self._running_process is not None:
             return self._running_process.wait()
-        return 0
+        return self.completed_exit_code
 
 
 class FakeSecret(SecretInterface):
@@ -88,6 +88,14 @@ class FakeFunction(FunctionInterface):
 
     def get_web_url(self) -> str | None:
         return self.url
+
+
+class FakeDeployment(FrozenModel):
+    """One `modal deploy` the fake was asked to perform."""
+
+    script_path: Path = Field(description="The script that was deployed")
+    app_name: str = Field(description="The app the script was deployed into")
+    extra_env: Mapping[str, str] = Field(description="Environment the script was deployed under")
 
 
 class FakeImage(ImageInterface):
@@ -230,6 +238,17 @@ class FakeVolume(VolumeInterface):
 # (128 + SIGKILL) that Modal surfaces for a terminated sandbox.
 _FAKE_TERMINATED_EXIT_CODE: Final[int] = 137
 
+# FakeSandbox runs argv on the machine running the tests. mngr's host bring-up
+# (build_configure_ssh_command and friends) rewrites the sshd host key, replaces
+# root's authorized_keys, and apt-installs packages; run as root, e.g. inside a
+# workspace container, that re-keys the real machine and locks its owner out.
+# Any command that reaches for these is refused instead of executed.
+_HOST_PROVISIONING_MARKERS: Final[tuple[str, ...]] = ("/etc/ssh", "/usr/sbin/sshd", "apt-get")
+
+
+class FakeSandboxRefusedHostProvisioningError(ModalProxyError):
+    """Raised when a FakeSandbox is asked to run mngr's host bring-up on the test machine."""
+
 
 class FakeSandbox(SandboxInterface):
     """Sandbox that runs commands locally via ConcurrencyGroup.
@@ -261,6 +280,14 @@ class FakeSandbox(SandboxInterface):
         if self._cg is None:
             raise ModalProxyError("Sandbox has no ConcurrencyGroup")
 
+        command_text = " ".join(args)
+        if any(marker in command_text for marker in _HOST_PROVISIONING_MARKERS):
+            raise FakeSandboxRefusedHostProvisioningError(
+                "FakeSandbox runs commands on the test machine and refuses to run host provisioning there "
+                f"(command mentions one of {_HOST_PROVISIONING_MARKERS}); drive bring-up against a real "
+                f"sandbox, or use a sandbox fake that answers without executing. Command: {command_text[:200]}"
+            )
+
         # Check if this is a "background" command (like sshd -D or nohup)
         # that should not block
         is_background = False
@@ -285,9 +312,10 @@ class FakeSandbox(SandboxInterface):
                 timeout=60,
                 is_checked_after=False,
             )
-            exec_proc = FakeExecProcess()
-            exec_proc._completed_text = finished.stdout
-            return exec_proc
+            return FakeExecProcess(
+                completed_output=finished.stdout,
+                completed_exit_code=finished.returncode if finished.returncode is not None else 0,
+            )
 
     def tunnels(self, *, timeout: int = 50) -> dict[int, TunnelInfo]:
         if self._is_terminated:
@@ -338,9 +366,7 @@ class FakeApp(AppInterface):
         yield self
 
 
-# ---------------------------------------------------------------------------
 # Top-level implementation
-# ---------------------------------------------------------------------------
 
 
 class FakeModalInterface(ModalInterface):
@@ -364,18 +390,14 @@ class FakeModalInterface(ModalInterface):
     _volumes: dict[str, FakeVolume] = PrivateAttr(default_factory=dict)
     _sandboxes: list[FakeSandbox] = PrivateAttr(default_factory=list)
     _functions: dict[str, FakeFunction] = PrivateAttr(default_factory=dict)
-    _deployments: list[tuple[Path, str]] = PrivateAttr(default_factory=list)
+    _deployments: list[FakeDeployment] = PrivateAttr(default_factory=list)
 
-    # =====================================================================
     # Environment
-    # =====================================================================
 
     def environment_create(self, name: str) -> None:
         self._environments.add(name)
 
-    # =====================================================================
     # App
-    # =====================================================================
 
     def app_create(self, name: str) -> AppInterface:
         app_id = f"ap-{uuid.uuid4().hex}"
@@ -406,9 +428,7 @@ class FakeModalInterface(ModalInterface):
             return app
         raise ModalProxyNotFoundError(f"App not found: {name}")
 
-    # =====================================================================
     # Image
-    # =====================================================================
 
     def image_debian_slim(self) -> ImageInterface:
         return FakeImage(image_id=f"img-debian-{uuid.uuid4().hex}")
@@ -419,9 +439,7 @@ class FakeModalInterface(ModalInterface):
     def image_from_id(self, image_id: str) -> ImageInterface:
         return FakeImage(image_id=image_id)
 
-    # =====================================================================
     # Sandbox
-    # =====================================================================
 
     def sandbox_create(
         self,
@@ -439,7 +457,7 @@ class FakeModalInterface(ModalInterface):
         experimental_options: Mapping[str, bool] | None = None,
     ) -> SandboxInterface:
         sandbox_id = f"sb-{uuid.uuid4().hex}"
-        sandbox = FakeSandbox(sandbox_id=sandbox_id)
+        sandbox = self._build_sandbox(sandbox_id)
         # Create a child ConcurrencyGroup for this sandbox's processes
         child_cg = self.concurrency_group.make_concurrency_group(
             name=f"sandbox-{sandbox_id}",
@@ -449,6 +467,10 @@ class FakeModalInterface(ModalInterface):
         sandbox._cg = child_cg
         self._sandboxes.append(sandbox)
         return sandbox
+
+    def _build_sandbox(self, sandbox_id: str) -> FakeSandbox:
+        """The sandbox object sandbox_create hands out; a subclass overrides this to change how commands are answered."""
+        return FakeSandbox(sandbox_id=sandbox_id)
 
     def sandbox_list(self, *, app_id: str) -> list[SandboxInterface]:
         # Return all non-terminated sandboxes
@@ -460,9 +482,7 @@ class FakeModalInterface(ModalInterface):
                 return sb
         raise ModalProxyNotFoundError(f"Sandbox not found: {sandbox_id}")
 
-    # =====================================================================
     # Volume
-    # =====================================================================
 
     def volume_from_name(
         self,
@@ -495,16 +515,12 @@ class FakeModalInterface(ModalInterface):
         if volume.root_dir.exists():
             shutil.rmtree(volume.root_dir)
 
-    # =====================================================================
     # Secret
-    # =====================================================================
 
     def secret_from_dict(self, values: Mapping[str, str | None]) -> SecretInterface:
         return FakeSecret(values=dict(values))
 
-    # =====================================================================
     # Function
-    # =====================================================================
 
     def function_from_name(
         self,
@@ -518,9 +534,24 @@ class FakeModalInterface(ModalInterface):
             return self._functions[key]
         raise ModalProxyNotFoundError(f"Function not found: {name} in app {app_name}")
 
-    # =====================================================================
+    def is_function_deployed(
+        self,
+        name: str,
+        *,
+        app_name: str,
+        environment_name: str | None = None,
+    ) -> bool:
+        return f"{app_name}/{name}" in self._functions
+
+    def register_deployed_function(self, name: str, *, app_name: str, url: str | None = None) -> None:
+        """Publish a function into an app, as a deploy of a script declaring it would.
+
+        Lets a test start from an app that is already carrying a given
+        deployment, rather than having to deploy a script that produces it.
+        """
+        self._functions[f"{app_name}/{name}"] = FakeFunction(url=url)
+
     # CLI
-    # =====================================================================
 
     def deploy(
         self,
@@ -528,8 +559,9 @@ class FakeModalInterface(ModalInterface):
         *,
         app_name: str,
         environment_name: str | None = None,
+        extra_env: Mapping[str, str] = {},
     ) -> None:
-        self._deployments.append((script_path, app_name))
+        self._deployments.append(FakeDeployment(script_path=script_path, app_name=app_name, extra_env=dict(extra_env)))
         # Register a testing function for each deployment so function_from_name works
         # Use a predictable URL pattern
         # Scan the script for function names (look for @app.function patterns)
@@ -544,9 +576,11 @@ class FakeModalInterface(ModalInterface):
         except (OSError, ValueError) as e:
             logger.trace("Failed to scan script for function names: {}", e)
 
-    # =====================================================================
+    def get_deployments(self) -> Sequence[FakeDeployment]:
+        """Every deploy performed against this interface, oldest first."""
+        return tuple(self._deployments)
+
     # Testing helpers
-    # =====================================================================
 
     def cleanup(self) -> None:
         """Terminate all sandboxes and exit their ConcurrencyGroups."""
@@ -568,9 +602,7 @@ class FakeModalInterface(ModalInterface):
         return contextlib.nullcontext((StringIO(), None))
 
 
-# ---------------------------------------------------------------------------
 # Unreachable Modal
-# ---------------------------------------------------------------------------
 
 # The Modal SDK's own wording when it cannot open a connection to the control
 # plane. Reproduced here so a test double reads exactly like the real thing to

@@ -13,10 +13,76 @@ you chose in the release's history entry.
 | Region label (lease) | OVH datacenter | Box | RAM | Storage | Slices/box |
 |---|---|---|---|---|---|
 | `US-EAST-VA` | `vin` | `24sys03-v1-us` (Xeon-E 2288G, 8c/16t) | 128 GB | `softraid-2x960nvme` | 14 |
-| `US-WEST-OR` | `hil` | `24sys03-v1-us` (Xeon-E 2288G, 8c/16t) | 128 GB | `softraid-2x960nvme` | 14 |
+| `US-WEST-OR` | `hil` | `24sys03-v1-us` (Xeon-E 2288G, 8c/16t) | 128 GB | `softraid-2x1920nvme` | 14 |
+
+Since 2026-09 OVH no longer stocks the 2x960 NVMe config in `hil` (its
+availability reads `unknown`); the 2x1920 NVMe config is the orderable one there
+($164/mo instead of $100/mo). Check `uv run minds-admin server pricing --region hil`
+before assuming either.
 
 OVH **orders** take the datacenter code (`vin` / `hil`); slice **bakes** take the
 lease-region label (`US-EAST-VA` / `US-WEST-OR`). Nothing cross-checks the two.
+
+## Which configs the tooling can use
+
+Only **two-drive NVMe software mirrors** (`softraid-2x<size>nvme`). The gen-2
+reinstall lays out a single md RAID1 disk group, and the slices are reflink
+carves on that one NVMe-backed XFS partition, so 3-disk mirrors, 4-disk RAID10,
+hardware RAID, SATA mirrors and hybrid SATA+NVMe pairs would all need layout
+work that has never been exercised. Two guards keep this honest:
+
+- `minds-admin server pricing` prices only 2x NVMe configs by default (and only
+  configs OVH reports as orderable: `unavailable`, `comingSoon` and `unknown`
+  statuses are skipped), so every row's base storage and `$/SLICE/MO` is
+  something you can actually buy and prep. Pass `--any-storage` to see the rest.
+- `minds-admin server order` refuses any other `--storage` code before it
+  resolves credentials or builds a cart. `--allow-unsupported-storage` is the
+  override for deliberate layout development, never for a production box.
+
+## TPM 2.0 is a hardware precondition
+
+A gen-2 box's storage volume unlocks at boot through its TPM, and OVH's catalog
+says nothing about TPMs: units of one plan differ (a `24sys03-v1-us` delivered
+to `hil` on 2026-09-19 had no TPM at all while its rack-mates, same board and
+BIOS, had Intel PTT). The gen-2 prep checks for a usable TPM 2.0 right after its
+package install and refuses the box before its storage partition is touched. When
+it does, open an OVH intervention ticket asking for the firmware TPM (Intel PTT
+or AMD fTPM) to be enabled in the BIOS, or for the unit to be replaced, then
+re-run `just server-setup <id>` (it resumes at the prep).
+
+## GAME-range plans and 1 Gbit/s ports are excluded
+
+OVH's GAME ranges (`24risegame*`, `24sysgame*`, `24skgame*`) cannot join the
+fleet, for two reasons learned from the one `24risegame022-v1-us` bought in `hil`
+on 2026-09-19 (cancelled the next day):
+
+- Their IP ships with the Game anti-DDoS profile in firewall mode with no rules,
+  which drops inbound UDP that matches no rule. The management WireGuard
+  (`51820/udp`) is inbound UDP, so the prep's `:22` lockdown landed while the
+  overlay could never come up, and the box was unreachable by every rung of the
+  operator transport. The profile cannot be removed from a GAME IP.
+- They sit on a **1 Gbit/s port** (every other fleet box has a 10G port shaped to
+  the 1 Gbps plan). The restore's parallel object fetch overran that port and
+  collapsed: the same 12.7 GB artifact took 856 s there against 59 s on a SYS-4
+  in the same datacenter.
+
+`minds-admin server pricing` never prices a GAME plan and `server order` refuses
+one outright (no override). OVH's catalog does not state port speeds, so the
+second condition is checked after the fact: `server await-delivery` reads the
+delivered server's `linkSpeed` and, below 10000 Mbit/s (or when OVH reports no
+`linkSpeed` at all, which is refused the same way), records the box at `failed`
+with its coordinates instead of `delivered`, so `setup` never reinstalls it.
+Cancel such a box's renewal (`PUT /dedicated/server/<name>/serviceInfos` with
+`renew.deleteAtExpiration: true`) and delete its `bare_metal_servers` row. If
+you have verified the port out of band (an unreported `linkSpeed` on a box you
+know sits on a 10G port), `minds-admin server set-status --server-id <id>
+--status delivered` deliberately overrides the refusal, and `setup` then
+proceeds; `setup` on a `failed` row prints that remedy.
+
+`server setup` and `server prep` also refuse to finish on a box whose `:22`
+lockdown went live without the WireGuard tunnel or overlay reaching it. The
+row's status is left as it was (`installing` for a first `setup`); fix the UDP
+path and re-run, which resumes at the prep.
 
 ## Step 2 -- preview + approve the orders (while the deploy runs)
 
@@ -34,31 +100,38 @@ errors and lists the offers + monthly prices until every such family is chosen):
 - `--option vrack-bandwidth-500-24sys-us` -- vRack private-network bandwidth,
   **$0/mo** (we don't use vRack for slices; the paid 1000 tier is +$23/mo).
 
+The storage differs per datacenter (see the table above), so the loop carries it
+alongside the region:
+
 ```bash
-for DC in vin hil; do
+for DC_STORAGE in vin:softraid-2x960nvme hil:softraid-2x1920nvme; do
+  DC="${DC_STORAGE%%:*}"
+  STORAGE="${DC_STORAGE#*:}"
   echo "===== ${DC} ====="
   just server-order --dry-run \
       --plan-code 24sys03-v1-us \
       --region "${DC}" \
       --memory-gb 128 \
-      --storage softraid-2x960nvme \
+      --storage "${STORAGE}" \
       --option bandwidth-1000-24sys-us \
       --option vrack-bandwidth-500-24sys-us
 done
 ```
 
 Each block prints `About to order 24sys03-v1-us in <dc>: 128GB RAM,
-softraid-2x960nvme, 8c/16t, 960GB usable disk (RAID1) -> 14 slices of 8GB` and an
+<storage>, 8c/16t, <usable>GB usable disk (RAID1), 1000 Mbit/s uplink -> 14
+slices of 8GB` (960GB usable for vin's 2x960, 1920GB for hil's 2x1920) and an
 `OVH price preview:` (subtotal / tax / due now), followed by `Dry run: cart
 deleted, no order placed.` Review the price, specs, and slice count, and approve
 before Step 3.
 
-> **Expected cost:** ~$100/mo recurring per box, plus a **~$60 one-time setup fee**
-> the first month, so budget **~$160 due now per box** (~$320 for the pair). OVH
-> periodically runs promotions that waive the setup fee (e.g. a run on 2026-07-09
-> showed exactly $100 due now, $0 setup) -- treat any such waiver as a bonus, not
-> the norm. The dry-run cart preview's "due now" is authoritative for what you'll
-> actually be charged on the day; trust it over the `pricing` table's
+> **Expected cost:** ~$100/mo recurring for the vin box and ~$164/mo for the hil
+> box (its larger 2x1920 NVMe config), plus a **~$60 one-time setup fee** each the
+> first month, so budget **~$160 due now for vin and ~$224 for hil** (~$384 for
+> the pair). OVH periodically runs promotions that waive the setup fee (e.g. a run
+> on 2026-07-09 showed exactly $100 due now, $0 setup) -- treat any such waiver as
+> a bonus, not the norm. The dry-run cart preview's "due now" is authoritative for
+> what you'll actually be charged on the day; trust it over the `pricing` table's
 > catalog-derived `SETUP` column.
 
 ## Step 3 -- place the orders (after approval)
@@ -76,7 +149,7 @@ just server-order --yes \
 
 just server-order --yes \
     --plan-code 24sys03-v1-us --region hil \
-    --memory-gb 128 --storage softraid-2x960nvme \
+    --memory-gb 128 --storage softraid-2x1920nvme \
     --option bandwidth-1000-24sys-us \
     --option vrack-bandwidth-500-24sys-us
 ```

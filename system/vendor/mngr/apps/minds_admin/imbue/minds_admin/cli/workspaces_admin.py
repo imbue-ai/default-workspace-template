@@ -24,7 +24,13 @@ from imbue.mngr_imbue_cloud.wire_types import WorkspaceStopKind
 # The kinds an operator may stamp (specs/workspace-stop-kinds.md); ``owner`` is
 # the owner route's alone.
 _OPERATOR_STOP_KINDS: Final[tuple[str, ...]] = tuple(
-    kind.value for kind in (WorkspaceStopKind.MAINTENANCE, WorkspaceStopKind.IDLE, WorkspaceStopKind.SUSPENSION)
+    kind.value
+    for kind in (
+        WorkspaceStopKind.MAINTENANCE,
+        WorkspaceStopKind.IDLE,
+        WorkspaceStopKind.SUSPENSION,
+        WorkspaceStopKind.RETIRED,
+    )
 )
 
 
@@ -43,7 +49,7 @@ def workspaces_admin() -> None:
     help=(
         "Why the machine is stopped, which decides who may start it: 'maintenance' is a hold only an "
         "operator start (or 'set-stop-kind idle') ends; 'idle' frees capacity and the user may start it; "
-        "'suspension' is the suspend fan-out's kind."
+        "'suspension' is the suspend fan-out's kind; 'retired' is final (see `workspaces retire`)."
     ),
 )
 @paid_auth_options
@@ -59,6 +65,25 @@ def admin_stop_workspace(host_db_id: str, kind: str, connector_url: str | None, 
     """
     client = make_admin_connector_client(connector_url)
     emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id, WorkspaceStopKind(kind)))
+
+
+@workspaces_admin.command(name="retire")
+@click.argument("host_db_id")
+@paid_auth_options
+@handle_imbue_cloud_errors
+def admin_retire_workspace(host_db_id: str, connector_url: str | None, api_key: str | None) -> None:
+    """Stop the workspace HOST_DB_ID for good: nobody starts it again, its owner included.
+
+    The ``retired`` stop kind for a workspace the gen-2 migration cannot take
+    (below the cutover's version floor, or without a release tag), taken
+    only after `minds-admin archives create` has archived it and the archive
+    has been checked. The owner's start answers 409 workspace_retired (the
+    desktop points them at their backups); the operator start refuses it
+    too -- `set-stop-kind <id> idle` first is the deliberate way back. Once
+    the owner is confirmed covered, `workspaces release` frees the row.
+    """
+    client = make_admin_connector_client(connector_url)
+    emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id, WorkspaceStopKind.RETIRED))
 
 
 @workspaces_admin.command(name="set-stop-kind")
@@ -93,8 +118,9 @@ def admin_start_workspace(host_db_id: str, connector_url: str | None, api_key: s
     by the gen-2 cutover runbook to start every stopped gen-1 workspace before
     the window so the drain can harvest it live. Idempotent -- a workspace
     already running/starting reports its status; a row the cutover has parked
-    is refused as under maintenance. Ignores the stop's kind (this is how a
-    held workspace comes back) and clears it.
+    is refused as under maintenance, a retired one as retired. Ignores a
+    maintenance / suspension kind (this is how a held workspace comes back)
+    and clears it.
     """
     client = make_admin_connector_client(connector_url)
     emit_json(client.admin_start_workspace(resolve_admin_api_key(api_key), host_db_id))

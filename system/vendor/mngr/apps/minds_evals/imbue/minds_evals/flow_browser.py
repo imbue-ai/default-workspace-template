@@ -50,6 +50,14 @@ CHROMIUM_LAUNCH_FLAGS: Final[tuple[str, ...]] = (
 # port 0 and reading the port off this line is what makes a local launch free of port races.
 _DEVTOOLS_LISTENING: Final[re.Pattern[str]] = re.compile(r"DevTools listening on ws://127\.0\.0\.1:(\d+)/")
 _READY_TIMEOUT_SECONDS: Final[float] = 30.0
+# The profile is thrown away, so a browser that is slow to honour SIGTERM loses nothing by being
+# killed; a short grace keeps teardown quick on a loaded machine, where a graceful exit can take far
+# longer than the browser's whole useful life.
+_SIGTERM_GRACE_SECONDS: Final[float] = 3.0
+# How long stopping the browser may take before it counts as broken. It has to outlast the grace, the
+# kill that follows it and the draining of the browser's output, all of which run before the process
+# is reported finished; anything shorter reports a shutdown that is still on schedule as a failure.
+_STOP_TIMEOUT_SECONDS: Final[float] = 30.0
 
 
 def resolve_chromium_path() -> Path:
@@ -110,6 +118,7 @@ def launch_local_browser(chromium_path: Path, profile_dir: Path, concurrency_gro
         is_checked_by_group=False,
         is_output_accumulated=False,
         name="flow-lab-chromium",
+        shutdown_timeout_sec=_SIGTERM_GRACE_SECONDS,
     )
     try:
         ready_message = "chromium did not serve CDP within {}s".format(_READY_TIMEOUT_SECONDS)
@@ -127,4 +136,4 @@ def launch_local_browser(chromium_path: Path, profile_dir: Path, concurrency_gro
             raise FlowBrowserError("chromium exited with status {} before serving CDP".format(process.returncode))
         yield "http://127.0.0.1:{}".format(listener.port)
     finally:
-        process.terminate()
+        process.terminate(force_kill_seconds=_STOP_TIMEOUT_SECONDS)

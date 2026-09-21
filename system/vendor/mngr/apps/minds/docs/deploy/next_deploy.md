@@ -15,6 +15,24 @@ deploy was deliberately not done.
 
 ## Must happen in this release
 
+- [ ] **Ship the digest-pinned workspace base image** (imbue-ai/mngr-internal#1138;
+  DWT PR #634). Docker Hub moved the unpinned `python:3.12-slim-trixie` tag to
+  a Debian 13.7 build on 2026-09-19, past the `20260725T000000Z` snapshot every
+  0.6.x template pins, so every fresh image build failed: first-of-tag seed
+  bakes, new desktop Docker creates, and CI's `build-minds-snapshot` job. The
+  fix pins the 13.6 index digest (`57cd7c3a…`, whose packages are exactly the
+  snapshot's -- no version change for any workspace) and is already on DWT
+  `main`-bound PR #634; the next tag cut carries it, and step 0 now bumps the
+  digest together with the timestamp. **A new release is not required for
+  this.** First-of-tag seeds of `minds-v0.6.2` (and of every older tag the
+  gen-2 migration bakes) work again from the operator side: the bake builds
+  a floating `FROM` against the digest recorded for its snapshot
+  (imbue-ai/mngr-internal#1143), so the tar-copy workaround is retired and
+  the gen-2 migration stays on `minds-v0.6.2`. Cut 0.6.3 only when something
+  else needs a release; until then new desktop installs that have no cached
+  base image cannot create local Docker workspaces on 0.6.2, and the
+  imbue_cloud slow-path rebuild of 0.6.2 on a leased slice fails the same way.
+
 - [ ] **SSH certificates replace the static management key on gen-2 boxes**
   (imbue-ai/mngr-internal#850; branch `mngr/ssh-authority-in-vault`). Order,
   per tier, dev first (dev and ci: steps 1 and 2 done 2026-09-09; the mounts are
@@ -116,8 +134,11 @@ deploy was deliberately not done.
   any hit (restamp one box to a free address, renumber its wg0, re-prep it;
   see the production repair in
   [history/minds-v0.6.1.md](./history/minds-v0.6.1.md)). Production was
-  repaired the same day; staging and the dev envs are unchecked. Deploy after
-  the `mngr/production-ssh-ca` branch merges, with the next connector deploy.
+  repaired the same day. Staging: checked (no duplicates) and applied by the
+  0.6.2 deploy `20260917T054239Z` on 2026-09-17 (see
+  [history/minds-v0.6.2.md](./history/minds-v0.6.2.md)). The dev envs are
+  unchecked. Production gets it with its next connector deploy, after the
+  `mngr/production-ssh-ca` branch merges.
 
 - [x] **Artifact mirror serving** (imbue-ai/mngr-internal#856, #851). Done
   2026-09-09 for production: `minds-admin artifacts upload` (14 artifacts),
@@ -273,9 +294,14 @@ deploy was deliberately not done.
   built on 2026-09-15 (mngr `0c9d81e7f6`, dwt `a87c68e19`, build
   `260915wjcyd06bp`; see [history/minds-v0.6.1.md](./history/minds-v0.6.1.md)),
   deployed to staging and baked on all three staging boxes (one 0.6.1 row
-  each) on 2026-09-15; staging holds no gen-1 box or row any more. Still to
-  do: cut further 0.6.x releases for the gen-2 cohort and keep 0.5.x stocked
-  on production's gen-1 boxes until its create rate reads ~zero.
+  each) on 2026-09-15; staging holds no gen-1 box or row any more.
+  `minds-v0.6.2` was cut and built on 2026-09-17 (mngr `253e087a58`, dwt
+  `073a56eb2d`, build `260917ohslvgoyj`; see
+  [history/minds-v0.6.2.md](./history/minds-v0.6.2.md)), deployed to staging
+  (`20260917T054239Z`) and baked on all three staging boxes (one 0.6.2 row
+  each) the same night; it carries the fix for latchkey permission requests
+  from a seeded welcome chat, which no earlier build has. Still to do: keep
+  0.5.x stocked on production's gen-1 boxes until its create rate reads ~zero.
 - [ ] **Production has no gen-2 box yet**, and the bake guard refuses
   `minds-v0.6.0` on gen-1 boxes, so it cannot hold 0.6.0 rows until its gen-2
   prerequisites land: the tier's `[ssh_ca]` committed (and dropped from the
@@ -308,6 +334,20 @@ deploy was deliberately not done.
   lima_disk_name columns (a follow-up connector migration) and the dual writes
   and COALESCE reads marked CLEANUP in minds_admin and the connector once
   every tier's pool DB has applied 041 and no pre-rename checkout is in use`.
+- [ ] **Connector migration 044 (`044_workspace_stop_kind_retired.sql`)**:
+  widens the `stop_kind` check constraint with `retired`, the final kind
+  `minds-admin workspaces retire` stamps on the workspaces the migration
+  cannot take (after `minds-admin archives create` archived them; runbook
+  section "Retiring the workspaces the migrate cannot take" in
+  [gen2-cutover.md](./gen2-cutover.md)). The desktop and the plugin in this
+  release render it; an older desktop shows a retired workspace as a plain
+  hold ("not actionable") and its start subprocess is refused by the
+  connector either way.
+- [ ] `CLEANUP: delete s3://<bucket>/<prefix>archives/ (the retired
+  workspaces' owner archives) 90 days after the last `minds-admin workspaces
+  release` of a retired row` -- the archives are outside both the
+  `<host_id>/` prefixes the release deletes and the `cutover/` prefix below,
+  so nothing else reclaims them.
 - [ ] `CLEANUP: delete s3://<bucket>/<prefix>cutover/ (the rollback copies of
   migrated workspaces' stop artifacts plus `images/<tag>.tar.zst`) after
   <date well past the last migration>`. Then delete the `cutover` command

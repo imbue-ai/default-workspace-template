@@ -10,11 +10,14 @@ verifier, a stdlib+rewardkit container that cannot import this package, free of 
 
 import re
 from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 from typing import Final
 from typing import assert_never
 
+from imbue.imbue_common.primitives import InvalidPrimitiveValueError
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals import ui_flows
 from imbue.minds_evals.data_types import AppCheck
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import DEFAULT_MIN_REGISTERED_APPS
@@ -24,9 +27,11 @@ from imbue.minds_evals.data_types import ExpandedExpectations
 from imbue.minds_evals.data_types import Expectations
 from imbue.minds_evals.data_types import FilesCheck
 from imbue.minds_evals.data_types import FilesExpectation
+from imbue.minds_evals.data_types import FlowStartPath
 from imbue.minds_evals.data_types import FlowSurface
 from imbue.minds_evals.data_types import HttpCheck
 from imbue.minds_evals.data_types import HttpExpectation
+from imbue.minds_evals.data_types import MAX_JUDGE_SCREENSHOTS_CEILING
 from imbue.minds_evals.data_types import MINDS_APP_EXPECTED_HTTP_STATUS
 from imbue.minds_evals.data_types import ProcessCheck
 from imbue.minds_evals.data_types import ProcessCheckKind
@@ -34,20 +39,36 @@ from imbue.minds_evals.data_types import ProcessExpectation
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import RESERVED_MINDS_UI_SURFACE
 from imbue.minds_evals.data_types import SKILL_NAME_PATTERN
+from imbue.minds_evals.data_types import ScriptedFlowAction
+from imbue.minds_evals.data_types import ScriptedFlowActionKind
 from imbue.minds_evals.data_types import TimingCheck
 from imbue.minds_evals.data_types import TimingExpectation
 from imbue.minds_evals.data_types import UiFlow
 from imbue.minds_evals.data_types import UiFlowCheck
 from imbue.minds_evals.data_types import is_same_skill
+from imbue.minds_evals.data_types import scripted_flow_action_problem
 from imbue.minds_evals.errors import EvalConfigError
 
 _EXPECTATIONS_KEYS: Final[frozenset[str]] = frozenset(
-    {"outcome", "deliverable", "ui_flows", "test_commands", "fresh_env", "process", "timing"}
+    {
+        "outcome",
+        "deliverable",
+        "ui_flows",
+        "test_commands",
+        "fresh_env",
+        "max_judge_screenshots",
+        "process",
+        "timing",
+    }
 )
 _DELIVERABLE_KEYS: Final[frozenset[str]] = frozenset({"kind", "min_registered_apps", "http", "files"})
 _HTTP_KEYS: Final[frozenset[str]] = frozenset({"target", "expect_status", "expect_body_regex"})
 _FILES_KEYS: Final[frozenset[str]] = frozenset({"glob", "min_count"})
-_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "actions", "expect", "script", "surface"})
+_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "actions", "expect", "script", "surface", "start_path"})
+# JSON has no comments, so a flow entry may carry a note for its reader under a key with this prefix.
+# Only flow entries take one, and it is dropped unread.
+_UI_FLOW_COMMENT_KEY_PREFIX: Final[str] = "_comment"
+_SCRIPT_ACTION_KEYS: Final[frozenset[str]] = frozenset({"kind", "role", "target", "beside", "text", "amount"})
 _PROCESS_KEYS: Final[frozenset[str]] = frozenset({"required_skills", "forbidden_skills", "max_worker_launches"})
 _TIMING_KEYS: Final[frozenset[str]] = frozenset({"fast_seconds", "slow_seconds", "requires_no_failures"})
 
@@ -193,31 +214,116 @@ def _parse_surface(raw: Mapping[str, Any], case_id: str, what: str) -> FlowSurfa
 
 
 @pure
+def _parse_start_path(raw: Mapping[str, Any], case_id: str, what: str) -> FlowStartPath:
+    """Where on the app's origin a flow opens. Taken verbatim: whitespace is refused rather than
+    trimmed, like every other character that could make the path mean something else."""
+    raw_start_path = raw.get("start_path", "")
+    if not isinstance(raw_start_path, str):
+        raise EvalConfigError("case {!r}: {}.start_path must be a string".format(case_id, what))
+    try:
+        return FlowStartPath(raw_start_path)
+    except InvalidPrimitiveValueError as error:
+        raise EvalConfigError("case {!r}: {}.start_path: {}".format(case_id, what, error)) from None
+
+
+@pure
+def _parse_script_action(raw_entry: object, case_id: str, what: str) -> ScriptedFlowAction:
+    raw = _require_mapping(raw_entry, case_id, what)
+    _reject_unknown_keys(raw, _SCRIPT_ACTION_KEYS, case_id, what)
+    raw_kind = raw.get("kind")
+    known_kinds = ", ".join(member.value for member in ScriptedFlowActionKind)
+    if raw_kind == ui_flows.FlowActionKind.DONE.value:
+        raise EvalConfigError(
+            "case {!r}: {} is a 'done', which every script ends with on its own (write only the actions "
+            "before it: {})".format(case_id, what, known_kinds)
+        )
+    if not isinstance(raw_kind, str) or raw_kind not in {member.value for member in ScriptedFlowActionKind}:
+        raise EvalConfigError(
+            "case {!r}: {} has unknown kind {!r} (known: {})".format(case_id, what, raw_kind, known_kinds)
+        )
+    kind = ScriptedFlowActionKind(raw_kind)
+    raw_strings = {field: raw.get(field, "") for field in ("role", "target", "beside", "text")}
+    for field, value in raw_strings.items():
+        if not isinstance(value, str):
+            raise EvalConfigError("case {!r}: {}.{} must be a string".format(case_id, what, field))
+    raw_amount = raw.get("amount", 0)
+    if not isinstance(raw_amount, int) or isinstance(raw_amount, bool):
+        raise EvalConfigError("case {!r}: {}.amount must be an integer".format(case_id, what))
+    # Taken verbatim, like a start path: a target is matched against the page's accessible names
+    # exactly, and typed text is typed as written.
+    problem = scripted_flow_action_problem(
+        kind=kind,
+        role=raw_strings["role"],
+        target=raw_strings["target"],
+        beside=raw_strings["beside"],
+        text=raw_strings["text"],
+        amount=raw_amount,
+    )
+    if problem:
+        raise EvalConfigError("case {!r}: {}: {}".format(case_id, what, problem))
+    return ScriptedFlowAction(
+        kind=kind,
+        role=raw_strings["role"],
+        target=raw_strings["target"],
+        beside=raw_strings["beside"],
+        text=raw_strings["text"],
+        amount=raw_amount,
+    )
+
+
+@pure
+def parse_flow_script(raw_script: object, case_id: str, what: str) -> tuple[ScriptedFlowAction, ...]:
+    """A scripted flow's `script`: a non-empty list of actions in the executor's vocabulary.
+
+    At most `MAX_STEPS_PER_FLOW - 1` of them, because the `done` that closes every script takes a
+    step of the flow's budget too; a longer script would be cut off by the budget and recorded as the
+    app failing to finish.
+    """
+    entries = _require_sequence(raw_script, case_id, what)
+    if not entries:
+        raise EvalConfigError("case {!r}: {} has no actions".format(case_id, what))
+    max_action_count = ui_flows.MAX_STEPS_PER_FLOW - 1
+    if len(entries) > max_action_count:
+        raise EvalConfigError(
+            "case {!r}: {} has {} actions, and a script may have at most {} (the closing 'done' takes the "
+            "last of a flow's {} steps)".format(
+                case_id, what, len(entries), max_action_count, ui_flows.MAX_STEPS_PER_FLOW
+            )
+        )
+    return tuple(
+        _parse_script_action(entry, case_id, "{}[{}]".format(what, index)) for index, entry in enumerate(entries)
+    )
+
+
+@pure
 def _parse_ui_flow(raw_entry: object, case_id: str, index: int) -> UiFlow:
     what = "expectations.ui_flows[{}]".format(index)
     raw = _require_mapping(raw_entry, case_id, what)
-    _reject_unknown_keys(raw, _UI_FLOW_KEYS, case_id, what)
+    authored = {key: value for key, value in raw.items() if not key.startswith(_UI_FLOW_COMMENT_KEY_PREFIX)}
+    _reject_unknown_keys(authored, _UI_FLOW_KEYS, case_id, what)
     name = str(raw.get("name") or "").strip()
     if not name:
         raise EvalConfigError("case {!r}: {} needs a 'name'".format(case_id, what))
     actions = str(raw.get("actions") or "").strip()
     expect = str(raw.get("expect") or "").strip()
-    script = str(raw.get("script") or "").strip()
-    # A flow is either natural language the verification agent executes, or a per-case script for a
-    # UI with stable selectors -- never both, and never neither.
-    if script and (actions or expect):
-        raise EvalConfigError("case {!r}: {} carries both 'script' and 'actions'/'expect'".format(case_id, what))
-    if not script and not (actions and expect):
-        raise EvalConfigError("case {!r}: {} needs either 'actions' + 'expect' or 'script'".format(case_id, what))
-    if script:
-        # The field is reserved, not implemented. Accepting it would hand a case author a green
-        # generation and a completed trial for verification that never ran -- the one failure mode a
-        # reserved field must not have.
+    # A flow is either natural language the verification agent carries out, or a script performed
+    # exactly as written -- never both, and never neither. Both kinds state what they expect, since
+    # the judge rules on that either way.
+    is_scripted = "script" in raw
+    if is_scripted and actions:
+        raise EvalConfigError("case {!r}: {} carries both 'script' and 'actions'".format(case_id, what))
+    if not expect or not (is_scripted or actions):
         raise EvalConfigError(
-            "case {!r}: {} uses 'script', which is a known but unimplemented field -- scripted flow "
-            "execution has no semantics yet, so nothing would run it. Use 'actions' + 'expect'.".format(case_id, what)
+            "case {!r}: {} needs either 'actions' + 'expect' or 'script' + 'expect'".format(case_id, what)
         )
-    return UiFlow(name=name, actions=actions, expect=expect, script=script, surface=_parse_surface(raw, case_id, what))
+    return UiFlow(
+        name=name,
+        actions=actions,
+        expect=expect,
+        script=parse_flow_script(raw["script"], case_id, "{}.script".format(what)) if is_scripted else (),
+        surface=_parse_surface(raw, case_id, what),
+        start_path=_parse_start_path(raw, case_id, what),
+    )
 
 
 @pure
@@ -456,9 +562,31 @@ def parse_expectations(raw_entry: object, case_id: str) -> Expectations:
         ui_flows=ui_flows,
         test_commands=test_commands,
         is_fresh_env_enabled=raw_fresh_env,
+        max_judge_screenshots=_parse_max_judge_screenshots(raw, case_id),
         process=process,
         timing=timing,
     )
+
+
+@pure
+def _parse_max_judge_screenshots(raw: Mapping[str, Any], case_id: str) -> int | None:
+    """How many flow screenshots in all the outcome judge is shown, when the case says. A case whose
+    flows would ask for more frames than the verifier's default attaches raises it, so the cap does not
+    drop its earliest flows' frames."""
+    raw_value = raw.get("max_judge_screenshots")
+    if raw_value is None:
+        return None
+    if (
+        not isinstance(raw_value, int)
+        or isinstance(raw_value, bool)
+        or not 1 <= raw_value <= MAX_JUDGE_SCREENSHOTS_CEILING
+    ):
+        raise EvalConfigError(
+            "case {!r}: expectations.max_judge_screenshots must be an integer from 1 to {}".format(
+                case_id, MAX_JUDGE_SCREENSHOTS_CEILING
+            )
+        )
+    return raw_value
 
 
 @pure
@@ -512,22 +640,25 @@ def _expand_deliverable(
 
 
 @pure
-def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
-    """The flows the verification agent drives, each with the id its manifest entry is keyed on.
+def flow_check_actions(actions: str, script: Sequence[ScriptedFlowAction]) -> str:
+    """What a flow check declares it does: a scripted flow's script rendered as prose, or a
+    model-driven flow's own `actions`. The judge's digest and the flow log read this one field for
+    both kinds."""
+    return ui_flows.describe_flow_script(script) if script else actions
 
-    Every flow reaching here is natural language: `parse_expectations` rejects the reserved `script`
-    field outright, because scripted execution has no semantics yet. The assertion holds that line
-    from this side -- if scripts are ever accepted at parse time again, expanding one into an
-    ordinary check would silently commission verification that nothing runs.
-    """
-    assert not any(flow.script for flow in flows), "scripted flows are rejected at parse time"
+
+@pure
+def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
+    """The flows driven at trial time, each with the id its manifest entry is keyed on."""
     return tuple(
         UiFlowCheck(
             check_id="ui_flow_{}_{}".format(index, slugify(flow.name)),
             name=flow.name,
-            actions=flow.actions,
+            actions=flow_check_actions(flow.actions, flow.script),
+            script=flow.script,
             expect=flow.expect,
             surface=flow.surface,
+            start_path=flow.start_path,
         )
         for index, flow in enumerate(flows)
     )
@@ -604,6 +735,7 @@ def expand_expectations(expectations: Expectations) -> ExpandedExpectations:
         is_deliverable_bundle_required=expectations.deliverable is not None,
         ui_flow_checks=_expand_ui_flows(expectations.ui_flows),
         is_fresh_env_enabled=expectations.is_fresh_env_enabled,
+        max_judge_screenshots=expectations.max_judge_screenshots,
         process_checks=_expand_process(expectations.process) if expectations.process is not None else (),
         timing_checks=_expand_timing(expectations.timing) if expectations.timing is not None else (),
     )

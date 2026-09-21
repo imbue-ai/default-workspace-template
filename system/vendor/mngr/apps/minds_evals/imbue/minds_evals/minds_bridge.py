@@ -3,16 +3,19 @@
 
 Everything here runs commands inside the harbor environment (the box) or, bridged one level deeper
 via ``mngr exec``, inside the trial's nested workspace sandbox. The functions are async because
-harbor's environment API is async; this module and driver.py are the only async code in the app.
+harbor's environment API is async. Every wait here reads its deadline from, and sleeps on, the
+``ClockInterface`` its caller hands it rather than the ``time`` module, so a test can spend a budget
+in polls instead of in real seconds.
 """
 
-import asyncio
+import base64
 import json
 import re
 import shlex
 import time
 import tomllib
 from collections.abc import Mapping
+from collections.abc import Sequence
 from http import HTTPStatus
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -28,6 +31,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals.clock import ClockInterface
 from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
@@ -251,7 +255,8 @@ def build_box_env(
 ) -> dict[str, str]:
     """The env for the backend-start exec and every bridge exec: the minds activation exports (so
     exec'd mngr commands resolve the same Modal environment the backend uses), Modal auth, the
-    per-trial Modal user-id scope, and the provider disables the entrypoint would set."""
+    per-trial Modal user-id scope, the provider disables the entrypoint would set, and the Latchkey
+    counting opt-out."""
     env: dict[str, str] = dict(activation_env)
     env.update(
         {
@@ -263,6 +268,11 @@ def build_box_env(
             # template.
             "MINDS_MODAL_EXTRA_TEMPLATE": EVAL_WORKSPACE_TEMPLATE,
             "SKIP_AUTH": "1",
+            # A box is eval infrastructure, not a Minds install, so it must not count toward
+            # Latchkey's usage. It boots the real desktop stack, which always spawns
+            # "mngr latchkey forward" and, through it, a "latchkey gateway"; that gateway inherits
+            # this env and so skips the per-host daily ping it would otherwise emit.
+            "LATCHKEY_DISABLE_COUNTING": "1",
         }
     )
     for provider in _DISABLED_PROVIDERS:
@@ -448,6 +458,7 @@ async def create_workspace_and_wait(
     env: dict[str, str],
     port: str,
     payload: dict[str, str],
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> str:
@@ -464,13 +475,13 @@ async def create_workspace_and_wait(
         raise WorkspaceCreateError("create returned no operation_id: {}".format(body))
 
     last_stage = ""
-    while time.time() < deadline:
+    while clock.now() < deadline:
         status, info = await _box_curl_json(
             environment, env, "GET", "{}/api/v1/workspaces/operations/create/{}".format(base_url, operation_id), None
         )
         if status == 0:
             # Transient blip (backend busy, connection dropped) -- keep polling.
-            await asyncio.sleep(poll_seconds)
+            await clock.sleep(poll_seconds)
             continue
         stage = str(info.get("status_text") or info.get("status") or "")
         if stage and stage != last_stage:
@@ -485,7 +496,7 @@ async def create_workspace_and_wait(
             return agent_id
         if info.get("error"):
             raise WorkspaceCreateError(str(info["error"]))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     raise WorkspaceCreateError("timed out waiting for workspace create")
 
 
@@ -629,6 +640,78 @@ async def workspace_curl_json(
     return response.body
 
 
+# Reads each named event's detail payload from the chat app and prints one JSON line per event, so one
+# bridged exec serves every tool call of a step. An event whose payload cannot be had prints a null detail.
+_EVENT_DETAILS_PROGRAM: Final[str] = """
+import json, sys, urllib.parse, urllib.request
+base_url, chat_id = sys.argv[1].rstrip("/"), urllib.parse.quote(sys.argv[2], safe="")
+for event_id in sys.argv[3:]:
+    url = base_url + "/api/chats/" + chat_id + "/events/" + urllib.parse.quote(event_id, safe="") + "/detail"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:
+            detail = json.loads(response.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        detail = None
+    print(json.dumps({"event_id": event_id, "detail": detail}))
+"""
+EVENT_DETAILS_COMMAND_LABEL: Final[str] = ": minds_evals_event_details;"
+# More than a diagnostic step makes by an order of magnitude; the cap keeps one exec's argument list
+# and output bounded on a trial that ran away.
+MAX_EVENT_DETAIL_COUNT: Final[int] = 400
+_EVENT_DETAILS_TIMEOUT_SECONDS: Final[int] = 300
+
+
+@pure
+def event_details_command(chat_agent_id: str, event_ids: Sequence[str]) -> str:
+    """The shell command that reads the chat app's detail payload of every given event, in one exec."""
+    encoded = base64.b64encode(_EVENT_DETAILS_PROGRAM.encode()).decode("ascii")
+    return '{label} {snippet}; printf %s {program} | base64 -d | python3 - "$chat_url" {agent} {event_ids}'.format(
+        label=EVENT_DETAILS_COMMAND_LABEL,
+        snippet=chat_url_shell_snippet(),
+        program=shlex.quote(encoded),
+        agent=shlex.quote(chat_agent_id),
+        event_ids=" ".join(shlex.quote(event_id) for event_id in event_ids),
+    )
+
+
+@pure
+def parse_event_details(output: str) -> dict[str, dict[str, Any] | None]:
+    """Each event's detail payload by event id, as `event_details_command` printed them; None for an event
+    whose payload the chat app did not serve."""
+    detail_by_event_id: dict[str, dict[str, Any] | None] = {}
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError as exc:
+            logger.warning("Skipping an event-detail line that is not JSON: {}", exc)
+            continue
+        event_id = record.get("event_id") if isinstance(record, dict) else None
+        if isinstance(event_id, str):
+            detail = record.get("detail")
+            detail_by_event_id[event_id] = detail if isinstance(detail, dict) else None
+    return detail_by_event_id
+
+
+async def fetch_event_details(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    chat_agent_id: str,
+    event_ids: Sequence[str],
+) -> dict[str, dict[str, Any] | None] | None:
+    """Each event's detail payload by event id, the last MAX_EVENT_DETAIL_COUNT of them, which are the current
+    step's; None when the bridged exec did not answer."""
+    if not event_ids:
+        return {}
+    command = event_details_command(chat_agent_id, event_ids[-MAX_EVENT_DETAIL_COUNT:])
+    is_success, stdout = await run_in_workspace(
+        environment, env, workspace_agent_id, command, _EVENT_DETAILS_TIMEOUT_SECONDS
+    )
+    return parse_event_details(stdout) if is_success else None
+
+
 # A chat wears two names: the display name it was created under ("Chat 2") and the canonical true
 # name the workspace lists it as ("Chat-2"). The agents listing carries the canonical one only --
 # labels, which is where the display name lives, reach clients over the workspace's WebSocket and
@@ -669,6 +752,7 @@ async def fetch_chat_agent_id(
     env: dict[str, str],
     workspace_agent_id: str,
     display_name: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> str | None:
@@ -679,7 +763,7 @@ async def fetch_chat_agent_id(
     no chat at all gets its chat from ``create_chat_agent``.
     """
     heartbeat = WaitHeartbeat(label="the workspace chat agent to appear in the agents listing")
-    while time.time() < deadline:
+    while clock.now() < deadline:
         body = await workspace_curl_json(environment, env, workspace_agent_id, AGENTS_PATH, None)
         agents = body.get("agents") if isinstance(body, dict) else None
         if isinstance(agents, list):
@@ -687,7 +771,7 @@ async def fetch_chat_agent_id(
             if chat_agent_id is not None:
                 return chat_agent_id
         heartbeat.tick(describe_agents_listing(body))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return None
 
 
@@ -697,6 +781,7 @@ async def create_chat_agent(
     workspace_agent_id: str,
     display_name: str,
     account_id: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> str | None:
@@ -724,7 +809,7 @@ async def create_chat_agent(
     payload = json.dumps(request_body)
     heartbeat = WaitHeartbeat(label="the workspace's create-chat endpoint to answer")
     unanswered_detail = ""
-    while time.time() < deadline:
+    while clock.now() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, CREATE_CHAT_PATH, payload)
         body = response.body if isinstance(response.body, dict) else {}
         if response.status == 0:
@@ -733,7 +818,7 @@ async def create_chat_agent(
             # failing.
             unanswered_detail = response.text or unanswered_detail
             heartbeat.tick(unanswered_detail or "nothing readable from {}".format(CREATE_CHAT_PATH))
-            await asyncio.sleep(poll_seconds)
+            await clock.sleep(poll_seconds)
             continue
         if response.is_ok:
             chat_id = body.get("chat_id")
@@ -750,7 +835,7 @@ async def create_chat_agent(
                 str(body.get("detail") or "")[:200],
             )
             resolved_agent_id = await fetch_chat_agent_id(
-                environment, env, workspace_agent_id, display_name, deadline, poll_seconds
+                environment, env, workspace_agent_id, display_name, clock, deadline, poll_seconds
             )
             if resolved_agent_id is None:
                 logger.error(
@@ -799,6 +884,7 @@ async def wait_for_auth_endpoint(
     environment: BaseEnvironment,
     env: dict[str, str],
     workspace_agent_id: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
@@ -813,12 +899,12 @@ async def wait_for_auth_endpoint(
     less legible.
     """
     heartbeat = WaitHeartbeat(label="the workspace's claude-auth endpoint")
-    while time.time() < deadline:
+    while clock.now() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
         if response.is_ok and isinstance(response.body, dict):
             return True
         heartbeat.tick("status {} from {}".format(response.status, CLAUDE_AUTH_STATUS_PATH))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return False
 
 
@@ -961,6 +1047,7 @@ async def sign_in_via_accounts_flow(
     lane_id: str,
     api_key: str,
     key_provider: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> AccountSignIn:
@@ -1003,9 +1090,9 @@ async def sign_in_via_accounts_flow(
 
     heartbeat = WaitHeartbeat(label="the sign-in on lane {} to settle".format(lane_id))
     sign_in = _read_account_flow_answer(response, lane_id, api_key)
-    while sign_in is None and time.time() < deadline:
+    while sign_in is None and clock.now() < deadline:
         heartbeat.tick(redact_secret(_response_detail(response), api_key)[:200])
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
         response = await workspace_curl(environment, env, workspace_agent_id, flow_path, None)
         sign_in = _read_account_flow_answer(response, lane_id, api_key)
     if sign_in is None:
@@ -1257,6 +1344,7 @@ async def wait_for_proxy(
     environment: BaseEnvironment,
     env: dict[str, str],
     port: int,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
@@ -1264,11 +1352,11 @@ async def wait_for_proxy(
     command = "curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 http://127.0.0.1:{}/health/liveliness".format(
         port
     )
-    while time.time() < deadline:
+    while clock.now() < deadline:
         result = await run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
         if (result.stdout or "").strip().endswith("200"):
             return True
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return False
 
 
@@ -1316,18 +1404,19 @@ async def wait_for_chat_state(
     chat_agent_id: str,
     *,
     is_waiting_desired: bool,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
     """Block until the chat agent is WAITING (True) or has left WAITING (False), same gating the old
     in-workspace worker used."""
     heartbeat = WaitHeartbeat(label="the chat agent to {} WAITING".format("reach" if is_waiting_desired else "leave"))
-    while time.time() < deadline:
+    while clock.now() < deadline:
         state = await fetch_chat_agent_state(environment, env, workspace_agent_id, chat_agent_id)
         if state is not None and (state == "WAITING") == is_waiting_desired:
             return True
         heartbeat.tick("state={}".format(state or "unreachable"))
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     return False
 
 
@@ -1337,6 +1426,7 @@ async def send_chat_message(
     workspace_agent_id: str,
     chat_agent_id: str,
     message: str,
+    clock: ClockInterface,
     deadline: float,
     poll_seconds: float,
 ) -> bool:
@@ -1358,7 +1448,7 @@ async def send_chat_message(
     body_json = json.dumps({"message": message})
     url_path = "/api/chats/{}/message".format(chat_agent_id)
     refusal_detail = ""
-    while time.time() < deadline:
+    while clock.now() < deadline:
         response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
         if response.is_ok:
             return True
@@ -1374,7 +1464,7 @@ async def send_chat_message(
             logger.warning("The workspace has not taken the message yet ({})", detail)
         # An attempt that says nothing must not erase what an earlier one said.
         refusal_detail = detail or refusal_detail
-        await asyncio.sleep(poll_seconds)
+        await clock.sleep(poll_seconds)
     logger.error("The workspace never took the message ({})", refusal_detail or "it never answered")
     return False
 
@@ -1456,9 +1546,10 @@ async def snapshot_workspace(
     env: dict[str, str],
     workspace_agent_id: str,
     tag: str,
-) -> bool:
+) -> int:
     """Tar the workspace home tree (minus SNAPSHOT_EXCLUDES) and pull it into the box's
-    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts.
+    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts. Returns the
+    pulled tarball's byte count as the box measures it, or 0 when the snapshot was skipped.
 
     Snapshots stay under the agent logs dir rather than joining the service logs: harbor downloads
     that dir once per step and then empties it, so each tarball travels exactly once and lands under
@@ -1491,20 +1582,34 @@ async def snapshot_workspace(
     is_success, _ = await run_in_workspace(environment, env, workspace_agent_id, tar_command, 300)
     if not is_success:
         logger.warning("Skipped snapshot {}: tar failed in the workspace", tag)
-        return False
+        return 0
+    # The size is read in the box once the pull has landed, as the pull's last line of output, so the
+    # figure is the tarball the trial actually keeps rather than the one the workspace wrote.
     pull_command = (
-        "mkdir -p {logs}/snapshots && cd {mngr} && uv run mngr rsync {agent}:{src} {logs}/snapshots/".format(
+        "mkdir -p {logs}/snapshots && cd {mngr} && uv run mngr rsync {agent}:{src} {logs}/snapshots/ "
+        "&& wc -c < {logs}/snapshots/{tarball}".format(
             logs=BOX_LOGS_DIR,
             mngr=BOX_MNGR_DIR,
             agent=shlex.quote(workspace_agent_id),
             src=workspace_tar,
+            tarball=shlex.quote("{}.tar.gz".format(tag)),
         )
     )
     result = await run_in_box(environment, pull_command, env, _SLOW_EXEC_TIMEOUT_SECONDS)
     if result.return_code != 0:
         logger.warning("Skipped snapshot {}: rsync pull failed: {}", tag, (result.stderr or "").strip()[:200])
-        return False
-    return True
+        return 0
+    byte_count = parse_trailing_byte_count(result.stdout or "")
+    if byte_count == 0:
+        logger.warning("Pulled snapshot {}, but the box reported no size for it", tag)
+    return byte_count
+
+
+@pure
+def parse_trailing_byte_count(output: str) -> int:
+    """The byte count `wc -c` printed as a command's last line of output, or 0 when there is none."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return int(lines[-1]) if lines and lines[-1].isdigit() else 0
 
 
 @pure

@@ -1,0 +1,163 @@
+{
+  "gates": {
+    "score": 1.0,
+    "criteria": [
+      {
+        "name": "transcript_has_agent_reply",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "transcript_has_agent_reply"
+      },
+      {
+        "name": "agent_engaged_substantively",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "agent_engaged_substantively"
+      },
+      {
+        "name": "all_turns_completed",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "all_turns_completed"
+      },
+      {
+        "name": "progress_timeline_was_read",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "progress_timeline_was_read"
+      },
+      {
+        "name": "finished_within_time",
+        "value": 1.0,
+        "raw": true,
+        "weight": 1.0,
+        "description": "finished_within_time"
+      }
+    ],
+    "kind": "programmatic"
+  },
+  "outcome": [
+    {
+      "score": 0.75,
+      "criteria": [
+        {
+          "name": "process_expectations_met",
+          "value": 0.75,
+          "raw": 0.75,
+          "weight": 1.0,
+          "description": "Recorded outcome checks of one expectation class that the delivered workspace met"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.6667,
+      "criteria": [
+        {
+          "name": "works_as_expected",
+          "value": 0.6667,
+          "raw": 7,
+          "weight": 1.0,
+          "description": "Given this evidence, how fully does the delivered artifact meet the stated expectations? 10 = everything commissioned is there and demonstrably working, with the evidence to show it. 1 = nothing was delivered, or what was delivered does not do what was asked.",
+          "reasoning": "The trial commissioned a twelve-item behaviour self-check with four recorded process checks. Three passed: build-app was invoked (skill_required_build_app), the forbidden diag-forbidden-7f3a skill was correctly never invoked, and exactly 1 worker was launched against the cap of 1 (diag-worker-7f3a). One check failed: skill_required_diag_never_invoked_7f3a was never invoked. The transcript shows the agent faithfully executed the twelve instructed items and replied 'done', with evidence complete (no error/unmeasured entries). Since one of the four ground-truth checks fell short, the delivery is largely but not fully compliant."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/expectations.md",
+          "/logs/agent/verification/manifest.json",
+          "/logs/agent/judge_transcript.txt",
+          "/logs/agent/judge_flows_digest.txt",
+          "/logs/agent/judge_screenshots"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"score\": 7, \"reasoning\": \"The trial commissioned a twelve-item behaviour self-check with four recorded process checks. Three passed: build-app was invoked (skill_required_build_app), the forbidden diag-forbidden-7f3a skill was correctly never invoked, and exactly 1 worker was launched against the cap of 1 (diag-worker-7f3a). One check failed: skill_required_diag_never_invoked_7f3a was never invoked. The transcript shows the agent faithfully executed the twelve instructed items and replied 'done', with evidence complete (no error/unmeasured entries). Since one of the four ground-truth checks fell short, the delivery is largely but not fully compliant.\"}"
+    }
+  ],
+  "quality": [
+    {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "message_lengths_within_limits",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 1.0,
+          "description": "message_lengths_within_limits"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    {
+      "score": 0.6944,
+      "criteria": [
+        {
+          "name": "conciseness",
+          "value": 1.0,
+          "raw": 10,
+          "weight": 1.0,
+          "description": "How concise is the AGENT in its chat messages? 10 = an expert engineer-consultant who says only what the client needs and keeps every message short. 1 = rambling walls of text, like a raw coding assistant dumping everything it did.",
+          "reasoning": "The agent sent only two chat messages: a standard welcome and a one-word 'done'. Nothing was rambling; each message was minimal. Perfectly concise."
+        },
+        {
+          "name": "nontechnical_language",
+          "value": 0.8889,
+          "raw": 9,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's language to the client in its chat messages? 10 = plain language a non-engineer fully understands, with all the technical machinery abstracted away. 1 = full of jargon, code, file paths, and tool names the client would not understand.",
+          "reasoning": "The chat messages themselves contain no jargon, file paths, or tool names \u2014 the welcome is plain language and the final reply is simply 'done'. The technical harness commands lived in the user's request, not the agent's chat output."
+        },
+        {
+          "name": "nontechnical_status_language",
+          "value": 0.1111,
+          "raw": 2,
+          "weight": 1.0,
+          "description": "How non-technical is the AGENT's progress-timeline copy -- the step titles it declares and the one-line summaries it closes them with? 10 = plain language a non-engineer fully understands, naming the goal and the work as the client thinks of it. 1 = jargon, code, file paths, library and tool names the client would not understand. Score 10 if the transcript has no progress timeline.",
+          "reasoning": "The progress timeline titles and summaries read as opaque diagnostic codes \u2014 'DIAG alpha 7f3a', 'alpha done 7f3a', 'DIAG beta 7f3a', 'beta done 7f3a'. These are meaningless to a non-technical client; they name nothing in terms of a real goal or understandable work."
+        },
+        {
+          "name": "proactive",
+          "value": 0.7778,
+          "raw": 8,
+          "weight": 1.0,
+          "description": "How self-directed is the AGENT? 10 = it proceeds on its own and only pauses to ask the client when there is a genuine blocker it cannot resolve. 1 = it stops to ask about trivial things it should have just decided.",
+          "reasoning": "The agent proceeded through the requested steps on its own without pausing to ask trivial questions, and simply reported 'done' at the end. It was self-directed, though this was largely dictated by the scripted harness instructions."
+        }
+      ],
+      "kind": "llm",
+      "judge": {
+        "model": "anthropic/claude-opus-4-8",
+        "reasoning_effort": "medium",
+        "timeout": 300,
+        "files": [
+          "/logs/agent/judge_transcript.txt"
+        ],
+        "atif_trajectory": null,
+        "reference": null,
+        "mode": "batched"
+      },
+      "judge_output": "{\"conciseness\":{\"score\":10,\"reasoning\":\"The agent sent only two chat messages: a standard welcome and a one-word 'done'. Nothing was rambling; each message was minimal. Perfectly concise.\"},\"nontechnical_language\":{\"score\":9,\"reasoning\":\"The chat messages themselves contain no jargon, file paths, or tool names \u2014 the welcome is plain language and the final reply is simply 'done'. The technical harness commands lived in the user's request, not the agent's chat output.\"},\"nontechnical_status_language\":{\"score\":2,\"reasoning\":\"The progress timeline titles and summaries read as opaque diagnostic codes \u2014 'DIAG alpha 7f3a', 'alpha done 7f3a', 'DIAG beta 7f3a', 'beta done 7f3a'. These are meaningless to a non-technical client; they name nothing in terms of a real goal or understandable work.\"},\"proactive\":{\"score\":8,\"reasoning\":\"The agent proceeded through the requested steps on its own without pausing to ask trivial questions, and simply reported 'done' at the end. It was self-directed, though this was largely dictated by the scripted harness instructions.\"}}"
+    }
+  ],
+  "timed_out": false,
+  "harness": {
+    "name": "codex",
+    "is_harness_quality_scored": false
+  },
+  "outcome_evidence": {
+    "is_evidence_complete": true,
+    "entry_count": 5,
+    "error_count_by_class": {}
+  }
+}

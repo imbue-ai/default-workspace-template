@@ -67,7 +67,7 @@ def test_broadcast_chats_updated() -> None:
     agent = AgentStateItem(id="a1", name="agent-1", state="RUNNING", labels={}, work_dir=None)
     own_chat = _ResolvedChat(chat_id=ChatId("a1"), member_agent_ids=("a1",), active_agent_id="a1", record=None)
     snapshot = chat_snapshot_for_active_agent(
-        agent, own_chat, is_permission_pending=False, shoulder_tap_available=False
+        agent, own_chat, is_permission_pending=False, shoulder_tap_available=False, last_messaged_at=None
     )
     broadcaster.broadcast_chats_updated([snapshot])
 
@@ -83,14 +83,14 @@ def test_broadcast_provisional_chat_created() -> None:
     q = broadcaster.register()
 
     broadcaster.broadcast_provisional_chat_created(
-        ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.AWAITING_ACCOUNT)
+        ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.CREATING)
     )
 
     msg = json.loads(_get_message(q))
     assert msg["type"] == "provisional_chat_created"
     assert msg["chat_id"] == "a1"
     assert msg["name"] == "test"
-    assert msg["phase"] == "awaiting_account"
+    assert msg["phase"] == "creating"
     assert msg["error"] is None
 
 
