@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import contextlib
 import json
-from datetime import datetime
-from datetime import timezone
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Generator

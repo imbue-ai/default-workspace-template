@@ -17,8 +17,8 @@ from pydantic import PrivateAttr
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
-from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTORY
 from imbue.system_interface.avatar.catalog import AvatarCatalogStore
+from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTORY
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path
@@ -44,9 +44,9 @@ from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
-from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import pinned_window
+from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised

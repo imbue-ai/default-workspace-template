@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from imbue.system_interface.avatar.catalog import MAX_REGISTERED_DESIGNS
 from imbue.system_interface.avatar.catalog import AvatarCatalogStore
 from imbue.system_interface.avatar.catalog import DesignRegistration
+from imbue.system_interface.avatar.catalog import MAX_REGISTERED_DESIGNS
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.primitives import DesignId

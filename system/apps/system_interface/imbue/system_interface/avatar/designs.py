@@ -18,13 +18,13 @@ from xml.etree.ElementTree import tostring
 
 from defusedxml.ElementTree import fromstring
 from defusedxml.common import DefusedXmlException
+from pydantic import Field
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.shell.errors import InvalidShellValueError
-from pydantic import Field
 
 ASSET_DIRECTORY: Final[Path] = Path(__file__).parent / "assets"
 MAX_SVG_BYTES: Final[int] = 256 * 1024
