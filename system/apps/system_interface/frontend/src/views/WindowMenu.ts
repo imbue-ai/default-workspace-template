@@ -7,7 +7,7 @@
  * section 4.4). Defined once so both menus render the identical list off the identical rule.
  */
 
-import type { AppRecord, PinStyle } from "../model/records";
+import type { AppRecord, EntryMode, PinStyle } from "../model/records";
 import type { EntryLook } from "../reducers/desktopState";
 import type { MenuEntry } from "./Menu";
 import { MENU_DIVIDER } from "./Menu";
@@ -47,7 +47,7 @@ export function windowMenuEntries(app: AppRecord | undefined, actions: WindowMen
 /** The presentation verbs of a pinned entry's menu (pinned-taskbar-entries plan section 4.4). */
 export interface EntryPresentationActions {
   readonly look: EntryLook;
-  readonly setMode: (mode: "bar" | "floating") => void;
+  readonly setMode: (mode: EntryMode) => void;
   readonly setStyle: (style: PinStyle) => void;
   /** Open the avatar chooser; offered while the entry shows the avatar. */
   readonly changeAvatar: () => void;
