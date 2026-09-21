@@ -1,0 +1,1 @@
+The service bands gain `terminal-pty` (12), the new supervisord program that runs ttyd on its own origin, framed by the terminal app's wrapper page. It sits right beside `terminal` (10), below `system_interface` (20): a shed pty drops every terminal pane's connection (the tmux sessions survive), so it is shed no more readily than the app that frames it.

@@ -27,3 +27,7 @@ viewer/build/
 
 # macOS Finder cruft
 **/.DS_Store
+
+# The repo root ignores **/*.log as Django output. A checked-in job directory holds the driver log
+# the trial wrote, and `steps.driver_log_step_local` is read from it, so these have to be tracked.
+!imbue/minds_evals/test_fixtures/**/driver.log

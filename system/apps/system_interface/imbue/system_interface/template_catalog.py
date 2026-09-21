@@ -1,4 +1,4 @@
-"""The template catalog behind the New Tab page's "Start from a template" section.
+"""The template catalog behind the launcher's "Start from a template" section.
 
 The catalog is a JSON document at a fixed URL (``catalog/new-tab-templates.json`` in the
 template repository, by default), fetched on demand and reused for a few hours. The last

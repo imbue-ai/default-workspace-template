@@ -1,0 +1,34 @@
+name: Set up the minds_evals test suite
+description: >-
+  Everything `just test-minds-evals` needs on a bare runner, shared by the jobs
+  that run that suite so they cannot drift apart: the toolchain, the vendored
+  viewer's build, and the Chromium the flow lab's tests drive.
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Install just
+      uses: extractions/setup-just@v4
+
+    # The vendored viewer (apps/minds_evals/viewer) is source, not a committed bundle, so
+    # nothing else would notice if it stopped building. The script bootstraps its own
+    # pinned bun, which is why no node toolchain is set up above.
+    - name: Build the vendored harbor viewer
+      shell: bash
+      run: apps/minds_evals/scripts/build_viewer.sh
+
+    # The flow lab's tests drive a real headless Chromium, the one playwright installs for
+    # the pinned release. Its absence fails those tests rather than skipping them on CI
+    # (the `chromium_path` fixture reads CI), so a job that lost this step is red, not quiet.
+    - name: Install the flow lab's Chromium
+      shell: bash
+      run: cd apps/minds_evals && uv sync --locked && uv run python -m playwright install --with-deps chromium

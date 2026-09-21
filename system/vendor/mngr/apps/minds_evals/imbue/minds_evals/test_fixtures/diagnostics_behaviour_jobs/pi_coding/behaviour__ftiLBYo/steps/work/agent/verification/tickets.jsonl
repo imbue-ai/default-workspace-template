@@ -1,0 +1,3 @@
+{"id": "wor-ibgs", "type": "chore", "status": "open", "is_step": false, "agent": "EVAL-behaviour-ftilbyo-40e0e27a", "title": "DIAG regular ticket 7f3a", "summary": "", "created": "2026-09-16T05:08:30.117215Z", "closed": ""}
+{"id": "wor-step-70ly", "type": "task", "status": "closed", "is_step": true, "agent": "EVAL-behaviour-ftilbyo-40e0e27a", "title": "DIAG beta 7f3a", "summary": "beta done 7f3a", "created": "2026-09-16T05:08:23.637984Z", "closed": "2026-09-16T05:08:57.378917Z"}
+{"id": "wor-step-x1hi", "type": "task", "status": "closed", "is_step": true, "agent": "EVAL-behaviour-ftilbyo-40e0e27a", "title": "DIAG alpha 7f3a", "summary": "alpha done 7f3a", "created": "2026-09-16T05:07:57.539364Z", "closed": "2026-09-16T05:08:28.593806Z"}

@@ -448,6 +448,11 @@ def _handle_sync_unlock() -> Response:
     key bundle (fetched from the connector when no local mirror exists);
     whichever accounts it unwraps get their DEK installed. Reports which
     accounts remain locked -- they may need an older password.
+
+    Succeeds only when this device ends up holding a key. An account whose
+    encrypted material has not reached this device yet does not read as
+    locked, so the loop below has nothing to try -- an unlock that acted on
+    nothing is reported as a failure, not a success.
     """
     if not _is_request_authenticated():
         return make_response(status_code=403, content='{"error":"Not authenticated"}', media_type="application/json")
@@ -486,22 +491,23 @@ def _handle_sync_unlock() -> Response:
         scheduler.kick()
     if is_ssh_material_written:
         bounce_latchkey_forward_supervisor(get_state().latchkey_forward_supervisor)
-    if not unlocked and still_locked:
+    is_any_account_unlocked = any(
+        is_account_unlocked(record_store.paths, str(account.user_id)) for account in accounts
+    )
+    if unlocked or (not still_locked and is_any_account_unlocked):
         return make_response(
             status_code=200,
-            content=json.dumps(
-                {
-                    "ok": False,
-                    "unlocked": unlocked,
-                    "still_locked": still_locked,
-                    "error": "That password did not unlock any account.",
-                }
-            ),
+            content=json.dumps({"ok": True, "unlocked": unlocked, "still_locked": still_locked}),
             media_type="application/json",
         )
+    error = (
+        "That password did not unlock any account."
+        if still_locked
+        else "No account on this device is waiting to be unlocked yet. Try again in a moment."
+    )
     return make_response(
         status_code=200,
-        content=json.dumps({"ok": True, "unlocked": unlocked, "still_locked": still_locked}),
+        content=json.dumps({"ok": False, "unlocked": unlocked, "still_locked": still_locked, "error": error}),
         media_type="application/json",
     )
 
@@ -643,7 +649,7 @@ def _handle_help_assist() -> Response:
     unreachable -- so we never spawn a chat that could only hang. Then we ask it which signed-in account the chat
     should run on, and return 409 if it names none or 502 if that probe could not run either. Otherwise the
     desktop app runs ``mngr create`` inside that workspace's container (via ``mngr exec``) to spawn a new chat seeded
-    with ``/assist <description>``; the system interface auto-opens its tab. The call blocks until
+    with ``/assist <description>``; the workspace's desktop opens its window. The call blocks until
     ``mngr create`` finishes so the get-help modal can hold its "starting..." state until the chat
     exists, then returns 200 on success or 502 if the spawn failed.
     """

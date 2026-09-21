@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "case_id": "behaviour",
+  "base_sha": "d3e030a3fc4d0b9019141427de19025ffbbdb962",
+  "dwt_tip_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+  "preexisting_registrations": [
+    "browser",
+    "chat",
+    "files",
+    "owner-exec",
+    "system_interface",
+    "terminal"
+  ],
+  "is_registry_present": true,
+  "seeded_registrations": [],
+  "is_expectations_declared": true,
+  "is_evidence_complete": true,
+  "started_at": "2026-09-16T05:15:27.288213+00:00",
+  "phases": [
+    {
+      "name": "workspace_state",
+      "seconds": 13.78
+    },
+    {
+      "name": "common_transcript",
+      "seconds": 46.78
+    },
+    {
+      "name": "workers",
+      "seconds": 56.25
+    },
+    {
+      "name": "tickets",
+      "seconds": 10.99
+    },
+    {
+      "name": "diagnostic_probe",
+      "seconds": 19.34
+    },
+    {
+      "name": "file_inventory",
+      "seconds": 26.5
+    },
+    {
+      "name": "process_checks",
+      "seconds": 0.0
+    }
+  ],
+  "entries": [
+    {
+      "entry_id": "file_inventory",
+      "check_class": "files",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "16034 file(s) inventoried",
+      "evidence_path": "verification/file_inventory.jsonl",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "skill_required_build_app",
+      "check_class": "process",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "build-app invoked at call_rS9ci7q9t4ZiwAAYr15sJH25",
+      "evidence_path": "",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "skill_required_diag_never_invoked_7f3a",
+      "check_class": "process",
+      "status": "failed",
+      "env": "live",
+      "reason": "skill_not_invoked",
+      "detail": "diag-never-invoked-7f3a was never invoked; the transcript shows: build-app",
+      "evidence_path": "",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "skill_forbidden_diag_forbidden_7f3a",
+      "check_class": "process",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "diag-forbidden-7f3a was never invoked",
+      "evidence_path": "",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    },
+    {
+      "entry_id": "worker_launches",
+      "check_class": "process",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "1 worker(s) launched against a cap of 1: diag-worker-7f3a",
+      "evidence_path": "",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    }
+  ]
+}

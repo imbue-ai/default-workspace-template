@@ -81,6 +81,73 @@ DOCKER_ARCHIVE: Final[ArchiveSource] = ArchiveSource(
 DEFAULT_ARCHIVES: Final[tuple[ArchiveSource, ...]] = (DEBIAN_ARCHIVE, DEBIAN_SECURITY_ARCHIVE, DOCKER_ARCHIVE)
 
 
+class InstalledPackage(FrozenModel):
+    """One package dpkg reports as installed on a rootfs (a ``/var/lib/dpkg/status`` stanza)."""
+
+    name: str = Field(description="The Package field")
+    version: str = Field(description="The installed Debian version string")
+
+
+class SnapshotPackageMismatch(FrozenModel):
+    """An installed package a frozen Packages index cannot keep: it lists no version at least as new (apt never downgrades)."""
+
+    name: str = Field(description="The package name")
+    installed_version: str = Field(description="The version dpkg reports installed")
+    newest_index_version: str | None = Field(
+        description="The newest version the index lists for the package, or None when it does not list the package at all"
+    )
+
+    @property
+    def text(self) -> str:
+        listed = "nothing" if self.newest_index_version is None else self.newest_index_version
+        return f"{self.name}={self.installed_version} (index lists {listed})"
+
+
+class DefaultWorkspaceTemplatePin(FrozenModel):
+    """The two pins a default-workspace-template ref commits that must agree: its image base and its apt snapshot.
+
+    The image base must be pinned by digest and its packages must exist in the
+    snapshot's frozen index, or apt (which never downgrades) cannot install the
+    template's toolchain on top of it (imbue-ai/mngr-internal#1138).
+    """
+
+    base_image_ref: str = Field(description="The Dockerfile's FROM reference, digest-pinned (``image@sha256:...``)")
+    apt_snapshot_timestamp: str = Field(
+        description="The committed .mngr/apt-snapshot-timestamp, e.g. 20260725T000000Z"
+    )
+
+
+class DockerfileBaseImage(FrozenModel):
+    """The image reference of a Dockerfile's first ``FROM`` line: its name, and its content digest when it is pinned."""
+
+    image_name: str = Field(description="The reference without any digest, e.g. ``python:3.12-slim-trixie``")
+    digest: str | None = Field(
+        description="The ``sha256:<64 hex digits>`` the reference pins, or None when it floats on its tag"
+    )
+
+    @property
+    def is_digest_pinned(self) -> bool:
+        return self.digest is not None
+
+    @property
+    def image_ref(self) -> str:
+        return self.image_name if self.digest is None else f"{self.image_name}@{self.digest}"
+
+
+class TemplateCheckoutPins(FrozenModel):
+    """The image base and apt snapshot a default-workspace-template checkout commits, read from its working tree.
+
+    Unlike :class:`DefaultWorkspaceTemplatePin`, the base may float: a checkout
+    of a tag that predates the digest pin (every tag through minds-v0.6.2) is
+    exactly what the pool bake's seed of an old release builds from.
+    """
+
+    base_image: DockerfileBaseImage = Field(description="The Dockerfile's FROM reference, pinned or floating")
+    apt_snapshot_timestamp: str = Field(
+        description="The committed .mngr/apt-snapshot-timestamp, e.g. 20260725T000000Z"
+    )
+
+
 class ReleaseFileEntry(FrozenModel):
     """One file row from a Release file's SHA256 section."""
 
