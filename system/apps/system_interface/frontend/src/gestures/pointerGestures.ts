@@ -1,8 +1,10 @@
 /**
- * The one module that listens to pointer events for window drag, resize, and shortcut drag
- * (desktop-interface plan section 6.5). It binds by data attribute (``data-drag-handle`` inside a
- * window, ``data-resize-edge``, ``data-shortcut``), uses pointer capture and a start threshold
- * (a press that never travels the threshold is a click, left to the element's own handlers),
+ * The one module that listens to pointer events for window drag and resize, shortcut drag,
+ * taskbar entry presses, and floating entry drag (desktop-interface plan section 6.5). It binds
+ * by data attribute (``data-drag-handle`` inside a window, ``data-resize-edge``,
+ * ``data-shortcut``, ``data-taskbar-entry``, ``data-pinned-entry``), uses pointer capture and a
+ * start threshold (a press that never travels the threshold is a click, left to the element's
+ * own handlers),
  * and sits behind the ``GestureSource`` interface so interact.js could replace it without
  * touching a reducer. Touch needs nothing extra beyond ``touch-action: none`` on the handles; a
  * long press stands in for the right click.
