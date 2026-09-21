@@ -38,14 +38,15 @@ def test_the_app_contract_module_is_the_shells_build_output_served_from_this_ori
     assert missing.status_code == 404
     assert "not built" in missing.get_json()["error"]
 
+    source = "export function connectToShell() {}\n"
     built = tmp_path / SHELL_APP_CONTRACT_PATH
     built.parent.mkdir(parents=True)
-    built.write_text("export function connectToShell() {}\n")
+    built.write_text(source)
     served = runner.application.test_client().get("/_static/app_contract.js")
 
     assert served.status_code == 200
     assert served.mimetype == "text/javascript"
-    assert served.text == "export function connectToShell() {}\n"
+    assert served.text == source
 
 
 def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
