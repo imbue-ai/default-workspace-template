@@ -1233,6 +1233,14 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
     _land(page, e2e_server)
     home_window = _open_via_shortcut(page, e2e_server)
     expect(_window(page, home_window)).to_be_visible(timeout=15000)
+    # Only a settled window is copied, and the window settles when its page reports its location, after the frame
+    # the line above waits for; the visitor must arrive after that report, not race it.
+    wait_for(
+        lambda: not _windows(e2e_server.base_url)[0]["is_settling"],
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message="Home's window never settled (its page never reported its location)",
+    )
 
     with _visiting_client(page, e2e_server, "user-alice", "Alice", "alice") as visitor:
         desktops = _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]
