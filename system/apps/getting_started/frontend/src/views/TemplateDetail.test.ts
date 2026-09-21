@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import "../testing/dom";
+import "@imbue/workspace-ui/src/testing/dom";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
