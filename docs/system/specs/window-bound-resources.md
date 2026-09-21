@@ -8,7 +8,7 @@ This spec amends the desktop interface ([plan](../blueprint/desktop-interface/pl
 - **Part A: shortcuts.** Every desktop shortcut opens a new window of its app, and the app decides what a new window holds.
   The chat's new window is its chat list; a new chat is made only inside the chat app or by the workspace's own seeding.
 - **Part B: window-bound resources.** A terminal session or a browser lives exactly as long as some window shows it.
-  Each app collects its own resources by watching the shell's windows; the shell stays generic and destroys nothing.
+  Each app collects its own resources by watching the shell's windows, prompted by the shell when a window closes; the shell stays generic and destroys nothing.
 - **Part C: agents.** An agent that wants a terminal or a browser opens a window for it, so the lifetime rule holds for agents too.
 
 ## 1. Background
@@ -19,7 +19,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
   A close removes the window for everyone and does nothing else: "the shell has no notion of stopping or deleting what the window showed" (plan 4.5; concepts decision 9 took "close means stop" from neither prototype).
 - A **shortcut** runs a launch path in `focus` or `new` mode; the desktop is seeded from each manifest's `default_shortcut`.
   Chat seeds `{new, mode = new}`; terminal, files, and browser seed `{new, mode = focus}`.
-  `ShortcutIcon.ts` labels a `new` shortcut with the launch path's label ("New Terminal") and a `focus` shortcut with the app's display name ("Terminal"), so today's desktop reads "New Chat, Terminal, File Viewer, Browser".
+  `ShortcutIcon.ts` labels a `new` shortcut with the launch path's label ("New Terminal") and a `focus` shortcut with the app's display name ("Terminal"), so today's desktop reads "New Chat, Terminal, File Viewer, Browser", and flipping a mode from the context menu renames the icon.
 - The **terminal** (`system/apps/terminal`) allocates `terminal-<N>` at `/new`, remembers it in `data/.apps/terminal/instances.json`, and recreates remembered sessions at startup.
   `TmuxSessionSource.delete_terminal` kills the session and forgets the record, but no route calls it.
   Every window of the terminal shows `/?session=<name>`.
@@ -39,12 +39,13 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 Recorded here so the implementation need not re-argue them.
 
 1. Every seeded shortcut is in `new` mode: a shortcut is "a new window of this app".
+   A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's tiles.
 2. A new chat window is the chat list at `/`.
    The chat app creates chats only from its own page (the New chat button, the launcher's seeded prompts through `/new`) and the workspace's seeding; the desktop shortcut and `layout.py open chat` never create one.
 3. A terminal and a browser are **window-bound**: the app destroys the resource once no window on any desktop shows it.
    The files app and the chat have no window-bound resource.
-4. Collection is the **app's**, by a periodic sweep over the shell's windows.
-   The shell tells apps nothing about closes in this release; a close hint is a later optimisation (section 5.6).
+4. Collection is the **app's**, by a sweep over the shell's windows: run when the shell says a window of the app closed, and every 90 seconds as the safety net.
+   The shell's close hint is a manifest-declared path the shell posts to; it carries no obligation, and a missed post costs at most one interval.
 5. A resource is collected only after the app has **seen a window for it** and then sees none.
    A resource that never had a window (an agent's browser with nobody connected, a hand-made tmux session, a window still settling at `/new`) is never collected.
 6. The fleet holds **one browser**.
@@ -61,15 +62,15 @@ Recorded here so the implementation need not re-argue them.
 | App | `default_shortcut` | `launch_paths` | Desktop label |
 |---|---|---|---|
 | `chat` | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`), then `new` ("New Chat", `/new`, params `account_id`, `message`) | Chat |
-| `terminal` | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, param `workdir`) | New Terminal |
-| `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, param `path`) | New File Viewer |
+| `terminal` | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, param `workdir`) | Terminal |
+| `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, param `path`) | File Viewer |
 | `browser` | `{launch = "new", mode = "focus"}` | `new` ("Open Browser", `/new`, param `url`) | Browser |
 
 The chat gains a second launch path, `root`, listed first so the launcher's "Open new" tiles show "Chat" before "New Chat".
 The `new` launch path stays: the launcher's "Start something" intents and templates seed a chat through the launch path that declares a `message` param, the welcome chat's auto-open targets `/?chat=<id>` explicitly, and `layout.py open chat --launch new` remains the way an agent starts a chat.
 The browser's launch path is relabelled "Open Browser" because it no longer always creates (section 5.4).
 
-The label rule in `ShortcutIcon.ts` is unchanged: a `new` shortcut shows its launch path's label, a `focus` shortcut its app's display name.
+`shortcutLabel` in `ShortcutIcon.ts` returns the app's display name in both modes, so a shortcut's icon never renames when its mode changes; the launch path's label is what the launcher's tile shows.
 `launchRowLabel` ("Open new chat") in the launcher's search reads the same for both chat tiles; that is accepted.
 
 ### 3.2 What a run does
@@ -90,14 +91,14 @@ The `focus` browser shortcut raises this client's most recent browser window on 
 
 Shortcuts are seeded once, when a desktop is created, so an existing desktop keeps its stored shortcuts (the chat's at `(chat, new)` in `new` mode, the others in `focus` mode).
 There is no automatic migration in this release, as for every other desktop-file change (plan section 15).
-A user flips a shortcut from its context menu ("Change shortcut to ..."); an agent runs `layout.py shortcut remove chat --launch new` and `layout.py shortcut set chat --launch root --mode new --cell <column,row>`.
+A user flips a shortcut from its context menu ("Change shortcut to ...") or makes a new desktop; an agent runs `layout.py shortcut remove chat --launch new` and `layout.py shortcut set chat --launch root --mode new --cell <column,row>`.
 The changelog entry says so.
 
 ## 4. Part B: window-bound resources
 
 ### 4.1 The rule
 
-An app that owns window-bound resources runs a **sweep** on a fixed interval (20 seconds).
+An app that owns window-bound resources runs a **sweep** when the shell posts its close hint (section 4.6) and on a fixed interval (90 seconds) regardless.
 Each sweep reads the shell's desktops and derives, for this app, the set of resource keys its windows name; then for every resource the app remembers:
 
 - a window names it: mark the record **window-seen** (persisted, once);
@@ -106,7 +107,8 @@ Each sweep reads the shell's desktops and derives, for this app, the set of reso
 
 A sweep that cannot read the desktops (the shell down or restarting, a non-JSON or wrongly shaped answer) does nothing and logs at debug.
 "No windows" is only ever a fact the shell stated.
-The first sweep runs one interval after the app starts, so a shell still booting beside the app is not asked too early.
+The first periodic sweep runs one interval after the app starts, so a shell still booting beside the app is not asked too early; a hint runs a sweep at once whenever it arrives.
+Sweeps are serialised: a hint during a sweep queues one more sweep rather than running two.
 
 Resources that exist before this release (the staging workspace's four terminal sessions with two windows) are never window-seen and are never collected; they are cleaned up by hand once, and the changelog entry says so.
 
@@ -140,6 +142,7 @@ A window-seen flag is one additive boolean on each app's record, defaulting to f
   A record whose name is an agent session is never collected (`delete_terminal` already refuses it).
 - Hand-made sessions (listed, never recorded) are never collected: nothing records them.
 - The sweep thread starts in `run_terminal_app` after the remembered sessions are recreated and stops on shutdown; `main.py` wires the shell URL and the interval.
+- The pages blueprint gains `POST /api/window-closed`, the manifest's `window_closed_path`, which wakes the sweep thread and answers 204.
 - The README's "verbs no route offers yet" paragraph is rewritten: delete is what the sweep calls.
 
 ### 4.4 The browser
@@ -159,7 +162,7 @@ With several saved browsers (a workspace upgraded from a cap of 2), "the browser
 `POST /browsers` with no `name` answers the same browser the same way, so the fleet CLI's `new` needs no change beyond section 6; a `POST /browsers` with a `name` keeps its create-or-409 semantics for a named second browser an operator insists on.
 
 **Collection is a stop.**
-The manager gains a sweep (on the bridge loop, `bridge.submit`) that applies section 4.1 with the `session` query parameter as the key.
+The manager gains a sweep (on the bridge loop, `bridge.submit`) that applies section 4.1 with the `session` query parameter as the key, run on the interval and whenever `POST /api/window-closed` (the manifest's `window_closed_path`) arrives.
 Collecting a browser is `stop_browser`: Chromium, its audio sink, and its display go; the profile and the tab list stay; `stopped: true` is checkpointed.
 Collecting a browser that is already stopped, or still launching, is a no-op (a launching one is collected on a later sweep once it runs and still has no window).
 The viewer's "New browser" gate (`can_create` in `GET /browsers`) is true whenever Chromium is installed, since `/new` always has a browser to answer.
@@ -167,7 +170,7 @@ The window-seen flag lives on `LiveBrowser` and rides `ManifestEntry.window_seen
 `close_and_forget` is untouched and reachable only through `DELETE /browsers/<name>` (the fleet CLI's `close`), which the skill now describes as "rarely needed: closing the window stops the browser and keeps your logins".
 
 **What the user sees.**
-Closing the last browser window stops the browser within one sweep interval.
+Closing the last browser window stops the browser as soon as the shell's hint lands, and within one sweep interval when it does not.
 Opening the browser shortcut, the launcher tile, or `layout.py open browser` brings the same browser back at `/?session=browser-1`, with its tabs, logged in.
 A window that exists while the browser is stopped (an agent stopped it, or the user did from the viewer) keeps showing the viewer's stopped overlay with its Start button, as today.
 
@@ -180,11 +183,15 @@ Neither declares a window-bound resource and neither sweeps.
 Closing a chat window destroys nothing; a chat is destroyed only from its own list.
 Closing a file viewer window destroys nothing.
 
-### 4.6 Deferred: the close hint
+### 4.6 The close hint
 
-A manifest field naming a path the shell POSTs to when a window of the app closes would let an app sweep at once instead of within 20 seconds.
-It is not part of this release: the iframe disappears instantly either way, and the sweep alone is the one code path to test.
-If the lag bothers, the hint is a manifest field, a registry key, one `forward_port.py` copy, and a POST from `ShellState.close_window`, and the app's handler is "sweep now".
+The manifest gains an optional `window_closed_path` (a launch-path-shaped value: rooted, no query string).
+`forward_port.py` copies it onto the registry row and `RegistryRow` reads it; a row without it means the app wants no hint.
+
+Whenever a window of an app closes, for any reason (the close control, the window and taskbar menus, the minds close chord, `layout.py close`, a desktop's deletion), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's registered URL plus its `window_closed_path`, from a daemon thread, with a 2 second timeout, after the close has been written and broadcast.
+A failed post is a debug log; the shell never waits for, retries, or acts on the answer, and the close is complete whether or not the app is up.
+The app's handler runs a sweep and answers 204; the body is a hint of what to check first and is never trusted on its own, since the app reads the shell's desktops for the truth.
+The terminal and the browser declare `window_closed_path = "/api/window-closed"`; the chat and the files app declare none.
 
 ## 5. Part C: agents open windows
 
@@ -217,7 +224,7 @@ The `2/2 browsers open` prose goes.
 
 ## 6. Contract and document changes
 
-- `contracts.md` section 2: the built-in manifests table of section 3.1; section 8: the `minimized` argument and the `open` exception to targeting.
+- `contracts.md` section 2: the `window_closed_path` field and the built-in manifests table of section 3.1; section 3: the registry key; section 5.3: the close's post; section 8: the `minimized` argument and the `open` exception to targeting.
 - `plan-desktop-interface.md` 3.6 (seeded modes), 4.5 (closing: "what the window showed is the app's to keep or collect; the terminal and the browser collect it once no window shows it"), 9.2 and 9.4 (the terminal's and browser's lifetimes, one browser), 15 (the close hint deferred).
 - `concepts.md` decisions: 9 amended (close removes the window for everyone; whether the app keeps what it showed is the app's rule), and decisions 15 to 18 added from section 2 of this spec.
 - `system/apps/system_interface/README.md`: no change beyond the shortcut sentence.
@@ -225,24 +232,26 @@ The `2/2 browsers open` prose goes.
 
 ## 7. Testing
 
-- `app_manifest`: the reader against a threaded fake shell (shape accepted, wrong shape and connection refused answering `None`).
-- Terminal: `sessions_test.py` cases for `sweep_windows` over the fake tmux (seen then collected, never seen left alone, stopped record forgotten, agent session refused, unparsable path names nothing); `main_test.py` or `test_terminal_app.py` for the thread's start and stop.
+- `app_manifest`: the reader against a threaded fake shell (shape accepted, wrong shape and connection refused answering `None`); `manifest_test.py` and `registry_test.py` for `window_closed_path`; `forward_port_test.py` for the copied key.
+- Shell: `state_test.py` or `routes_test.py` for the close's post against a recording fake app (posted on close and on desktop deletion, not posted for an app without the field, a refused or absent app not failing the close).
+- Terminal: `sessions_test.py` cases for `sweep_windows` over the fake tmux (seen then collected, never seen left alone, stopped record forgotten, agent session refused, unparsable path names nothing); `pages_test.py` for the hint route waking the sweep; `main_test.py` or `test_terminal_app.py` for the thread's start and stop.
 - Browser: manager tests for the cap of 1 on create and restore, `/new` on a running, stopped, and absent browser, the sweep stopping a seen browser and leaving an unseen one, and the flag round-tripping through the manifest.
 - Shell: `desktop_routes` and `test_layout_pipeline.py` cases for `open --minimized` and for an `open` with no client (window written, no placement, `client_id` null).
 - `system/test_app_manifests.py` for section 3.1; the frontend's `ShortcutIcon.test.ts` already covers the label rule.
-- Manual, in the staging workspace: a terminal opened from the shortcut dies within a sweep of its close; the browser stops on close and comes back logged in from the shortcut; an agent's `agentic-browser-fleet new` shows a minimized browser entry; closing that window stops the agent's browser.
+- Manual, in the staging workspace: a terminal opened from the shortcut dies right after its close; the browser stops on close and comes back logged in from the shortcut; an agent's `agentic-browser-fleet new` shows a minimized browser entry; closing that window stops the agent's browser.
 
 ## 8. Implementation order
 
 Each step leaves the tree green and is one or two commits.
 
-1. Shortcuts: the four manifests, the chat's `root` launch path, the popover default, `test_app_manifests.py`, contracts section 2.
-2. The `app_manifest` window reader and `shell_base_url`.
-3. The terminal sweep.
-4. The browser: the cap, `/new` and `POST /browsers` semantics, restore under the cap, the sweep, the manifest flag.
-5. The op route: `minimized` and the no-client `open`; `layout.py`; the fleet CLI's `--minimized`.
-6. Skills, READMEs, plan and concepts amendments, changelogs.
-7. Sync into the staging workspace (Python changes to the terminal, browser, and shell: `supervisorctl restart` of those programs, announced first) and fix its two desktops' shortcuts by hand.
+1. Shortcuts: the four manifests, the chat's `root` launch path, the label rule, the popover default, `test_app_manifests.py`, contracts section 2.
+2. `app_manifest`: the `window_closed_path` field and registry key, `forward_port.py`, the window reader and `shell_base_url`.
+3. The shell's close hint.
+4. The terminal sweep and hint route.
+5. The browser: the cap, `/new` and `POST /browsers` semantics, restore under the cap, the sweep and hint route, the manifest flag.
+6. The op route: `minimized` and the no-client `open`; `layout.py`; the fleet CLI's `--minimized`.
+7. Skills, READMEs, plan and concepts amendments, changelogs.
+8. Sync into the staging workspace (Python changes to the terminal, browser, and shell: `supervisorctl restart` of those programs, announced first); the existing desktops keep their shortcuts, a fresh desktop gets the new ones.
 
 ## 9. Out of scope
 
@@ -252,3 +261,4 @@ Each step leaves the tree green and is one or two commits.
   Moot while the fleet holds one browser.
 - Hiding the chat's `new` tile from the launcher.
 - Migrating existing desktops' shortcuts.
+- Letting only the last-interacted window of a shared browser drive its size; every viewer's resize wins in turn, and the others letterbox, as today.
