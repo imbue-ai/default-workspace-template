@@ -141,8 +141,8 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   picks the lowest free port at or above 8080 by parsing
   `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
   `data/.state/apps.toml`; if you're choosing
-  manually, avoid `8000` (system_interface), `8010` (the chat app) and
-  `8081` (the browser service).
+  manually, avoid `8000` (system_interface), `8010` (the chat app), `8030`
+  (the Getting Started app) and `8081` (the browser service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
   noise. The scaffolder does this. For the wrap-existing path, many
