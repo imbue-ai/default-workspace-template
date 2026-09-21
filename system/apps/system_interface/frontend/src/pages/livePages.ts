@@ -241,6 +241,9 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       const found = windowsById.get(page.windowId);
       if (found === undefined) continue;
+      // This client's path for an independent window arrives with the active desktop's layout, so a hidden page
+      // of one on another desktop stays where it is until that desktop is shown again.
+      if (found.window.scope === "independent" && found.desktop.id !== state.activeDesktopId) continue;
       // The window as this client sees it: an independent window at this client's own stored path.
       const seen = effectiveWindow(state, found.window);
       // A stored record still naming the path a page reported leaving is a snapshot from before the shell
