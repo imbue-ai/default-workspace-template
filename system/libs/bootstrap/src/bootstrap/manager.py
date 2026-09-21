@@ -669,7 +669,7 @@ def _wake_update_dri_agent(agent_name: str) -> None:
             )
         except (OSError, subprocess.TimeoutExpired) as e:
             # `mngr` missing is a live possibility here -- an apply interrupted
-            # mid `uv tool install` of the vendored mngr is exactly why this
+            # mid `uv tool install` of the mngr tool is exactly why this
             # runs -- and boot must survive it.
             logger.warning("{} could not run ({})", " ".join(argv[:2]), e)
             return
