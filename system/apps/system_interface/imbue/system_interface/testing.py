@@ -8,7 +8,6 @@ directory, mirroring `main.build_production_state` without ever starting the she
 
 from __future__ import annotations
 
-import json
 import os
 import socket
 import socketserver
@@ -20,12 +19,9 @@ import urllib.error
 import urllib.request
 import xmlrpc.client
 from collections.abc import Iterator
-from collections.abc import Mapping
-from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
