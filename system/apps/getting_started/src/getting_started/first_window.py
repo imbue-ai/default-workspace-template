@@ -128,12 +128,19 @@ class HttpShellOps(ShellOpsInterface):
     shell_url: str = Field(frozen=True, description="The shell's base URL, without a trailing slash")
 
     def _get_json(self, route: str) -> Any | None:
+        """One GET of a shell route; its JSON body, or None when the shell could not be reached or answered an error."""
         try:
             response = httpx.get(f"{self.shell_url}{route}", timeout=SHELL_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            return response.json()
-        except (httpx.HTTPError, ValueError) as e:
+        except httpx.HTTPError as e:
             logger.debug("Could not read {} from the shell at {}: {}", route, self.shell_url, e)
+            return None
+        if response.is_error:
+            logger.debug("The shell at {} answered {} for {}", self.shell_url, response.status_code, route)
+            return None
+        try:
+            return response.json()
+        except ValueError as e:
+            logger.warning("The shell answered {} with a body that is not JSON: {}", route, e)
             return None
 
     def connected_client_ids(self) -> list[str]:
