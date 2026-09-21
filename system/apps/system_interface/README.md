@@ -86,20 +86,22 @@ lives beside it under `data/.state/presence/` (`--presence-dir`).
   backdrop, state, minimized; the order is the stack).
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's `default_shortcut` on the first read after the
-  registry has been read. A client record holds the client's active desktop
-  and when it was last seen; clients unseen for a while are pruned with their
-  placement files.
+  registry has been read. A client record holds the client's active desktop,
+  when it was last seen, and the user it last arrived as; clients unseen for
+  a while are pruned with their placement files. `users.json` holds the
+  desktop made for each visiting user (see "Who is here").
 - **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
   focus, minimize, restore, maximize, snap, place, the shortcut edits) and
   every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
   free cell, reading order, shortcut placement) as pure functions over the
   records. The rules the frontend also applies pass the shared vectors in
   `docs/system/blueprint/desktop-interface/geometry_vectors.json`.
-- **Routes** (`shell/desktop_routes.py`): the desktop, window, placement, and
-  wallpaper routes above. A placements save carries a save id and the stamp it
-  was based on; a save over a newer arrangement is refused with 409 and the
-  browser refetches. `GET /api/inventory` is `{desktops, apps, clients}`, each
-  `app` carrying its `launch_paths`, `default_shortcut`, and `is_running`.
+- **Routes** (`shell/desktop_routes.py`): the desktop, window, placement,
+  arrival, and wallpaper routes above. A placements save carries a save id
+  and the stamp it was based on; a save over a newer arrangement is refused
+  with 409 and the browser refetches. `GET /api/inventory` is
+  `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
+  `default_shortcut`, and `is_running`.
 - **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
@@ -113,10 +115,11 @@ lives beside it under `data/.state/presence/` (`--presence-dir`).
   messages.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
-liveness, desktops, placements, wallpapers, clients, client activity, layout
-ops, the pure desktop document editor, the routes with their shared helpers,
-state); the package root holds the process (`main.py`, `server.py`), the
-not-built placeholder, and the update-staleness check. The frontend
+liveness, desktops, placements, wallpapers, clients, users and the request
+identity, client activity, layout ops, the pure desktop document editor, the
+routes with their shared helpers, state); the package root holds the process
+(`main.py`, `server.py`), the not-built placeholder, and the update-staleness
+check. The frontend
 (`frontend/`) is one member of the npm workspace rooted at
 `system/package.json`; the design system, the base helpers, and the contract
 modules it shares with the app pages live in `system/libs/workspace_ui`, and
