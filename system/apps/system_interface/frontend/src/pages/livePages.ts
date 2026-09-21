@@ -3,8 +3,9 @@
  * by window id, created when the window is first shown in this client and destroyed only when
  * the window closes or its desktop is deleted. A page is never re-parented (that reloads it):
  * hidden pages are ``display: none``, and the reconcile step positions each page over its
- * window's content box, in the same stacking context as the window chrome so a window's edges
- * and shield stay clickable over a cross-origin page. Every page but the focused one is inert
+ * window's content box (``placePage`` re-places one page per pointer move of a drag or resize,
+ * with no redraw), in the same stacking context as the window chrome so a window's edges and
+ * shield stay clickable over a cross-origin page. Every page but the focused one is inert
  * (``pointer-events: none``), and every page is inert while a gesture runs.
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
