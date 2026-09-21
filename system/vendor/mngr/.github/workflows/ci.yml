@@ -197,7 +197,6 @@ jobs:
               libs/concurrency_group \
               libs/imbue_common \
               libs/mngr \
-              libs/mngr_usage \
               libs/overlay \
               libs/resource_guards \
               justfile \

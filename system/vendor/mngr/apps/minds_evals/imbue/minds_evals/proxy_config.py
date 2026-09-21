@@ -1,12 +1,14 @@
 """The litellm config the eval's in-box proxy runs from.
 
-Built host-side and uploaded, so the box runs no code generation. The model list is derived from
-``mngr_usage``'s price table -- the same table ``usage.py`` prices transcripts with -- so the
-proxy's own cost figures and the eval's cannot disagree about prices, and a model added there
-becomes routable here without a second edit.
+Built host-side and uploaded, so the box runs no code generation. Every claude model is routable
+through one pattern entry, exactly as the deployed proxy (``apps/modal_litellm``) routes them, and
+prices are left to litellm's own map inside the box rather than written inline: four flat per-token
+numbers cannot express what that map holds beside them -- the fast-mode premium, the 1-hour
+cache-write rate, the regional uplift -- and a model becomes routable and priced the day the map
+carries it, with no entry to add here.
 
-The proxy runs with **no database**: litellm's schema is Postgres-only and a fresh one costs about
-a hundred migrations, which is far too much to stand up per trial. Without a database litellm has no
+The proxy runs with **no database**: litellm's schema is Postgres-only and a fresh one costs about a
+hundred migrations, which is far too much to stand up per trial. Without a database litellm has no
 virtual keys and no spend tables, so auth and usage recording are supplied by ``box_proxy_hooks``
 instead. That trade is what keeps Modal the only infrastructure this eval depends on.
 """
@@ -16,44 +18,30 @@ from typing import Any
 from typing import Final
 
 from imbue.imbue_common.pure import pure
-from imbue.mngr_usage.pricing import MODEL_PRICING
 
-# Only Anthropic models are routable: the workspace runs Claude Code, which talks the Anthropic
-# Messages API, and the pricing table's keys carry the provider that litellm needs to route.
-_ANTHROPIC_PREFIX: Final[str] = "anthropic/"
+# Only claude models are routable. The workspace runs Claude Code, which talks the Anthropic Messages
+# API, and the proxy holds an Anthropic credential and nothing else -- so the pattern is deliberately
+# `claude-*` rather than a bare `*`: a non-claude name has to fail here as an unknown model instead of
+# being forwarded to Anthropic and coming back as a confusing upstream error. (An Anthropic model not
+# named `claude-...` would need this widened.)
+_CLAUDE_MODEL_PATTERN: Final[str] = "claude-*"
+_ANTHROPIC_TARGET_PATTERN: Final[str] = "anthropic/claude-*"
 HOOKS_MODULE: Final[str] = "box_proxy_hooks"
 
 
 @pure
 def build_model_list() -> list[dict[str, Any]]:
-    """One routable entry per priced Anthropic model, carrying its prices inline.
-
-    Prices are written inline rather than left to litellm's bundled map, so cost stays correct even
-    on a litellm version whose own table predates a model. The trade is that four flat per-token
-    numbers cannot express what that map holds beside them -- the fast-mode premium
-    (``provider_specific_entry.fast``), the 1-hour cache-write rate, the regional uplift -- so every
-    figure the proxy reports is a standard-rate, 5-minute-cache one. The eval's own totals re-apply
-    the fast premium from ``mngr_usage`` afterwards; the proxy's per-request ``cost_usd`` does not.
-    """
-    entries: list[dict[str, Any]] = []
-    for pricing_key, prices in MODEL_PRICING.items():
-        if not pricing_key.startswith(_ANTHROPIC_PREFIX):
-            continue
-        model_name = pricing_key[len(_ANTHROPIC_PREFIX) :]
-        entries.append(
-            {
-                "model_name": model_name,
-                "litellm_params": {
-                    "model": pricing_key,
-                    "api_key": "os.environ/ANTHROPIC_API_KEY",
-                    "input_cost_per_token": prices.input_cost_per_token,
-                    "output_cost_per_token": prices.output_cost_per_token,
-                    "cache_creation_input_token_cost": prices.cache_creation_input_token_cost,
-                    "cache_read_input_token_cost": prices.cache_read_input_token_cost,
-                },
-            }
-        )
-    return entries
+    """The one routable entry: a bare claude name as Claude Code asks for it, forwarded upstream
+    provider-qualified so litellm knows whose API to talk and which prices to bill at."""
+    return [
+        {
+            "model_name": _CLAUDE_MODEL_PATTERN,
+            "litellm_params": {
+                "model": _ANTHROPIC_TARGET_PATTERN,
+                "api_key": "os.environ/ANTHROPIC_API_KEY",
+            },
+        }
+    ]
 
 
 @pure

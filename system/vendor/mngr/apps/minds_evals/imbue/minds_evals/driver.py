@@ -1031,7 +1031,7 @@ def build_turn_record(
     # not the conversation's.
     baseline_event_count: int,
 ) -> TurnRecord:
-    """One answered client message as a record, priced over its own slice of the event stream."""
+    """One answered client message as a record, metered over its own slice of the event stream."""
     turn_usage = usage_accounting.summarize_turn_usage(events, baseline_event_count)
     return TurnRecord(
         index=message_index,
@@ -1043,7 +1043,6 @@ def build_turn_record(
         agent_message_count=agent_message_count,
         message_count=turn_usage.message_count,
         tokens=usage_accounting.token_buckets(turn_usage.tokens),
-        cost_usd=turn_usage.cost_usd,
     )
 
 
@@ -1407,7 +1406,7 @@ class WorkspaceAuthentication(FrozenModel):
 
 
 class PublishedSpend(FrozenModel):
-    """The workspace spend already published to harbor by this trial's earlier run() calls.
+    """The workspace tokens already published to harbor by this trial's earlier run() calls.
 
     Harbor sums one AgentContext per step into a multi-step trial's totals, while this driver's
     account of the workspace is the whole conversation's -- one chat and one proxy serve every step
@@ -1418,7 +1417,6 @@ class PublishedSpend(FrozenModel):
     input_tokens: int = Field(default=0, description="Input tokens published so far, cache included")
     cache_tokens: int = Field(default=0, description="Cache-read tokens published so far")
     output_tokens: int = Field(default=0, description="Output tokens published so far")
-    cost_usd: float = Field(default=0.0, description="USD published so far; a step that cannot price adds nothing")
 
 
 @pure
@@ -1780,7 +1778,12 @@ class MindsPersonaDriver(BaseAgent):
         # measured: nothing observes the workspace before the seed is in it.
         self._seeded_registrations: frozenset[str] = frozenset()
         self._verification_metadata: dict[str, Any] = {}
-        self._verifier_usage: ui_flows.VerifierUsage | None = None
+        # Two scopes of the same spend. The step's is what this step's AgentContext reports, and
+        # each step builds its own flow agent, so the per-step records add up rather than repeat;
+        # the trial's is what the usage artifact carries, which describes the whole trial the way
+        # its other two blocks do.
+        self._step_verifier_usage: ui_flows.VerifierUsage | None = None
+        self._trial_verifier_usage: ui_flows.VerifierUsage | None = None
         # What this step's collector read and produced, held whole for the computations that run over
         # a step's collection; None until a step has collected, and again for a step that could not.
         self._step_evidence: evidence_collection.CollectedEvidence | None = None
@@ -2018,7 +2021,7 @@ class MindsPersonaDriver(BaseAgent):
         # cumulative across steps, and a step that dropped it would publish a negative spend delta.
         self._verification_metadata = {}
         self._transcript_capture = evidence_collection.not_attempted_transcript_capture()
-        self._verifier_usage = None
+        self._step_verifier_usage = None
         self._step_evidence = None
         # A destroyed workspace has nothing left to capture, and every probe against it would run to
         # its own transport timeout before saying so.
@@ -2063,7 +2066,11 @@ class MindsPersonaDriver(BaseAgent):
         # Whatever the flow agent spent before a failure is still spent, so keep the account, and
         # whatever the transcript capture brought out before it is still worth having.
         self._step_evidence = collector.collected_evidence(is_collection_complete=manifest is not None)
-        self._verifier_usage = collector.verifier_usage()
+        step_verifier_usage = collector.verifier_usage()
+        self._step_verifier_usage = step_verifier_usage
+        self._trial_verifier_usage = usage_accounting.combined_verifier_usage(
+            self._trial_verifier_usage, step_verifier_usage
+        )
         self._transcript_capture = collector.transcript_capture
         self._worker_captures = list(collector.worker_captures)
         self._worker_capture_overflow = list(collector.worker_capture_overflow)
@@ -3427,6 +3434,11 @@ class MindsPersonaDriver(BaseAgent):
             # Which step wrote this file, so a per-step artifact says what it is. Empty for a
             # single-step case, whose one state.json describes the whole trial.
             "step_name": step.name if step is not None else "",
+            # How many steps the task declares, which nothing else a finished job directory holds can
+            # say: harbor's result.json lists the steps that RAN, so a reader of a trial that stopped
+            # at a reward floor cannot otherwise tell it from one that ran them all. Zero for a
+            # single-step case.
+            "step_count": step.total if step is not None else 0,
             # Both pinned inputs at the top level, where every reader of a state file looks for
             # them; the "arm" block below repeats them so it describes a whole treatment on its own.
             "mngr_sha": self._mngr_sha,
@@ -3532,28 +3544,30 @@ class MindsPersonaDriver(BaseAgent):
         )
 
     def _publish_step_spend(self, context: AgentContext, workspace_usage: usage_accounting.TrialUsage) -> None:
-        """Report on this context the workspace spend this run() call added, not the running total.
+        """Report on this context the workspace tokens this run() call added, not the running total.
 
         Harbor sums one AgentContext per step into a multi-step trial's totals, while the account
         this reads from is the whole conversation's, so publishing the total on every step would
-        multiply an N-step trial's published tokens and cost. A single-step trial starts from
-        nothing and therefore still publishes the whole account.
+        multiply an N-step trial's published tokens. A single-step trial starts from nothing and
+        therefore still publishes the whole account.
+
+        Harbor's cost field is left unset on purpose: this driver records tokens per model and prices
+        nothing, so a figure here would be a price frozen into the trial record. `check-run` prices
+        the tokens instead.
         """
         published = self._published_spend
-        # Output tokens and cost are each unknown for a stream that did not report them. An unknown
-        # figure publishes nothing rather than a partial one, and leaves what earlier steps
-        # published standing so a later step that does know still reports its own share.
+        # Output tokens are unknown for a stream that did not report them. An unknown figure publishes
+        # nothing rather than a partial one, and leaves what earlier steps published standing so a
+        # later step that does know still reports its own share.
         output_tokens = workspace_usage.tokens.output
-        cost_usd = workspace_usage.cost_usd
         context.n_input_tokens = workspace_usage.n_input_tokens - published.input_tokens
         context.n_cache_tokens = workspace_usage.n_cache_tokens - published.cache_tokens
         context.n_output_tokens = None if output_tokens is None else output_tokens - published.output_tokens
-        context.cost_usd = None if cost_usd is None else cost_usd - published.cost_usd
+        context.cost_usd = None
         self._published_spend = PublishedSpend(
             input_tokens=workspace_usage.n_input_tokens,
             cache_tokens=workspace_usage.n_cache_tokens,
             output_tokens=published.output_tokens if output_tokens is None else output_tokens,
-            cost_usd=published.cost_usd if cost_usd is None else cost_usd,
         )
 
     def _populate_context_metadata(self, context: AgentContext, trajectory_source: TrajectorySource) -> None:
@@ -3568,11 +3582,6 @@ class MindsPersonaDriver(BaseAgent):
         decider_usage = usage_accounting.summarize_decider_usage(decider_results, self._decider_model)
         if workspace_usage.message_count:
             self._publish_step_spend(context, workspace_usage)
-        if workspace_usage.unpriced_models:
-            logger.warning(
-                "No pricing for {}; the trial's cost is reported as unknown rather than partial",
-                ", ".join(workspace_usage.unpriced_models),
-            )
         if not workspace_usage.is_cost_complete:
             logger.warning(
                 "This trial delegated ({} subagent call(s); {} of {} worker launch(es) captured), so its reported "
@@ -3585,13 +3594,13 @@ class MindsPersonaDriver(BaseAgent):
         if workspace_usage.message_count:
             if not workspace_usage.is_speed_observed:
                 logger.warning(
-                    "Speed tier unobserved, so every request is priced at the standard rate. Minds runs fast mode "
-                    "by default and fast mode bills at twice that, so treat this cost as a floor; run with "
-                    "--ak proxy=true to price it exactly"
+                    "Speed tier unobserved, so every request can only be priced at the standard rate. Minds runs "
+                    "fast mode by default and fast mode bills at twice that, so treat this trial's cost as a floor; "
+                    "run with --ak proxy=true to price it exactly"
                 )
             elif workspace_usage.fast_message_count:
                 logger.info(
-                    "{} of {} request(s) were served in fast mode and are priced at the fast-mode rate",
+                    "{} of {} request(s) were served in fast mode and are priced at the fast-mode rate by a report",
                     workspace_usage.fast_message_count,
                     workspace_usage.message_count,
                 )
@@ -3654,25 +3663,39 @@ class MindsPersonaDriver(BaseAgent):
             "decider_usage": usage_accounting.decider_usage_metadata(decider_usage),
             # The UI-flow verification agent is harness spend just like the decider: it measures
             # what the eval costs to run, never what the agent under test consumed.
-            "verifier_agent_usage": usage_accounting.verifier_usage_metadata(self._verifier_usage)
-            if self._verifier_usage is not None
+            "verifier_agent_usage": usage_accounting.verifier_usage_metadata(self._step_verifier_usage)
+            if self._step_verifier_usage is not None
             else {},
             # Empty when no evidence phase ran (no workspace, or collection failed outright);
             # the grade reads the bundle itself, this is for scanning runs at a glance.
             "verification": self._verification_metadata,
         }
-        self._write_usage(workspace_usage, decider_usage)
+        self._write_usage(workspace_usage, decider_usage, self._trial_verifier_usage)
 
     def _write_usage(
-        self, workspace_usage: usage_accounting.TrialUsage, decider_usage: usage_accounting.DeciderUsage
+        self,
+        workspace_usage: usage_accounting.TrialUsage,
+        decider_usage: usage_accounting.DeciderUsage,
+        verifier_usage: ui_flows.VerifierUsage | None,
     ) -> None:
         """Write the usage breakdown as its own trial artifact, so cost and cache behaviour can be
-        read (and diffed across runs) without parsing the whole transcript."""
+        read (and diffed across runs) without parsing the whole transcript.
+
+        One block per spender, never a single total: the workspace agent's spend is what the eval
+        measures and the other two are what running it costs. Every block describes the whole trial,
+        so the verification agent's is summed over the steps that ran a phase -- unlike the copy in
+        each step's own trial metadata, which covers that step alone. A trial where no step ran one
+        writes that block as null rather than leaving it out, so a reader can tell a phase that did
+        not run from a file written before the block existed.
+        """
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "workspace_agent": usage_accounting.workspace_usage_metadata(workspace_usage),
             "decider": usage_accounting.decider_usage_metadata(decider_usage),
-            # What each answered client message cost. Always the transcript's account, whatever
+            "verifier_agent": usage_accounting.verifier_usage_metadata(verifier_usage)
+            if verifier_usage is not None
+            else None,
+            # What each answered client message consumed. Always the transcript's account, whatever
             # sourced the totals above, and a floor rather than a partition of them: the welcome
             # turn, a worker's spend, and whatever the agent spends past the poll that closed a
             # turn all belong to no record.

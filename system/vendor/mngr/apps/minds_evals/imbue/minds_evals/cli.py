@@ -26,6 +26,7 @@ from imbue.minds_evals import ci_report
 from imbue.minds_evals import cleanup_environments
 from imbue.minds_evals import flow_browser
 from imbue.minds_evals import flow_lab
+from imbue.minds_evals import pricing
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import CiReportContext
@@ -127,7 +128,9 @@ def check_run_command(job_dir: Path, summary_md_path: Path | None, summary_json_
     went unmeasured, and it is not recorded as having answered on a model other than the one its
     harness config asked for. Judge scores are reported and never gated.
     """
-    result = check_run.check_job_directory(job_dir)
+    # One map for the whole report: litellm's table is read once here, so every figure in the two
+    # summaries is priced at the same rates and the report can name the map they came from.
+    result = check_run.check_job_directory(job_dir, pricing.load_litellm_price_map())
     check_run.write_run_check_reports(result, summary_md_path, summary_json_path)
     for trial in result.trials:
         if not trial.is_passed:

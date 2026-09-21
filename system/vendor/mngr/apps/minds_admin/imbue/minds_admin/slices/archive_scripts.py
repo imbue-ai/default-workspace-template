@@ -41,16 +41,23 @@ def load_archive_stream_script() -> str:
 def build_container_layer_path_command(container_id: str) -> str:
     """Print the container's overlay upper directory (its writable layer) on the VM.
 
-    Read off the container's root mount in its own mount table rather than
-    ``docker inspect``'s GraphDriver section, which a dockerd on the containerd
-    image store (the VM images since Docker 29) leaves empty.
+    Read off mount tables rather than ``docker inspect``'s GraphDriver section,
+    which a dockerd on the containerd image store (the VM images since Docker
+    29) leaves empty. A runc container's own mount table has the overlay at
+    ``/``. A runsc (gVisor) container's pid is the sandbox process, whose root
+    is a tmpfs, so the VM's own table is read as well: dockerd mounts the
+    container's rootfs there at ``<data-root>/rootfs/overlayfs/<full id>``.
     """
+    id_command = f"docker inspect --format {shlex.quote('{{.Id}}')} {shlex.quote(container_id)}"
     pid_command = f"docker inspect --format {shlex.quote('{{.State.Pid}}')} {shlex.quote(container_id)}"
     upperdir_awk = (
-        '$5 == "/" { n = split($NF, options, ","); for (i = 1; i <= n; i++) '
-        "if (options[i] ~ /^upperdir=/) { print substr(options[i], 10); exit } }"
+        '($5 == "/" || $5 ~ ("/rootfs/overlayfs/" cid "$")) { n = split($NF, options, ","); '
+        "for (i = 1; i <= n; i++) if (options[i] ~ /^upperdir=/) { print substr(options[i], 10); exit } }"
     )
-    return f"pid=$({pid_command}) && awk {shlex.quote(upperdir_awk)} /proc/$pid/mountinfo"
+    return (
+        f"cid=$({id_command}) && pid=$({pid_command}) && "
+        f'awk -v cid="$cid" {shlex.quote(upperdir_awk)} /proc/$pid/mountinfo /proc/self/mountinfo'
+    )
 
 
 @pure

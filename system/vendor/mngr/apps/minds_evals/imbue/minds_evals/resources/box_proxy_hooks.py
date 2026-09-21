@@ -129,10 +129,11 @@ def _request_record(
         "cache_write_tokens": cache_write,
         # Kept as reported so the normalization above can be re-derived from the record.
         "prompt_tokens_including_cache": prompt_tokens,
-        # litellm's own cost for the call, priced from the model_list entry the driver
-        # generated. Recorded alongside the tokens so the two can be reconciled. Note that the
-        # model_list carries one price per model, so a fast-mode call is priced at the standard
-        # rate it is not billed at -- hence recording the speed next to it.
+        # litellm's own cost for the call, priced from its own price map inside the box.
+        # Recorded alongside the tokens as this proxy's own observation of what it served; the
+        # trial's figures are derived from the tokens instead, so nothing sums this. litellm
+        # prices a call at the standard rate whether or not fast mode served it -- hence recording
+        # the speed next to it.
         "cost_usd": cost_usd,
         # "fast" or null. Always written (even when null) so that a log which simply predates
         # this field stays distinguishable from one that observed only standard-speed traffic.

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from harbor.models.trial.paths import TrialPaths
+from harbor.trial.artifact_handler import ArtifactHandler
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -17,14 +19,27 @@ from imbue.minds_evals import evidence_collection
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
+from imbue.minds_evals.data_types import PricingSource
 from imbue.minds_evals.data_types import StepBoxFile
 from imbue.minds_evals.data_types import StepPosition
+from imbue.minds_evals.data_types import TokenSnapshot
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.driver import DriverEventType
 from imbue.minds_evals.driver import EVAL_USER_ID_NAMESPACE
 from imbue.minds_evals.expectations import expand_expectations
 from imbue.minds_evals.expectations import parse_expectations
+from imbue.minds_evals.pricing import CacheWriteTtl
+from imbue.minds_evals.pricing import PriceMap
+from imbue.minds_evals.pricing import price_tokens
+from imbue.minds_evals.pricing import resolve_price_entry
 from imbue.minds_evals.trajectory import STEP_BOUNDARY_KIND
+from imbue.minds_evals.ui_flows import VerifierUsage
+from imbue.minds_evals.usage import DeciderUsage
+from imbue.minds_evals.usage import ModelUsage
+from imbue.minds_evals.usage import TrialUsage
+from imbue.minds_evals.usage import decider_usage_metadata
+from imbue.minds_evals.usage import verifier_usage_metadata
+from imbue.minds_evals.usage import workspace_usage_metadata
 
 # The scheduled CI workflow. It hard-codes things this package also decides -- the Modal environment
 # prefix its sweep matches on, the summary file names its report composes, and the model field names
@@ -363,8 +378,17 @@ def _exception_info(exception_type: str) -> dict[str, Any]:
     }
 
 
+def _graded_verifier_result() -> dict[str, Any]:
+    """What harbor records for a trial, or a step, its verifier graded."""
+    return {"rewards": {"gates": 1.0, "quality": 0.75, "reward": 0.75}}
+
+
 def _write_harbor_trial_result(
-    trial_dir: Path, job_dir: Path, case_id: str, exception_type: str, step_exception_type: str
+    trial_dir: Path,
+    job_dir: Path,
+    case_id: str,
+    exception_type: str,
+    step_results: Sequence[Mapping[str, Any]],
 ) -> None:
     """harbor's own record of the trial. An exception at either level replaces the verifier result,
     because a trial harbor could not run is never graded."""
@@ -380,16 +404,17 @@ def _write_harbor_trial_result(
             "trials_dir": str(job_dir),
         },
         "agent_info": {"name": "minds-persona-driver", "version": "0.1.0"},
-        "verifier_result": {"rewards": {"gates": 1.0, "quality": 0.75, "reward": 0.75}},
+        "verifier_result": _graded_verifier_result(),
     }
     if exception_type:
         trial_result["exception_info"] = _exception_info(exception_type)
         trial_result["verifier_result"] = None
-    if step_exception_type:
-        # harbor records a per-step failure on the step alone, leaving the trial-level
-        # exception_info unset -- which is why the run gate has to read both.
-        trial_result["step_results"] = [{"step_name": "agent", "exception_info": _exception_info(step_exception_type)}]
-        trial_result["verifier_result"] = None
+    if step_results:
+        trial_result["step_results"] = [dict(step_result) for step_result in step_results]
+        # A stepped trial's own reward is the step harbor selected, so a last step that raised leaves
+        # the trial ungraded -- and it is a step raising with nothing graded that stops the rest.
+        if step_results[-1].get("exception_info") is not None:
+            trial_result["verifier_result"] = None
     (trial_dir / "result.json").write_text(json.dumps(trial_result, indent=2))
 
 
@@ -399,11 +424,16 @@ def _write_agent_state(
     test_state: str,
     is_environment_recorded: bool,
     harness_config: Mapping[str, Any] | None,
+    step_name: str,
+    step_count: int,
 ) -> None:
-    """The driver's own progress record, synced out of the box."""
+    """The driver's own progress record, synced out of the box. The two step keys are what the driver
+    writes for a flat trial -- no step, no steps declared -- unless a stepped one is being written."""
     state: dict[str, Any] = {
         "eval_name": trial_dir.name,
         "case_name": case_id,
+        "step_name": step_name,
+        "step_count": step_count,
         "mngr_sha": TRIAL_MNGR_SHA,
         "dwt_sha": TRIAL_DWT_SHA,
         "test_state": test_state,
@@ -498,6 +528,185 @@ def _write_evidence_manifest(
     )
 
 
+def fixture_pricing_source() -> PricingSource:
+    """What a report priced from the fixture map below records as having priced it.
+
+    Named as plainly not a real map, because the rendered `priced by` line is asserted on literally
+    and both of litellm's halves of that line -- its version, and which copy of its map answered --
+    move underneath a test without anything in this project changing.
+    """
+    return PricingSource(source="fixture", version="0.0", map_source="fixture")
+
+
+# The price table the tests price against, in place of litellm's own. litellm fetches its map over the
+# network when it is imported and upstream edits it, so a test naming a dollar figure out of it would
+# go red on a price change in a library rather than on a change here. These rates are this project's
+# own: they mirror the cards the models were published under, which is what makes the round figures
+# below plausible, but nothing reads them back from a provider. The live map has exactly one test of
+# its own -- `test_litellm_prices_every_model_a_run_reports` -- and it pins no amount.
+FIXTURE_PRICE_MAP: Final[PriceMap] = PriceMap(
+    entries={
+        # Opus 4.8: $5/$25 per MTok, a cache read at a tenth of an input token, a 5-minute cache write
+        # at 1.25x one and a 1-hour write at 2x. The only fixture model that serves fast mode.
+        "claude-opus-4-8": {
+            "input_cost_per_token": 5e-6,
+            "output_cost_per_token": 2.5e-5,
+            "cache_read_input_token_cost": 5e-7,
+            "cache_creation_input_token_cost": 6.25e-6,
+            "cache_creation_input_token_cost_above_1hr": 1e-5,
+        },
+        # Haiku 4.5, a fifth of Opus and a model the API refuses the fast tier on.
+        "claude-haiku-4-5": {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 5e-6,
+            "cache_read_input_token_cost": 1e-7,
+            "cache_creation_input_token_cost": 1.25e-6,
+            "cache_creation_input_token_cost_above_1hr": 2e-6,
+        },
+        # Bedrock's Haiku, which bills one cache-write rate whatever the TTL: no 1-hour key at all.
+        "anthropic.claude-3-5-haiku-20241022-v1:0": {
+            "input_cost_per_token": 8e-7,
+            "output_cost_per_token": 4e-6,
+            "cache_read_input_token_cost": 8e-8,
+            "cache_creation_input_token_cost": 1e-6,
+        },
+        # The gateway-qualified id a pi arm on OpenRouter asks for, and beside it the vendor-direct key
+        # a reported id resolves to on its own. Neither prices a cache write. The gateway marks its
+        # rates up over the vendor's, which is what makes the two readings of one reported id tell
+        # each other apart in a figure rather than only in the key a lookup returns.
+        "openrouter/openai/gpt-5-mini": {
+            "input_cost_per_token": 5e-7,
+            "output_cost_per_token": 4e-6,
+            "cache_read_input_token_cost": 5e-8,
+        },
+        "gpt-5-mini": {
+            "input_cost_per_token": 2.5e-7,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 2.5e-8,
+        },
+        # A placeholder row nobody filled prices in for, which has to read as unpriced, not as free.
+        "glm-4-7-251222": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+    },
+    pricing_source=fixture_pricing_source(),
+)
+
+# The models a usage fixture names. Catalog ids the fixture map above prices, so a block is priced the
+# way a real trial's is; a fixture asking for an unpriced spender names a model that map does not
+# carry (`kimi-k2.6`, the OpenRouter lane's greeting model, is the one the runs actually meet).
+USAGE_WORKSPACE_MODEL: Final[str] = "claude-opus-4-8"
+USAGE_DECIDER_MODEL: Final[str] = "claude-haiku-4-5"
+USAGE_VERIFIER_MODEL: Final[str] = "claude-haiku-4-5"
+
+# What each fixture spender consumed, chosen so that the figures a reader prices them at are round
+# numbers the report assertions can name: $1.50 for the workspace agent over all four buckets at the
+# fixture map's Opus rates, $0.25 and $0.10 for the two harness callers at its Haiku rates.
+# `test_collect_spend_prices_the_fixtures_tokens` is the one place that arithmetic is asserted.
+USAGE_WORKSPACE_TOKENS: Final[TokenSnapshot] = TokenSnapshot(
+    input=100_000, output=20_000, cache_read=400_000, cache_creation=48_000
+)
+USAGE_DECIDER_TOKENS: Final[TokenSnapshot] = TokenSnapshot(input=200_000, output=10_000)
+NO_TOKENS: Final[TokenSnapshot] = TokenSnapshot()
+USAGE_VERIFIER_TOKENS: Final[TokenSnapshot] = TokenSnapshot(input=50_000, output=10_000)
+USAGE_WORKSPACE_COST_USD: Final[float] = 1.50
+USAGE_DECIDER_COST_USD: Final[float] = 0.25
+USAGE_VERIFIER_COST_USD: Final[float] = 0.10
+
+
+def usage_tokens_costing(cost_usd: float, *, model: str = USAGE_WORKSPACE_MODEL) -> TokenSnapshot:
+    """Output tokens that price to exactly `cost_usd` on one model of the fixture map, for a fixture
+    that needs several spenders to be told apart by their figures.
+
+    Derived from the rate rather than written down, so a test that names a dollar amount keeps naming
+    the amount it meant however the fixture map's rates are set.
+    """
+    entry = resolve_price_entry(model, FIXTURE_PRICE_MAP)
+    assert entry is not None, model
+    return TokenSnapshot(output=round(cost_usd / entry.output_cost_per_token))
+
+
+def usage_cost_usd(model: str, tokens: TokenSnapshot, *, cache_write_ttl: CacheWriteTtl) -> float:
+    """What a fixture's tokens price to on the fixture map, for a test asserting on a figure it did
+    not choose."""
+    entry = resolve_price_entry(model, FIXTURE_PRICE_MAP)
+    assert entry is not None, model
+    cost_usd = price_tokens(entry, tokens, is_fast_mode=False, cache_write_ttl=cache_write_ttl)
+    assert cost_usd is not None, model
+    return cost_usd
+
+
+def trial_usage_payload(
+    *,
+    workspace_tokens: TokenSnapshot = USAGE_WORKSPACE_TOKENS,
+    workspace_model: str = USAGE_WORKSPACE_MODEL,
+    workspace_fast_tokens: TokenSnapshot = NO_TOKENS,
+    is_cost_complete: bool = True,
+    is_cost_rate_certain: bool = True,
+    is_workspace_traffic_recorded: bool = True,
+    decider_model: str = USAGE_DECIDER_MODEL,
+    decider_fallback_count: int = 0,
+    verifier_model: str = USAGE_VERIFIER_MODEL,
+    verifier_tokens: TokenSnapshot = USAGE_VERIFIER_TOKENS,
+    verifier_failed_call_count: int = 0,
+) -> dict[str, Any]:
+    """`agent/usage.json` as the driver writes it: one block per spender, in tokens and never in
+    money. The driver writes the verification agent's block as null where no verification phase ran;
+    a caller that wants that shape sets the key itself.
+
+    Every block goes through the driver's own metadata writer, so what a reader of these fixtures
+    prices is the artifact a real trial leaves rather than a second description of it. What a block
+    costs is therefore the caller's choice of tokens and model: a model the fixture price map does not
+    carry is how a fixture asks for an unpriced spender.
+    """
+    workspace_usage = TrialUsage(
+        per_model=(
+            ModelUsage(
+                model=workspace_model,
+                message_count=6,
+                tokens=workspace_tokens,
+                fast_message_count=1 if workspace_fast_tokens.is_any_token_recorded else 0,
+                fast_tokens=workspace_fast_tokens,
+            ),
+        )
+        if is_workspace_traffic_recorded
+        else (),
+        tokens=workspace_tokens if is_workspace_traffic_recorded else TokenSnapshot(),
+        message_count=6 if is_workspace_traffic_recorded else 0,
+        # What the driver's own flags are derived from: a delegated call is traffic no transcript
+        # sees, and an unobserved speed tier is traffic nobody can price at a confirmed rate.
+        delegated_call_count=0 if is_cost_complete else 1,
+        worker_launch_count=0,
+        worker_captured_count=0,
+        is_speed_observed=is_cost_rate_certain,
+        # Derived from the one per-model row the way the driver derives it from all of them, so the
+        # artifact's two levels agree.
+        fast_message_count=1 if workspace_fast_tokens.is_any_token_recorded else 0,
+        fast_tokens=workspace_fast_tokens,
+    )
+    decider_usage = DeciderUsage(
+        model=decider_model,
+        call_count=3,
+        # A call that fell back answered unusably and was billed all the same, so a block carrying
+        # one is a floor, the way a failed flow-agent call makes the verifier's block one.
+        fallback_count=decider_fallback_count,
+        input_token_count=USAGE_DECIDER_TOKENS.input or 0,
+        output_token_count=USAGE_DECIDER_TOKENS.output or 0,
+    )
+    verifier_usage = VerifierUsage(
+        model=verifier_model,
+        call_count=4,
+        # A call that came back with nothing was billed all the same, so a block carrying one is a
+        # floor rather than the whole of that spender's traffic.
+        failed_call_count=verifier_failed_call_count,
+        input_token_count=verifier_tokens.input or 0,
+        output_token_count=verifier_tokens.output or 0,
+    )
+    return {
+        "workspace_agent": workspace_usage_metadata(workspace_usage),
+        "decider": decider_usage_metadata(decider_usage),
+        "verifier_agent": verifier_usage_metadata(verifier_usage),
+    }
+
+
 def write_trial_dir(
     job_dir: Path,
     trial_name: str,
@@ -515,6 +724,7 @@ def write_trial_dir(
     is_environment_recorded: bool = True,
     is_manifest_written: bool = True,
     harness_config: Mapping[str, Any] | None = None,
+    usage: Mapping[str, Any] | None = None,
 ) -> Path:
     """One finished trial's on-disk artifacts, in the layout harbor and the driver leave behind.
 
@@ -526,13 +736,126 @@ def write_trial_dir(
     (trial_dir / "agent" / "verification").mkdir(parents=True, exist_ok=True)
     (trial_dir / "verifier").mkdir(parents=True, exist_ok=True)
     if is_result_written:
-        _write_harbor_trial_result(trial_dir, job_dir, case_id, exception_type, step_exception_type)
+        _write_harbor_trial_result(
+            trial_dir,
+            job_dir,
+            case_id,
+            exception_type,
+            # harbor records a per-step failure on the step alone, leaving the trial-level
+            # exception_info unset -- which is why the run gate has to read both.
+            step_results=(
+                ({"step_name": "agent", "exception_info": _exception_info(step_exception_type)},)
+                if step_exception_type
+                else ()
+            ),
+        )
     if is_state_written:
-        _write_agent_state(trial_dir, case_id, test_state, is_environment_recorded, harness_config)
+        _write_agent_state(
+            trial_dir, case_id, test_state, is_environment_recorded, harness_config, step_name="", step_count=0
+        )
     if not exception_type and not step_exception_type:
         _write_reward_details(trial_dir, test_state, failed_gate_names, judge_raw_score)
     if is_manifest_written:
         _write_evidence_manifest(trial_dir, case_id, errored_entry_ids, failed_entry_ids)
+    # Absent by default, which is what an oracle trial and every trial written before usage.json
+    # existed leave behind.
+    if usage is not None:
+        (trial_dir / "agent" / "usage.json").write_text(json.dumps(dict(usage), indent=2))
+    return trial_dir
+
+
+class StepFixture(FrozenModel):
+    """One step of a written stepped trial: what that step's own artifacts say about it."""
+
+    name: str = Field(description="The step's name, which is also its directory's name under `steps/`")
+    test_state: str = Field(default="finished", description="What the state file this step wrote says it ended in")
+    errored_entry_ids: tuple[str, ...] = Field(
+        default=(), description="Evidence entries this step's collector could not measure"
+    )
+    failed_gate_names: tuple[str, ...] = Field(
+        default=(), description="Structural gates this step's verifier scored at zero"
+    )
+    exception_type: str = Field(
+        default="", description="What harbor recorded this step raising; empty when the step ran to its own end"
+    )
+    usage: Mapping[str, Any] | None = Field(
+        default=None, description="The cost account this step wrote; None for a step that wrote none"
+    )
+    is_state_written: bool = Field(
+        default=True, description="Whether this step got far enough to sync the driver's state record out"
+    )
+    is_archived: bool = Field(
+        default=True,
+        description="Whether harbor moved this step's outputs into its step directory; false leaves them at the "
+        "trial root, where a step that died before the archive leaves them",
+    )
+
+
+def _step_result(step: StepFixture) -> dict[str, Any]:
+    """Harbor's record of one step: graded, or carrying the exception that stopped the trial there."""
+    if step.exception_type:
+        return {"step_name": step.name, "exception_info": _exception_info(step.exception_type)}
+    return {"step_name": step.name, "verifier_result": _graded_verifier_result()}
+
+
+def write_stepped_trial_dir(
+    job_dir: Path,
+    trial_name: str,
+    steps: Sequence[StepFixture],
+    *,
+    case_id: str = "todo-app",
+    declared_step_count: int = 0,
+    judge_raw_score: float = 8.0,
+    harness_config: Mapping[str, Any] | None = None,
+) -> Path:
+    """One stepped trial's on-disk artifacts, in the layout harbor leaves a multi-step task in.
+
+    Every step is written into the trial-root directories the box mounts, exactly where the driver
+    and the verifier write them, and then archived with harbor's own move -- the call
+    `MultiStepTrial._archive_step_outputs` makes -- so what these fixtures pin is harbor's layout
+    rather than a second description of it.
+
+    `declared_step_count` is how many steps the task declared, which a trial that stopped at a step's
+    reward floor records more of than it ran; zero means the steps written are all the task had.
+    """
+    trial_dir = job_dir / trial_name
+    paths = TrialPaths(trial_dir=trial_dir)
+    step_count = declared_step_count or len(steps)
+    for step in steps:
+        (paths.agent_dir / evidence_collection.VERIFICATION_DIRNAME).mkdir(parents=True, exist_ok=True)
+        paths.verifier_dir.mkdir(parents=True, exist_ok=True)
+        # Cumulative, both of them: each step rewrites the whole conversation's record, so the last
+        # step's copy is the one that describes the trial.
+        if step.is_state_written:
+            _write_agent_state(
+                trial_dir,
+                case_id,
+                step.test_state,
+                True,
+                harness_config,
+                step_name=step.name,
+                step_count=step_count,
+            )
+        if step.usage is not None:
+            (paths.agent_dir / "usage.json").write_text(json.dumps(dict(step.usage), indent=2))
+        # A step harbor recorded an exception for was never graded, which is also what makes harbor
+        # abandon the steps after it.
+        if not step.exception_type:
+            _write_reward_details(trial_dir, step.test_state, step.failed_gate_names, judge_raw_score)
+        _write_evidence_manifest(trial_dir, case_id, step.errored_entry_ids, ())
+        if step.is_archived:
+            ArtifactHandler.move_dir_contents(paths.agent_dir, paths.step_agent_dir(step.name))
+            ArtifactHandler.move_dir_contents(paths.verifier_dir, paths.step_verifier_dir(step.name))
+        else:
+            # Harbor creates a step's directories before the step runs and archives into them after
+            # it, so a step that died in between has both: an empty step directory and its own
+            # outputs still at the trial root.
+            paths.step_agent_dir(step.name).mkdir(parents=True, exist_ok=True)
+            paths.step_verifier_dir(step.name).mkdir(parents=True, exist_ok=True)
+    # Harbor removes the emptied mount targets at the end of the trial, so a reader cannot find a
+    # stepped trial's artifacts at the root even as empty directories.
+    paths.cleanup_empty_mount_dirs()
+    _write_harbor_trial_result(trial_dir, job_dir, case_id, "", step_results=[_step_result(step) for step in steps])
     return trial_dir
 
 

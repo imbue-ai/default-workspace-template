@@ -137,8 +137,10 @@ deploy was deliberately not done.
   repaired the same day. Staging: checked (no duplicates) and applied by the
   0.6.2 deploy `20260917T054239Z` on 2026-09-17 (see
   [history/minds-v0.6.2.md](./history/minds-v0.6.2.md)). The dev envs are
-  unchecked. Production gets it with its next connector deploy, after the
-  `mngr/production-ssh-ca` branch merges.
+  unchecked. Production: already at 043 when the 2026-09-20 deploy's preflight
+  read its `schema_migrations` (applied by the 2026-09-17 production deploy
+  `20260917T142813Z`, which no history entry records); the duplicate-address
+  query was empty. Only the dev envs remain unchecked.
 
 - [x] **Artifact mirror serving** (imbue-ai/mngr-internal#856, #851). Done
   2026-09-09 for production: `minds-admin artifacts upload` (14 artifacts),
@@ -207,7 +209,15 @@ deploy was deliberately not done.
   Modal CLI has no `app describe`). Then confirm a lease/stop cycle against a
   gen-2 box still works through the proxy. Verified on staging on 2026-09-15
   (`us-west-2` for both the connector and the proxy after deploy
-  `20260915T021647Z`).
+  `20260915T021647Z`). Production deployed on 2026-09-20 from `fb7c265c5f`:
+  deploy `20260920T002726Z` (RECREATE; applied 044), `/version` advanced,
+  both health checks green; all three `<channel>-web.json` files named
+  `minds-v0.6.2`, at which the pool held 7 `available` US-EAST-VA and 17
+  US-WEST-OR rows; the fresh connector log had no `Could not read the web
+  pin` / `No web pin published` line; the four live `rsc-production` and
+  `llm-production` containers answered `westus3` / `eastus2`. Not done: a web
+  create from the chrome on each channel, and a lease/stop cycle through the
+  proxy.
 
 - [ ] **Promote 0.5.0 past alpha.** Beta and stable are still 0.4.2 (build
   `260825un55i8ix7`), so most users are two releases behind. The 0.5.0 build is
@@ -329,7 +339,383 @@ deploy was deliberately not done.
   gen-2 (see [history/minds-v0.6.1.md](./history/minds-v0.6.1.md), whose
   findings list what the sweep taught the tooling: legacy-layout workspaces
   need `repair-home-layout` first, rows 039 could not measure are restamped,
-  pre-0.5.0 templates need the tolerant seed bake). Production remains.
+  pre-0.5.0 templates need the tolerant seed bake). Production: the box
+  sweeps started on 2026-09-20 (night 1), hil / US-WEST-OR only, two
+  concurrent invocations at most (two lanes, one target box each), no
+  repaves, every migrated workspace verified read-only on its target (DB row,
+  state record, VM root over the operator certificate, container programs,
+  home tree, version, UI). Per source box, in order:
+  - **`946923eb` -> `95bbc37c`** (lane A, 06:32Z-10:23Z, 10/10): the first
+    invocation carried `--publish-image-tars`, which seeded and published the
+    0.4.1, 0.4.2 and 0.5.2 tars (about 6 minutes each) before the first
+    harvest; 0.6.2 seeded at the first harvest and 0.5.0 came from lane B's
+    seed. Rows, in migration order, with the new container port on
+    `147.135.97.118` (the VM port is one below) and the latchkey detail:
+    `96aefeda` imbue-hud (0.6.2, 22001, FULL), `c86f8f71` workspace-2
+    (0.4.1, 22003, FULL), `7347c179` workspace-1 (0.4.1, 22005, none),
+    `1cecae75` work (0.6.2, 22007, FULL), `e959cc6b`
+    primary-shared-tools-workspace (0.6.2, 22009, FULL), `4f8da966`
+    library-stuff (0.5.0, 22011, FULL), `d4c18c8d`
+    shared-event-attendees-workspace (0.6.2, 22013, FULL), `d4f5cd82`
+    workspace-1 (0.5.2, 22015, FULL), `9b8ab0dc` workspace-1 (0.4.2, 22017,
+    none), `81c1728f` main (0.5.2, 22019, FULL). Stops took 1.5 to 3 minutes
+    except `c86f8f71` (23 minutes: its data disk is 81% full). Two
+    workspaces carry an owner-added supervisord program that is not running
+    on gen-2: `c86f8f71`'s `sg-download` (`ionice -c3` is refused under
+    gVisor: `ioprio_set failed: Operation not permitted`; the owner has to
+    drop the `ionice` from its command) and `4f8da966`'s `disc-finder`
+    (still STARTING at the probe). The box then held 0 rows; audit clean
+    (`95bbc37c` 10/14 used, keys 0/0, CA correct, encrypted, 36 exclusive /
+    0 contaminated). Not repaved.
+  - **`0d59c281` -> `0172f93e`** (lane B, 07:36Z-10:53Z, 10/10; started once
+    lane A's first workspace had passed its checks). Seeds paid on the
+    target: 0.3.11, 0.5.0 and 0.6.1 (the 0.6.1 seed's first attempt died in
+    the slice boot wait with "Connection to 127.0.0.1 closed by remote
+    host" and the bake's own retry succeeded). Rows, in migration order,
+    with the new container port on `51.81.243.47` and the latchkey detail:
+    `20636a9c` workspace-2 (0.3.11, 22001, DISK_ONLY), `4d98c380`
+    workspace-1 (0.4.2, 22003, none), `42a5cc82` workspace-2 (0.4.2, 22005,
+    none), `c3241f4e` terrapin-trail (0.5.0, 22007, FULL), `cb868420`
+    workspace-1 (0.4.2, 22009, none), `a341427b` workspace-5 (0.6.2, 22011,
+    FULL), `cf6412be` workspace-1 (0.4.2, 22013, none), `42ebe272`
+    workspace-2 (0.4.2, 22015, FULL), `e0a0fa65` workspace-1 (0.5.0, 22017,
+    FULL), `9e1f7ee5` autocompact-null-test (0.6.1, 22019, FULL). Three of
+    them (`4d98c380`, `42a5cc82`, `42ebe272`) were created from a branch
+    and hold no release tag, so their version came from the vendored
+    `FALLBACK_BRANCH` (0.4.2). The box then held 0 rows; the 10:25Z audit
+    read `0172f93e` 10/14 used, keys 0/0, CA correct, encrypted. Not
+    repaved.
+  - `777fadf6` (the never-leased `available` 0.5.2 row on `9ef5ab2e`) was
+    destroyed with `pool destroy` at 10:53Z, as agreed, before that box's
+    sweep.
+  - **`d6871163` -> `c2458e1c`** (lane A, 10:24Z-11:49Z, 7/7; no seed
+    needed, every version's tar was in the bucket). Rows, in migration
+    order, with the new container port on `51.81.242.229` and the latchkey
+    detail: `26569bf0` workspace-3 (0.4.2, 22001, FULL), `d92d02b6`
+    workspace-1 (0.4.2, 22003, FULL), `c9169345` clear-up-elm20-gmail
+    (0.4.2, 22005, FULL), `14dfa404` google-inbox-aug27 (0.6.2, 22007,
+    FULL), `62c66345` workspace-1 (0.4.2, 22009, FULL), `2ed5abf3`
+    sept14-4pm (0.5.2, 22011, FULL), `190b5607` workspace-2 (0.6.1, 22013,
+    FULL; its own `tailscaled` program was still STARTING at the probe).
+    The box then held 0 rows. Not repaved.
+  - **`9ef5ab2e` -> `d0aae071`** (lane B, 10:54Z-12:34Z, 7/7; no seed
+    needed). Rows, in migration order, with the new container port on
+    `51.81.243.34` and the latchkey detail: `bc48bb25` workspace-1 (0.4.1,
+    22001, FULL), `b8dc7438` work (0.6.2, 22003, FULL; its own
+    `relationships` program was still STARTING at the probe), `6f53fb3f`
+    personal (0.6.2, 22005, FULL), `8b594773` workspace-1 (0.4.1, 22007,
+    none), `cfa65b4a` shared-analytics-workspace (0.6.2, 22009, FULL),
+    `68ebc224` gmail-ui (0.4.2, 22011, FULL), `f210f8b6` daisyui-skill
+    (0.5.2, 22013, FULL). The box then held 0 rows. Not repaved.
+  - **`7286e152` -> `c2458e1c`** (lane A, 11:49Z-13:04Z, 6/6; no seed
+    needed; the target then held 13/14). Rows, in migration order, with the
+    new container port on `51.81.242.229` and the latchkey detail:
+    `7c6b3c64` workspace-1 (0.3.11, 22015, DISK_ONLY; the second 0.3.11
+    migration, clean with the autostart fix), `76d51c10` workspace-5 (0.6.2,
+    22017, FULL), `3e8c9573` kanjun-inbox-aug26-2pm (0.4.2, 22019, FULL),
+    `300b9082` workspace-1 (0.4.2, 22021, none), `94dbf60d` workspace-1
+    (0.4.2, 22023, none), `23f286bb` workspace-1 (0.4.2, 22025, FULL). The
+    box then held 0 rows. Not repaved.
+  - **`267e76bd` -> `d0aae071`** (lane B, 12:34Z-13:51Z, 5/5; no seed
+    needed; the target then held 12/14). Rows, in migration order, with the
+    new container port on `51.81.243.34` and the latchkey detail:
+    `245ea378` workspace-1 (0.3.11, 22015, FULL; the third and last 0.3.11
+    migration, clean), `093dff1b` financial-workspace (0.6.2, 22017, FULL),
+    `6dba5432` workspace-6 (0.6.2, 22019, FULL), `c7753264` workspace-1
+    (0.5.0, 22021, FULL), `fe8d7a08` workspace-1 (0.6.2, 22023, FULL; its
+    own `task-inbox` and `task-inbox-refresh` programs read STOPPED "Not
+    started", i.e. not set to autostart, as before the move). The box then
+    held 0 rows. Not repaved.
+  - **`782ed40b` -> `3841df6d`** (wave 3, 13:04Z-13:53Z, 3/3; no seed
+    needed; the target then held 7/14 with its four earlier rows). Rows,
+    in migration order, with the new container port on `147.135.97.227` and
+    the latchkey detail: `5ecc0d7a` workspace-1 (0.6.2, 22005, FULL),
+    `f482e124` workspace-6 (0.6.2, 22011, FULL), `6e80e84f` workspace-1
+    (0.5.2, 22013, FULL). The box then held 0 rows. Not repaved.
+  - **Night-1 end state (13:55Z)**: 48/48 workspaces migrated and verified
+    (every one `leased`, `box_generation` 2, `US-WEST-OR`, `stop_kind`
+    NULL); the seven gen-1 source boxes `946923eb`, `0d59c281`, `d6871163`,
+    `7286e152`, `9ef5ab2e`, `267e76bd`, `782ed40b` hold 0 rows and 0 slice
+    disks (audit), left `ready` on gen-1 as the rollback horizon, NOT
+    repaved; final `server-audit` 36 boxes, 36 exclusive, 0 contaminated,
+    0 unaudited, every gen-2 target keys 0/0, CA correct, encrypted, no
+    degraded arrays. No rollback was run and no cutover record is in
+    flight; every harvested key was shredded. Reports:
+    `~/.minds/cutover/reports/migrate-20260920T*.json`. Timings: 10 to 18
+    minutes per workspace when its tar was in the bucket, about 6 minutes
+    per seed; the whole 48 took 06:32Z to 13:53Z with two lanes. Owner
+    follow-ups: `c86f8f71`'s `sg-download` cannot run under gVisor (drop
+    `ionice -c3`); the other owner-added programs the probe reported were
+    STARTING or deliberately not autostarted. Still to do for production:
+    the remaining gen-1 boxes (`46bf5609` with its do-not-touch row,
+    susy's three boxes, every vin box), the repaves once the rollback
+    horizon closes, and the retired rows' releases.
+  - Two tooling gaps found and fixed on this branch during the sweep, each
+    on the first workspace it applied to: (1) the `minds-v0.3.11` template's
+    autostart installer only enables its boot unit, so a 0.3.11 workspace
+    came back with no services agent and failed the health probe (row
+    parked about 20 minutes, then resumed with the fix: the replay now
+    starts the unit); (2) the health probe required every supervisord
+    program, so `c86f8f71`'s own gVisor-incompatible program failed the
+    migration (row parked about 30 minutes, then resumed with the fix: only
+    template-shipped programs block; owner-added ones are reported). Both
+    resumes were `--workspace <row>` plus the box sweep in one invocation,
+    so the parked row went first.
+  - **Daytime 2026-09-20 (14:00Z to 18:30Z), between the night-1 and night-2
+    sweeps**: night 1 validated clean (Bugsink `rsc` 0 issues first seen after
+    06:00Z; 0 `MNGR_BOX_SIGNAL` and 0 OOM lines on the five targets; the
+    migrate's own footprint in OpenObserve was 47 admin stop-kind 409 probes,
+    one owner start 409 during a hold, three slice-reconcile divergences
+    mid-transplant, and seven harmless gen-1 retention finalizes). The
+    tier-wide `repair-home-layout --all-leased` probe found six legacy
+    layouts among leased rows, all repaired with `--migrate` (~1 minute each,
+    rollback snapshot kept): `ff6927e5` red-scribble and `dd887893`
+    workspace-1 on `0b24ee94`, `20dfb490` workspace-2 on `219affc1`,
+    `3584ef5c` workspace-1 on `feb11eae`, `7f574268` a and `1267becb` b on
+    `a7828ee9` (vin). The tier preflight (0 refused, 10 errors) named the
+    six, the three do-not-touch rows, and `8499e566` on `a7828ee9`
+    ("expected exactly one container labeled with host id ..."); health
+    warnings on `ffefcef6` (supervisord down) and three owner-added programs.
+    Three accounts suspended in late August as abusers (prefixes
+    `77d44ec6ad0f431d`, `f3bfb0c10dbd4695`, `a69c29083b964fba`) had their
+    stopped gen-1 rows (`187a39a4`, `bf3bb7d2`, `ff300196`) released and the
+    accounts deleted with `scripts/delete_accounts.py`; their `host-...`
+    buckets were left to the backup-retention reaper. A trial migrate of
+    `ff300196` before that deletion admin-started it onto `7286e152`, was
+    refused at the harvest for a legacy layout, and the repair then failed
+    (no services in the restored container; the owner's `.bashrc` runs an
+    endless restic loop); stopped again with `workspaces stop --kind idle`
+    and released (the migrate does not check owner suspension: issue 1164).
+    Four departed internal accounts (prefixes `3e9e8a959bb74a3c`,
+    `91beeb7f32554fb3`, `4bf48af6fa144631`, `96803d7d156f484f`) were
+    removed: five rows released (`c3fc9ee3` leased on `80972293`,
+    `9ea236f0` stopped, and the retired `80c7dd0c`, `7566937b`, `7bbbb887`,
+    whose archives survive), accounts deleted, and their ten R2 buckets
+    emptied and deleted through the connector's own bounded reaper (7,665
+    objects, ~66 minutes) with the ten Cloudflare tokens revoked. Then the
+    stopped-row path was proven: the two stopped vin workspaces of one
+    internal owner (`f00fd0f9` workspace-6 and `d8f23a08` workspace-7, both
+    0.3.11) migrated vin to vin onto `8797d3ae` (17:59Z to 18:19Z, ~10
+    minutes each): admin start onto a vin gen-1 box (`d157ec61`, then
+    `8cade5fa`), harvest (latchkey `DISK_ONLY`, as a stopped origin has no
+    tmpfs pair), `disk_gb` restamped 44 to 45 from the measured 29 GiB disk,
+    then the usual stop, park, transplant, replay, re-lease; new container
+    ports 22011 and 22013 on `135.148.169.102`, both verified (`leased`, gen
+    2, `US-EAST-VA`, runsc, all template programs, UI 200); the `:1989`
+    gateway stays unbound until the owner's desktop next provisions the
+    machine. Pre-existing problems found on the way were filed as issues
+    1157 to 1163. Reports `~/.minds/cutover/reports/migrate-20260920T181914Z.json`.
+  - **Evening 2026-09-20 (21:15Z to 22:15Z)**: the last stopped hil gen-1
+    row of a non-internal owner, `f21a2f5c` workspace-1 (owner prefix
+    `9f13747fa3434371`, 0.4.1, stopped since 2026-08-24, `disk_gb` 44),
+    migrated onto `3841df6d` (21:19Z to 21:32Z). The connector admin-started
+    it onto `feb11eae` (the same-region gen-1 box with room it picked; the
+    box was back to its 8 rows afterwards), harvest `DISK_ONLY`, `disk_gb`
+    restamped 44 to 45, tar already in the bucket; new container port 22015
+    on `147.135.97.227`, verified (`leased`, gen 2, `US-WEST-OR`, runsc,
+    `/home/user -> /mngr-vol/home`, 1.2 GB, `minds-v0.4.1-4-g...`, UI 200,
+    `mngr list` shows `system-services`); `3841df6d` then held 8/14. Report
+    `migrate-20260920T213245Z.json`. Then **the seven emptied hil gen-1
+    boxes were repaved gen-2** with `cutover repave`, two concurrent batches:
+    `946923eb`, `0d59c281`, `d6871163`, `7286e152` (21:37Z to 21:54Z) and
+    `9ef5ab2e`, `267e76bd`, `782ed40b` (21:56Z to 22:11Z), every box coming
+    back `ready`, generation 2, 14 slots, overcommit 4.0, LUKS-encrypted,
+    keys 0/0, CA correct, storage partition ~936.5 GB (reports
+    `repave-20260920T215348Z.json`, `repave-20260920T221116Z.json`; per-box
+    records in `~/.minds/cutover/boxes/`). They are migration targets, not
+    stock (no bake). This closes the rollback horizon for the 48 night-1
+    workspaces as far as those boxes go; the remaining hil gen-1 boxes
+    (`219affc1`, `529bf614`, `80972293`, `91d1f669`, `46bf5609`, and the
+    three do-not-touch boxes) and vin's still exist, and the horizon has not
+    been declared closed. The quarantined never-leased 0.6.2 row `07190358`
+    on `5f099257` (ordinal 10; issue 1161) was destroyed with `pool destroy`
+    at 21:37Z, so that box reads 12/14 again (no replacement baked). Two
+    read-only diagnoses for the night sweeps, remedies pending: `ffefcef6`
+    workspace-1 on `80972293` has been running with no services since its
+    owner's stop/start on 2026-09-17 05:20Z, because an `update-self` run
+    earlier that night (00:30Z to 02:00Z, merged 0.6.1 then rolled back the
+    apply, never reaching a verdict) left the container with no `mngr` uv
+    tool, so the template's `minds-autostart.service` fails with
+    `exec: mngr: not found` and, with `StartLimitIntervalSec=0` and the path
+    unit retriggering it, hot-loops about six times a second (over a million
+    failures since 09-19); the fix is to reinstall the vendored mngr
+    (`system/scripts/install_mngr.py`) in the container, after which the
+    autostart brings the services back. `8499e566` workspace-1 on `a7828ee9`
+    (vin) is a failed slow-path create from 2026-09-11 18:08Z (lease, volume
+    wiped to an empty `agents/` + `host_dir/`, the rebuild's `docker build`
+    canceled at 18:29Z): no container at all, empty data volume, no backup
+    bucket, a stub workspace record; the owner (client 0.5.0, last seen
+    2026-09-17) fell back to a fast-path lease of `947649dd` workspace-2 on
+    `c011f511` nine minutes later, which is healthy (all template programs,
+    UI 200, home layout) and was mis-attributed the "no running container"
+    probe verdict in the handoff. Both remedies were then applied with Josh's
+    approval (22:25Z to 22:35Z): the vendored mngr was reinstalled in
+    `ffefcef6`'s container with the installer's single `uv tool install`
+    (`system/vendor/mngr/libs/mngr` plus the six `mngr_plugins.toml` plugins,
+    `--reinstall`, tool dirs pinned to `/root`), after which the looping
+    autostart started the services agent on its next tick and every template
+    program, the UI and `mngr list` came back; the box's preflight then read
+    clean. `8499e566` was released with `minds-admin workspaces release`
+    (its stub record was deleted outright; `a7828ee9` then held 7 rows).
+  - **The 22 stopped gen-1 workspaces of one internal owner (prefix
+    `f01706cbe567466f`; 17 hil, 5 vin; baked 0.3.10 to 0.5.2) archived and
+    retired at the owner's request (22:42Z to 00:19Z)**, the retire flow run
+    on stopped rows: per row `archives create --start-stopped` (the connector
+    admin-started each onto a same-region gen-1 box of its choosing, which
+    included `feb11eae` and `46bf5609` as transient slots), a check with
+    `archives list`, then `workspaces retire`; two lanes, hil and vin, about
+    3.5 minutes per row. Every row has exactly one archive (46.5 GB in
+    total); `archives links` wrote
+    `~/.minds/archives/reports/archive-links-20260921T002003Z.{md,csv}`
+    (7-day links) for the owner. Two rows failed once and succeeded on a
+    re-run: `39afd238` and `7275de1c` hit an archive-streamer gap (a pytest
+    fixture file under the container's `/tmp` with a synthetic year-2286
+    mtime overflowed the zip's DOS date field; fixed on this branch, see
+    `apps/minds_admin`'s changelog), and `690f5346`'s first admin start
+    failed in the restore transfer on `91d1f669` (`zstd` decompress of the
+    6 GB disk object; the row landed back on `stopped` and the retry
+    restored cleanly). None released yet: release them once the owner has
+    what he wants.
+  - **Vin sweep, 2026-09-21 01:05Z to 02:29Z: the eight leased rows of
+    `c011f511`, `d157ec61` and `642c2c1c` migrated vin to vin**, selected
+    with `--workspace` (not box sweeps) so the 19 never-leased 0.5.2
+    `available` rows on `c011f511` and `642c2c1c` were left as stock. Two
+    lanes, one target each; every workspace verified read-only on its
+    target. Lane A onto `f763270e` (empty; its first 0.3.10 workspace paid
+    a seed), rows in migration order with the new container port on
+    `135.148.169.103` and the latchkey detail: `2ff3ee72` mshq (0.3.11,
+    22001, FULL), `e22f064d` workspace-1 (0.3.11, 22003, FULL), `947649dd`
+    workspace-2 (0.5.2, 22005, FULL), `34cd5427` workspace-1 (0.3.10, 22007,
+    FULL), `ffe92996` glebs-corner (0.5.2, 22009, FULL; its own `todo`
+    program was still STARTING at the probe). Lane B onto `8797d3ae`, on
+    `135.148.169.102`: `ec31ceb0` workspace-1 (0.4.2, 22015, none),
+    `4546d8fd` workspace-1 (0.4.2, 22017, FULL), `4f2c7622` workspace-1
+    (0.4.2, 22019, FULL; its checkout is a `_darcs` tree with no `.git`, so
+    the version came from the vendored mngr's `FALLBACK_BRANCH`). `d157ec61`
+    then held 0 rows (repave-eligible, like `8cade5fa`); `f763270e` 5/14,
+    `8797d3ae` 10/14 (6 leased); audit 35 exclusive, 0 contaminated. One
+    failure, fixed in place and resumed: `ffe92996` failed the migrate's
+    autostart start because its `mngr` uv tool environment (under
+    `/home/user/.local`, carried on the volume) had never been re-synced
+    after the workspace's own update from 0.3.10 to 0.5.2, so the vendored
+    mngr's import of `watchdog` failed on the first restart in months;
+    the tool was reinstalled in the container on the target slice (the same
+    remedy as `ffefcef6` earlier that night), the services came back, and a
+    re-run of the same invocation resumed the parked row to RESTORED within
+    two minutes. Reports `migrate-20260921T014633Z.json`,
+    `migrate-20260921T015559Z.json`, `migrate-20260921T022335Z.json`,
+    `migrate-20260921T022904Z.json`. Remaining gen-1 leased rows after this:
+    hil `219affc1` 11, `529bf614` 11, `80972293` 10, `91d1f669` 12,
+    `46bf5609` 7, `0b24ee94` 9, `feb11eae` 8, `bab2c8a1` 4; vin `a7828ee9` 6,
+    `68069cdb` 7, `d04e8224` 10.
+  - **02:37Z to 03:04Z: vin repaves and the last three retirements.**
+    `d157ec61` and `8cade5fa` (both empty) repaved gen-2 (02:37Z to 02:53Z,
+    `ready`, 14 slots, encrypted, keys 0/0, CA correct). With Josh's blanket
+    approval of never-leased `available` rows as disposable capacity, the 19
+    such 0.5.2 rows on `c011f511` (11) and `642c2c1c` (8) were destroyed
+    with `pool destroy` (19/19) and both boxes repaved: `642c2c1c` came up
+    `ready` gen-2 (02:47Z to 03:00Z); **`c011f511` failed its prep at the
+    storage-encryption step, twice, with the TPM refusing to create the
+    sealing key** (`Esys_CreatePrimary` error `0x9a2`, "Failed to seal to
+    TPM2: State not recoverable"; the reinstall itself succeeded, the
+    recovery passphrase is in Vault). The box sits at `installing`,
+    generation 2, with no rows and is excluded from every pool path until
+    its TPM is reset or the box is retired; the audit reports it unaudited
+    meanwhile. Diagnosis (03:35Z): the TPM is detected and answers, but all
+    three hierarchies carry unknown authorization values (`ownerAuthSet`,
+    `endorsementAuthSet`, `lockoutAuthSet` all 1; `tpm2_createprimary`
+    fails with 0x9A2 "authorization failure" under every hierarchy), and
+    with the lockout auth set it cannot be cleared from the OS. OVH ticket
+    737351 filed 03:38Z asking for a BIOS-level clear or a reseat/replace,
+    referencing ticket 737104 (the `ns1002940` TPM that a reseat fixed on
+    09-19). The three remaining pre-floor gen-1
+    workspaces, live-probed RETIRE on 09-20 and left alone until now, were
+    archived and retired at Josh's instruction (02:37Z to 02:41Z):
+    `6d2e93e9` susyworkspace (owner prefix `2aebc26bbd8a4e1d`, 819.6 MB),
+    `b6564921` terrapintrail2 (`1e5f65b5da5b40d0`, 864.8 MB), `6d238b19`
+    workspace-1 (`c196c542cf0d4348`, 196.5 MB); links report
+    `~/.minds/archives/reports/archive-links-20260921T025320Z.{md,csv}`.
+    No gen-1 row below the version floor remains in any status but
+    `retired`; 74 retired rows await release.
+  - **Vin sweep, 2026-09-21 06:21Z to 08:29Z: `d04e8224` and `68069cdb`
+    emptied, plus the one default-size row of `a7828ee9`** (Josh's vin
+    plan; the hil sweep ran concurrently from another session on its own
+    branch). Step 0 read clean: the 23 leased rows all on the home layout,
+    every preflight CLEAN, no suspended owners, no overlay duplicates. The 4
+    never-leased 0.5.2 `available` rows of `d04e8224` and the 7 of `68069cdb`
+    were destroyed first (11/11). Two lanes, every workspace verified
+    read-only on its target. Lane A **`d04e8224` -> `8cade5fa`** (06:21Z to
+    08:29Z, 10/10), rows in migration order with the new container port on
+    `51.81.56.168` and the latchkey detail: `d8017b2e` workspace-1 (0.3.11,
+    22001, FULL; 14 GB home), `7e9cd93e` workspace-2 (0.3.11, 22003, none;
+    23 GB), `1c1a894c` workspace-1 (0.3.11, 22005, FULL), `5d3f5971`
+    workspace-2 (0.3.11, 22007, FULL), `b40cbe37` workspace-3 (0.3.11,
+    22009, FULL), `2b6bff65` workspace-4 (0.3.11, 22011, FULL), `abc403b7`
+    workspace-5 (0.3.11, 22013, FULL), `9afd33f1` workspace-6 (0.3.11,
+    22015, FULL), `296e8f9c` workspace-1 (live 0.6.2 from a 0.4.2 bake,
+    22017, FULL), `eba7ce5a` workspace-1 (0.4.2, 22019, FULL). Lane B
+    **`68069cdb` -> `d157ec61`** (06:31Z to 08:09Z, 7/7; the 0.4.4 tar was
+    seeded on the target), on `135.148.122.19`: `297ef0bb` talent-filter
+    (0.3.11, 22001, FULL), `716aded5` workspace-2 (live 0.6.2, 22003, FULL),
+    `a0933323` workspace-2 (0.4.1, 22005, FULL), `27b5cdb8` workspace-1
+    (0.4.1, 22007, none), `a43a63bc` workspace-1 (0.4.1, 22009, FULL),
+    `1b0da834` datalib-slack3 (live 0.4.4, 22011, FULL), `52525ddb`
+    workspace-5 (live 0.6.2, 22013, FULL). Then `40a5634e` workspace-2
+    (0.3.17, the one default-size row of `a7828ee9`, `disk_gb` restamped 44
+    to 45 from its measured 29 GiB disk) -> **`642c2c1c`** at
+    `135.148.34.21`:22001 (08:11Z to 08:21Z, DISK_ONLY). One failure, fixed
+    in the tooling and resumed: `296e8f9c` failed the autostart start after
+    the replay, because its checkout is a rolled-back self-update (content
+    from before the 0.6.2 merge, `git describe` still 0.6.2) whose vendored
+    mngr lacks the `mngr_autocompact` plugin the 0.6.2 image's tool
+    environment registers (`ModuleNotFoundError: No module named
+    'imbue.mngr_autocompact.plugin'`); the by-hand reinstall that fixed
+    `ffefcef6` and `ffe92996` was discarded by the resume (each replay
+    recreates the container from the image), so the migrate now runs the
+    template's own `install_mngr.py` procedure inside the container and
+    retries the start once (`0d2ce87030`; see `apps/minds_admin`'s
+    changelog); the second resume then restored the row in 8 minutes.
+    `68069cdb` (0 rows) was repaved gen-2 08:11Z to 08:24Z (`ready`, 14
+    slots, encrypted, storage partition 936.5 GB); `d04e8224`'s repave
+    started 08:30Z. Targets afterwards: `8cade5fa` 10/14, `d157ec61` 7/14,
+    `642c2c1c` 1/14. Reports `migrate-20260921T074539Z.json`,
+    `migrate-20260921T080832Z.json`, `migrate-20260921T082917Z.json` (lane A
+    and its two resumes), `migrate-20260921T080929Z.json` (lane B),
+    `migrate-20260921T082146Z.json` (`40a5634e`), `repave-20260921T082445Z.json`.
+  - **08:30Z to 10:13Z: the five oversized-disk rows of `a7828ee9` shrunk
+    onto `642c2c1c`, the first live use of `--shrink-oversized-disks`.**
+    Each row carried `disk_gb` 232 (a 216 GiB gen-1 data disk holding 2 to
+    6 GiB); the migrate measured the disk at the harvest, restamped the row
+    232 -> 44 before the stop, and transplanted into a 44 GiB gen-2 disk.
+    One proving run first (`3b1a5251` test-ui, live 0.6.2, 08:30Z to
+    08:47Z, container port 22003, FULL), verified with `disk_gb` 44 in the
+    row, a 44G data disk on the VM (12G used: the engines' base plus the
+    2.5 GB home tree), UI 200 and the gateway bound; then the other four in
+    one invocation, on `135.148.34.21`: `0456abbc` workspace-1 (0.5.0,
+    22005, FULL), `a6a08154` workspace-1 (0.5.0, 22007, none), `7f574268` a
+    (0.5.0, 22009, FULL), `1267becb` b (0.5.0, 22011, FULL). The
+    216 GiB disks made each stop about 15 minutes. One failure, fixed in the
+    tooling and resumed: `7f574268`'s replayed latchkey gateway went FATAL
+    because its owner's desktop (a build from the unmerged
+    `mngr/new-desktop-egress` branch) had written a `gateway_run.sh` naming
+    `/usr/local/bin/latchkey-curl-router`, while this checkout's latchkey
+    provisioning installs `latchkey-curl-dispatch`; the replay now reads the
+    path off the harvested script and symlinks it onto the installed shim
+    (`8720404f97`; the desktop's next provisioning pass replaces the link),
+    and the resume restored the row in 8 minutes, with `1267becb` (the same
+    owner) going through the new path directly. `f5b2043e`, the never-leased
+    232 GB `available` row, was destroyed at 10:14Z and **`a7828ee9` was
+    repaved gen-2** (10:14Z to 10:43Z: `ready`, 29 slots, overcommit 4.0,
+    encrypted, storage partition 7.98 TB). `642c2c1c` then held 6 rows (one
+    at 45 GiB, five at 44 GiB). Reports `migrate-20260921T084745Z.json`,
+    `migrate-20260921T094517Z.json`, `migrate-20260921T101316Z.json`,
+    `repave-20260921T104242Z.json`. **Vin end state (10:45Z)**: 23/23
+    workspaces migrated and verified; no gen-1 box with rows is left in vin
+    (`c011f511` stays `installing` on its TPM fault, OVH ticket 737351); the
+    three repaved boxes are migration targets, not stock (no bake); none of
+    the vin migrations left a cutover record in flight and every harvested
+    key was shredded (the hil lanes were mid-flight at the time); final
+    audit 34 exclusive, 0 contaminated, 1 unaudited (`c011f511`).
 - [ ] `CLEANUP: drop the lima_service_user / lima_instance_name /
   lima_disk_name columns (a follow-up connector migration) and the dual writes
   and COALESCE reads marked CLEANUP in minds_admin and the connector once
@@ -342,7 +728,32 @@ deploy was deliberately not done.
   [gen2-cutover.md](./gen2-cutover.md)). The desktop and the plugin in this
   release render it; an older desktop shows a retired workspace as a plain
   hold ("not actionable") and its start subprocess is refused by the
-  connector either way.
+  connector either way. Done for staging on 2026-09-19: deploy
+  `20260919T235027Z` from `0325c2b42f` (`main` at the merge of PR #1145)
+  applied 044 (RECREATE; staging was at 043, no duplicate overlay addresses)
+  and shipped the archive/retire admin commands' connector side. The full
+  archive -> check -> retire -> links flow was then exercised end to end on a
+  fresh 0.6.2 staging workspace (row `708b76a2`, gen-2, runsc), which found
+  and fixed `archives create` refusing every runsc container (it read the
+  writable layer off the sandbox pid's mount table; it now falls back to the
+  VM's rootfs mount). Done for production on 2026-09-20: deploy
+  `20260920T002726Z` from `fb7c265c5f` (`main` at the merge of PR #1101 plus
+  the runsc archive fix, whose connector code equals `main`) applied 044
+  (RECREATE; production was at 043, no duplicate overlay addresses). The
+  first production retirements followed the same night: the 54 gen-1
+  workspaces in Josh's `~/handoff/ready-to-retire.txt` (baked 0.3.1-0.3.9,
+  every live probe `RETIRE` with an empty `git describe`, every archive
+  present in the bucket with a sha; 54.0 GB archived) were retired one call
+  each between 01:5xZ and 01:58Z and had all reached `stopped` / `retired` by
+  02:07Z; `archives links` wrote
+  `~/.minds/archives/reports/archive-links-20260920T020713Z.{md,csv}`. Three
+  more rows read `RETIRE` in that probe but were not on the list and were
+  left alone (`b6564921` terrapintrail2, `6d238b19` workspace-1, `6d2e93e9`
+  susyworkspace). A 55th, `326e3e1e` learn-from-scratch (nayana, baked
+  0.3.10, `stopped` since 2026-08-18), was retired WITHOUT an archive on
+  Josh's instruction: its stop artifact is encrypted to a lost key and the
+  owner's restic bucket `c04e09c5f863425f--host-bae87c9771e14fe09ab08ca2e93aae3e`
+  is the remaining copy. None has been released yet.
 - [ ] `CLEANUP: delete s3://<bucket>/<prefix>archives/ (the retired
   workspaces' owner archives) 90 days after the last `minds-admin workspaces
   release` of a retired row` -- the archives are outside both the

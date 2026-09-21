@@ -37,6 +37,7 @@ from typing import Any
 from typing import Final
 from urllib.parse import urlsplit
 
+from pydantic import BaseModel
 from pydantic import Field
 from pydantic import JsonValue
 from pydantic import ValidationError
@@ -796,11 +797,25 @@ def _conversation_records(state: Mapping[str, Any]) -> tuple[tuple[EntryRecord, 
         return None
     try:
         return (
-            tuple(EntryRecord.model_validate(record) for record in raw_entries),
-            tuple(TurnRecord.model_validate(record) for record in raw_turns),
+            tuple(EntryRecord.model_validate(_declared_fields(record, EntryRecord)) for record in raw_entries),
+            tuple(TurnRecord.model_validate(_declared_fields(record, TurnRecord)) for record in raw_turns),
         )
     except ValidationError:
         return None
+
+
+@pure
+def _declared_fields(record: Any, model_type: type[BaseModel]) -> Any:
+    """A persisted record's keys cut down to the ones its model declares.
+
+    A state file is written by whichever driver version produced the trial, and its records shed keys
+    as well as grow them; the models forbid extras, so a key an older driver wrote and the current
+    model no longer carries would otherwise turn every record of that trial into one that does not
+    parse. Anything that is not a mapping is left for the model to refuse.
+    """
+    if not isinstance(record, Mapping):
+        return record
+    return {key: value for key, value in record.items() if key in model_type.model_fields}
 
 
 @pure

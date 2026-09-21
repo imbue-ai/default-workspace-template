@@ -51,11 +51,16 @@ from imbue.minds_evals.data_types import JudgeScore
 from imbue.minds_evals.data_types import KnownFailure
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.data_types import PricingSource
 from imbue.minds_evals.data_types import RunCheck
+from imbue.minds_evals.data_types import Spender
+from imbue.minds_evals.data_types import SpenderCost
 from imbue.minds_evals.data_types import TrialCheck
 from imbue.minds_evals.data_types import UnsupportedDiagnosticCell
+from imbue.minds_evals.testing import FIXTURE_PRICE_MAP
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import read_scheduled_workflow_text
+from imbue.minds_evals.testing import trial_usage_payload
 from imbue.minds_evals.testing import write_trial_dir
 
 RUN_URL: Final[str] = "https://github.com/imbue-ai/mngr-internal/actions/runs/42"
@@ -171,7 +176,7 @@ def write_summary(summary_path: Path, job_dir: Path, **trial_arguments: Any) -> 
     """One trial's job directory, graded the way `check-run` grades it and dumped where the report
     looks for it."""
     write_trial_dir(job_dir, "todo-app__aaaaaaa", **trial_arguments)
-    run_check = check_job_directory(job_dir)
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
     write_run_check_reports(run_check, None, summary_path)
     return run_check
 
@@ -180,7 +185,7 @@ def write_two_case_summary(summary_path: Path, job_dir: Path, **trial_arguments:
     """A pass over two cases, so the grid it feeds has more than one row."""
     write_trial_dir(job_dir, "greeting__aaaaaaa", case_id="greeting", **trial_arguments)
     write_trial_dir(job_dir, "todo-app__bbbbbbb", case_id="todo-app", **trial_arguments)
-    run_check = check_job_directory(job_dir)
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
     write_run_check_reports(run_check, None, summary_path)
     return run_check
 
@@ -342,10 +347,13 @@ def make_graded_trial(case_id: str, judge_scores: Sequence[JudgeScore], reward: 
         case_id=case_id,
         is_completed=True,
         incompletion_reason="",
+        step_count=0,
+        completed_step_count=0,
         is_gates_passed=True,
         error_entry_ids=(),
         reward=reward,
         judge_scores=tuple(judge_scores),
+        spend=(),
         lane="anthropic",
         requested_model="",
         is_model_confirmed=None,
@@ -1242,7 +1250,7 @@ def test_render_slack_report_marks_a_trial_that_was_never_graded_without_a_rewar
     write_passing_oracle(summaries_dir, tmp_path)
     write_trial_dir(tmp_path / "main-default-live", "todo-app__aaaaaaa", exception_type="TimeoutError")
     write_run_check_reports(
-        check_job_directory(tmp_path / "main-default-live"),
+        check_job_directory(tmp_path / "main-default-live", FIXTURE_PRICE_MAP),
         None,
         live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
     )
@@ -1534,7 +1542,9 @@ def test_render_slack_report_truncates_a_long_details_block(tmp_path: Path) -> N
             is_environment_recorded=False,
         )
     write_run_check_reports(
-        check_job_directory(oracle_job_dir), None, oracle_summary_path(summaries_dir, "main", CONFIG_SLUG)
+        check_job_directory(oracle_job_dir, FIXTURE_PRICE_MAP),
+        None,
+        oracle_summary_path(summaries_dir, "main", CONFIG_SLUG),
     )
 
     (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
@@ -1706,10 +1716,12 @@ def test_as_slack_payload_posts_a_run_whose_arms_all_passed_but_whose_job_did_no
 
 def test_parse_run_check_reads_back_the_summary_check_run_wrote(tmp_path: Path) -> None:
     """`check-run` dumps a model whose verdict fields are computed, and computed fields are extras on
-    the way back in, so the dump does not validate as-is."""
+    the way back in, so the dump does not validate as-is. The trial carries a spend record, which is
+    the deepest level of the summary: a computed field on one of those would make every summary of a
+    trial that recorded money read as one that could not be read."""
     job_dir = tmp_path / "nightly-run"
-    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=HAIKU_HARNESS_CONFIG)
-    run_check = check_job_directory(job_dir)
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=HAIKU_HARNESS_CONFIG, usage=trial_usage_payload())
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
     summary_path = tmp_path / "live-summary.json"
     write_run_check_reports(run_check, None, summary_path)
     assert '"is_passed"' in summary_path.read_text()
@@ -1719,6 +1731,29 @@ def test_parse_run_check_reads_back_the_summary_check_run_wrote(tmp_path: Path) 
     assert parsed == run_check
     assert parsed.is_passed is True
     assert parsed.trials[0].requested_model == "haiku"
+    assert [entry.spender for entry in parsed.trials[0].spend] == list(Spender)
+    assert parsed.pricing == run_check.pricing
+
+
+def test_parse_run_check_reads_a_summary_written_before_the_cost_fields_existed(tmp_path: Path) -> None:
+    """A summary is read back by whatever `ci-report` is current, which is not always the `check-run`
+    that wrote it, and a field the writer never heard of must read as a trial that recorded nothing
+    for it rather than as a summary that could not be read -- the one thing the report has no way to
+    tell a reader apart from a pass that genuinely went missing.
+    """
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=HAIKU_HARNESS_CONFIG)
+    payload = json.loads(check_job_directory(job_dir, FIXTURE_PRICE_MAP).model_dump_json())
+    payload.pop("pricing")
+    for trial in payload["trials"]:
+        for field_name in ("step_count", "completed_step_count", "spend"):
+            trial.pop(field_name)
+
+    parsed = parse_run_check(json.dumps(payload))
+
+    assert parsed.pricing.source == ""
+    (trial_check,) = parsed.trials
+    assert (trial_check.step_count, trial_check.completed_step_count, trial_check.spend) == (0, 0, ())
 
 
 def _nested_model_types(model: type[BaseModel]) -> set[type[BaseModel]]:
@@ -1737,12 +1772,15 @@ def test_only_the_levels_parse_run_check_strips_carry_computed_fields() -> None:
     read as one that could not be read -- the failure the report must never show for a bug of its
     own -- and a new model nested under RunCheck would put a whole unstripped level between them.
     Growing the parsing by a level is the fix; this is what says a level has appeared."""
-    assert _nested_model_types(RunCheck) == {TrialCheck}
+    assert _nested_model_types(RunCheck) == {TrialCheck, PricingSource}
 
     deeper_models = _nested_model_types(TrialCheck)
 
-    assert deeper_models == {JudgeScore}
-    assert [model for model in deeper_models if model.model_computed_fields] == []
+    assert deeper_models == {JudgeScore, SpenderCost}
+    # Every level the stripping does not reach, which is every model under the summary but the two it
+    # names: a computed field on any of them is validated back as one the model did not declare.
+    unstripped_models = {PricingSource, *deeper_models}
+    assert [model for model in unstripped_models if model.model_computed_fields] == []
 
 
 def test_format_duration_reads_as_a_wall_clock() -> None:
