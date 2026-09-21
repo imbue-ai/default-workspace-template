@@ -449,7 +449,7 @@ def _set_container_timezone(
         cached_tz_name = cache_path.read_text().strip()
     except FileNotFoundError:
         cached_tz_name = ""
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         logger.warning("Could not read the cached timezone at {}: {}", cache_path, e)
         return
     if not cached_tz_name:
