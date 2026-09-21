@@ -37,7 +37,8 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # mngr's conventions, duplicated rather than imported: the host directory's environment variable and fallback,
 # the observer's event file under it, the three event types the fold reads, the label that marks the workspace's
-# services agent, and the two lifecycle states that mean an agent is working.
+# services agent, and the two lifecycle states that mean an agent is working. Reading that file is the one
+# exception to the workspace's rule of reaching mngr through its CLI alone; the minds design document records it.
 ENV_MNGR_HOST_DIR: Final[str] = "MNGR_HOST_DIR"
 DEFAULT_MNGR_HOST_DIRNAME: Final[str] = ".mngr"
 AGENT_EVENTS_RELATIVE_PATH: Final[Path] = Path("events") / "mngr" / "agents" / "events.jsonl"
