@@ -1,4 +1,12 @@
-FROM python:3.12-slim-trixie
+# Pinned by index digest, not by tag: every apt operation in the image resolves
+# against the frozen archive at .mngr/apt-snapshot-timestamp, and apt refuses to
+# downgrade, so the base's own package versions must exist in that snapshot (a
+# floating tag can move to a newer Debian point release than the snapshot). Bump
+# this digest together with the snapshot timestamp, never alone; the release
+# runbook in the mngr monorepo (apps/minds/docs/deploy/ops/app-release.md, step
+# 0) and its release test check that the pair still agrees. Resolve a tag's
+# current index digest with `docker buildx imagetools inspect python:3.12-slim-trixie`.
+FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 # /root/.local/bin holds uv + claude (installed by system/scripts/setup_system.sh); put
 # it on PATH for every build layer and at runtime.

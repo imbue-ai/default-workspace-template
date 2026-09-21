@@ -117,12 +117,69 @@ def compute_order_pricing(
 _SETUP_AMORTIZATION_MONTHS: Final[Decimal] = Decimal(12)
 
 # OVH availability statuses that mean a (plan, memory, storage) combo is not orderable right now.
-_UNORDERABLE_AVAILABILITY_STATUSES: Final[frozenset[str]] = frozenset({"unavailable", "comingSoon"})
+# ``unknown`` is OVH's answer for a config it no longer stocks in that datacenter: the order API
+# refuses it just like ``unavailable``.
+_UNORDERABLE_AVAILABILITY_STATUSES: Final[frozenset[str]] = frozenset({"unavailable", "comingSoon", "unknown"})
 
 _AVAILABILITY_DELIVERY_RE: Final[re.Pattern[str]] = re.compile(r"^(\d+)H", re.IGNORECASE)
 _MEMORY_GB_RE: Final[re.Pattern[str]] = re.compile(r"ram-(\d+)g", re.IGNORECASE)
 # Matches each disk group in a storage planCode, e.g. '2x512nvme' or the '2x6000sa' + '2x512nvme' of a hybrid.
 _STORAGE_DISK_GROUP_RE: Final[re.Pattern[str]] = re.compile(r"(\d+)x(\d+)(nvme|ssd|sa)", re.IGNORECASE)
+# The one storage shape the slice fleet runs: two NVMe drives in a software mirror. The gen-2
+# reinstall layout is a single md RAID1 disk group (``ordering.build_gen2_reinstall_storage``), so
+# 3-disk mirrors, 4-disk RAID10, hardware RAID and hybrid SATA+NVMe pairs would all need layout work
+# that has never been exercised, and SATA-backed slices would be a regression for the reflink carves
+# and the 14+ workspaces sharing one filesystem.
+_SUPPORTED_SLICE_STORAGE_PREFIX: Final[str] = "softraid-"
+_SUPPORTED_SLICE_DISK_COUNT: Final[int] = 2
+_SUPPORTED_SLICE_DISK_MEDIA: Final[str] = "nvme"
+# OVH's GAME ranges (``24risegame*``, ``24sysgame*``, ``24skgame*``) cannot join the slice fleet: their
+# IP ships with the Game anti-DDoS profile in firewall mode, which drops the management WireGuard's
+# inbound UDP so the overlay can never come up, and they sit on a 1 Gbit/s port, which collapses the
+# workspace restore's parallel object fetch (see ``ordering.MIN_BOX_LINK_SPEED_MBPS``).
+_GAME_RANGE_PLAN_MARKER: Final[str] = "game"
+
+
+@pure
+def is_supported_slice_storage(storage_code: str) -> bool:
+    """Whether a storage code is a two-drive NVMe software mirror, the only shape the slice tooling lays out.
+
+    Accepts both the availability short code (``softraid-2x1920nvme``) and the plan-suffixed add-on
+    code (``softraid-2x1920nvme-24sys03-v1-us``); a second disk group anywhere in the code (the
+    ``softraid-2x960nvme-2x6000sa`` hybrids) disqualifies it.
+    """
+    disk_groups = _STORAGE_DISK_GROUP_RE.findall(storage_code)
+    if len(disk_groups) != 1 or not storage_code.lower().startswith(_SUPPORTED_SLICE_STORAGE_PREFIX):
+        return False
+    disk_count, _disk_gb, media = disk_groups[0]
+    return int(disk_count) == _SUPPORTED_SLICE_DISK_COUNT and media.lower() == _SUPPORTED_SLICE_DISK_MEDIA
+
+
+@pure
+def assert_storage_supported_for_slices(storage_code: str) -> None:
+    """Refuse a storage config the slice fleet cannot use (see ``is_supported_slice_storage``)."""
+    if not is_supported_slice_storage(storage_code):
+        raise BareMetalConfigError(
+            f"storage {storage_code!r} is not a two-drive NVMe software mirror (softraid-2x<size>nvme), the only "
+            "storage shape the gen-2 reinstall layout and slice carves support; pick a 2x NVMe config"
+        )
+
+
+@pure
+def is_game_range_plan(plan_code: str) -> bool:
+    """Whether a planCode belongs to one of OVH's GAME ranges (see ``_GAME_RANGE_PLAN_MARKER``)."""
+    return _GAME_RANGE_PLAN_MARKER in plan_code.lower()
+
+
+@pure
+def assert_plan_orderable_for_slices(plan_code: str) -> None:
+    """Refuse a plan the slice fleet cannot run: the GAME ranges (see ``is_game_range_plan``)."""
+    if is_game_range_plan(plan_code):
+        raise BareMetalConfigError(
+            f"plan {plan_code!r} is an OVH GAME-range server: its Game anti-DDoS firewall drops the management "
+            "WireGuard's inbound UDP and its 1 Gbit/s port collapses the workspace restore fetch, so the slice "
+            "fleet cannot use it; pick a SYS or RISE plan"
+        )
 
 
 @pure
@@ -376,13 +433,19 @@ def compute_slice_pricing_rows(
     allowed_regions: AbstractSet[str],
     memory_per_slice_gb: int,
     cpu_overcommit_ratio: float,
+    # Whether storage configs the slice tooling cannot use (SATA, hybrid, 3+ disks, hardware RAID)
+    # are priced too. Off, only two-drive NVMe mirrors are considered, so a row's base storage --
+    # and its price per slice -- is a config that could actually be ordered and prepped.
+    is_every_storage_included: bool,
 ) -> list[SlicePricingRow]:
     """Build per-slice pricing rows, one per (server x RAM config x region), sorted cheapest-per-slice first.
 
     Rows are split per region because delivery time and stock differ by datacenter. Each row prices the
     cheapest storage available in that region as its base (the disk/slice and price/slice columns) and lists
-    the other in-region storage configs as per-slice disk upgrades. Price per slice is the month-to-month
-    cost plus the setup fee amortized over a year, divided by the slot count. Combos that cannot be priced
+    the other in-region storage configs as per-slice disk upgrades; unless every storage is included, only
+    the configs the slice tooling supports (``is_supported_slice_storage``) count for either. GAME-range
+    plans (``is_game_range_plan``) are never priced. Price per slice is the month-to-month cost plus the
+    setup fee amortized over a year, divided by the slot count. Combos that cannot be priced
     month-to-month, or whose per-slice disk budget is non-positive, are skipped.
     """
     products_by_name = {str(product["name"]): product for product in catalog.get("products", [])}
@@ -391,6 +454,8 @@ def compute_slice_pricing_rows(
     rows: list[SlicePricingRow] = []
     for plan in catalog.get("plans", []):
         plan_code = str(plan["planCode"])
+        if is_game_range_plan(plan_code):
+            continue
         availability_by_memory = availability_index.get(plan_code)
         if not availability_by_memory:
             continue
@@ -401,7 +466,14 @@ def compute_slice_pricing_rows(
         memory_addon_codes = _addon_family_codes(plan, "memory")
         storage_addon_codes = _addon_family_codes(plan, "storage")
 
-        for memory_short, storages_by_short in availability_by_memory.items():
+        for memory_short, every_storage_by_short in availability_by_memory.items():
+            storages_by_short = {
+                storage_short: region_to_status
+                for storage_short, region_to_status in every_storage_by_short.items()
+                if is_every_storage_included or is_supported_slice_storage(storage_short)
+            }
+            if not storages_by_short:
+                continue
             memory_code = _match_short_to_addon_code(memory_short, memory_addon_codes)
             if memory_code is None:
                 continue
