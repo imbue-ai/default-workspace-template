@@ -2,7 +2,8 @@
  * The switch dialog (spec 5.1): "Switch to Codex?" with the model the chat should run on after the
  * switch, "Switch this chat" as the thing it is for, and "Start a new chat" for leaving this chat
  * alone. One dialog per page, opened by the provider menu, by the auth-error note's switch link,
- * and by the composer's "Change" link, so they all open the same one.
+ * by the composer's "Change" link, and by the model bar's armed Model row, so they all open the
+ * same one.
  *
  * "Switch this chat" applies nothing yet: it arms the pending switch (``PendingLane``), which the
  * composer's next send carries out. Only a switch that will write a summary asks when the account is
