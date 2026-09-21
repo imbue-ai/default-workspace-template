@@ -17,7 +17,13 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import { launchRowLabel, launchTilesOf, orderLaunchTiles, promptTargetOfTiles } from "../model/launch";
+import {
+  NO_CHAT_APP_REASON,
+  launchRowLabel,
+  launchTilesOf,
+  orderLaunchTiles,
+  promptTargetOfTiles,
+} from "../model/launch";
 import type { LaunchTile } from "../model/launch";
 import { MESSAGE_PARAM } from "../model/launch";
 import type { AppRecord, Desktop, LaunchPath, WindowRecord } from "../model/records";
@@ -59,7 +65,6 @@ const SEARCH_TEMPLATES_TITLE = "Templates";
 const SEE_MORE_LABEL = "See more";
 const TEMPLATES_LOADING_MESSAGE = "Loading templates…";
 const TEMPLATES_FAILED_MESSAGE = "Failed to load templates.";
-const NO_CHAT_APP_REASON = "No app on this machine can start a chat";
 const TEMPLATES_NOT_OFFERED_REASON = "No template catalog is configured on this machine";
 
 const SECTION_HEADING_CLASS = "type-section text-faint";

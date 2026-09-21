@@ -3,7 +3,8 @@ import "../testing/dom";
 import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AvatarChooserDialog, NO_CHAT_APP_FOR_DESIGN_REASON } from "./AvatarChooserDialog";
+import { NO_CHAT_APP_REASON } from "../model/launch";
+import { AvatarChooserDialog } from "./AvatarChooserDialog";
 import type { AvatarChooserDialogAttrs } from "./AvatarChooserDialog";
 
 afterEach(unmountViews);
@@ -52,7 +53,7 @@ describe("AvatarChooserDialog", () => {
     expect(onDesignOwn).toHaveBeenCalledTimes(1);
     const disabled = render({ onDesignOwn: null }).querySelector(".avatar-design-own") as HTMLButtonElement;
     expect(disabled.disabled).toBe(true);
-    expect(disabled.parentElement?.getAttribute("data-hover-tooltip")).toBe(NO_CHAT_APP_FOR_DESIGN_REASON);
+    expect(disabled.parentElement?.getAttribute("data-hover-tooltip")).toBe(NO_CHAT_APP_REASON);
   });
 
   it("shows the loading and error states, and closes on Done", () => {

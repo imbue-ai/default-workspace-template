@@ -35,6 +35,9 @@ export function orderLaunchTiles(tiles: readonly LaunchTile[]): LaunchTile[] {
   return [...leading, ...tiles.filter((tile) => tile.app.launcher_rank === null)];
 }
 
+/** Why a seeded prompt cannot be started: no app declares a launch path that takes a ``message``. */
+export const NO_CHAT_APP_REASON = "No app on this machine can start a chat";
+
 /** Where a seeded prompt goes: the first tile (in display order) whose launch path takes a ``message``. */
 export function promptTargetOfTiles(tiles: readonly LaunchTile[]): LaunchTile | null {
   return orderLaunchTiles(tiles).find((tile) => tile.launchPath.params.includes(MESSAGE_PARAM)) ?? null;

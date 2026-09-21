@@ -11,6 +11,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { avatarImageUrl, avatarSourceUrl } from "../model/api";
+import { NO_CHAT_APP_REASON } from "../model/launch";
 import type { AvatarDesign } from "../model/records";
 
 /** The first message of the chat "Design your own..." starts. */
@@ -18,8 +19,6 @@ export const AVATAR_DESIGN_PROMPT =
   "I'd like to design my own desktop avatar. Help me draw it, show me a preview, " +
   "and replace my current avatar only after I approve the design. " +
   "Here's how I'd like it to look: ";
-
-export const NO_CHAT_APP_FOR_DESIGN_REASON = "No app on this machine can start a chat";
 
 const CHOOSER_WIDTH_PX = 460;
 
@@ -74,7 +73,7 @@ function designOwnRow(attrs: AvatarChooserDialogAttrs): m.Children {
   return m("div", { class: "mt-4 border-t border-default pt-3" }, [
     m(
       "span",
-      { class: "inline-block", ...hoverTooltipAttrs(isDisabled ? NO_CHAT_APP_FOR_DESIGN_REASON : null) },
+      { class: "inline-block", ...hoverTooltipAttrs(isDisabled ? NO_CHAT_APP_REASON : null) },
       m(
         Button,
         {
