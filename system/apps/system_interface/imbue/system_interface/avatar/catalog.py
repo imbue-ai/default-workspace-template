@@ -18,7 +18,7 @@ from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.designs import bundled_design
 from imbue.system_interface.avatar.designs import bundled_design_source
-from imbue.system_interface.avatar.designs import parse_design_svg
+from imbue.system_interface.avatar.designs import validate_design_source
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
@@ -37,8 +37,10 @@ MAX_SOURCE_PATH_LENGTH: Final[int] = 4096
 _MAX_CATALOG_BYTES: Final[int] = MAX_REGISTERED_DESIGNS * MAX_SVG_BYTES * 6 + 1024 * 1024
 
 
-class DesignRegistration(FrozenModel):
-    """A trusted local author's original drawing and where it came from (the body of ``POST /api/avatars``)."""
+class StoredDesign(FrozenModel):
+    """A registered design as the catalog keeps it: a trusted local author's original drawing and where it came
+    from. Validated when it was registered, not on every read, so a later change to the shared stylesheet does not
+    unmake a stored design (the renderer draws every design with the sheet of the day)."""
 
     id: DesignId = Field(description="The stable catalog id")
     label: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH, description="What the chooser calls it")
@@ -47,10 +49,14 @@ class DesignRegistration(FrozenModel):
         min_length=1, max_length=MAX_SOURCE_PATH_LENGTH, description="The original's local path or provenance"
     )
 
+
+class DesignRegistration(StoredDesign):
+    """The body of ``POST /api/avatars``: a design whose drawing is validated on the way in."""
+
     @field_validator("svg")
     @classmethod
     def _validate_svg(cls, value: str) -> str:
-        parse_design_svg(value)
+        validate_design_source(value)
         return value
 
 
@@ -58,7 +64,7 @@ class AvatarCatalog(FrozenModel):
     """The whole of ``catalog.json``: a bounded list of registered designs."""
 
     version: int = Field(default=CATALOG_FILE_VERSION, ge=1, le=1, description="The file format version")
-    designs: tuple[DesignRegistration, ...] = Field(
+    designs: tuple[StoredDesign, ...] = Field(
         default=(), max_length=MAX_REGISTERED_DESIGNS, description="The registered designs, in registration order"
     )
 
@@ -138,6 +144,6 @@ class AvatarCatalogStore(MutableModel):
                 raise InvalidShellValueError(
                     f"the catalog holds {MAX_REGISTERED_DESIGNS} registered designs; replace one by its id instead"
                 )
-            catalog = AvatarCatalog(designs=(*kept, registration))
+            catalog = AvatarCatalog(designs=(*kept, StoredDesign(**registration.model_dump())))
             write_json_atomic(self._path(), catalog.model_dump(mode="json"))
         logger.info("Registered avatar design {} from {}", registration.id, registration.source_path)

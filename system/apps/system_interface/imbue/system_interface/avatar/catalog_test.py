@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from imbue.system_interface.avatar.catalog import AvatarCatalogStore
 from imbue.system_interface.avatar.catalog import DesignRegistration
@@ -40,6 +41,23 @@ def test_registering_an_id_again_replaces_it_in_place(tmp_path: Path) -> None:
     store.register(_registration("mine", "Second"))
     labels = [listing.label for listing in store.entries() if listing.source_path is not None]
     assert labels == ["Mine", "Second"]
+
+
+def test_a_stored_design_outlives_a_change_to_the_shared_stylesheet(tmp_path: Path) -> None:
+    """The catalog is read without re-validating its drawings: a design registered under an earlier sheet still
+    lists and answers its source."""
+    directory = tmp_path / "avatars"
+    directory.mkdir()
+    stale = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>.jelly-body{x:1}</style></svg>'
+    (directory / "catalog.json").write_text(
+        json.dumps({"version": 1, "designs": [{"id": "old", "label": "Old", "svg": stale, "source_path": "/x"}]})
+    )
+    store = AvatarCatalogStore(directory=directory)
+    assert [listing.id for listing in store.entries()][-1] == "old"
+    assert store.source("old") == stale
+    # A registration is still held to today's sheet.
+    with pytest.raises(ValidationError, match="custom CSS"):
+        DesignRegistration(id=DesignId("new"), label="New", svg=stale, source_path="/y")
 
 
 def test_a_bundled_id_is_never_replaced(tmp_path: Path) -> None:

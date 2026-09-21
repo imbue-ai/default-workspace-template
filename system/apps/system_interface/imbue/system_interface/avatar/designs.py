@@ -196,7 +196,8 @@ _COLOR: Final[re.Pattern[str]] = re.compile(r"(?:#[0-9a-fA-F]{3,8}|[A-Za-z]+|(?:
 
 def parse_design_svg(svg: str) -> Element:
     """Validate passive drawing markup, answering the parsed tree; raises InvalidShellValueError rather than
-    repairing unsafe input silently."""
+    repairing unsafe input silently. A ``<style>``'s text is not judged here: the renderer replaces it with the
+    shared sheet, and ``validate_design_source`` holds a registration to that sheet."""
     if len(svg.encode("utf-8")) > MAX_SVG_BYTES:
         raise InvalidShellValueError(f"the design exceeds {MAX_SVG_BYTES // 1024} KiB")
     if "<?" in svg:
@@ -213,17 +214,26 @@ def parse_design_svg(svg: str) -> Element:
             raise InvalidShellValueError(f"unsupported design SVG element: {tag}")
         if tag == "svg" and element is not root:
             raise InvalidShellValueError("nested SVG documents are not supported in a design")
-        if tag == "style" and (len(element) or (element.text or "").strip() != ANIMATION_CSS.strip()):
-            raise InvalidShellValueError(
-                "custom CSS is not supported in a design; animate through the jelly-body, jelly-eyes, and "
-                "jelly-extra classes"
-            )
+        if tag == "style" and len(element):
+            raise InvalidShellValueError("a design's <style> holds the shared stylesheet's text and nothing else")
         for name, value in element.attrib.items():
             if name not in _ATTRIBUTES:
                 raise InvalidShellValueError(f"unsupported design SVG attribute: {name}")
             if name in _PAINT_ATTRIBUTES and not (_LOCAL_PAINT.fullmatch(value) or _COLOR.fullmatch(value)):
                 raise InvalidShellValueError(f"unsupported design SVG paint: {value}")
     return root
+
+
+def validate_design_source(svg: str) -> None:
+    """What a registration must pass: passive drawing markup whose only stylesheet, if any, is the shared one as
+    it is today; raises InvalidShellValueError."""
+    root = parse_design_svg(svg)
+    for style in root.iter(_STYLE_TAG):
+        if (style.text or "").strip() != ANIMATION_CSS.strip():
+            raise InvalidShellValueError(
+                "custom CSS is not supported in a design; animate through the jelly-body, jelly-eyes, and "
+                "jelly-extra classes"
+            )
 
 
 @pure
