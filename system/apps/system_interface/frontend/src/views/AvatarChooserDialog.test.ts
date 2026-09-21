@@ -40,6 +40,7 @@ describe("AvatarChooserDialog", () => {
     expect(onSelect).toHaveBeenCalledWith("gummy-seal");
     const source = dialog.querySelector("[data-avatar-source]") as HTMLAnchorElement;
     expect(source.getAttribute("href")).toBe("/api/avatars/mine/source.svg");
+    expect(source.getAttribute("download")).toBe("");
     expect(source.getAttribute("title")).toBe("/tmp/mine.svg");
   });
 
