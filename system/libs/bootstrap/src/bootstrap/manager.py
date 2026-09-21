@@ -50,6 +50,12 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# The last timezone the bootstrap applied. /etc/localtime lives on the container
+# rootfs and is lost when the container is recreated, and the fetch that sets it
+# needs the user's computer to be reachable at boot; a boot whose fetch fails
+# re-applies this instead of leaving the container on UTC.
+USER_TIMEZONE_CACHE = STATE_DIR / "user_timezone"
+
 # The in-flight update-apply marker and the script that rolls a stale one
 # back (see the update-self skill's apply/recover). The marker persists with
 # the container volume, so an apply the previous container run left mid-motion
@@ -301,7 +307,7 @@ def _parse_timezone_response(body: bytes) -> str:
 
     A well-formed ``{"timezone": ""}`` is the desktop client's documented
     answer when the user's timezone cannot be determined -- a valid response,
-    returned as "" so callers fall back to UTC without treating it as a
+    returned as "" so callers fall back to the cached zone without treating it as a
     failure. Raises ValueError for a non-JSON or non-UTF-8 body and
     TimezoneFetchError for a well-formed body of the wrong shape.
     """
@@ -342,7 +348,7 @@ def _fetch_user_timezone() -> str:
     cron schedules run in the user's local time. Returns "" on any failure
     (missing env, refused connection, non-200, malformed body) -- and when the
     desktop client itself does not know the timezone -- so the caller can fall
-    back to UTC.
+    back to the cached zone.
     """
     gateway = os.environ.get("LATCHKEY_GATEWAY", "")
     password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
@@ -363,15 +369,12 @@ def _fetch_user_timezone() -> str:
         timezone_name = _request_timezone(request)
     except (OSError, ValueError, TimezoneFetchError) as e:
         logger.warning(
-            "Could not fetch the user timezone from the gateway ({}); "
-            "container stays on UTC",
+            "Could not fetch the user timezone from the gateway ({})",
             e,
         )
         return ""
     if not timezone_name:
-        logger.debug(
-            "Desktop client does not know the user timezone; container stays on UTC"
-        )
+        logger.debug("Desktop client does not know the user timezone")
     return timezone_name
 
 
@@ -414,6 +417,44 @@ def _apply_container_timezone(
         return False
     logger.info("Container timezone set to {}", tz_name)
     return True
+
+
+def _set_container_timezone(
+    fetched_tz_name: str,
+    cache_path: Path = USER_TIMEZONE_CACHE,
+    zoneinfo_dir: Path = Path("/usr/share/zoneinfo"),
+    localtime_path: Path = Path("/etc/localtime"),
+    timezone_path: Path = Path("/etc/timezone"),
+) -> None:
+    """Apply the fetched timezone, or the cached one when the fetch came back empty.
+
+    A successfully applied zone is written to ``cache_path`` for the next boot.
+    Best-effort throughout: a missing or unwritable cache is logged, never raised.
+    """
+    tz_name = fetched_tz_name
+    if not tz_name:
+        try:
+            tz_name = cache_path.read_text().strip()
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            logger.warning(
+                "Could not read the cached timezone at {}: {}", cache_path, e
+            )
+            return
+        logger.info("Falling back to the last applied timezone {}", tz_name)
+    if not _apply_container_timezone(
+        tz_name,
+        zoneinfo_dir=zoneinfo_dir,
+        localtime_path=localtime_path,
+        timezone_path=timezone_path,
+    ):
+        return
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(tz_name + "\n")
+    except OSError as e:
+        logger.warning("Could not cache the timezone at {}: {}", cache_path, e)
 
 
 def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
@@ -867,9 +908,7 @@ def main() -> None:
     # Set the container clock to the user's timezone so cron schedules run in
     # their local time. Must precede _exec_supervisord: cron reads the
     # timezone once at daemon start.
-    tz_name = _fetch_user_timezone()
-    if tz_name:
-        _apply_container_timezone(tz_name)
+    _set_container_timezone(_fetch_user_timezone())
 
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()
