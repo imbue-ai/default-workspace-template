@@ -682,6 +682,32 @@ def test_sweep_marks_terminals_a_window_shows_and_collects_the_ones_it_showed_on
     assert read_session_id_file(terminal_paths.sessions_dir, "terminal-2") is None
 
 
+def test_marking_a_terminal_window_seen_lets_a_sweep_collect_it_once_no_window_shows_it(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    fake_tmux.set_sessions([_session("terminal-1", "$1")])
+    session_store.save_record(make_terminal_record("terminal-1", None, "/srv", session_id="$1"))
+    write_session_id_file(terminal_paths.sessions_dir, "terminal-1", "$1")
+
+    # Its window closed before any sweep observed it: a sweep alone leaves it be.
+    assert session_source.sweep_windows([]) == []
+    assert fake_tmux.session_names() == ["terminal-1"]
+
+    # The shell's close hint named it; marking is once, and an unknown terminal marks nothing.
+    assert session_source.mark_window_seen(TmuxSessionName("terminal-1")) is True
+    assert session_source.mark_window_seen(TmuxSessionName("terminal-1")) is False
+    assert session_source.mark_window_seen(TmuxSessionName("terminal-9")) is False
+    assert [record.is_window_seen for record in session_store.list_records()] == [True]
+
+    assert session_source.sweep_windows([]) == ["terminal-1"]
+    assert fake_tmux.session_names() == []
+    assert session_store.list_records() == []
+    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") is None
+
+
 def test_sweep_forgets_a_stopped_terminal_a_window_showed_once_and_kills_nothing(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,

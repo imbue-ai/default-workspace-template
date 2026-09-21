@@ -37,8 +37,13 @@ class WindowSweeper(MutableModel):
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
 
-    def request_sweep(self) -> None:
-        """A window closed: sweep now rather than at the next interval."""
+    def request_sweep(self, closed_terminal: TmuxSessionName | None) -> None:
+        """A window closed: mark the terminal it showed as window-seen, then sweep now rather than at the next interval.
+
+        The mark is what lets a terminal whose window closed before any sweep observed it be collected at all.
+        """
+        if closed_terminal is not None and self.source.mark_window_seen(closed_terminal):
+            logger.debug("Marked {} window-seen from the shell's close hint", closed_terminal)
         self._wake.set()
 
     def sweep_once(self) -> list[TmuxSessionName] | None:

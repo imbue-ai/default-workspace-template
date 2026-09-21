@@ -105,6 +105,10 @@ Each sweep reads the shell's desktops and derives, for this app, the set of reso
 - no window names it, and it is window-seen: **collect** it;
 - no window names it, and it was never seen: leave it.
 
+The close hint (section 4.6) names the closed window's path.
+Before the sweep it brings, the app marks the resource that path names window-seen, so a window that opened and closed between two sweeps (no periodic sweep ever observed it) still counts as having shown its resource; without this a terminal or browser closed within its first sweep interval would never be collected.
+A hint whose path names nothing (a window closed while still at `/new`) marks nothing.
+
 A sweep that cannot read the desktops (the shell down or restarting, a non-JSON or wrongly shaped answer) does nothing and logs at debug.
 "No windows" is only ever a fact the shell stated.
 The first periodic sweep runs one interval after the app starts, so a shell still booting beside the app is not asked too early; a hint runs a sweep at once whenever it arrives.
@@ -142,7 +146,7 @@ A window-seen flag is one additive boolean on each app's record, defaulting to f
   A record whose name is an agent session is never collected (`delete_terminal` already refuses it).
 - Hand-made sessions (listed, never recorded) are never collected: nothing records them.
 - The sweep thread starts in `run_terminal_app` after the remembered sessions are recreated and stops on shutdown; `main.py` wires the shell URL and the interval.
-- The pages blueprint gains `POST /api/window-closed`, the manifest's `window_closed_path`, which wakes the sweep thread and answers 204.
+- The pages blueprint gains `POST /api/window-closed`, the manifest's `window_closed_path`, which marks the terminal the posted path names window-seen, wakes the sweep thread, and answers 204.
 - The README's "verbs no route offers yet" paragraph is rewritten: delete is what the sweep calls.
 
 ### 4.4 The browser
@@ -162,7 +166,7 @@ With several saved browsers (a workspace upgraded from a cap of 2), "the browser
 `POST /browsers` with no `name` answers the same browser the same way, so the fleet CLI's `new` needs no change beyond section 6; a `POST /browsers` with a `name` keeps its create-or-409 semantics for a named second browser an operator insists on.
 
 **Collection is a stop.**
-The manager gains a sweep (on the bridge loop, `bridge.submit`) that applies section 4.1 with the `session` query parameter as the key, run on the interval and whenever `POST /api/window-closed` (the manifest's `window_closed_path`) arrives.
+The manager gains a sweep (on the bridge loop, `bridge.submit`) that applies section 4.1 with the `session` query parameter as the key, run on the interval and whenever `POST /api/window-closed` (the manifest's `window_closed_path`) arrives, which first marks the browser the posted path names window-seen.
 Collecting a browser is `stop_browser`: Chromium, its audio sink, and its display go; the profile and the tab list stay; `stopped: true` is checkpointed.
 Collecting a browser that is already stopped, or still launching, is a no-op (a launching one is collected on a later sweep once it runs and still has no window).
 The viewer's "New browser" gate (`can_create` in `GET /browsers`) is true whenever Chromium is installed, since `/new` always has a browser to answer.
@@ -190,7 +194,7 @@ The manifest gains an optional `window_closed_path` (a launch-path-shaped value:
 
 Whenever a window of an app closes, for any reason (the close control, the window and taskbar menus, the minds close chord, `layout.py close`, a desktop's deletion), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's registered URL plus its `window_closed_path`, from a daemon thread, with a 2 second timeout, after the close has been written and broadcast.
 A failed post is a debug log; the shell never waits for, retries, or acts on the answer, and the close is complete whether or not the app is up.
-The app's handler runs a sweep and answers 204; the body is a hint of what to check first and is never trusted on its own, since the app reads the shell's desktops for the truth.
+The app's handler marks the resource the body's `path` names window-seen (the post is proof a window showed it), runs a sweep, and answers 204; what is shown now is read from the shell's desktops, never inferred from the body.
 The terminal and the browser declare `window_closed_path = "/api/window-closed"`; the chat and the files app declare none.
 
 ## 5. Part C: agents open windows

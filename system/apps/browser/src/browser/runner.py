@@ -85,6 +85,7 @@ from browser.session import (
     FleetFullError,
     InvalidBrowserNameError,
     LiveBrowser,
+    closed_window_browser,
     deferred_install_ready,
     set_proxy_server,
 )
@@ -318,9 +319,12 @@ def health() -> Response:
 def window_closed() -> Response:
     """``POST /api/window-closed``: the shell says a window of ours closed; sweep now rather than at the interval.
 
-    The body names the window, but the sweep reads the shell's desktops for the truth rather than trusting it.
+    The body's path is proof a window showed the browser it names, so that browser is marked window-seen first
+    (a window that opened and closed between two sweeps is otherwise never seen); what is shown now is still
+    read from the shell's desktops.
     """
-    bridge.submit(manager.sweep_from_shell(shell_base_url()))
+    closed_name = closed_window_browser(request.get_json(silent=True))
+    bridge.submit(manager.sweep_after_window_closed(closed_name, shell_base_url()))
     return Response("", status=HTTP_NO_CONTENT)
 
 

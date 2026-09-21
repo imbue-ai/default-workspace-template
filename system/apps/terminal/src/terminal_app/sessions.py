@@ -252,6 +252,20 @@ class TmuxSessionSource(MutableModel):
             self.store.remove_record(name)
             self._remove_session_id_file(name)
 
+    def mark_window_seen(self, name: TmuxSessionName) -> bool:
+        """Record that a desktop window showed the terminal, so a sweep collects it once none does.
+
+        The shell's close hint names the closed window's path, so a terminal whose window closed before any sweep
+        saw it still counts as shown. Answers whether a record was marked; an unknown or already marked terminal
+        is a no-op.
+        """
+        with self._lock:
+            record = self._record_named(name)
+            if record is None or record.is_window_seen:
+                return False
+            self.store.save_record(record.model_copy_update(to_update(record.field_ref().is_window_seen, True)))
+            return True
+
     def sweep_windows(self, window_paths: Sequence[str]) -> list[TmuxSessionName]:
         """Mark every remembered terminal a window shows, and delete the ones a window showed once and none shows now.
 
