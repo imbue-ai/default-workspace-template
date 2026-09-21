@@ -190,7 +190,7 @@ def resolve_target(
     if override is None:
         latest = pick_latest_stable_tag(tags, ceiling=ceiling)
         if latest is None:
-            raise NoUpdateTargetError(_no_target_message(ceiling))
+            raise NoUpdateTargetError(_no_target_message(tags, ceiling))
         return ResolvedTarget(latest, "tag", ceiling, False)
     exceeds = not _is_within_ceiling(override, ceiling)
     if override == "main":
@@ -200,9 +200,14 @@ def resolve_target(
     return ResolvedTarget(override, "ref", ceiling, exceeds)
 
 
-def _no_target_message(ceiling: str | None) -> str:
-    """Explain why no default target could be picked, never naming a release above the ceiling."""
-    if ceiling is not None and parse_version(ceiling) is not None:
+def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
+    """Explain why no default target could be picked, never naming a release above the ceiling.
+
+    An upstream with no stable tag at all is a different refusal from one whose
+    every tag is above the ceiling: the app is not the reason, and an
+    ``--override`` is the only way forward, so that case keeps the generic line.
+    """
+    if ceiling is not None and pick_latest_stable_tag(tags) is not None:
         return (
             f"no stable minds-v* tag upstream is at or below this workspace's minds app "
             f"({ceiling}); there is nothing it can update to"
