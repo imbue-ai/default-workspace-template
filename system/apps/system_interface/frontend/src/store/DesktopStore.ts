@@ -148,8 +148,8 @@ export class DesktopStore {
   private backdrop: PixelSize = { width: 0, height: 0 };
   private gesture: ActiveGesture | null = null;
   private isLauncherOpenNow = false;
-  // The name of this user's earlier desktop when the shell had to seed a fresh one at arrival; shown once.
-  private replacedDesktopName: string | null = null;
+  // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
+  private replacedDesktop: ReplacedDesktop | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new SaveIdMinter();
   private readonly pendingRestores = new Set<string>();
@@ -292,7 +292,7 @@ export class DesktopStore {
     }
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
-    this.replacedDesktopName = arrival?.replacedDesktopName ?? null;
+    this.replacedDesktop = replacedDesktopOf(arrival);
     const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, arrival?.desktopId ?? null);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
@@ -449,13 +449,13 @@ export class DesktopStore {
     this.takeDesktop(await this.deps.api.updateDesktopSettings(desktopId, name, color, glyph));
   }
 
-  /** The name of this user's earlier desktop, while the notice that it was deleted and replaced is still owed. */
-  getReplacedDesktopName(): string | null {
-    return this.replacedDesktopName;
+  /** This user's deleted desktop and the one seeded in its place, while the notice about them is still owed. */
+  getReplacedDesktop(): ReplacedDesktop | null {
+    return this.replacedDesktop;
   }
 
   dismissReplacedDesktopNotice(): void {
-    this.replacedDesktopName = null;
+    this.replacedDesktop = null;
     this.deps.redraw();
   }
 
@@ -931,6 +931,20 @@ export class DesktopStore {
     if (gesture === null || gesture.kind !== "move" || gesture.zone === null) return null;
     return frameToPixels(frameForState(MAXIMIZED_FRAME, gesture.zone), this.backdrop);
   }
+}
+
+/** What the notice that a visitor's desktop was deleted names: the deleted desktop, and the one the shell seeded
+ *  in its place (not necessarily the one this client landed on: a deep link's desktop wins the landing). */
+export interface ReplacedDesktop {
+  readonly replacedName: string;
+  readonly seededName: string;
+}
+
+/** The replaced desktop an arrival reports, when it does; the shell names the deleted desktop only alongside the
+ *  one it seeded, so an answer with one but not the other reports nothing. */
+export function replacedDesktopOf(arrival: ClientArrival | null): ReplacedDesktop | null {
+  if (arrival === null || arrival.replacedDesktopName === null || arrival.createdDesktop === null) return null;
+  return { replacedName: arrival.replacedDesktopName, seededName: arrival.createdDesktop.name };
 }
 
 /** The desktop a fresh window lands on: the deep link's when it exists, else the one the shell's arrival answer
