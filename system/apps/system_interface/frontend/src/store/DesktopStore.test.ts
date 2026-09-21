@@ -755,6 +755,18 @@ describe("pinned entries", () => {
     expect(store.getState().desktops[0].windows.map((window) => window.id)).toEqual(["win-1", "win-9"]);
   });
 
+  it("the human-facing Close minimizes a pinned window and closes an ordinary one", async () => {
+    const store = await pinnedStore();
+    store.toggleTaskbarEntry("win-9");
+    expect(placementOf(store.getState().layout, "win-9").is_minimized).toBe(false);
+    await store.closeOrMinimizeWindow("win-9");
+    expect(placementOf(store.getState().layout, "win-9").is_minimized).toBe(true);
+    expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
+    expect(store.getState().desktops[0].windows.map((window) => window.id)).toEqual(["win-1", "win-9"]);
+    await store.closeOrMinimizeWindow("win-1");
+    expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+
   it("restores a pinned window the client never placed at the frame the shell answered, not the cascade", async () => {
     const store = await pinnedStore();
     expect(store.windowRect("win-9")).toEqual({ x: 460, y: 40, width: 500, height: 720 });
