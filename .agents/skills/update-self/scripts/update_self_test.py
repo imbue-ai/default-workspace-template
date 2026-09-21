@@ -161,6 +161,22 @@ def test_resolve_target_treats_tags_above_the_ceiling_as_absent() -> None:
         raise AssertionError("expected a refusal when every tag is above the ceiling")
 
 
+def test_no_stable_tag_upstream_offers_the_override_even_under_a_ceiling() -> None:
+    # Nothing is above the ceiling here -- upstream carries no stable release at
+    # all -- so the refusal must not blame the app, and must keep the one way out.
+    try:
+        update_target.resolve_target(
+            None, ["minds-v0.4.0-rc1"], ceiling="minds-v0.3.9"
+        )
+    except update_target.NoUpdateTargetError as exc:
+        message = str(exc)
+        assert "no stable minds-v* tag found upstream" in message
+        assert "--override" in message
+        assert "minds-v0.3.9" not in message
+    else:
+        raise AssertionError("expected a refusal when upstream has no stable tag")
+
+
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
     newer = update_target.resolve_target("minds-v0.4.0", tags, ceiling="minds-v0.3.9")
