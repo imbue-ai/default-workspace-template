@@ -13,9 +13,10 @@ import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { avatarImageUrl, avatarSourceUrl } from "../model/api";
 import type { AvatarDesign } from "../model/records";
 
-/** The first message of the chat "Design your own..." starts. */
+/** The disabled "Design your own..." button's tooltip. */
 export const NO_DRAFT_TARGET_REASON = "No pinned window on this desktop takes a draft";
 
+/** The prompt "Design your own..." drafts, unsent, into the pinned window's chat. */
 export const AVATAR_DESIGN_PROMPT =
   "I'd like to design my own desktop avatar. Help me draw it, show me a preview, " +
   "and replace my current avatar only after I approve the design. " +
