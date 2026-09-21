@@ -121,13 +121,15 @@ options over persisting the gateway URL or headers into git config.
 ### Using multiple accounts
 
 Credentials can be associated with a specific account, and a service can hold
-more than one. The user can add one from the Permissions tab of this machine's
+more than one. To add one, send a permission request with an `account` in the
+payload; approving it prompts the user to sign in. Double-check the resulting
+account; it may differ from the one you requested.
+
+Alternatively, the user can add one from the Permissions tab of this machine's
 options in the Mind app (the key icon in the tabs along the top): "Add connection"
 lists the services that already have an account here under "Add another
-account", and the ones that do not under "Connect a new service". You can also
-send a permission request with an `account` in the payload; approving it prompts
-the user to sign in. Double-check the resulting account; it may differ from the
-one you requested.
+account", and the ones that do not under "Connect a new service". When
+applicable, always prefer sending a permission request over this option.
 
 Reference an account in curl calls with `latchkey --account alice@example.com
 curl ...` (the `--account` option goes right after `latchkey`). The existing
