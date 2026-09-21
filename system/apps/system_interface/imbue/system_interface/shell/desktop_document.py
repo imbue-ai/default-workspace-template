@@ -390,15 +390,25 @@ def pinned_window(app_pin: AppPin, now: datetime) -> Window:
 @pure
 def _as_pinned(window: Window, app_pin: AppPin) -> Window:
     """The window adopted as the app's pinned window: marked, settled (it has no launch path to finish), given the
-    pin's scope, and, when independent, its shared title cleared (each client keeps its own from then on)."""
+    pin's scope, and, when independent, its shared path and title set to the home path and nothing (each client
+    keeps its own from then on; the shared record carries the home path at all times)."""
     scope = app_pin.pin.scope
-    title = WindowTitle("") if scope is LocationScope.INDEPENDENT else window.title
-    if window.is_pinned and not window.is_settling and window.scope is scope and window.title == title:
+    is_independent = scope is LocationScope.INDEPENDENT
+    path = WindowPath(str(app_pin.pin.path)) if is_independent else window.path
+    title = WindowTitle("") if is_independent else window.title
+    if (
+        window.is_pinned
+        and not window.is_settling
+        and window.scope is scope
+        and window.path == path
+        and window.title == title
+    ):
         return window
     return window.model_copy_update(
         to_update(window.field_ref().is_pinned, True),
         to_update(window.field_ref().is_settling, False),
         to_update(window.field_ref().scope, scope),
+        to_update(window.field_ref().path, path),
         to_update(window.field_ref().title, title),
     )
 
