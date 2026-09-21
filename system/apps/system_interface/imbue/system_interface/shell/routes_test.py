@@ -12,6 +12,7 @@ from flask.testing import FlaskClient
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import ClientId
@@ -19,6 +20,7 @@ from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
@@ -767,6 +769,25 @@ def _arrive(client: FlaskClient, client_id: str, identity: RequestIdentity | Non
     response = client.post(f"/api/clients/{client_id}/arrive", headers=headers)
     assert response.status_code == 200, response.get_data(as_text=True)
     return response.get_json()
+
+
+def test_an_arrival_before_the_registry_is_read_lands_nowhere_and_records_nothing(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The default desktop is only created once the registry has been read, so until then there is no desktop to
+    land on, none to seed a visitor's from, and no record to write."""
+    unread = AppInventory(
+        registry_path=write_two_app_registry(tmp_path), broadcaster=broadcaster, liveness_prober=FakeLivenessProber()
+    )
+    app = shell_application(tmp_path, unread, broadcaster)
+    assert _arrive(app.test_client(), "c-early", _ALICE) == {
+        "desktop_id": None,
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    assert _shell(app).clients.get_client("c-early") is None
+    assert _shell(app).users.list_users() == []
+    assert _shell(app).list_desktops() == []
 
 
 def test_the_owner_and_an_anonymous_client_arrive_on_their_recorded_desktop_or_the_first(
