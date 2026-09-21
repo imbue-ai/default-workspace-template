@@ -13,6 +13,7 @@ import { launchPathOf } from "../model/launch";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appGlyph } from "./glyphs";
+import { rectStyle } from "./pixelStyle";
 
 /** The intrinsic width and height the glyph markup carries; the drawing is sized by its token-sized box
  *  (``[&>svg]:size-full``), so the theme's ``--desk-icon-size`` governs, in compact mode too. */
@@ -62,12 +63,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             (isSelected ? "bg-fill-active " : "hover:bg-fill-hover ") +
             (isLifted ? "opacity-40 " : "") +
             (isStopped ? "text-faint" : "text-primary"),
-          style: {
-            left: `${rect.x}px`,
-            top: `${rect.y}px`,
-            width: `${rect.width}px`,
-            height: `${rect.height}px`,
-          },
+          style: rectStyle(rect),
           ...hoverTooltipAttrs(isStopped ? `${label}: not running` : null),
           onclick: isRunOnClick ? onRun : onSelect,
           // A double tap's dblclick follows two clicks that already ran the shortcut.

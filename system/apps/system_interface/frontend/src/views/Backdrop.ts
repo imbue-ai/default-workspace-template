@@ -14,6 +14,7 @@ import type { AppRecord, Desktop, DesktopShortcut, Placement } from "../model/re
 import { shortcutKey } from "../model/records";
 import { appByName, renderedState, windowTitle } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
+import { rectStyle } from "./pixelStyle";
 import { ICON_MARKUP_SIZE, ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
@@ -148,7 +149,7 @@ function shortcutGhost(position: PixelPoint, target: PixelRect, app: AppRecord |
     m("div", {
       "data-drop-cell": "",
       class: "pointer-events-none absolute z-(--z-sticky) rounded-lg border-2 border-dashed border-accent",
-      style: { left: `${target.x}px`, top: `${target.y}px`, width: `${target.width}px`, height: `${target.height}px` },
+      style: rectStyle(target),
     }),
     m(
       "div",
