@@ -124,12 +124,14 @@ const PRESENT_USER_WIRE = {
 };
 
 describe("parsePresentUsers", () => {
-  it("reads the contract's user objects, a missing name as null", () => {
+  it("reads the contract's user objects, a missing name or avatar as null", () => {
     expect(parsePresentUsers([PRESENT_USER_WIRE])).toEqual([PRESENT_USER_WIRE]);
+    const { display_name: _name, avatar_url: _avatar, ...nameless } = PRESENT_USER_WIRE;
+    expect(parsePresentUsers([nameless])).toEqual([{ ...PRESENT_USER_WIRE, display_name: null, avatar_url: null }]);
     expect(parsePresentUsers([])).toEqual([]);
   });
 
-  it("refuses a user without an email or with a non-boolean owner, and a users that is not a list", () => {
+  it("refuses a user without an email or with a non-boolean owner, and a `users` that is not a list", () => {
     expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, email: undefined }])).toThrow(WireShapeError);
     expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, owner: "yes" }])).toThrow(WireShapeError);
     expect(() => parsePresentUsers({ users: [] })).toThrow(WireShapeError);
