@@ -21,6 +21,7 @@ import {
   SHELL_SHOWN,
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
+import type { Placement } from "../model/records";
 import { activeFocusedWindowId } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
@@ -103,6 +104,22 @@ function messageFromPage(windowId: string, data: Record<string, unknown>): void 
   window.dispatchEvent(
     new MessageEvent("message", { data, source: frameOf(windowId).contentWindow, origin: window.location.origin }),
   );
+}
+
+/** An independent pinned ``win-4`` of the docs app on the home desktop, this client's page of it at ``/?doc=7``
+ *  ("Seven"), placed by ``placements`` in this client's layout, shown with its chrome; answers its frame. */
+async function showIndependentWindow(placements: Placement[]): Promise<HTMLIFrameElement> {
+  const [home, work] = api.desktops;
+  const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
+  api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
+  api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+  api.writeLayout("home", CLIENT, { updated_at: null, placements });
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+  await settle();
+  renderChrome("win-4");
+  layer.reconcile();
+  return frameOf("win-4");
 }
 
 beforeEach(async () => {
@@ -411,25 +428,13 @@ describe("the contract", () => {
   });
 
   it("an independent window's page opens at this client's own path, and follows only that path", async () => {
-    const [home, work] = api.desktops;
-    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
-    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
-    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
-    api.writeLayout("home", CLIENT, {
-      updated_at: null,
-      placements: [
-        placementRecord("win-2", { is_minimized: true }),
-        placementRecord("win-1"),
-        placementRecord("win-4"),
-      ],
-    });
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
-    await settle();
-    renderChrome("win-4");
-    layer.reconcile();
-    expect(frameOf("win-4").getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
-    expect(frameOf("win-4").title).toBe("Seven");
+    const frame = await showIndependentWindow([
+      placementRecord("win-2", { is_minimized: true }),
+      placementRecord("win-1"),
+      placementRecord("win-4"),
+    ]);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    expect(frame.title).toBe("Seven");
     const spy = spyOnFrame("win-4");
     load("win-4");
     expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-4", path: "/?doc=7" });
@@ -454,17 +459,7 @@ describe("the contract", () => {
   });
 
   it("leaves an independent window's hidden page alone while another desktop is active", async () => {
-    const [home, work] = api.desktops;
-    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
-    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
-    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
-    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-4")] });
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
-    await settle();
-    renderChrome("win-4");
-    layer.reconcile();
-    const frame = frameOf("win-4");
+    const frame = await showIndependentWindow([placementRecord("win-4")]);
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
     const spy = spyOnFrame("win-4");
     load("win-4");
@@ -488,17 +483,7 @@ describe("the contract", () => {
   });
 
   it("does not move an independent window's page while its desktop's layout is still being read", async () => {
-    const [home, work] = api.desktops;
-    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
-    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
-    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
-    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-4")] });
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
-    await settle();
-    renderChrome("win-4");
-    layer.reconcile();
-    const frame = frameOf("win-4");
+    const frame = await showIndependentWindow([placementRecord("win-4")]);
     const spy = spyOnFrame("win-4");
     load("win-4");
     messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
@@ -527,16 +512,7 @@ describe("the contract", () => {
   });
 
   it("reloads and greets an independent window's hidden page at this client's own path", async () => {
-    const [home, work] = api.desktops;
-    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
-    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
-    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
-    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-4")] });
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
-    await settle();
-    renderChrome("win-4");
-    layer.reconcile();
+    await showIndependentWindow([placementRecord("win-4")]);
     load("win-4");
     await store.switchDesktop("work");
     layer.reconcile();
