@@ -382,9 +382,11 @@ export function entryLook(state: DesktopState, window: WindowRecord, app: AppRec
   const pin = app?.pin ?? null;
   const declaredStyle = pin?.style ?? "plain";
   const own = state.entries[window.app];
+  // A stored style is plain or the declared one; one stored under an earlier manifest falls back.
+  const ownStyle = own !== undefined && (own.style === "plain" || own.style === declaredStyle) ? own.style : null;
   return {
     mode: own?.mode ?? pin?.default_mode ?? "bar",
-    style: own?.style ?? declaredStyle,
+    style: ownStyle ?? declaredStyle,
     declaredStyle,
     position: own?.position ?? null,
   };
