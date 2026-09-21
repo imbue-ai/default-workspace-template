@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from imbue.chat.secret_requests import InvalidSecretRequestError
+from imbue.chat.secret_requests import SecretFileWriteError
 from imbue.chat.secret_requests import SecretRequestNotPendingError
 from imbue.chat.secret_requests import SecretRequestStatus
 from imbue.chat.secret_requests import SecretRequestStore
@@ -164,3 +165,18 @@ def test_the_value_appears_nowhere_but_the_env_file(tmp_path: Path, loguru_recor
     ).read_text()
     assert value not in record
     assert all(value not in line for line in loguru_records)
+
+
+def test_a_failed_env_write_leaves_no_temporary_copy_of_the_values(tmp_path: Path) -> None:
+    # The temporary already holds every value by the time the rename runs, so a failure
+    # there must not leave it beside the real file. A directory in the env file's place
+    # is the cheapest way to make the rename fail.
+    store = _store(tmp_path)
+    filed = store.file_request(_CHAT, "svc", ["A"], "why")
+    secrets_directory = tmp_path / "workspace" / "data" / ".secrets"
+    (secrets_directory / "svc.env" / "occupied").mkdir(parents=True)
+
+    with pytest.raises(SecretFileWriteError):
+        store.submit(filed.request.request_id, {"A": "hunter2"})
+
+    assert [entry.name for entry in secrets_directory.iterdir()] == ["svc.env"]

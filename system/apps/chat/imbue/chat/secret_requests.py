@@ -468,6 +468,15 @@ class SecretRequestStore(MutableModel):
             os.replace(temporary, path)
         except OSError as e:
             raise SecretFileWriteError(path, e.strerror or type(e).__name__) from e
+        finally:
+            # The temporary already holds every value in the file. A failure anywhere
+            # above would otherwise leave that copy beside the real file forever:
+            # nothing reads it (the wrapper takes only `.env`) and nobody sees it.
+            # A successful replace renamed it away, so this is then a no-op.
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning("Could not remove the temporary secret file {}: {}", temporary.name, e.strerror)
 
 
 def _validated_variable_names(variables: Sequence[str]) -> tuple[SecretVariableName, ...]:
