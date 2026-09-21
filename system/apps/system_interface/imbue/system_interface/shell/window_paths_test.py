@@ -29,7 +29,7 @@ def test_paths_read_empty_until_written_and_a_report_that_changes_nothing_writes
     assert file_path.stat().st_mtime_ns == stamp
     assert store.read_paths(_CLIENT, _LIVE) == {_WIN_1: _stored("/?chat=a", "Alpha")}
     # Another client has paths of its own.
-    assert store.read_paths("c2", _LIVE) == {}
+    assert store.read_paths(ClientId("c2"), _LIVE) == {}
     assert json.loads(file_path.read_text())["version"] == 1
 
 
