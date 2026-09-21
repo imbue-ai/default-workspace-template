@@ -135,9 +135,13 @@ class ShellState(MutableModel):
         now = datetime.now(timezone.utc)
         for client_id in self.clients.prune_unseen(now):
             removed = self.placements.delete_client_layouts(client_id)
-            self.window_paths.delete_client_paths(client_id)
+            is_paths_file_removed = self.window_paths.delete_client_paths(client_id)
             logger.info(
-                "Pruned client {} unseen for {} days ({} layout file(s))", client_id, CLIENT_RETENTION.days, removed
+                "Pruned client {} unseen for {} days ({} layout file(s), window paths file removed: {})",
+                client_id,
+                CLIENT_RETENTION.days,
+                removed,
+                is_paths_file_removed,
             )
 
     def _run_client_prune(self) -> None:
