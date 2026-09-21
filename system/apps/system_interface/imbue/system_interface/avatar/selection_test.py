@@ -5,8 +5,8 @@ from pathlib import Path
 
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.primitives import DesignId
-from imbue.system_interface.avatar.selection import SELECTION_FILENAME
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
+from imbue.system_interface.avatar.selection import SELECTION_FILENAME
 
 
 def test_the_selection_defaults_and_round_trips(tmp_path: Path) -> None:

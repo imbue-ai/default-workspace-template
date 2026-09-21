@@ -4,10 +4,10 @@ import pytest
 from defusedxml.ElementTree import fromstring
 
 from imbue.system_interface.avatar.designs import ANIMATION_CSS
+from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.designs import SVG_NAMESPACE
-from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.designs import bundled_design
 from imbue.system_interface.avatar.designs import bundled_design_source
 from imbue.system_interface.avatar.designs import parse_design_svg

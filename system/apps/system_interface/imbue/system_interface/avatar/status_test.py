@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from imbue.system_interface.avatar.designs import AvatarMood
-from imbue.system_interface.avatar.status import STALE_AFTER
 from imbue.system_interface.avatar.status import AvatarStatus
 from imbue.system_interface.avatar.status import AvatarStatusReader
+from imbue.system_interface.avatar.status import STALE_AFTER
 from imbue.system_interface.avatar.status import agent_events_path
 from imbue.system_interface.avatar.status import fold_agent_events
 from imbue.system_interface.avatar.status import parse_event_timestamp
