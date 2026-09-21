@@ -3,13 +3,8 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-from watchdog.events import DirModifiedEvent
-from watchdog.events import FileModifiedEvent
-from watchdog.events import FileMovedEvent
-
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.inventory import AppInventory
-from imbue.system_interface.shell.inventory import _make_registry_file_handler
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_FILES_URL
 from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
@@ -89,17 +84,6 @@ def test_an_unreadable_registry_keeps_the_last_good_read(tmp_path: Path, broadca
 
     assert [str(entry.row.name) for entry in inventory.entries()] == ["terminal", "files"]
     assert drain_messages(client_queue) == []
-
-
-def test_the_registry_watch_fires_for_the_registry_file_alone(tmp_path: Path) -> None:
-    fired: list[bool] = []
-    handler = _make_registry_file_handler("apps.toml", lambda: fired.append(True))
-    handler.on_modified(FileModifiedEvent(str(tmp_path / "apps.toml")))
-    # forward_port.py replaces the file atomically: the move's destination is the registry.
-    handler.on_moved(FileMovedEvent(str(tmp_path / "apps.toml.tmp-1"), str(tmp_path / "apps.toml")))
-    handler.on_modified(FileModifiedEvent(str(tmp_path / "apps.toml.tmp-2")))
-    handler.on_modified(DirModifiedEvent(str(tmp_path)))
-    assert len(fired) == 2
 
 
 def test_start_watches_the_registry_and_lists_a_row_that_appears(

@@ -13,7 +13,6 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
@@ -26,15 +25,14 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
-from watchdog.events import FileMovedEvent
-from watchdog.events import FileSystemEvent
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer as _Observer
+from watchdog.observers.api import BaseObserver
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.avatar.designs import AvatarMood
+from imbue.system_interface.file_watch import start_file_watch
+from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # mngr's conventions, duplicated rather than imported: the host directory's environment variable and fallback,
@@ -233,34 +231,6 @@ def read_avatar_status(path: Path, now: datetime) -> AvatarStatus:
     return fold_agent_events(read_tail_lines_back_to_snapshot(path), now)
 
 
-class _EventsFileHandler(FileSystemEventHandler):
-    """Fires ``on_change`` on mutating events whose path is the events file."""
-
-    basename: str
-    on_change: Callable[[], None]
-
-    def _maybe_fire(self, event: FileSystemEvent) -> None:
-        if event.is_directory:
-            return
-        paths = [event.src_path]
-        if isinstance(event, FileMovedEvent):
-            paths.append(event.dest_path)
-        if any(os.path.basename(str(path)) == self.basename for path in paths):
-            self.on_change()
-
-    on_modified = _maybe_fire
-    on_created = _maybe_fire
-    on_moved = _maybe_fire
-    on_closed = _maybe_fire
-
-
-def _make_events_file_handler(basename: str, on_change: Callable[[], None]) -> _EventsFileHandler:
-    handler = _EventsFileHandler()
-    handler.basename = basename
-    handler.on_change = on_change
-    return handler
-
-
 class AvatarStatusReader(MutableModel):
     """Keeps the avatar's status current: watches the events file, refolds after a settled burst of writes and on
     a timer for staleness, and pushes ``avatar_status`` to every window when the mood or the staleness changes."""
@@ -276,7 +246,7 @@ class AvatarStatusReader(MutableModel):
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _status: AvatarStatus = PrivateAttr(default=STALE_IDLE_STATUS)
-    _observer: Any | None = PrivateAttr(default=None)
+    _observer: BaseObserver | None = PrivateAttr(default=None)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
@@ -300,8 +270,7 @@ class AvatarStatusReader(MutableModel):
             self._thread.join(timeout=5)
             self._thread = None
         if self._observer is not None:
-            self._observer.stop()
-            self._observer.join(timeout=5)
+            stop_file_watch(self._observer)
             self._observer = None
 
     def refresh(self) -> None:
@@ -321,17 +290,7 @@ class AvatarStatusReader(MutableModel):
         """Watch the events directory once it exists; the shell creates nothing under an mngr directory."""
         if self._observer is not None or not self.events_path.parent.is_dir():
             return
-        observer = _Observer()
-        observer.schedule(
-            _make_events_file_handler(self.events_path.name, self._wake.set), str(self.events_path.parent)
-        )
-        observer.daemon = True
-        try:
-            observer.start()
-        except OSError as e:
-            logger.opt(exception=e).error("Failed to watch the agents event file at {}", self.events_path)
-            return
-        self._observer = observer
+        self._observer = start_file_watch(self.events_path, self._wake.set)
 
     def _run(self) -> None:
         while not self._stop.is_set():
