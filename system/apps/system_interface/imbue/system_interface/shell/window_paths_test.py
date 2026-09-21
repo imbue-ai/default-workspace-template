@@ -22,10 +22,10 @@ def _stored(path: str, title: str = "") -> StoredWindowPath:
 def test_paths_read_empty_until_written_and_a_report_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:
     store = WindowPathStore(state_directory=tmp_path)
     assert store.read_paths(_CLIENT, _LIVE) == {}
-    assert store.set_path(_CLIENT, _WIN_1, _stored("/?chat=a", "Alpha"), _LIVE) is True
+    assert store.set_path(_CLIENT, _WIN_1, _stored("/?chat=a", "Alpha"), lambda: _LIVE) is True
     file_path = tmp_path / WINDOW_PATHS_DIRNAME / "c1.json"
     stamp = file_path.stat().st_mtime_ns
-    assert store.set_path(_CLIENT, _WIN_1, _stored("/?chat=a", "Alpha"), _LIVE) is False
+    assert store.set_path(_CLIENT, _WIN_1, _stored("/?chat=a", "Alpha"), lambda: _LIVE) is False
     assert file_path.stat().st_mtime_ns == stamp
     assert store.read_paths(_CLIENT, _LIVE) == {_WIN_1: _stored("/?chat=a", "Alpha")}
     # Another client has paths of its own.
@@ -35,17 +35,17 @@ def test_paths_read_empty_until_written_and_a_report_that_changes_nothing_writes
 
 def test_entries_of_windows_since_gone_are_dropped_on_read_and_on_the_next_write(tmp_path: Path) -> None:
     store = WindowPathStore(state_directory=tmp_path)
-    store.set_path(_CLIENT, _WIN_1, _stored("/a"), _LIVE)
-    store.set_path(_CLIENT, _WIN_2, _stored("/b"), _LIVE)
+    store.set_path(_CLIENT, _WIN_1, _stored("/a"), lambda: _LIVE)
+    store.set_path(_CLIENT, _WIN_2, _stored("/b"), lambda: _LIVE)
     assert set(store.read_paths(_CLIENT, frozenset({_WIN_2}))) == {_WIN_2}
-    store.set_path(_CLIENT, _WIN_2, _stored("/c"), frozenset({_WIN_2}))
+    store.set_path(_CLIENT, _WIN_2, _stored("/c"), lambda: frozenset({_WIN_2}))
     assert set(json.loads((tmp_path / WINDOW_PATHS_DIRNAME / "c1.json").read_text())["windows"]) == {str(_WIN_2)}
 
 
 def test_a_clients_file_goes_with_the_client_and_an_unreadable_one_reads_empty(tmp_path: Path) -> None:
     store = WindowPathStore(state_directory=tmp_path)
     assert store.delete_client_paths(_CLIENT) is False
-    store.set_path(_CLIENT, _WIN_1, _stored("/a"), _LIVE)
+    store.set_path(_CLIENT, _WIN_1, _stored("/a"), lambda: _LIVE)
     assert store.delete_client_paths(_CLIENT) is True
     assert store.read_paths(_CLIENT, _LIVE) == {}
     file_path = tmp_path / WINDOW_PATHS_DIRNAME / "c1.json"

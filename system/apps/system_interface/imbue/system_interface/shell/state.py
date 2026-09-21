@@ -325,7 +325,7 @@ class ShellState(MutableModel):
                 self.broadcast_desktops_updated()
             return next(candidate for candidate in outcome.desktop.windows if candidate.id == window_id)
         stored = StoredWindowPath(path=path, title=title)
-        if self.window_paths.set_path(client_id, window_id, stored, self._independent_window_ids()):
+        if self.window_paths.set_path(client_id, window_id, stored, self._independent_window_ids):
             self.broadcaster.broadcast_placements_updated(str(desktop.id), str(client_id), mint_save_id())
         return effective_window(window, stored)
 

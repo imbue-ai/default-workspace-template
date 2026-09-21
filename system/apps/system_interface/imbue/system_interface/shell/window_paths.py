@@ -7,6 +7,7 @@ location report. Entries naming a window no desktop holds any more are dropped o
 the client when the client is pruned.
 """
 
+from collections.abc import Callable
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Final
@@ -84,17 +85,15 @@ class WindowPathStore(MutableModel):
         client_id: ClientId,
         window_id: WindowId,
         stored: StoredWindowPath,
-        live_window_ids: AbstractSet[WindowId],
+        live_window_ids: Callable[[], AbstractSet[WindowId]],
     ) -> bool:
         """Store the client's path and title for a window, dropping entries of windows since gone; answers whether
-        anything was written (a report that changes nothing writes nothing)."""
+        anything was written (a report that changes nothing writes nothing). ``live_window_ids`` is read under the
+        lock, so a window born between the caller's read and the write is not pruned."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked(client_id)
-            kept = {
-                raw_window_id: entry
-                for raw_window_id, entry in document.windows.items()
-                if raw_window_id in live_window_ids
-            }
+            live = live_window_ids()
+            kept = {raw_window_id: entry for raw_window_id, entry in document.windows.items() if raw_window_id in live}
             if kept.get(str(window_id)) == stored and kept == document.windows:
                 return False
             kept[str(window_id)] = stored
