@@ -1,0 +1,802 @@
+{
+    "id": "eac61a42-e3e5-4d2c-b573-fd02058d29a9",
+    "task_name": "minds-evals/behaviour",
+    "trial_name": "behaviour__tZ8kgo2",
+    "trial_uri": "file:///job/sd-r3c-behaviour-claude-0915/behaviour__tZ8kgo2",
+    "task_id": {
+        "path": "/tmp/minds-evals/datasets/sd-r3c-behaviour/behaviour"
+    },
+    "source": "sd-r3c-behaviour",
+    "task_checksum": "48de4ffaf9dd657a42d68d7e856761300f8bf84af0c52461787fe74beef5f46a",
+    "config": {
+        "task": {
+            "path": "/tmp/minds-evals/datasets/sd-r3c-behaviour/behaviour",
+            "git_url": null,
+            "git_commit_id": null,
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": "sd-r3c-behaviour"
+        },
+        "trial_name": "behaviour__tZ8kgo2",
+        "trials_dir": "apps/minds_evals/jobs/sd-r3c-behaviour-claude-0915",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": 3.0,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": "imbue.minds_evals.driver:MindsPersonaDriver",
+            "import_path": null,
+            "model_name": null,
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {
+                "snapshot_mode": "final",
+                "lane": "anthropic",
+                "model": "haiku",
+                "effort": "medium",
+                "fast": false
+            },
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "modal",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {
+                "sandbox_timeout_secs": 14400
+            },
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "8803d0f2-0242-4912-819a-198b8e999075",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "minds-persona-driver",
+        "version": "0.1.0",
+        "model_info": null
+    },
+    "agent_result": null,
+    "verifier_result": {
+        "rewards": {
+            "gates": 1.0,
+            "harness_quality": 0.95,
+            "quality": 0.7556,
+            "reward": 0.7945
+        }
+    },
+    "verifier_environment_mode": null,
+    "exception_info": null,
+    "started_at": "2026-09-16T04:58:15.517644Z",
+    "finished_at": "2026-09-16T05:35:35.624547Z",
+    "environment_setup": {
+        "started_at": "2026-09-16T04:58:16.051557Z",
+        "finished_at": "2026-09-16T05:01:24.085711Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-09-16T05:01:24.085743Z",
+        "finished_at": "2026-09-16T05:01:45.026900Z"
+    },
+    "agent_execution": null,
+    "verifier": null,
+    "step_results": [
+        {
+            "step_name": "work",
+            "agent_result": {
+                "n_input_tokens": 827889,
+                "n_cache_tokens": 707800,
+                "n_output_tokens": 3374,
+                "cost_usd": 0.7610104,
+                "rollout_details": null,
+                "metadata": {
+                    "case_id": "behaviour",
+                    "turns_completed": 1,
+                    "turn_count": 1,
+                    "step_name": "work",
+                    "entries": [
+                        {
+                            "index": 0,
+                            "kind": "literal",
+                            "exchange_count": 1,
+                            "outcome": "completed",
+                            "detail": "",
+                            "satisfied_at": "",
+                            "satisfied_at_turn": null
+                        }
+                    ],
+                    "turns": [
+                        {
+                            "index": 1,
+                            "entry_index": 0,
+                            "exchange": 0,
+                            "sent_at": "2026-09-16T05:11:55.731521+00:00",
+                            "replied_at": "2026-09-16T05:14:32.992049+00:00",
+                            "reply_seconds": 157.3,
+                            "agent_message_count": 1,
+                            "message_count": 13,
+                            "tokens": {
+                                "input": 107,
+                                "output": 1808,
+                                "cache_read": 412179,
+                                "cache_write": 45236
+                            },
+                            "cost_usd": 0.10690990000000002
+                        }
+                    ],
+                    "conversation_seconds": 157.3,
+                    "test_state": "finished",
+                    "timed_out": false,
+                    "timed_out_reason": "",
+                    "average_words_per_turn": 1.0,
+                    "average_words_per_message": 1.0,
+                    "decider_model": "claude-opus-4-8",
+                    "arm": {
+                        "mngr_sha": "c1e4357690b44f5ad1b113fe2c289fe65a434144",
+                        "dwt_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+                        "harness_config": {
+                            "lane": "anthropic",
+                            "key_provider": "",
+                            "account_id": "93311e5637444e3589a69ba15628a626",
+                            "harness": "claude",
+                            "model": "haiku",
+                            "effort": "medium",
+                            "fast": false,
+                            "model_choice_switch": "applied",
+                            "observed_models": [
+                                "claude-haiku-4-5-20251001"
+                            ],
+                            "welcome_model": "claude-opus-5",
+                            "is_model_confirmed": true
+                        }
+                    },
+                    "modal_user_id": "evals-behaviour-tz8kgo2-625bcc6a",
+                    "modal_environment_name": "minds-staging-evals-behaviour-tz8kgo2-625bcc6a",
+                    "mngr_sha": "c1e4357690b44f5ad1b113fe2c289fe65a434144",
+                    "dwt_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+                    "workspace_usage": {
+                        "message_count": 22,
+                        "tokens": {
+                            "input": 125,
+                            "output": 3374,
+                            "cache_read": 707800,
+                            "cache_write": 119964
+                        },
+                        "cost_usd": 0.7610104,
+                        "unpriced_models": [],
+                        "is_cost_complete": true,
+                        "delegated_call_count": 0,
+                        "worker_launch_count": 1,
+                        "worker_captured_count": 1,
+                        "is_speed_observed": false,
+                        "is_cost_rate_certain": false,
+                        "fast_message_count": 0,
+                        "fast_tokens": {
+                            "input": 0,
+                            "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0
+                        },
+                        "failed_request_count": 0,
+                        "per_model": [
+                            {
+                                "model": "claude-opus-5",
+                                "message_count": 9,
+                                "tokens": {
+                                    "input": 18,
+                                    "output": 1566,
+                                    "cache_read": 295621,
+                                    "cache_write": 74728
+                                },
+                                "cost_usd": 0.6541005,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            },
+                            {
+                                "model": "claude-haiku-4-5-20251001",
+                                "message_count": 13,
+                                "tokens": {
+                                    "input": 107,
+                                    "output": 1808,
+                                    "cache_read": 412179,
+                                    "cache_write": 45236
+                                },
+                                "cost_usd": 0.10690990000000002,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            }
+                        ]
+                    },
+                    "usage_source": "transcript",
+                    "transcript_usage": {
+                        "message_count": 22,
+                        "tokens": {
+                            "input": 125,
+                            "output": 3374,
+                            "cache_read": 707800,
+                            "cache_write": 119964
+                        },
+                        "cost_usd": 0.7610104,
+                        "unpriced_models": [],
+                        "is_cost_complete": true,
+                        "delegated_call_count": 0,
+                        "worker_launch_count": 1,
+                        "worker_captured_count": 1,
+                        "is_speed_observed": false,
+                        "is_cost_rate_certain": false,
+                        "fast_message_count": 0,
+                        "fast_tokens": {
+                            "input": 0,
+                            "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0
+                        },
+                        "failed_request_count": 0,
+                        "per_model": [
+                            {
+                                "model": "claude-opus-5",
+                                "message_count": 9,
+                                "tokens": {
+                                    "input": 18,
+                                    "output": 1566,
+                                    "cache_read": 295621,
+                                    "cache_write": 74728
+                                },
+                                "cost_usd": 0.6541005,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            },
+                            {
+                                "model": "claude-haiku-4-5-20251001",
+                                "message_count": 13,
+                                "tokens": {
+                                    "input": 107,
+                                    "output": 1808,
+                                    "cache_read": 412179,
+                                    "cache_write": 45236
+                                },
+                                "cost_usd": 0.10690990000000002,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            }
+                        ]
+                    },
+                    "trajectory_source": "workspace",
+                    "transcript_capture": {
+                        "stream": {
+                            "is_captured": true,
+                            "reason": "",
+                            "detail": ""
+                        },
+                        "document": {
+                            "is_captured": true,
+                            "reason": "",
+                            "detail": ""
+                        }
+                    },
+                    "workers": [
+                        {
+                            "name": "diag-worker-7f3a",
+                            "agent_type": "claude",
+                            "agent_id": "agent-84c4d096de8d43e89ba6d4c66fab249d",
+                            "state": "stopped",
+                            "depth": 0,
+                            "lead_name": "",
+                            "launch_tool_call_id": "toolu_01KxnjVL3tzwAbQ4N4HzaMM8",
+                            "document": {
+                                "is_captured": true,
+                                "reason": "",
+                                "detail": ""
+                            },
+                            "stream": {
+                                "is_captured": true,
+                                "reason": "",
+                                "detail": ""
+                            },
+                            "report": {
+                                "is_captured": true,
+                                "reason": "",
+                                "detail": ""
+                            },
+                            "usage": {
+                                "message_count": 8,
+                                "tokens": {
+                                    "input": 16,
+                                    "output": 1422,
+                                    "cache_read": 285434,
+                                    "cache_write": 42279
+                                },
+                                "cost_usd": 0.4425907499999999,
+                                "unpriced_models": [],
+                                "is_cost_complete": true,
+                                "delegated_call_count": 0,
+                                "worker_launch_count": 0,
+                                "worker_captured_count": 0,
+                                "is_speed_observed": false,
+                                "is_cost_rate_certain": false,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                },
+                                "failed_request_count": 0,
+                                "per_model": [
+                                    {
+                                        "model": "claude-opus-5",
+                                        "message_count": 8,
+                                        "tokens": {
+                                            "input": 16,
+                                            "output": 1422,
+                                            "cache_read": 285434,
+                                            "cache_write": 42279
+                                        },
+                                        "cost_usd": 0.4425907499999999,
+                                        "fast_message_count": 0,
+                                        "fast_tokens": {
+                                            "input": 0,
+                                            "output": 0,
+                                            "cache_read": 0,
+                                            "cache_write": 0
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "worker_capture_overflow": [],
+                    "decider_usage": {
+                        "model": "claude-opus-4-8",
+                        "call_count": 0,
+                        "fallback_count": 0,
+                        "tokens": {
+                            "input": 0,
+                            "output": 0
+                        },
+                        "cost_usd": 0.0
+                    },
+                    "verifier_agent_usage": {
+                        "model": "claude-opus-4-8",
+                        "call_count": 0,
+                        "failed_call_count": 0,
+                        "tokens": {
+                            "input": 0,
+                            "output": 0
+                        },
+                        "cost_usd": 0.0
+                    },
+                    "verification": {
+                        "is_evidence_complete": true,
+                        "entry_count": 5,
+                        "failed_entry_count": 1,
+                        "error_entry_count": 0
+                    }
+                }
+            },
+            "verifier_result": {
+                "rewards": {
+                    "gates": 1.0,
+                    "harness_quality": 0.95,
+                    "outcome": 0.7083,
+                    "quality": 0.7111,
+                    "reward": 0.7578
+                }
+            },
+            "exception_info": null,
+            "agent_execution": {
+                "started_at": "2026-09-16T05:01:45.619898Z",
+                "finished_at": "2026-09-16T05:18:54.696063Z"
+            },
+            "verifier": {
+                "started_at": "2026-09-16T05:22:45.505058Z",
+                "finished_at": "2026-09-16T05:23:28.674461Z"
+            }
+        },
+        {
+            "step_name": "check",
+            "agent_result": {
+                "n_input_tokens": 184700,
+                "n_cache_tokens": 137961,
+                "n_output_tokens": 649,
+                "cost_usd": 0.07545584999999999,
+                "rollout_details": null,
+                "metadata": {
+                    "case_id": "behaviour",
+                    "turns_completed": 2,
+                    "turn_count": 2,
+                    "step_name": "check",
+                    "entries": [
+                        {
+                            "index": 0,
+                            "kind": "literal",
+                            "exchange_count": 1,
+                            "outcome": "completed",
+                            "detail": "",
+                            "satisfied_at": "",
+                            "satisfied_at_turn": null
+                        },
+                        {
+                            "index": 1,
+                            "kind": "literal",
+                            "exchange_count": 1,
+                            "outcome": "completed",
+                            "detail": "",
+                            "satisfied_at": "",
+                            "satisfied_at_turn": null
+                        }
+                    ],
+                    "turns": [
+                        {
+                            "index": 1,
+                            "entry_index": 0,
+                            "exchange": 0,
+                            "sent_at": "2026-09-16T05:11:55.731521+00:00",
+                            "replied_at": "2026-09-16T05:14:32.992049+00:00",
+                            "reply_seconds": 157.3,
+                            "agent_message_count": 1,
+                            "message_count": 13,
+                            "tokens": {
+                                "input": 107,
+                                "output": 1808,
+                                "cache_read": 412179,
+                                "cache_write": 45236
+                            },
+                            "cost_usd": 0.10690990000000002
+                        },
+                        {
+                            "index": 2,
+                            "entry_index": 1,
+                            "exchange": 0,
+                            "sent_at": "2026-09-16T05:24:25.848498+00:00",
+                            "replied_at": "2026-09-16T05:25:36.719772+00:00",
+                            "reply_seconds": 70.9,
+                            "agent_message_count": 1,
+                            "message_count": 4,
+                            "tokens": {
+                                "input": 36,
+                                "output": 649,
+                                "cache_read": 137961,
+                                "cache_write": 46703
+                            },
+                            "cost_usd": 0.07545585
+                        }
+                    ],
+                    "conversation_seconds": 821.0,
+                    "test_state": "finished",
+                    "timed_out": false,
+                    "timed_out_reason": "",
+                    "average_words_per_turn": 2.5,
+                    "average_words_per_message": 2.5,
+                    "decider_model": "claude-opus-4-8",
+                    "arm": {
+                        "mngr_sha": "c1e4357690b44f5ad1b113fe2c289fe65a434144",
+                        "dwt_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+                        "harness_config": {
+                            "lane": "anthropic",
+                            "key_provider": "",
+                            "account_id": "93311e5637444e3589a69ba15628a626",
+                            "harness": "claude",
+                            "model": "haiku",
+                            "effort": "medium",
+                            "fast": false,
+                            "model_choice_switch": "applied",
+                            "observed_models": [
+                                "claude-haiku-4-5-20251001"
+                            ],
+                            "welcome_model": "claude-opus-5",
+                            "is_model_confirmed": true
+                        }
+                    },
+                    "modal_user_id": "evals-behaviour-tz8kgo2-625bcc6a",
+                    "modal_environment_name": "minds-staging-evals-behaviour-tz8kgo2-625bcc6a",
+                    "mngr_sha": "c1e4357690b44f5ad1b113fe2c289fe65a434144",
+                    "dwt_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+                    "workspace_usage": {
+                        "message_count": 26,
+                        "tokens": {
+                            "input": 161,
+                            "output": 4023,
+                            "cache_read": 845761,
+                            "cache_write": 166667
+                        },
+                        "cost_usd": 0.83646625,
+                        "unpriced_models": [],
+                        "is_cost_complete": true,
+                        "delegated_call_count": 0,
+                        "worker_launch_count": 1,
+                        "worker_captured_count": 1,
+                        "is_speed_observed": false,
+                        "is_cost_rate_certain": false,
+                        "fast_message_count": 0,
+                        "fast_tokens": {
+                            "input": 0,
+                            "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0
+                        },
+                        "failed_request_count": 0,
+                        "per_model": [
+                            {
+                                "model": "claude-opus-5",
+                                "message_count": 9,
+                                "tokens": {
+                                    "input": 18,
+                                    "output": 1566,
+                                    "cache_read": 295621,
+                                    "cache_write": 74728
+                                },
+                                "cost_usd": 0.6541005,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            },
+                            {
+                                "model": "claude-haiku-4-5-20251001",
+                                "message_count": 17,
+                                "tokens": {
+                                    "input": 143,
+                                    "output": 2457,
+                                    "cache_read": 550140,
+                                    "cache_write": 91939
+                                },
+                                "cost_usd": 0.18236575,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            }
+                        ]
+                    },
+                    "usage_source": "transcript",
+                    "transcript_usage": {
+                        "message_count": 26,
+                        "tokens": {
+                            "input": 161,
+                            "output": 4023,
+                            "cache_read": 845761,
+                            "cache_write": 166667
+                        },
+                        "cost_usd": 0.83646625,
+                        "unpriced_models": [],
+                        "is_cost_complete": true,
+                        "delegated_call_count": 0,
+                        "worker_launch_count": 1,
+                        "worker_captured_count": 1,
+                        "is_speed_observed": false,
+                        "is_cost_rate_certain": false,
+                        "fast_message_count": 0,
+                        "fast_tokens": {
+                            "input": 0,
+                            "output": 0,
+                            "cache_read": 0,
+                            "cache_write": 0
+                        },
+                        "failed_request_count": 0,
+                        "per_model": [
+                            {
+                                "model": "claude-opus-5",
+                                "message_count": 9,
+                                "tokens": {
+                                    "input": 18,
+                                    "output": 1566,
+                                    "cache_read": 295621,
+                                    "cache_write": 74728
+                                },
+                                "cost_usd": 0.6541005,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            },
+                            {
+                                "model": "claude-haiku-4-5-20251001",
+                                "message_count": 17,
+                                "tokens": {
+                                    "input": 143,
+                                    "output": 2457,
+                                    "cache_read": 550140,
+                                    "cache_write": 91939
+                                },
+                                "cost_usd": 0.18236575,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                }
+                            }
+                        ]
+                    },
+                    "trajectory_source": "workspace",
+                    "transcript_capture": {
+                        "stream": {
+                            "is_captured": true,
+                            "reason": "",
+                            "detail": ""
+                        },
+                        "document": {
+                            "is_captured": true,
+                            "reason": "",
+                            "detail": ""
+                        }
+                    },
+                    "workers": [
+                        {
+                            "name": "diag-worker-7f3a",
+                            "agent_type": "claude",
+                            "agent_id": "agent-84c4d096de8d43e89ba6d4c66fab249d",
+                            "state": "stopped",
+                            "depth": 0,
+                            "lead_name": "",
+                            "launch_tool_call_id": "toolu_01KxnjVL3tzwAbQ4N4HzaMM8",
+                            "document": {
+                                "is_captured": true,
+                                "reason": "",
+                                "detail": ""
+                            },
+                            "stream": {
+                                "is_captured": true,
+                                "reason": "",
+                                "detail": ""
+                            },
+                            "report": {
+                                "is_captured": true,
+                                "reason": "",
+                                "detail": ""
+                            },
+                            "usage": {
+                                "message_count": 8,
+                                "tokens": {
+                                    "input": 16,
+                                    "output": 1422,
+                                    "cache_read": 285434,
+                                    "cache_write": 42279
+                                },
+                                "cost_usd": 0.4425907499999999,
+                                "unpriced_models": [],
+                                "is_cost_complete": true,
+                                "delegated_call_count": 0,
+                                "worker_launch_count": 0,
+                                "worker_captured_count": 0,
+                                "is_speed_observed": false,
+                                "is_cost_rate_certain": false,
+                                "fast_message_count": 0,
+                                "fast_tokens": {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0
+                                },
+                                "failed_request_count": 0,
+                                "per_model": [
+                                    {
+                                        "model": "claude-opus-5",
+                                        "message_count": 8,
+                                        "tokens": {
+                                            "input": 16,
+                                            "output": 1422,
+                                            "cache_read": 285434,
+                                            "cache_write": 42279
+                                        },
+                                        "cost_usd": 0.4425907499999999,
+                                        "fast_message_count": 0,
+                                        "fast_tokens": {
+                                            "input": 0,
+                                            "output": 0,
+                                            "cache_read": 0,
+                                            "cache_write": 0
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                    "worker_capture_overflow": [],
+                    "decider_usage": {
+                        "model": "claude-opus-4-8",
+                        "call_count": 0,
+                        "fallback_count": 0,
+                        "tokens": {
+                            "input": 0,
+                            "output": 0
+                        },
+                        "cost_usd": 0.0
+                    },
+                    "verifier_agent_usage": {
+                        "model": "claude-opus-4-8",
+                        "call_count": 0,
+                        "failed_call_count": 0,
+                        "tokens": {
+                            "input": 0,
+                            "output": 0
+                        },
+                        "cost_usd": 0.0
+                    },
+                    "verification": {
+                        "is_evidence_complete": true,
+                        "entry_count": 1,
+                        "failed_entry_count": 0,
+                        "error_entry_count": 0
+                    }
+                }
+            },
+            "verifier_result": {
+                "rewards": {
+                    "gates": 1.0,
+                    "harness_quality": 0.95,
+                    "quality": 0.7556,
+                    "reward": 0.7945
+                }
+            },
+            "exception_info": null,
+            "agent_execution": {
+                "started_at": "2026-09-16T05:23:30.728357Z",
+                "finished_at": "2026-09-16T05:30:58.116604Z"
+            },
+            "verifier": {
+                "started_at": "2026-09-16T05:35:06.366640Z",
+                "finished_at": "2026-09-16T05:35:35.617306Z"
+            }
+        }
+    ]
+}

@@ -525,7 +525,10 @@ def test_hand_built_boundary_becomes_a_system_step_ahead_of_the_steps_first_turn
         _provenance(),
         _usage(message_count=2),
         timestamp="2026-09-01T00:00:00Z",
-        boundaries=(_boundary(name="build", conversation_index=0), _boundary(conversation_index=2)),
+        boundaries=(
+            _boundary(name="build", conversation_index=0),
+            _boundary(conversation_index=2, opening_message="Adjust it."),
+        ),
     )
 
     assert built is not None
@@ -541,7 +544,14 @@ def test_hand_built_boundary_becomes_a_system_step_ahead_of_the_steps_first_turn
     marker = rendered["steps"][3]
     assert marker["message"].startswith(STEP_BOUNDARY_BANNER)
     assert "Step: adjust-requirements" in marker["message"]
-    assert marker["extra"] == {"minds_evals": {"kind": STEP_BOUNDARY_KIND, "step_name": "adjust-requirements"}}
+    # The opening message the marker was joined on rides in the `extra` beside the step's name.
+    assert marker["extra"] == {
+        "minds_evals": {
+            "kind": STEP_BOUNDARY_KIND,
+            "step_name": "adjust-requirements",
+            "opening_message": "Adjust it.",
+        }
+    }
     # The markers are cosmetic, so the trial's reported step count stays the conversation's.
     assert rendered["final_metrics"]["total_steps"] == 4
 

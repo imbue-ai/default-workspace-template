@@ -60,12 +60,12 @@ belong in tested code rather than agent prose:
     the worker's "what's new" report.
 
 ``surface-chat-tab``
-    Open this run's own chat tab in the workspace UI, so a user sent into the
+    Open this run's own chat window in the workspace UI, so a user sent into the
     workspace by the minds app lands on the conversation performing the update.
-    The interface can only place a tab in front of a client that is connected,
+    The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
-    and returns at once; the open is a no-op on a tab that is already there.
+    and returns at once; the open focuses a window that is already there.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
@@ -343,9 +343,9 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     return 0
 
 
-# How long the detached helper keeps trying to place the tab. Generous enough
+# How long the detached helper keeps trying to open the window. Generous enough
 # to cover a user arriving after a stopped machine's cold boot; past it the
-# app's own copy naming the tab is the fallback.
+# app's own copy naming the window is the fallback.
 SURFACE_CHAT_TAB_DEADLINE_SECONDS = 600.0
 
 SURFACE_CHAT_TAB_RETRY_SECONDS = 5.0
@@ -360,7 +360,7 @@ def wait_and_open_chat_tab(
 ) -> bool:
     """Call ``try_open`` until it succeeds or the deadline passes; whether it did.
 
-    Stops on the first success: a tab is surfaced once, and re-opening it later
+    Stops on the first success: a window is surfaced once, and re-opening it later
     would yank a user who has since moved on back to it.
     """
     started_at = monotonic()
@@ -372,13 +372,16 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
-def _try_open_chat_tab(repo_root: Path, chat_id: str) -> bool:
-    result = subprocess.run(
+def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
+    """One attempt at opening the chat's window through the desktop's ``open`` op; whether the shell took it."""
+    result = runner.run(
         [
             sys.executable,
             "system/scripts/layout.py",
             "open",
-            f"app:chat?instance={chat_id}",
+            "chat",
+            "--path",
+            f"/?chat={chat_id}",
         ],
         cwd=repo_root,
         capture_output=True,
@@ -392,7 +395,7 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         return (
             0
             if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.chat_id),
+                lambda: _try_open_chat_tab(repo_root, args.chat_id, Runner()),
                 deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
                 retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
             )
@@ -719,7 +722,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     surface_parser = sub.add_parser(
         "surface-chat-tab",
-        help="Open this run's own chat tab once a workspace client can show it.",
+        help="Open this run's own chat window once a workspace client can show it.",
         parents=[common],
     )
     surface_parser.add_argument(

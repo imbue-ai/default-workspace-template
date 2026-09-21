@@ -1331,6 +1331,12 @@ class FakeCursor:
             if found is not None:
                 self._results = [self._backend.workspace_supervisor_tuple(found)]
 
+        elif query_lower.startswith("select status, stop_kind from pool_hosts"):
+            # workspaces.py: the operator start's prologue (the retired guard reads the kind).
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                self._results.append((found.status, found.stop_kind))
+
         elif query_lower.startswith("select status from pool_hosts"):
             found = self._backend.find_pool_row(params[0])
             if found is not None:
@@ -1462,10 +1468,14 @@ class FakeCursor:
             found = self._backend.find_pool_row(raw_id)
             # workspaces.py: the owner's statement also carries the hold
             # predicate (the admin's does not).
-            is_hold_honored = "stop_kind is null or" not in query_lower or (
+            is_hold_honored = "stop_kind in (" not in query_lower or (
                 found is not None and found.stop_kind in (None, "owner", "idle")
             )
-            if found is not None and found.status == "stopped" and is_hold_honored:
+            # The admin's statement carries only the retired guard.
+            is_retire_honored = "stop_kind <> 'retired'" not in query_lower or (
+                found is not None and found.stop_kind != "retired"
+            )
+            if found is not None and found.status == "stopped" and is_hold_honored and is_retire_honored:
                 found.status = "starting"
                 found.transition_error = None
                 found.transition_failure_count = 0
@@ -2856,6 +2866,8 @@ class FakePoolBackend:
         # it is matched before the transfer-alive probe.
         if CLEANUP_DELETE_FAILED_MARKER in command:
             return 0, "", (f"{CLEANUP_DELETE_FAILED_MARKER}\n" if self.cleanup_vm_survives else "")
+        if "setsid nohup bash" in command:
+            return 0, "", ""
         if "kill -0" in command:
             return (0 if self.transfer_alive else 1), "", ""
         if "reserve.sh" in command:
