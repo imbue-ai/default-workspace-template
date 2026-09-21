@@ -6,24 +6,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, avatarStateRecord, windowRecord } from "../testing/records";
 import { FloatingEntries } from "./FloatingEntries";
 import type { FloatingEntriesAttrs } from "./FloatingEntries";
+import type { TaskbarEntry } from "../reducers/desktopState";
 
 afterEach(unmountViews);
 
+const buddy = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "floating" } });
+
+/** The fixture's entry: the pinned window of an app whose pin declares the avatar, shown plain and minimized. */
+function pinnedEntry(overrides: Partial<TaskbarEntry> = {}): TaskbarEntry {
+  return {
+    window: windowRecord("win-9", "buddy", "/", { is_pinned: true }),
+    app: buddy,
+    title: "Buddy",
+    isMinimized: true,
+    isFocused: false,
+    isPinned: true,
+    look: { mode: "floating", style: "plain", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },
+    ...overrides,
+  };
+}
+
 function render(overrides: Partial<FloatingEntriesAttrs> = {}): HTMLElement {
-  const buddy = appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "floating" } });
   const attrs: FloatingEntriesAttrs = {
     avatar: avatarStateRecord(),
-    entries: [
-      {
-        window: windowRecord("win-9", "buddy", "/", { is_pinned: true }),
-        app: buddy,
-        title: "Buddy",
-        isMinimized: true,
-        isFocused: false,
-        isPinned: true,
-        look: { mode: "floating", style: "plain", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },
-      },
-    ],
+    entries: [pinnedEntry()],
     rectOf: () => ({ x: 500, y: 400, width: 56, height: 56 }),
     openMenuWindowId: null,
     onClick: vi.fn(),
@@ -59,15 +65,11 @@ describe("FloatingEntries", () => {
   it("draws the avatar wearing the mood in the avatar style, marked stale when the status may be old", () => {
     const layer = render({
       entries: [
-        {
-          window: windowRecord("win-9", "buddy", "/", { is_pinned: true }),
-          app: appRecord("buddy", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "floating" } }),
-          title: "Buddy",
+        pinnedEntry({
           isMinimized: false,
           isFocused: true,
-          isPinned: true,
           look: { mode: "floating", style: "avatar", declaredStyle: "avatar", position: null },
-        },
+        }),
       ],
       avatar: avatarStateRecord({ design: "jelly-cat", status: { mood: "working", is_stale: true } }),
     });
