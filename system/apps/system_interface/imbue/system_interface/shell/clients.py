@@ -1,4 +1,5 @@
-"""Client records: ``clients.json`` (desktop contracts.md section 4.3), the active desktop and last-seen stamp per browser context."""
+"""Client records: ``clients.json`` (desktop contracts.md section 4.3), the active desktop, the last-seen stamp, and the
+signed-in user, per browser context."""
 
 from datetime import datetime
 from datetime import timedelta
@@ -21,6 +22,7 @@ from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
@@ -42,6 +44,7 @@ class _StoredClient(FrozenModel):
 
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
     last_seen: datetime = Field(description="When the client last reported")
+    user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
 
 
 class ClientsDocument(FrozenModel):
@@ -59,12 +62,15 @@ def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]
         "active_desktop": str(record.active_desktop) if record.active_desktop is not None else None,
         "last_seen": record.last_seen.isoformat(),
         "is_connected": is_connected,
+        "user_id": str(record.user_id) if record.user_id is not None else None,
     }
 
 
 @pure
 def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
-    return ClientRecord(id=client_id, active_desktop=stored.active_desktop, last_seen=stored.last_seen)
+    return ClientRecord(
+        id=client_id, active_desktop=stored.active_desktop, last_seen=stored.last_seen, user_id=stored.user_id
+    )
 
 
 @pure
@@ -140,7 +146,11 @@ class ClientStore(MutableModel):
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             previous = document.clients.get(str(report.client_id))
-            stored = _StoredClient(active_desktop=report.active_desktop, last_seen=stamped)
+            stored = _StoredClient(
+                active_desktop=report.active_desktop,
+                last_seen=stamped,
+                user_id=previous.user_id if previous is not None else None,
+            )
             clients = {**document.clients, str(report.client_id): stored}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
         previous_desktop = previous.active_desktop if previous is not None else None
@@ -167,6 +177,22 @@ class ClientStore(MutableModel):
         return ClientReportOutcome(
             record=_record_of(client_id, updated),
             is_active_desktop_changed=previous.active_desktop != desktop_id,
+        )
+
+    def record_arrival(
+        self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
+    ) -> ClientReportOutcome:
+        """Record a client's arrival (the shell page loading): the user it arrived as and the desktop it lands on."""
+        stamped = now.astimezone(timezone.utc)
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            previous = document.clients.get(str(client_id))
+            stored = _StoredClient(active_desktop=desktop_id, last_seen=stamped, user_id=user_id)
+            clients = {**document.clients, str(client_id): stored}
+            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
+        previous_desktop = previous.active_desktop if previous is not None else None
+        return ClientReportOutcome(
+            record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != desktop_id
         )
 
     def prune_unseen(self, now: datetime) -> list[ClientId]:

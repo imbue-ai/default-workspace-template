@@ -47,14 +47,13 @@ export function windowRecord(
   return { id, app, path, title: "", opened_at: "2026-09-19T00:00:00Z", is_settling: false, ...overrides };
 }
 
-/** A shared desktop named after its id, with no wallpaper, shortcuts, or windows. */
+/** A desktop named after its id, with no wallpaper, shortcuts, or windows. */
 export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Desktop {
   return {
     id,
     name: capitalized(id),
     color: "#2f6b4f",
     glyph: 0,
-    sharing: "shared",
     wallpaper: null,
     shortcuts: [],
     windows: [],

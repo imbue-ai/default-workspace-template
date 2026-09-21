@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from app_manifest.primitives import AppName
@@ -35,9 +36,9 @@ from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
@@ -51,6 +52,27 @@ DESKTOPS_FILENAME: Final[str] = "desktops.json"
 DEFAULT_DESKTOP_NAME: Final[str] = "Home"
 DEFAULT_DESKTOP_COLOR: Final[str] = "#2f6b4f"
 DEFAULT_DESKTOP_GLYPH: Final[int] = 0
+
+# Each glyph's signature colour, in glyph order: the frontend's ``SQUIGGLE_GLYPHS`` palette, which is what the
+# settings dialog offers, so a desktop the shell names itself wears a colour the dialog could have picked.
+DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
+    "#F0603A",
+    "#16A34A",
+    "#E3A400",
+    "#45BC4E",
+    "#12B5A5",
+    "#17A2C4",
+    "#3B82F6",
+    "#7C5CFF",
+    "#B455E8",
+    "#EC4899",
+)
+# What a user's desktop is called when their identity offers no usable name.
+FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
+# The key the tabbed-era desktops file carried per desktop; every desktop is shared now.
+# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_unlocked`` around late November 2026, once every
+# workspace has rewritten its desktops.json without the key (the first write after this release does).
+_RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
 
 _COLOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}")
 _SLUG_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
@@ -92,17 +114,78 @@ def validated_desktop_glyph(glyph: int) -> int:
 
 
 @pure
+def next_glyph_index(used_glyphs: Sequence[int]) -> int:
+    """The glyph a desktop the shell names gets: the first nobody uses, then repeating (the frontend's rule)."""
+    used = set(used_glyphs)
+    for index in range(GLYPH_COUNT):
+        if index not in used:
+            return index
+    return len(used_glyphs) % GLYPH_COUNT
+
+
+@pure
+def unique_desktop_name(base: str, existing: Sequence[Desktop]) -> str:
+    """``base``, or ``base 2``, ``base 3``, ... until neither the name nor its id is taken (the frontend's rule)."""
+    taken_names = {desktop.name.strip().lower() for desktop in existing}
+    taken_ids = {str(desktop.id) for desktop in existing}
+    candidate = base
+    suffix = 1
+    while candidate.lower() in taken_names or str(slugify_desktop_name(candidate)) in taken_ids:
+        suffix += 1
+        candidate = f"{base} {suffix}"
+    return candidate
+
+
+@pure
+def _sluggable(name: str) -> bool:
+    try:
+        slugify_desktop_name(name)
+    except DesktopValueError:
+        return False
+    return True
+
+
+@pure
+def desktop_name_for_user(identity: RequestIdentity, existing: Sequence[Desktop]) -> str:
+    """What a visiting user's desktop is called: their display name, else the local part of their email, else a
+    fallback, made unique among the existing desktops."""
+    candidates = [
+        (identity.display_name or "").strip(),
+        (identity.email or "").split("@")[0].strip(),
+        FALLBACK_USER_DESKTOP_NAME,
+    ]
+    base = next(candidate for candidate in candidates if candidate and _sluggable(candidate))
+    return unique_desktop_name(base, existing)
+
+
+@pure
 def default_desktop(shortcuts: Sequence[DesktopShortcut]) -> Desktop:
     return Desktop(
         id=slugify_desktop_name(DEFAULT_DESKTOP_NAME),
         name=DEFAULT_DESKTOP_NAME,
         color=DEFAULT_DESKTOP_COLOR,
         glyph=DEFAULT_DESKTOP_GLYPH,
-        sharing=SharingMode.SHARED,
         wallpaper=None,
         shortcuts=tuple(shortcuts),
         windows=(),
     )
+
+
+@pure
+def _without_retired_keys(raw: dict[str, Any]) -> dict[str, Any]:
+    """The raw desktops document with the keys this version no longer stores dropped from every desktop."""
+    desktops = raw.get("desktops")
+    if not isinstance(desktops, list):
+        return raw
+    return {
+        **raw,
+        "desktops": [
+            {key: value for key, value in desktop.items() if key not in _RETIRED_DESKTOP_KEYS}
+            if isinstance(desktop, dict)
+            else desktop
+            for desktop in desktops
+        ],
+    }
 
 
 @pure
@@ -143,7 +226,7 @@ class DesktopStore(MutableModel):
             logger.warning("Ignored a desktops file of version {!r} at {}", raw.get("version"), self._path())
             return None
         try:
-            return DesktopsDocument.model_validate(raw)
+            return DesktopsDocument.model_validate(_without_retired_keys(raw))
         except ValidationError as e:
             logger.warning("Ignored an unreadable desktops file at {}: {}", self._path(), e.errors()[0]["msg"])
             return None
@@ -174,38 +257,42 @@ class DesktopStore(MutableModel):
 
     def create_desktop(self, name: str, color: str, glyph: int, shortcuts: Sequence[DesktopShortcut]) -> Desktop:
         """Register a new desktop with no windows and no wallpaper; two names that shorten to one id conflict."""
-        desktop = Desktop(
-            id=slugify_desktop_name(name),
-            name=validated_desktop_name(name),
-            color=validated_desktop_color(color),
-            glyph=validated_desktop_glyph(glyph),
-            sharing=SharingMode.SHARED,
-            wallpaper=None,
-            shortcuts=tuple(shortcuts),
-            windows=(),
+        return self.add_desktop(
+            Desktop(
+                id=slugify_desktop_name(name),
+                name=validated_desktop_name(name),
+                color=validated_desktop_color(color),
+                glyph=validated_desktop_glyph(glyph),
+                wallpaper=None,
+                shortcuts=tuple(shortcuts),
+                windows=(),
+            )
         )
+
+    def add_desktop(self, desktop: Desktop) -> Desktop:
+        """Append a fully formed desktop (a created or a seeded one); an id already taken conflicts."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             existing_desktops = document.desktops if document is not None else ()
             existing = next((candidate for candidate in existing_desktops if candidate.id == desktop.id), None)
             if existing is not None:
                 raise DesktopConflictError(
-                    f"Desktop name {name!r} conflicts with existing desktop {existing.name!r} (both shorten to '{desktop.id}')"
+                    f"Desktop name {desktop.name!r} conflicts with existing desktop {existing.name!r} "
+                    f"(both shorten to '{desktop.id}')"
                 )
             self._write_unlocked(
                 DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(*existing_desktops, desktop))
             )
         return desktop
 
-    def update_settings(self, desktop_id: str, name: str, color: str, glyph: int, sharing: SharingMode) -> Desktop:
-        """Replace one desktop's display metadata and sharing mode; the id, wallpaper, shortcuts, and windows stay."""
+    def update_settings(self, desktop_id: str, name: str, color: str, glyph: int) -> Desktop:
+        """Replace one desktop's display metadata; the id, wallpaper, shortcuts, and windows stay."""
         return self._replace(
             desktop_id,
             lambda desktop: desktop.model_copy_update(
                 to_update(desktop.field_ref().name, validated_desktop_name(name)),
                 to_update(desktop.field_ref().color, validated_desktop_color(color)),
                 to_update(desktop.field_ref().glyph, validated_desktop_glyph(glyph)),
-                to_update(desktop.field_ref().sharing, sharing),
             ),
         )
 

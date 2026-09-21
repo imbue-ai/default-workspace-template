@@ -22,7 +22,6 @@ from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
@@ -200,7 +199,6 @@ def desktop_with_windows(*windows: Window) -> Desktop:
         name="Home",
         color="#2f6b4f",
         glyph=0,
-        sharing=SharingMode.SHARED,
         wallpaper=None,
         shortcuts=(),
         windows=windows,

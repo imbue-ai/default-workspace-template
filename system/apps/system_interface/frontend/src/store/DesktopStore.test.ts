@@ -69,15 +69,43 @@ afterEach(() => {
 });
 
 describe("bootstrap", () => {
-  it("lands on the recorded desktop, reports it, and fetches its layout", async () => {
+  it("arrives first, lands on the desktop the shell answers, reports it, and fetches its layout", async () => {
     api.clients = [
       { id: CLIENT, active_desktop: "work" },
       { id: "other", active_desktop: "home" },
     ];
     const store = await startedStore();
+    expect(api.calls.slice(0, 2)).toEqual([`arriveClient:${CLIENT}`, "fetchDesktops"]);
     expect(store.getState().activeDesktopId).toBe("work");
     expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
     expect(store.getState().isLayoutLoaded).toBe(true);
+    expect(store.getReplacedDesktopName()).toBeNull();
+  });
+
+  it("lands a first-time user on the desktop the shell seeded for them, and notices a replaced one until dismissed", async () => {
+    const seeded = desktopRecord("alice", { name: "Alice" });
+    api.arrival = { createdDesktop: seeded, replacedDesktopName: "Alice" };
+    const redraws: number[] = [];
+    const store = await startedStore(() => redraws.push(1));
+    expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["home", "work", "alice"]);
+    expect(store.getState().activeDesktopId).toBe("alice");
+    expect(store.getReplacedDesktopName()).toBe("Alice");
+    const before = redraws.length;
+    store.dismissReplacedDesktopNotice();
+    expect(store.getReplacedDesktopName()).toBeNull();
+    expect(redraws.length).toBe(before + 1);
+  });
+
+  it("falls back to the first desktop when the arrival cannot be settled", async () => {
+    api.clients = [{ id: CLIENT, active_desktop: "work" }];
+    const store = makeStore();
+    api.refusal = "shell down";
+    const started = store.start(NO_LINK);
+    api.refusal = null;
+    await started;
+    // The arrival was refused; the desktops read that followed was not, and the first desktop is the landing.
+    expect(api.calls[0]).toBe(`arriveClient:${CLIENT}`);
+    expect(store.getState().activeDesktopId).toBe("home");
   });
 
   it("a deep link's desktop wins, and its open and launch wait for the apps to arrive over the socket", async () => {

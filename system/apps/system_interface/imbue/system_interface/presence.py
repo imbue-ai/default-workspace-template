@@ -29,7 +29,6 @@ from typing import Final
 from typing import Self
 
 from loguru import logger
-from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
@@ -48,10 +47,10 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
-
-IDENTITY_HEADER: Final[str] = "X-Imbue-Identity"
 
 # Where presence lives, relative to the workspace root the supervised process runs from
 # (machine state, like the shell's own files); ``main.py`` takes ``--presence-dir`` so a
@@ -71,8 +70,6 @@ USER_LEFT_EVENT_TYPE: Final[EventType] = EventType("user_left")
 # A per-tab session id the shell page mints (a uuid); held to a filename-safe alphabet
 # because it is written into the user's presence file as a key.
 _SESSION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$")
-# A user id names the user's presence file, so it is held to the same alphabet.
-_USER_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class PresenceSessionId(NonEmptyStr):
@@ -84,49 +81,6 @@ class PresenceSessionId(NonEmptyStr):
         return super().__new__(cls, value)
 
 
-class PresenceUserId(NonEmptyStr):
-    """A signed-in account's user id as the identity header carries it."""
-
-    def __new__(cls, value: str) -> Self:
-        if not _USER_ID_PATTERN.fullmatch(value):
-            raise InvalidShellValueError(f"invalid presence user id {value!r}")
-        return super().__new__(cls, value)
-
-
-class RequestIdentity(FrozenModel):
-    """The requester a proxy vouched for: the owner flag always, the account record when the workspace is shared."""
-
-    # The header is cross-version wire data from the proxies; a field this build does not
-    # know must never make it unreadable.
-    model_config = ConfigDict(extra="ignore")
-
-    owner: bool = Field(description="Whether the requester is the workspace's owner")
-    user_id: str | None = Field(default=None, description="The account's user id (absent for an unshared workspace)")
-    email: str | None = Field(default=None, description="The account's verified email, present exactly when user_id is")
-    display_name: str | None = Field(default=None, description="The account's display name, when it has one")
-    avatar_url: str | None = Field(default=None, description="The account's avatar URL, when it has one")
-
-
-ANONYMOUS_OWNER: Final[RequestIdentity] = RequestIdentity(owner=True)
-
-
-@pure
-def parse_identity_header(header_value: str | None) -> RequestIdentity:
-    """The identity a request carries; a missing or unreadable header reads as the anonymous owner.
-
-    A missing header means the request came through no current proxy (an older
-    forward, an in-container caller): it is treated as the owner with no account,
-    never as a visitor. An unreadable one is logged and treated the same way.
-    """
-    if header_value is None or not header_value.strip():
-        return ANONYMOUS_OWNER
-    try:
-        return RequestIdentity.model_validate_json(header_value)
-    except ValidationError as e:
-        logger.warning("Ignored an unreadable {} header: {}", IDENTITY_HEADER, e.errors()[0]["msg"])
-        return ANONYMOUS_OWNER
-
-
 class PresentUser(FrozenModel):
     """One connected user: the latest identity snapshot plus the tab sessions it has open."""
 
@@ -135,7 +89,9 @@ class PresentUser(FrozenModel):
     display_name: str | None = Field(default=None, description="The display name as of its last heartbeat")
     avatar_url: str | None = Field(default=None, description="The avatar URL as of its last heartbeat")
     owner: bool = Field(description="Whether this user owns the workspace")
-    sessions: dict[str, str] = Field(description="Each open tab's session id to the ISO timestamp of its last heartbeat")
+    sessions: dict[str, str] = Field(
+        description="Each open tab's session id to the ISO timestamp of its last heartbeat"
+    )
     first_seen: str = Field(description="ISO timestamp of the heartbeat that created this record")
     last_seen: str = Field(description="ISO timestamp of the latest heartbeat from any session")
 
@@ -301,7 +257,7 @@ class PresenceStore(MutableModel):
     def _user_path(self, user_id: str) -> Path:
         return self.users_directory / f"{user_id}.json"
 
-    def _read_user(self, user_id: PresenceUserId) -> PresentUser | None:
+    def _read_user(self, user_id: UserId) -> PresentUser | None:
         document = read_json_object(self._user_path(str(user_id)))
         if document is None:
             return None
@@ -317,7 +273,7 @@ class PresenceStore(MutableModel):
         users: list[PresentUser] = []
         for path in sorted(self.users_directory.glob("*.json")):
             try:
-                user = self._read_user(PresenceUserId(path.stem))
+                user = self._read_user(UserId(path.stem))
             except InvalidShellValueError:
                 logger.warning("Skipped a presence file whose name is not a user id: {}", path.name)
                 continue
@@ -384,10 +340,10 @@ class PresenceStore(MutableModel):
         return events
 
 
-def _require_user_id(identity: RequestIdentity) -> PresenceUserId:
+def _require_user_id(identity: RequestIdentity) -> UserId:
     if identity.user_id is None:
         raise InvalidShellValueError("presence needs a signed-in requester (the identity carries no user id)")
-    return PresenceUserId(identity.user_id)
+    return UserId(identity.user_id)
 
 
 def utc_now() -> datetime:

@@ -21,7 +21,7 @@ Windows are positioned boxes that a separate live-page layer mirrors; they are n
 
 | Concept | Was | One line | Owner | Alternatives considered |
 |---|---|---|---|---|
-| Desktop | project, view | A named collection of windows and shortcuts with a wallpaper and a sharing mode | Shell, shared | space, screen, room |
+| Desktop | project, view | A named collection of windows and shortcuts with a wallpaper | Shell, shared | space, screen, room |
 | Window | tab, panel, instance | One app page: an app, a path under its origin, and a title; exists on exactly one desktop | Desktop, shared | pane, frame, card |
 | Placement | layout entry | Where one client keeps one window: frame, state, minimized, and its place in that client's stack | Shell, per client | geometry, arrangement |
 | Layout | layout | One client's ordered placements for one desktop | Shell, per client | arrangement |
@@ -41,13 +41,12 @@ The sections below define each one.
 
 ### 2.1 Desktop
 
-A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **sharing mode**, a **wallpaper**, its **shortcuts**, and its **windows**.
+A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **wallpaper**, its **shortcuts**, and its **windows**.
 Everything on a desktop is shared truth: every client sees the same desktops with the same windows, shortcuts, and wallpaper.
 A workspace always has at least one desktop; deleting the last one is refused, and a fresh workspace starts with one default desktop.
 There is no unfiltered "Everything" desktop; the launcher is how you reach everything on the machine.
 
-The sharing mode is `shared` (the default) or `personal`.
-Today, with one user, the mode changes nothing but the menu that shows it.
+Every desktop is shared. A private mode was considered and dropped: a window holds a resource for everyone, so nothing about a desktop is actually partitioned, and the concept bought nothing. A visiting user is kept off the owner's desktop by being given one of their own on arrival (the plan's section 3.10).
 It is the flag that will decide, once other people share a workspace, whether they may open and close windows on that desktop.
 There is one window set in either mode, so switching the mode moves no data.
 
@@ -117,7 +116,7 @@ It is an overlay, one per client, closed by a choice, a click outside, or Escape
 Opening something from it opens a window on the active desktop.
 
 The system tray holds the tray widgets, each a self-contained component with one popover.
-V1 ships one: **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, sharing, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
+V1 ships one: **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
 
 ### 2.9 The word "dock"
 
@@ -146,7 +145,7 @@ Nothing branches on a stored device kind, and the client record no longer carrie
 flowchart TB
     subgraph shared["Shared truth (server, every client)"]
         App["App (registry row, manifest, launch paths)"]
-        Desktop["Desktop: name, colour, glyph, sharing, wallpaper"]
+        Desktop["Desktop: name, colour, glyph, wallpaper"]
         Window["Window: id, app, path, title"]
         Shortcut["Shortcut: app, launch path, mode, cell"]
     end
@@ -178,7 +177,7 @@ flowchart TB
 |---|---|
 | Which apps exist, their display name, icon, launch paths; whether an app runs; Stop and Start | Manifest and registry; the shell via supervisord (unchanged) |
 | What is inside an app: its chats, sessions, folders, their names and status | The app, in its own pages (new) |
-| Desktops: name, colour, glyph, sharing mode, wallpaper, shortcuts and cells, windows | Shell, shared |
+| Desktops: name, colour, glyph, wallpaper, shortcuts and cells, windows | Shell, shared |
 | Open and close a window; a window's path and title | Shell, shared; the page reports path and title |
 | Frame, state, minimized, stacking order; the active desktop | Shell, per client |
 | Which taskbar entries show, which tray widgets exist | Derived in the browser from the layout and the inventory |
@@ -186,7 +185,7 @@ flowchart TB
 ## 4. Verbs
 
 Per window: open, raise, minimize, restore, maximize, snap left, snap right, move, resize, navigate, refresh, share, close.
-Per desktop: create, rename, recolour, set the glyph, set the sharing mode, set the wallpaper, delete, switch to, add, move, and remove shortcuts.
+Per desktop: create, rename, recolour, set the glyph, set the wallpaper, delete, switch to, add, move, and remove shortcuts.
 Per app: stop, start.
 The agent-facing `layout.py` speaks the same verbs, targets exactly one client for the per-client ones, and applies every op to the stored files so no browser needs to be connected.
 
@@ -223,7 +222,7 @@ Recorded here so the spec need not re-argue them.
 10. Compact and touch are render policies from media queries, and mobile is in scope for V1.
 11. The `{tab}` placeholder, tab ids on the wire, and the rebind route go.
 12. Agent verbs are window and desktop verbs only; `split` and `move` become `place`.
-13. A desktop's sharing mode is a flag with one window set in both modes.
+13. Every desktop is shared; there is no sharing mode. A visiting user gets a desktop of their own on arrival instead.
 14. A window's URL is followed live by every client, navigated in-app where the page can and by reload otherwise, never echoed back to the client that drove it.
 15. Every seeded shortcut opens a new window of its app, labelled with the app's name; the app decides what a new window holds (the chat's is its list, never a new chat). The browser's is the one focus-mode shortcut (`docs/system/specs/window-bound-resources.md`).
 16. A terminal and the browser are window-bound: the app collects the resource once a window has shown it and none does any more, told of closes by the shell and sweeping the shell's windows regardless; the shell destroys nothing.

@@ -10,8 +10,6 @@ export type WindowState = "NORMAL" | "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZ
 
 export const WINDOW_STATES: readonly WindowState[] = ["NORMAL", "SNAPPED_LEFT", "SNAPPED_RIGHT", "MAXIMIZED"];
 
-export type SharingMode = "shared" | "personal";
-
 export type ShortcutMode = "focus" | "new";
 
 export type IfPresent = "focus" | "new";
@@ -63,7 +61,6 @@ export interface Desktop {
   readonly name: string;
   readonly color: string;
   readonly glyph: number;
-  readonly sharing: SharingMode;
   readonly wallpaper: Wallpaper | null;
   readonly shortcuts: readonly DesktopShortcut[];
   readonly windows: readonly WindowRecord[];
@@ -122,6 +119,14 @@ export interface ClientRecord {
   readonly active_desktop: string | null;
   readonly last_seen: string;
   readonly is_connected: boolean;
+}
+
+/** What the shell answers when this client's page arrives (contracts.md section 5.5): where it lands, the desktop
+ *  seeded for a first-time user, and the name of the user's earlier desktop when it had been deleted meanwhile. */
+export interface ClientArrival {
+  readonly desktopId: string | null;
+  readonly createdDesktop: Desktop | null;
+  readonly replacedDesktopName: string | null;
 }
 
 export interface WallpaperListing {
@@ -243,7 +248,6 @@ export function parseDesktop(raw: unknown): Desktop {
     name: asString(record.name, "desktop.name"),
     color: asString(record.color, "desktop.color"),
     glyph: asNumber(record.glyph, "desktop.glyph"),
-    sharing: asOneOf(record.sharing, ["shared", "personal"], "desktop.sharing"),
     wallpaper: parseWallpaper(record.wallpaper),
     shortcuts: asArray(record.shortcuts, "desktop.shortcuts").map(parseShortcut),
     windows: asArray(record.windows, "desktop.windows").map(parseWindow),
@@ -326,6 +330,18 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     active_desktop: asOptionalString(record.active_desktop, "client.active_desktop"),
     last_seen: asString(record.last_seen, "client.last_seen"),
     is_connected: record.is_connected === true,
+  };
+}
+
+export function parseClientArrival(raw: unknown): ClientArrival {
+  const record = asObject(raw, "arrival");
+  return {
+    desktopId: asOptionalString(record.desktop_id, "arrival.desktop_id"),
+    createdDesktop:
+      record.created_desktop === null || record.created_desktop === undefined
+        ? null
+        : parseDesktop(record.created_desktop),
+    replacedDesktopName: asOptionalString(record.replaced_desktop_name, "arrival.replaced_desktop_name"),
   };
 }
 

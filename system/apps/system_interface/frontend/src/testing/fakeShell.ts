@@ -8,11 +8,11 @@ import type { DesktopApi } from "../store/DesktopStore";
 import type { PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import type {
+  ClientArrival,
   Desktop,
   DesktopShortcut,
   GridCell,
   Layout,
-  SharingMode,
   Wallpaper,
   WindowRecord,
 } from "../model/records";
@@ -22,6 +22,12 @@ import type { DesktopSocket, SocketHandlers } from "../store/socket";
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
   clients: { id: string; active_desktop: string | null }[] = [];
+  /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
+   *  the desktops as the shell would), and the name of the one it replaced. */
+  arrival: { createdDesktop: Desktop | null; replacedDesktopName: string | null } = {
+    createdDesktop: null,
+    replacedDesktopName: null,
+  };
   /** ``<desktop>/<client>`` -> the stored layout. */
   readonly layouts = new Map<string, Layout>();
   readonly calls: string[] = [];
@@ -74,7 +80,6 @@ export class FakeDesktopApi implements DesktopApi {
       name,
       color,
       glyph,
-      sharing: "shared",
       wallpaper: null,
       shortcuts: [],
       windows: [],
@@ -83,16 +88,10 @@ export class FakeDesktopApi implements DesktopApi {
     return created;
   }
 
-  async updateDesktopSettings(
-    desktopId: string,
-    name: string,
-    color: string,
-    glyph: number,
-    sharing: SharingMode,
-  ): Promise<Desktop> {
+  async updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop> {
     this.calls.push(`updateDesktopSettings:${desktopId}:${name}`);
     this.refuse();
-    return this.replace({ ...this.desktop(desktopId), name, color, glyph, sharing });
+    return this.replace({ ...this.desktop(desktopId), name, color, glyph });
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
@@ -229,6 +228,21 @@ export class FakeDesktopApi implements DesktopApi {
     }
     return this.writeLayout(desktopId, request.clientId, { updated_at: null, placements: request.placements })
       .updated_at;
+  }
+
+  async arriveClient(clientId: string): Promise<ClientArrival> {
+    this.calls.push(`arriveClient:${clientId}`);
+    this.refuse();
+    const created = this.arrival.createdDesktop;
+    if (created !== null && !this.desktops.some((desktop) => desktop.id === created.id)) {
+      this.desktops = [...this.desktops, created];
+    }
+    const recorded = this.clients.find((client) => client.id === clientId)?.active_desktop ?? null;
+    return {
+      desktopId: created?.id ?? recorded ?? this.desktops[0]?.id ?? null,
+      createdDesktop: created,
+      replacedDesktopName: this.arrival.replacedDesktopName,
+    };
   }
 
   async fetchClients(): Promise<{ id: string; active_desktop: string | null }[]> {

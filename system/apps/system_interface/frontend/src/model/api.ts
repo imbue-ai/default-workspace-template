@@ -8,6 +8,7 @@
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { HttpError, errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
 import {
+  parseClientArrival,
   parseClientRecords,
   parseDesktop,
   parseDesktops,
@@ -16,6 +17,7 @@ import {
   parseWindow,
 } from "./records";
 import type {
+  ClientArrival,
   ClientRecord,
   Desktop,
   DesktopShortcut,
@@ -23,7 +25,6 @@ import type {
   IfPresent,
   Layout,
   Placement,
-  SharingMode,
   Wallpaper,
   WallpaperListing,
   WindowRecord,
@@ -58,9 +59,8 @@ export async function updateDesktopSettings(
   name: string,
   color: string,
   glyph: number,
-  sharing: SharingMode,
 ): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name, color, glyph, sharing }));
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name, color, glyph }));
 }
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
@@ -163,6 +163,13 @@ export async function savePlacements(desktopId: string, request: PlacementsSaveR
     throw error;
   }
   return data.updated_at ?? null;
+}
+
+/** Tell the shell this client's page has loaded; it answers the desktop to land on (a first-time user's is seeded). */
+export async function arriveClient(clientId: string): Promise<ClientArrival> {
+  return parseClientArrival(
+    await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/arrive`), {}),
+  );
 }
 
 export async function fetchClients(): Promise<ClientRecord[]> {

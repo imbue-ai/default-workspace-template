@@ -13,6 +13,7 @@ import { launchPathOf, launchPathWithParams } from "../model/launch";
 import { applyPresence } from "../model/Presence";
 import type {
   AppRecord,
+  ClientArrival,
   Desktop,
   DesktopShortcut,
   GridCell,
@@ -20,7 +21,6 @@ import type {
   Layout,
   Placement,
   PresentUser,
-  SharingMode,
   ShortcutMode,
   Wallpaper,
   WindowRecord,
@@ -67,13 +67,7 @@ const SAVE_DEBOUNCE_MS = 300;
 export interface DesktopApi {
   fetchDesktops(): Promise<Desktop[]>;
   createDesktop(name: string, color: string, glyph: number): Promise<Desktop>;
-  updateDesktopSettings(
-    desktopId: string,
-    name: string,
-    color: string,
-    glyph: number,
-    sharing: SharingMode,
-  ): Promise<Desktop>;
+  updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop>;
   setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop>;
   deleteDesktop(desktopId: string): Promise<string>;
   setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop>;
@@ -84,6 +78,7 @@ export interface DesktopApi {
   reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
+  arriveClient(clientId: string): Promise<ClientArrival>;
   fetchClients(): Promise<{ id: string; active_desktop: string | null }[]>;
   setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void>;
 }
@@ -153,6 +148,8 @@ export class DesktopStore {
   private backdrop: PixelSize = { width: 0, height: 0 };
   private gesture: ActiveGesture | null = null;
   private isLauncherOpenNow = false;
+  // The name of this user's earlier desktop when the shell had to seed a fresh one at arrival; shown once.
+  private replacedDesktopName: string | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new SaveIdMinter();
   private readonly pendingRestores = new Set<string>();
@@ -277,16 +274,17 @@ export class DesktopStore {
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
     });
-    let desktops: Desktop[];
-    let clients: Awaited<ReturnType<DesktopApi["fetchClients"]>>;
+    // The arrival comes first: it may seed a desktop for this user, which the desktops read then includes.
+    let arrival: ClientArrival | null;
     try {
-      [desktops, clients] = await Promise.all([
-        this.deps.api.fetchDesktops(),
-        this.deps.api.fetchClients().catch((error: unknown) => {
-          console.warn("[si] could not read the client records", error);
-          return [];
-        }),
-      ]);
+      arrival = await this.deps.api.arriveClient(this.deps.clientId);
+    } catch (error) {
+      console.warn("[si] the shell could not settle where this client lands", error);
+      arrival = null;
+    }
+    let desktops: Desktop[];
+    try {
+      desktops = await this.deps.api.fetchDesktops();
     } catch (error) {
       console.warn("[si] could not read the desktops", error);
       this.deps.notify(`Could not read the desktops: ${(error as Error).message}`);
@@ -294,8 +292,8 @@ export class DesktopStore {
     }
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
-    const recorded = clients.find((client) => client.id === this.deps.clientId)?.active_desktop ?? null;
-    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, recorded);
+    this.replacedDesktopName = arrival?.replacedDesktopName ?? null;
+    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, arrival?.desktopId ?? null);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -447,14 +445,18 @@ export class DesktopStore {
     }
   }
 
-  async updateDesktopSettings(
-    desktopId: string,
-    name: string,
-    color: string,
-    glyph: number,
-    sharing: SharingMode,
-  ): Promise<void> {
-    this.takeDesktop(await this.deps.api.updateDesktopSettings(desktopId, name, color, glyph, sharing));
+  async updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<void> {
+    this.takeDesktop(await this.deps.api.updateDesktopSettings(desktopId, name, color, glyph));
+  }
+
+  /** The name of this user's earlier desktop, while the notice that it was deleted and replaced is still owed. */
+  getReplacedDesktopName(): string | null {
+    return this.replacedDesktopName;
+  }
+
+  dismissReplacedDesktopNotice(): void {
+    this.replacedDesktopName = null;
+    this.deps.redraw();
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<void> {
@@ -931,16 +933,16 @@ export class DesktopStore {
   }
 }
 
-/** The desktop a fresh window lands on: the deep link's when it exists, else the client's recorded
- *  one when it exists, else the first; null with no desktops. */
+/** The desktop a fresh window lands on: the deep link's when it exists, else the one the shell's arrival answer
+ *  named when it exists, else the first; null with no desktops. */
 export function chooseInitialDesktopId(
   desktops: readonly Desktop[],
   deepLinkDesktopId: string | null,
-  recordedDesktopId: string | null,
+  arrivalDesktopId: string | null,
 ): string | null {
   if (desktops.length === 0) return null;
   const ids = new Set(desktops.map((desktop) => desktop.id));
   if (deepLinkDesktopId !== null && ids.has(deepLinkDesktopId)) return deepLinkDesktopId;
-  if (recordedDesktopId !== null && ids.has(recordedDesktopId)) return recordedDesktopId;
+  if (arrivalDesktopId !== null && ids.has(arrivalDesktopId)) return arrivalDesktopId;
   return desktops[0].id;
 }

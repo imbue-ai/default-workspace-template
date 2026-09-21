@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseClientArrival,
   WireShapeError,
   parseAppRecord,
   parseClientRecords,
@@ -16,7 +17,6 @@ const DESKTOP_WIRE = {
   name: "Home",
   color: "#2f6b4f",
   glyph: 0,
-  sharing: "shared",
   wallpaper: { kind: "bundled", name: "dawn" },
   shortcuts: [{ target: { kind: "launch", app: "docs", launch: "new" }, mode: "new", cell: { column: 0, row: 0 } }],
   windows: [
@@ -42,8 +42,25 @@ describe("parseDesktop", () => {
   it("reads a null wallpaper and refuses a desktop of the wrong shape", () => {
     expect(parseDesktop({ ...DESKTOP_WIRE, wallpaper: null }).wallpaper).toBeNull();
     expect(() => parseDesktop({ ...DESKTOP_WIRE, windows: "none" })).toThrow(WireShapeError);
-    expect(() => parseDesktop({ ...DESKTOP_WIRE, sharing: "public" })).toThrow(WireShapeError);
     expect(() => parseDesktop([])).toThrow(WireShapeError);
+  });
+});
+
+describe("parseClientArrival", () => {
+  it("reads the arrival with and without a seeded desktop, and refuses the wrong shape", () => {
+    const plain = parseClientArrival({ desktop_id: "home", created_desktop: null, replaced_desktop_name: null });
+    expect(plain).toEqual({ desktopId: "home", createdDesktop: null, replacedDesktopName: null });
+    const seeded = parseClientArrival({
+      desktop_id: "alice",
+      created_desktop: { ...DESKTOP_WIRE, id: "alice", name: "Alice" },
+      replaced_desktop_name: "Alice",
+    });
+    expect(seeded.createdDesktop?.name).toBe("Alice");
+    expect(seeded.replacedDesktopName).toBe("Alice");
+    expect(
+      parseClientArrival({ desktop_id: null, created_desktop: null, replaced_desktop_name: null }).desktopId,
+    ).toBeNull();
+    expect(() => parseClientArrival({ desktop_id: 7 })).toThrow(WireShapeError);
   });
 });
 

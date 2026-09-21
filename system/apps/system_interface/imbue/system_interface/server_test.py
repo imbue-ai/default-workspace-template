@@ -15,13 +15,13 @@ from flask.testing import FlaskClient
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
-from imbue.system_interface.presence import IDENTITY_HEADER
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
@@ -470,8 +470,18 @@ def test_presence_heartbeat_records_nothing_for_an_identity_without_a_user_id(cl
 
 def test_presence_heartbeat_rejects_a_bad_session_id(client: FlaskClient) -> None:
     assert _heartbeat(client, _VISITOR_IDENTITY, session_id="bad").status_code == 400
-    assert client.post("/api/presence/heartbeat", json={"session_id": 7}, headers={IDENTITY_HEADER: _VISITOR_IDENTITY}).status_code == 400
-    assert client.post("/api/presence/heartbeat", data="not json", headers={IDENTITY_HEADER: _VISITOR_IDENTITY}).status_code == 400
+    assert (
+        client.post(
+            "/api/presence/heartbeat", json={"session_id": 7}, headers={IDENTITY_HEADER: _VISITOR_IDENTITY}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/presence/heartbeat", data="not json", headers={IDENTITY_HEADER: _VISITOR_IDENTITY}
+        ).status_code
+        == 400
+    )
 
 
 def test_presence_leave_removes_the_session_and_broadcasts_the_change(app: Flask) -> None:
