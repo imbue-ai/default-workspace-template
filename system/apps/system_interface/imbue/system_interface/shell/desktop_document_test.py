@@ -438,7 +438,7 @@ def test_windows_without_a_placement_read_as_minimized_at_the_bottom_and_stale_p
 
 def test_the_verbs_edit_one_placement_and_the_stack() -> None:
     layout = _layout(placement_record(_WIN_1), placement_record(_WIN_2))
-    opened = with_window_placed_on_open(layout, _WIN_3)
+    opened = with_window_placed_on_open(layout, _WIN_3, False)
     assert [placement.window_id for placement in opened.placements] == [_WIN_1, _WIN_2, _WIN_3]
     assert opened.placements[-1].frame == cascade_frame(2) and opened.placements[-1].is_minimized is False
     raised = with_window_raised(opened, _WIN_1)

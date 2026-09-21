@@ -26,6 +26,9 @@ from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import entries_wire_json
+from imbue.system_interface.shell.close_hints import WindowClosedHint
+from imbue.system_interface.shell.close_hints import post_window_closed_hint
+from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientRecord
@@ -107,6 +110,11 @@ class ShellState(MutableModel):
     )
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
+    )
+    close_hint_poster: Callable[[WindowClosedHint], None] = Field(
+        default=post_window_closed_hint,
+        frozen=True,
+        description="How an app is told a window of its closed; a test records the hints instead",
     )
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -264,32 +272,26 @@ class ShellState(MutableModel):
             )
         return saved
 
-    def open_window(self, desktop_id: str, request: WindowOpenRequest) -> WindowOpenOutcome:
+    def open_window(self, desktop_id: str, request: WindowOpenRequest, is_minimized: bool) -> WindowOpenOutcome:
         """Open a window of ``request.app`` at ``request.path`` on the desktop for everyone, placed at once in the
-        requesting client's layout; with ``if_present`` focus, a window of the app already at that exact path is
-        restored and raised there instead (desktop plan section 4.1)."""
+        requesting client's layout (shown, or minimized when asked); with ``if_present`` focus, a window of the app
+        already at that exact path is answered instead, restored and raised there unless the open asked for
+        minimized, in which case it is left as placed (desktop plan section 4.1)."""
         desktop = self.get_desktop(desktop_id)
-        entry = self.require_app_entry(str(request.app))
-        if request.launch is not None:
-            self.require_launch_path(entry, request.launch)
+        self._require_open_target(request.app, request.launch)
         if request.if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, request.app, request.path)
             if existing is not None:
-                self.edit_desktop_layout(
-                    desktop, request.client_id, lambda layout: with_window_raised(layout, existing.id)
-                )
+                if not is_minimized:
+                    self.edit_desktop_layout(
+                        desktop, request.client_id, lambda layout: with_window_raised(layout, existing.id)
+                    )
                 return WindowOpenOutcome(window=existing, is_new=False)
-        window = Window(
-            id=mint_window_id(),
-            app=request.app,
-            path=request.path,
-            title=WindowTitle(""),
-            opened_at=datetime.now(timezone.utc),
-            is_settling=request.launch is not None,
-        )
-        opened_on = self.desktops.open_window(desktop.id, window)
+        opened_on, window = self._append_window(desktop, request.app, request.path, request.launch)
         placed = self._edit_placements(
-            opened_on, request.client_id, lambda layout: with_window_placed_on_open(layout, window.id)
+            opened_on,
+            request.client_id,
+            lambda layout: with_window_placed_on_open(layout, window.id, is_minimized),
         )
         # The window is announced before the placement that arranges it, so no client reads the placement as one of
         # a window its desktop does not hold.
@@ -298,12 +300,51 @@ class ShellState(MutableModel):
         logger.info("Opened window {} of {} at {} on desktop {}", window.id, window.app, window.path, desktop.id)
         return WindowOpenOutcome(window=window, is_new=True)
 
+    def open_window_unplaced(
+        self, desktop_id: str, app: AppName, path: WindowPath, launch: LaunchPathId | None, if_present: IfPresent
+    ) -> WindowOpenOutcome:
+        """An open with no client to place it for (an agent's, with nobody connected): the window exists on the
+        desktop for everyone and reads as minimized in every layout; with ``if_present`` focus, a window of the app
+        already at the path is answered as it stands."""
+        desktop = self.get_desktop(desktop_id)
+        self._require_open_target(app, launch)
+        if if_present is IfPresent.FOCUS:
+            existing = find_window_at(desktop, app, path)
+            if existing is not None:
+                return WindowOpenOutcome(window=existing, is_new=False)
+        _, window = self._append_window(desktop, app, path, launch)
+        self.broadcast_desktops_updated()
+        logger.info("Opened window {} of {} at {} on desktop {} for no client", window.id, app, path, desktop.id)
+        return WindowOpenOutcome(window=window, is_new=True)
+
+    def _require_open_target(self, app: AppName, launch: LaunchPathId | None) -> None:
+        entry = self.require_app_entry(str(app))
+        if launch is not None:
+            self.require_launch_path(entry, launch)
+
+    def _append_window(
+        self, desktop: Desktop, app: AppName, path: WindowPath, launch: LaunchPathId | None
+    ) -> tuple[Desktop, Window]:
+        """Mint a window and write it onto the desktop; a window opened at a launch path settles until its page reports."""
+        window = Window(
+            id=mint_window_id(),
+            app=app,
+            path=path,
+            title=WindowTitle(""),
+            opened_at=datetime.now(timezone.utc),
+            is_settling=launch is not None,
+        )
+        return self.desktops.open_window(desktop.id, window), window
+
     def close_window(self, desktop_id: str, window_id: WindowId) -> bool:
-        """Close a window for everyone: off the desktop and out of every client's layout of it; False when the
-        desktop did not hold it (idempotent). Raises PinnedWindowError (a 409) for a pinned window, which is never
-        closed."""
-        window = find_window(self.get_desktop(desktop_id), window_id)
-        if window is not None and window.is_pinned:
+        """Close a window for everyone: off the desktop and out of every client's layout of it, and its app told;
+        False when the desktop did not hold it (idempotent). Raises PinnedWindowError (a 409) for a pinned window,
+        which is never closed."""
+        desktop = self.get_desktop(desktop_id)
+        closing = find_window(desktop, window_id)
+        if closing is None:
+            return False
+        if closing.is_pinned:
             raise PinnedWindowError(f"Window {window_id} is pinned and cannot be closed; minimize it instead")
         outcome = self.desktops.close_window(desktop_id, window_id)
         if not outcome.is_written:
@@ -312,7 +353,18 @@ class ShellState(MutableModel):
         self.broadcast_desktops_updated()
         self._broadcast_placements_written(rewritten)
         logger.info("Closed window {} on desktop {} ({} layout(s) rewritten)", window_id, desktop_id, len(rewritten))
+        self._hint_windows_closed(desktop.id, (closing,))
         return True
+
+    def _hint_windows_closed(self, desktop_id: DesktopId, windows: Sequence[Window]) -> None:
+        """Tell each closed window's app, when its row names a window_closed_path (spec section 4.6)."""
+        for window in windows:
+            entry = self.inventory.entry(str(window.app))
+            if entry is None:
+                continue
+            hint = window_closed_hint(entry, desktop_id, window)
+            if hint is not None:
+                self.close_hint_poster(hint)
 
     def report_window_location(
         self, desktop_id: str, window_id: WindowId, client_id: ClientId, path: WindowPath, title: WindowTitle
@@ -352,6 +404,7 @@ class ShellState(MutableModel):
                 self.set_client_active_desktop(client.id, outcome.fallback_desktop_id)
         self.broadcast_desktops_updated()
         logger.info("Deleted desktop {} (fallback {})", desktop_id, outcome.fallback_desktop_id)
+        self._hint_windows_closed(outcome.deleted.id, outcome.deleted.windows)
         return outcome
 
     def set_client_active_desktop(self, client_id: ClientId, desktop_id: DesktopId) -> bool:

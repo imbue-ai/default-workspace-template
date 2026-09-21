@@ -57,13 +57,13 @@ def test_a_browser_save_is_refused_when_stale_and_skipped_when_unchanged(tmp_pat
 def test_the_shells_own_edit_writes_only_a_change_and_a_close_drops_the_window_everywhere(tmp_path: Path) -> None:
     store = PlacementStore(state_directory=tmp_path)
     opened = store.edit_layout(
-        "home", "c1", _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_1), TEST_NOW
+        "home", "c1", _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_1, False), TEST_NOW
     )
     assert opened.is_written is True and [placement.window_id for placement in opened.layout.placements] == [_WIN_1]
     unchanged = store.edit_layout("home", "c1", _LIVE, lambda layout: layout, TEST_NOW + timedelta(seconds=1))
     assert unchanged.is_written is False and unchanged.layout.updated_at == TEST_NOW
-    store.edit_layout("home", "c2", _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_2), TEST_NOW)
-    store.edit_layout("home", "c2", _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_1), TEST_NOW)
+    store.edit_layout("home", "c2", _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_2, False), TEST_NOW)
+    store.edit_layout("home", "c2", _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_1, False), TEST_NOW)
 
     rewritten = store.drop_window_everywhere("home", _WIN_1, TEST_NOW + timedelta(seconds=5))
     assert sorted(str(stored.client_id) for stored in rewritten) == ["c1", "c2"]
@@ -77,7 +77,7 @@ def test_layouts_are_deleted_per_desktop_and_per_client(tmp_path: Path) -> None:
     for desktop_id in ("home", "alpha"):
         for client_id in ("c1", "c2"):
             store.edit_layout(
-                desktop_id, client_id, _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_1), TEST_NOW
+                desktop_id, client_id, _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_1, False), TEST_NOW
             )
     assert [str(stored.client_id) for stored in store.layouts_of_desktop("home")] == ["c1", "c2"]
     store.delete_desktop_layouts("home")

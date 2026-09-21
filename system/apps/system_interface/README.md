@@ -46,8 +46,10 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
-- `/_static/app_contract.js`: the browser-side contract module every app page
-  imports (source in `system/libs/workspace_ui/src/app_contract.ts`).
+- `/_static/app_contract.js`: the browser-side contract module (source in
+  `system/libs/workspace_ui/src/app_contract.ts`), built into this app's static
+  output; every app serves that same file from its own origin, since a
+  cross-origin module import carries no cookie and the forwarder refuses it.
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
@@ -234,9 +236,13 @@ Every op targets exactly one client (`--client <id>`, else the client that last
 messaged the requesting agent, else the one connected client; refused with the
 clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
-(`--launch`, `--param`; a bare URL is the browser's `new`) and prints the
-window's id. Only `refresh` and the interface reload reach the browser as
-messages. See the `manage-desktop` skill for end-to-end orientation.
+(`--launch`, `--param`; a bare URL is the browser's `new`), minimized with
+`--minimized`, and prints the window's id; an `open` with no client to target
+still writes the window, unplaced. A close is posted to the app's registered
+`window_closed_path`, when it has one, so an app whose resources live as long
+as their windows (the terminal, the browser) can collect at once
+(`docs/system/specs/window-bound-resources.md`). Only `refresh` and the
+interface reload reach the browser as messages. See the `manage-desktop` skill for end-to-end orientation.
 
 ## Updating the running UI
 

@@ -6,10 +6,13 @@ icon = "icon.svg"
 critical = true
 priority = "terminal"
 launcher_rank = 40
+# A terminal lives as long as a window shows it: the shell posts every closed window here and
+# the app collects what no window shows (docs/system/specs/window-bound-resources.md).
+window_closed_path = "/api/window-closed"
 
 [default_shortcut]
 launch = "new"
-mode = "focus"
+mode = "new"
 
 [[launch_paths]]
 id = "new"

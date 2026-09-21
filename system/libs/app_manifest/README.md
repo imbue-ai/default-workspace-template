@@ -45,8 +45,10 @@ The models behind a workspace app's two descriptions:
   `read_origin_label(path, name)` answers
   one app's origin label, or `""` when no such app is registered or the registry
   cannot be read (logged as a warning), for a page that derives another app's
-  origin; `SHELL_APP_NAME` is the shell's registered name, the row such a page
-  reads to import the app contract module from the shell's origin.
+  origin. `SHELL_APP_CONTRACT_PATH` is where the shell's frontend build writes
+  the app contract module, which every app serves at `APP_CONTRACT_ROUTE` from
+  its own origin (a cross-origin module import carries no cookie, and the
+  forwarder refuses it).
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own

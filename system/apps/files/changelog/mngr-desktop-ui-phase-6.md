@@ -5,3 +5,5 @@ The files app follows phases 6 and 7 of the desktop interface (`docs/system/blue
 - The page honours the `path` launch parameter: opening `/?path=/notes/` lands in that folder (a path that would leave the served root is ignored), so the `new` launch path and `layout.py open files --param path=...` both work.
 
 - The manifest declares launch paths only; the retired `instances` and `actions` keys are gone.
+
+- The default shortcut is in new mode: every double click opens another file viewer window, labelled "File Viewer".

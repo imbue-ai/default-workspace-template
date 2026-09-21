@@ -16,6 +16,7 @@ import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desk
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { FloatingEntries } from "./FloatingEntries";
+import { rectStyle } from "./pixelStyle";
 import { ICON_MARKUP_SIZE, ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
@@ -113,14 +114,13 @@ export function Backdrop(): m.Component<BackdropAttrs> {
               const window = windowsById.get(placement.window_id);
               if (placement.is_minimized || window === undefined) return [];
               const app = appByName(state, window.app);
-              const gestureRect = store.gestureRectFor(window.id);
               return [
                 m(Window, {
                   key: window.id,
                   window,
                   app,
                   title: effectiveWindowTitle(state, window, app),
-                  rect: gestureRect ?? store.renderedRect(placement),
+                  rect: store.windowRect(window.id),
                   state: renderedState(placement, state.modes),
                   stackIndex: index,
                   isFocused: window.id === focusedWindowId,
@@ -148,7 +148,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             onClick: attrs.onEntryClick,
             onContextMenu: attrs.onEntryContextMenu,
           }),
-          snapRect === null ? null : m(SnapPreview, { rect: snapRect }),
+          m(SnapPreview, { rect: snapRect }),
           gesture?.kind === "shortcut"
             ? shortcutGhost(gesture.iconPosition, cellRect(gesture.targetCell, metrics), appByName(state, gesture.app))
             : null,
@@ -164,7 +164,7 @@ function shortcutGhost(position: PixelPoint, target: PixelRect, app: AppRecord |
     m("div", {
       "data-drop-cell": "",
       class: "pointer-events-none absolute z-(--z-sticky) rounded-lg border-2 border-dashed border-accent",
-      style: { left: `${target.x}px`, top: `${target.y}px`, width: `${target.width}px`, height: `${target.height}px` },
+      style: rectStyle(target),
     }),
     m(
       "div",

@@ -606,6 +606,7 @@ icon = "icon.svg"
 critical = false
 priority = "files"
 launcher_rank = 20
+window_closed_path = "/api/window-closed"
 
 [default_shortcut]
 launch = "new"
@@ -656,6 +657,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     # Written in the order the contract spells the inline table (tomllib keeps file order).
     assert list(row["default_shortcut"]) == ["launch", "mode"]
     assert row["launcher_rank"] == 20
+    assert row["window_closed_path"] == "/api/window-closed"
     assert "actions" not in row
     # The row carries each launch path's param NAMES (the launcher reads them), and no ``params``
     # key at all for a launch path that declares none.
@@ -763,6 +765,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "launch_paths",
         "launcher_rank",
         "pin",
+        "window_closed_path",
     ):
         assert stale_key not in row, stale_key
     assert "priority" not in row

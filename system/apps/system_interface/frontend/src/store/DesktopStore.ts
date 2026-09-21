@@ -865,6 +865,11 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
+  /** The pointer moved during a window drag. The gesture's rectangle and zone are updated with no
+   *  redraw (a redraw per pointer event re-renders the whole desktop and repositions every live
+   *  page): the App paints them straight onto the window, its page, and the snap preview, and
+   *  ``gestureRectFor`` and ``snapPreviewRect`` keep answering the live values, so a redraw from
+   *  any other cause mid-drag renders the same thing. */
   updateWindowMove(pointer: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "move") return;
@@ -888,7 +893,6 @@ export class DesktopStore {
     const currentRect = movedRect(start.startRect, delta, this.backdrop, this.metrics);
     const zone = snapZoneForRelease(pointer, this.backdrop, this.metrics.snapThreshold);
     this.gesture = { ...start, currentRect, zone };
-    this.notifyListeners();
   }
 
   endWindowMove(pointer: PixelPoint): void {
@@ -926,11 +930,11 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
+  /** The pointer moved during a resize; no redraw, as for a move. */
   updateWindowResize(delta: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "resize") return;
     this.gesture = { ...gesture, currentRect: resizedRect(gesture.startRect, gesture.edge, delta, this.metrics) };
-    this.notifyListeners();
   }
 
   endWindowResize(delta: PixelPoint): void {
@@ -1107,6 +1111,14 @@ export class DesktopStore {
     if (gesture === null || gesture.kind === "shortcut" || gesture.kind === "floating-entry") return null;
     if (gesture.windowId !== windowId) return null;
     return gesture.currentRect;
+  }
+
+  /** The rectangle the desktop draws a window at now: the gesture's while one moves or resizes it, else
+   *  its placement's. What a render positions the window by, and what the paint of a gesture writes
+   *  onto it when the gesture ends or is cancelled, so the DOM already equals what the next render
+   *  answers (a render diffs against the last render, not the DOM, and writes nothing it finds equal). */
+  windowRect(windowId: string): PixelRect {
+    return this.gestureRectFor(windowId) ?? this.renderedRect(placementOf(this.state.layout, windowId));
   }
 
   /** The rectangle the snap preview draws, or null when the drag is in no zone. */

@@ -1,7 +1,9 @@
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from app_manifest.testing import ShellStub
 from flask.testing import FlaskClient
 
 from terminal_app.data_types import TerminalPaths
@@ -10,9 +12,9 @@ from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
     DEFAULT_TEST_WORKDIR,
     ENV_FAKE_TMUX_DIR,
+    TEST_APP_CONTRACT_SOURCE,
     TEST_PTY_LABEL,
     TEST_SESSION_COMMAND,
-    TEST_SHELL_LABEL,
     FakeTmux,
     build_pages_test_client,
     install_fake_tmux,
@@ -58,9 +60,26 @@ def session_source(
 
 
 @pytest.fixture
-def pages_client(session_source: TmuxSessionSource, tmp_path: Path) -> FlaskClient:
-    """A test client over the wrapper pages, with both the shell and the pty registered."""
-    registry_path = write_registry_labels(
-        tmp_path / "apps.toml", {"system_interface": TEST_SHELL_LABEL, "terminal-pty": TEST_PTY_LABEL}
-    )
-    return build_pages_test_client(session_source, registry_path)
+def window_closed_posts() -> list[None]:
+    """One entry per window-closed post the pages under test took."""
+    return []
+
+
+@pytest.fixture
+def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_closed_posts: list[None]) -> FlaskClient:
+    """A test client over the wrapper pages, with the pty registered and a built contract module to serve."""
+    registry_path = write_registry_labels(tmp_path / "apps.toml", {"terminal-pty": TEST_PTY_LABEL})
+    contract_path = tmp_path / "app_contract.js"
+    contract_path.write_text(TEST_APP_CONTRACT_SOURCE)
+    return build_pages_test_client(session_source, registry_path, contract_path, window_closed_posts)
+
+
+@pytest.fixture
+def shell_stub() -> Iterator[ShellStub]:
+    """A loopback stand-in for the shell, answering what a test sets."""
+    stub = ShellStub()
+    stub.start()
+    try:
+        yield stub
+    finally:
+        stub.close()

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  defaultShortcutMode,
   launchPathOf,
   launchPathWithParams,
   launchRowLabel,
@@ -41,6 +42,13 @@ describe("launch paths of an app", () => {
   it("finds a launch path by id", () => {
     expect(launchPathOf(docs, "new")?.label).toBe("New docs");
     expect(launchPathOf(docs, "other")).toBeNull();
+  });
+
+  it("adds a shortcut in the app's declared mode for its default launch path and in new mode otherwise", () => {
+    const focused = appRecord("focused", { default_shortcut: { launch: "new", mode: "focus" } });
+    expect(defaultShortcutMode(focused, launchPathRecord())).toBe("focus");
+    expect(defaultShortcutMode(focused, launchPathRecord({ id: "other" }))).toBe("new");
+    expect(defaultShortcutMode(appRecord("bare", { default_shortcut: null }), launchPathRecord())).toBe("new");
   });
 
   it("appends params as a query string", () => {

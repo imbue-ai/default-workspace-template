@@ -30,6 +30,10 @@
   --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;
+  --desk-resize-edge: 8px;
+  --desk-resize-corner: 16px;
+  --desk-resize-overhang: 3px;
+  --desk-resize-edge-inset: calc(var(--desk-resize-corner) - var(--desk-resize-overhang));
 }
 
 [data-compact] {

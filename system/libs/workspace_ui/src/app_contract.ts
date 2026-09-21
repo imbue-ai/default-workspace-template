@@ -4,10 +4,13 @@
  * the one postMessage module an app page imports to speak to the workspace shell that frames
  * it.
  *
- * Built as its own library entry (`vite.contract.config.ts`) and served by the shell at
- * `/_static/app_contract.js` with a permissive CORS header, so a page on any app origin can
- * import it; the chat document, which lives in this same source tree, imports the source
- * directly. It must therefore import nothing: the served file has no other dependencies.
+ * Built as its own library entry (`vite.contract.config.ts`) into the shell's static output,
+ * and served by every app at `/_static/app_contract.js` from its own origin: a page imports it
+ * as a module, and a module import is a fetch without cookies, which the desktop client's
+ * forwarder and the share gateway refuse across origins (the shell serves it too, with a
+ * permissive CORS header, for the e2e stub pages). The chat document, which lives in this
+ * same source tree, imports the source directly. It must therefore import nothing: the served
+ * file has no other dependencies.
  *
  * Trust: a page accepts a message only from `window.parent` (a nested third-party frame can
  * post here but can never satisfy that identity), and sends only to `window.parent`. The
