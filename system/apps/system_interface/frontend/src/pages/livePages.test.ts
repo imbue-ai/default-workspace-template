@@ -526,6 +526,30 @@ describe("the contract", () => {
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
   });
 
+  it("reloads and greets an independent window's hidden page at this client's own path", async () => {
+    const [home, work] = api.desktops;
+    const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
+    api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-4")] });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+    await settle();
+    renderChrome("win-4");
+    layer.reconcile();
+    load("win-4");
+    await store.switchDesktop("work");
+    layer.reconcile();
+    // The work desktop's layout knows nothing of this client's path for the window; an agent's refresh of the
+    // app still reloads the hidden page where it is, and the handshake after the load names that path.
+    const reloads = spyOnSrc("win-4");
+    socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
+    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=7"]);
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "home", path: "/?doc=7" });
+  });
+
   it("raises the window of a page that says it took focus", () => {
     store.restoreWindow("win-2");
     layer.reconcile();
