@@ -83,6 +83,10 @@ def test_the_thread_stops_once_delivered_and_never_starts_when_already_delivered
     shell = FakeShellOps(client_ids=["client-a"])
     opener = _opener(tmp_path, shell)
     opener.start()
+    # The thread returns once it has delivered; a stop before its first attempt would find nothing to assert on.
+    assert opener._thread is not None
+    opener._thread.join(timeout=5)
+    assert opener._thread.is_alive() is False
     opener.stop()
     assert opener.ledger.is_delivered() is True
     again = _opener(tmp_path, shell)
