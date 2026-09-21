@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.shell.data_types import StoredWindowPath
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
@@ -69,6 +70,34 @@ class WindowPathStore(MutableModel):
         """The client's stored paths for the windows that still exist, by window id."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked(client_id)
+        return self._live_paths(document, live_window_ids)
+
+    def read_all_paths(
+        self, live_window_ids: AbstractSet[WindowId]
+    ) -> dict[ClientId, dict[WindowId, StoredWindowPath]]:
+        """Every client's stored paths for the windows that still exist, by client id: what the desktops listing
+        shows beside an independent window so a reader of the shell's windows sees what each client is looking at."""
+        directory = self.state_directory / WINDOW_PATHS_DIRNAME
+        with STATE_FILES_LOCK:
+            files = sorted(directory.glob(f"*{_FILE_SUFFIX}")) if directory.is_dir() else []
+            documents: dict[ClientId, WindowPathsDocument] = {}
+            for file in files:
+                try:
+                    client_id = ClientId(file.stem)
+                except InvalidShellValueError as e:
+                    logger.warning("Skipped a window paths file with an unusable client id: {}", e)
+                    continue
+                documents[client_id] = self._read_unlocked(client_id)
+        return {
+            client_id: self._live_paths(document, live_window_ids)
+            for client_id, document in documents.items()
+            if self._live_paths(document, live_window_ids)
+        }
+
+    @staticmethod
+    def _live_paths(
+        document: WindowPathsDocument, live_window_ids: AbstractSet[WindowId]
+    ) -> dict[WindowId, StoredWindowPath]:
         paths: dict[WindowId, StoredWindowPath] = {}
         for raw_window_id, stored in document.windows.items():
             try:

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from app_manifest.manifest import LocationScope
@@ -48,6 +49,7 @@ from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
+from imbue.system_interface.shell.data_types import window_wire_json
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import pinned_apps
@@ -172,7 +174,7 @@ class ShellState(MutableModel):
         self.desktops.ensure_default(self.seed_shortcuts)
         outcome = self.desktops.ensure_pinned_windows(self.pinned_apps(), datetime.now(timezone.utc))
         if outcome.is_written:
-            self.broadcaster.broadcast_desktops_updated([desktop_wire_json(desktop) for desktop in outcome.desktops])
+            self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(outcome.desktops))
         return list(outcome.desktops)
 
     def seed_shortcuts(self) -> tuple[DesktopShortcut, ...]:
@@ -209,7 +211,28 @@ class ShellState(MutableModel):
         raise DesktopNotFoundError(desktop_id)
 
     def broadcast_desktops_updated(self) -> None:
-        self.broadcaster.broadcast_desktops_updated([desktop_wire_json(desktop) for desktop in self.list_desktops()])
+        self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(self.list_desktops()))
+
+    def desktops_wire_json(self, desktops: Sequence[Desktop]) -> list[dict[str, Any]]:
+        """The ``desktops`` of a listing or a ``desktops_updated``: every client's stored path for each independent
+        window rides on the window, read once for the whole list."""
+        by_client = self.window_paths.read_all_paths(self._independent_window_ids())
+        by_window: dict[WindowId, dict[ClientId, WindowPath]] = {}
+        for client_id, paths in by_client.items():
+            for window_id, stored in paths.items():
+                by_window.setdefault(window_id, {})[client_id] = stored.path
+        return [desktop_wire_json(desktop, by_window) for desktop in desktops]
+
+    def desktop_wire_json(self, desktop: Desktop) -> dict[str, Any]:
+        (wire,) = self.desktops_wire_json((desktop,))
+        return wire
+
+    def window_wire_json(self, window: Window) -> dict[str, Any]:
+        """One window as a listing shows it, with each client's own path when it is independent."""
+        by_client = self.window_paths.read_all_paths({window.id})
+        return window_wire_json(
+            window, {client_id: paths[window.id].path for client_id, paths in by_client.items() if window.id in paths}
+        )
 
     def read_desktop_layout(self, desktop: Desktop, client_id: ClientId) -> DesktopLayout:
         """The client's layout of the desktop as it reads: its own file with stale placements dropped, else empty."""

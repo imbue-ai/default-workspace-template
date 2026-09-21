@@ -128,7 +128,7 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
     """Every window path of ``app`` across every desktop, or None when the shell could not be read."""
 ```
 
-It GETs `{shell_url}/api/desktops` with a 2 second timeout over `urllib.request`, validates the `{"desktops": [{"windows": [{"app", "path"}, ...]}, ...]}` shape it needs, and returns the paths of the windows whose `app` matches.
+It GETs `{shell_url}/api/desktops` with a 2 second timeout over `urllib.request`, validates the `{"desktops": [{"windows": [{"app", "path", "client_paths"?}, ...]}, ...]}` shape it needs, and returns the paths of the windows whose `app` matches: each window's `path`, and every value of its `client_paths` (a pinned window with the `independent` scope keeps its shared path at its home path, and what each client's page shows rides beside it; any one of those views keeps the resource alive).
 The shell URL is `MINDS_WORKSPACE_SERVER_URL` with the default `http://127.0.0.1:8000`, resolved as `layout.py` and the chat's `shell_client.py` resolve it; a helper `shell_base_url()` moves into the same module so the three agree.
 
 A window-seen flag is one additive boolean on each app's record, defaulting to false, so a store written by the previous release reads unchanged.

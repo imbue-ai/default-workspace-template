@@ -33,6 +33,21 @@ def test_paths_read_empty_until_written_and_a_report_that_changes_nothing_writes
     assert json.loads(file_path.read_text())["version"] == 1
 
 
+def test_every_clients_paths_read_in_one_pass_with_clients_holding_none_left_out(tmp_path: Path) -> None:
+    store = WindowPathStore(state_directory=tmp_path)
+    assert store.read_all_paths(_LIVE) == {}
+    store.set_path(_CLIENT, _WIN_1, _stored("/?chat=a", "Alpha"), lambda: _LIVE)
+    store.set_path(ClientId("c2"), _WIN_1, _stored("/?chat=b"), lambda: _LIVE)
+    store.set_path(ClientId("c2"), _WIN_2, _stored("/x"), lambda: _LIVE)
+    # A client whose only entry names a window since gone reads as holding none; a stray file is skipped.
+    store.set_path(ClientId("c3"), _WIN_2, _stored("/y"), lambda: _LIVE)
+    (tmp_path / WINDOW_PATHS_DIRNAME / "not a client id.json").write_text("{}")
+    assert store.read_all_paths(frozenset({_WIN_1})) == {
+        _CLIENT: {_WIN_1: _stored("/?chat=a", "Alpha")},
+        ClientId("c2"): {_WIN_1: _stored("/?chat=b")},
+    }
+
+
 def test_entries_of_windows_since_gone_are_dropped_on_read_and_on_the_next_write(tmp_path: Path) -> None:
     store = WindowPathStore(state_directory=tmp_path)
     store.set_path(_CLIENT, _WIN_1, _stored("/a"), lambda: _LIVE)

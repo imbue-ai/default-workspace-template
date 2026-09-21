@@ -155,7 +155,7 @@ Removed: `POST /api/apps/<name>/changed`, `POST /api/apps/<name>/instances` and 
 | `POST /api/desktops/<id>/shortcuts/move` | `{"app", "launch", "cell"}` | `200 desktop`; an occupant of the cell is moved to the nearest free cell (section 10) |
 | `POST /api/desktops/<id>/shortcuts/remove` | `{"app", "launch"}` | `200 desktop` |
 
-`desktop` is the object of section 4.1.
+`desktop` is the object of section 4.1, each window carrying one field the file does not store: `client_paths`, the path each client's page of an independent window is at, by client id (`{}` for a linked window; a client at the home path has no entry). A reader of the shell's windows (`docs/system/specs/window-bound-resources.md` section 4.2) takes `path` and every `client_paths` value alike, since any client's view of a window keeps what it shows alive. The `window` objects the window routes answer (section 5.3) carry it too.
 
 ### 5.3 Windows
 

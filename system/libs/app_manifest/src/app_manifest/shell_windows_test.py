@@ -18,6 +18,19 @@ _DESKTOPS = {
             ],
         },
         {"id": "work", "windows": [{"id": "win-3", "app": "terminal", "path": "/new?workdir=%2Fdata"}]},
+        {
+            "id": "pinned",
+            "windows": [
+                {
+                    "id": "win-4",
+                    "app": "terminal",
+                    "path": "/",
+                    "scope": "independent",
+                    "client_paths": {"c1": "/?session=terminal-7", "c2": "/?session=terminal-8"},
+                },
+                {"id": "win-5", "app": "browser", "path": "/", "client_paths": {"c1": "/?session=browser-2"}},
+            ],
+        },
     ]
 }
 
@@ -25,7 +38,14 @@ _DESKTOPS = {
 def test_the_reader_answers_the_apps_window_paths_across_every_desktop(shell_stub: ShellStub) -> None:
     shell_stub.answer(200, json.dumps(_DESKTOPS))
 
-    assert read_app_window_paths(shell_stub.url, _TERMINAL) == ["/?session=terminal-1", "/new?workdir=%2Fdata"]
+    # An independent window's shared path stays home; what each client shows rides beside it and counts too.
+    assert read_app_window_paths(shell_stub.url, _TERMINAL) == [
+        "/?session=terminal-1",
+        "/new?workdir=%2Fdata",
+        "/",
+        "/?session=terminal-7",
+        "/?session=terminal-8",
+    ]
 
 
 def test_the_reader_answers_an_empty_list_for_an_app_with_no_windows(shell_stub: ShellStub) -> None:
@@ -55,6 +75,11 @@ def test_a_document_of_the_wrong_shape_reads_as_none() -> None:
     assert window_paths_of_app([], _TERMINAL) is None
     assert window_paths_of_app({"desktops": {}}, _TERMINAL) is None
     assert window_paths_of_app({"desktops": [{"windows": [{"app": "terminal"}]}]}, _TERMINAL) is None
+    assert window_paths_of_app({"desktops": [{"windows": [{"app": "t", "path": "/", "client_paths": []}]}]}, _TERMINAL) is None
+    assert (
+        window_paths_of_app({"desktops": [{"windows": [{"app": "t", "path": "/", "client_paths": {"c": 1}}]}]}, _TERMINAL)
+        is None
+    )
     assert window_paths_of_app({"desktops": []}, _TERMINAL) == []
 
 

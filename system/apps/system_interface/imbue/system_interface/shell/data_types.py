@@ -367,15 +367,25 @@ class DesktopDeleteOutcome(FrozenModel):
 
 
 @pure
-def desktop_wire_json(desktop: Desktop) -> dict[str, Any]:
-    """The ``desktop`` object of desktop contracts.md section 4.1."""
-    return desktop.model_dump(mode="json")
+def desktop_wire_json(
+    desktop: Desktop, client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]]
+) -> dict[str, Any]:
+    """The ``desktop`` object of desktop contracts.md section 5.2: the record of section 4.1 with each window
+    carrying ``client_paths``, the path each client's page of an independent window is at (empty for a linked
+    window, and for a client at the home path), so a reader of the shell's windows sees what every client shows."""
+    return {
+        **desktop.model_dump(mode="json"),
+        "windows": [window_wire_json(window, client_paths.get(window.id, {})) for window in desktop.windows],
+    }
 
 
 @pure
-def window_wire_json(window: Window) -> dict[str, Any]:
-    """The ``window`` object of desktop contracts.md section 4.1."""
-    return window.model_dump(mode="json")
+def window_wire_json(window: Window, client_paths: Mapping[ClientId, WindowPath]) -> dict[str, Any]:
+    """The ``window`` object of desktop contracts.md section 5.2 (section 4.1's record plus ``client_paths``)."""
+    return {
+        **window.model_dump(mode="json"),
+        "client_paths": {str(client_id): str(path) for client_id, path in client_paths.items()},
+    }
 
 
 @pure

@@ -285,6 +285,7 @@ New or changed routes:
 | `POST /api/desktops/<id>/windows/<window>/close` | `409` for a pinned window |
 | `POST /api/desktops/<id>/windows/<window>/location` | body gains `client_id`; for an independent window the report is stored per client and the answer's `path` and `title` are the client's |
 | `GET /api/placements/<desktop>?client=` | the layout answer gains `window_paths`, the client's stored `{path, title}` by window id for the desktop's independent windows; the save body carries no such field |
+| `GET /api/desktops` and every `desktops_updated` | each window gains `client_paths`, every client's stored path for an independent window by client id (`{}` for a linked one), so the agent listing and the window-bound-resource sweeps see what each client shows |
 | `POST /api/clients/<client>/entries/<app>` | new: `{mode, style, position}`; answers the client record |
 | `GET /api/avatars` | new: `{designs: [{id, label, source_path}], selected, default}` |
 | `POST /api/avatars` | new, loopback only: register a design |
@@ -443,5 +444,4 @@ A suggested commit order inside that pull request, each commit leaving the repos
 - The prototype's `listening` mood while the chat is open.
 - An editable draft for "Design your own..." (a `draft` launch parameter); the message is sent on open.
 - Keyboard shortcuts for the entry and the chooser.
-- Showing a client's stored paths for independent windows in the agent listing.
 - A workspace-owned observer service, so the mood no longer depends on the chat app's process.

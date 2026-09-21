@@ -31,7 +31,6 @@ from imbue.system_interface.documents import inject_meta_tag
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
@@ -560,7 +559,7 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
             json.dumps(
                 {
                     "type": "desktops_updated",
-                    "desktops": [desktop_wire_json(desktop) for desktop in shell.list_desktops()],
+                    "desktops": shell.desktops_wire_json(shell.list_desktops()),
                 }
             )
         )

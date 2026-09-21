@@ -400,6 +400,10 @@ def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays
     assert (located.get_json()["path"], located.get_json()["title"]) == ("/?doc=1", "First")
     shared = client.get("/api/desktops").get_json()["desktops"][0]["windows"][0]
     assert (shared["path"], shared["title"]) == ("/", "")
+    # What each client shows rides beside the shared record, for a reader of the shell's windows.
+    assert pinned["client_paths"] == {}
+    assert shared["client_paths"] == {"c1": "/?doc=1"}
+    assert located.get_json()["client_paths"] == {"c1": "/?doc=1"}
     # The reporting client's windows are told through placements_updated naming that client (which, as with every
     # layout write, every window hears and only that client's apply); the shared desktops are not re-announced.
     announced = drain_messages(first_queue)
