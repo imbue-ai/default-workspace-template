@@ -262,8 +262,8 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
   }
 
-  /** Read this client's record, pick the desktop (a deep link's first), connect, fetch the layout, and
-   *  honour the deep link's open or launch. */
+  /** Connect, post this client's arrival, land on the deep link's desktop else the one the shell answered,
+   *  fetch the layout, and honour the deep link's open or launch. */
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
       onConnected: () => this.takeConnected(),
