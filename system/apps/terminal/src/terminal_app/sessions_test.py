@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from terminal_app.data_types import TerminalPaths, TmuxSession
+from terminal_app.data_types import TerminalPaths, TerminalSessionRecord, TmuxSession
 from terminal_app.errors import (
     InvalidTerminalValueError,
     TerminalConflictError,
@@ -650,3 +650,49 @@ def test_a_session_renamed_to_another_terminals_key_stays_with_the_terminal_that
     with pytest.raises(TerminalConflictError, match="duplicate session"):
         session_source.start_terminal(TmuxSessionName("terminal-2"))
     assert session_store.list_records()[0].session_id == "$5"
+
+
+def test_sweep_marks_terminals_a_window_shows_and_collects_the_ones_it_showed_once(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    fake_tmux.set_sessions([_session("terminal-1", "$1"), _session("terminal-2", "$2"), _session("terminal-3", "$3")])
+    for number in (1, 2, 3):
+        session_store.save_record(make_terminal_record(f"terminal-{number}", None, "/srv", session_id=f"${number}"))
+        write_session_id_file(terminal_paths.sessions_dir, f"terminal-{number}", f"${number}")
+
+    # Windows show terminal-1 and terminal-2; one is still settling at its launch path and shows nothing.
+    first = session_source.sweep_windows(["/?session=terminal-1", "/?session=terminal-2", "/new?workdir=%2Fsrv"])
+
+    assert first == []
+    assert [(record.name, record.is_window_seen) for record in session_store.list_records()] == [
+        ("terminal-1", True),
+        ("terminal-2", True),
+        ("terminal-3", False),
+    ]
+
+    # terminal-2's window closed; terminal-3 never had one and is left alone.
+    second = session_source.sweep_windows(["/?session=terminal-1"])
+
+    assert second == ["terminal-2"]
+    assert fake_tmux.session_names() == ["terminal-1", "terminal-3"]
+    assert [record.name for record in session_store.list_records()] == ["terminal-1", "terminal-3"]
+    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-2") is None
+
+
+def test_sweep_forgets_a_stopped_terminal_a_window_showed_once_and_kills_nothing(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+) -> None:
+    session_store.save_record(
+        TerminalSessionRecord(
+            name=TmuxSessionName("terminal-4"), title=None, workdir=None, is_stopped=True, is_window_seen=True
+        )
+    )
+
+    assert session_source.sweep_windows([]) == ["terminal-4"]
+    assert session_store.list_records() == []
+    assert [call for call in fake_tmux.calls() if call[0] == "kill-session"] == []

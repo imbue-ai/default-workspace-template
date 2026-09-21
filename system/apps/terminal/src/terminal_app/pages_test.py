@@ -63,7 +63,7 @@ def test_an_unregistered_pty_leaves_the_label_empty(
     session_source: TmuxSessionSource, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
     registry_path = write_registry_labels(tmp_path / "apps.toml", {})
-    client = build_pages_test_client(session_source, registry_path, tmp_path / "app_contract.js")
+    client = build_pages_test_client(session_source, registry_path, tmp_path / "app_contract.js", [])
     fake_tmux.set_sessions([make_tmux_session("terminal-3", "$3")])
 
     page = client.get("/?session=terminal-3")
@@ -134,6 +134,17 @@ def test_health_answers(pages_client: FlaskClient) -> None:
     assert pages_client.get("/api/health").json == {"status": "ok"}
 
 
+def test_a_window_closed_post_asks_for_a_sweep_and_answers_no_content(
+    pages_client: FlaskClient, window_closed_posts: list[None]
+) -> None:
+    response = pages_client.post(
+        "/api/window-closed", json={"path": "/?session=terminal-1", "window_id": "win-1", "desktop_id": "home"}
+    )
+
+    assert response.status_code == 204
+    assert len(window_closed_posts) == 1
+
+
 def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_client: FlaskClient) -> None:
     response = pages_client.get("/_static/app_contract.js")
 
@@ -146,7 +157,7 @@ def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_c
 def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     session_source: TmuxSessionSource, tmp_path: Path
 ) -> None:
-    client = build_pages_test_client(session_source, tmp_path / "apps.toml", tmp_path / "missing" / "app_contract.js")
+    client = build_pages_test_client(session_source, tmp_path / "apps.toml", tmp_path / "missing" / "app_contract.js", [])
 
     response = client.get("/_static/app_contract.js")
 

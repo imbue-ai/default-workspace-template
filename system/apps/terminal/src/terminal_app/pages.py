@@ -12,6 +12,7 @@ from this origin (``APP_CONTRACT_ROUTE``, the shell's build output).
 import html
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -43,6 +44,9 @@ from terminal_app.sessions import TmuxSessionSource
 BLUEPRINT_NAME: Final[str] = "terminal_pages"
 NEW_PATH: Final[str] = "/new"
 HEALTH_PATH: Final[str] = "/api/health"
+# Where the shell posts a closed window of the terminal (the manifest's ``window_closed_path``): a sweep runs at once.
+WINDOW_CLOSED_PATH: Final[str] = "/api/window-closed"
+HTTP_NO_CONTENT: Final[int] = 204
 SESSION_API_PATH: Final[str] = "/api/sessions/<name>"
 
 # The one parameter the ``new`` launch path takes (system/apps/terminal/app.toml).
@@ -258,7 +262,13 @@ def _workdir(raw: str) -> Workdir | None:
         raise InvalidTerminalValueError(f"invalid {WORKDIR_PARAM!r}: {e}") from e
 
 
-def build_pages_blueprint(source: TmuxSessionSource, registry_path: Path, contract_path: Path) -> Blueprint:
+def build_pages_blueprint(
+    source: TmuxSessionSource,
+    registry_path: Path,
+    contract_path: Path,
+    # Called for every closed window the shell posts; the sweeper's ``request_sweep``.
+    on_window_closed: Callable[[], None],
+) -> Blueprint:
     """The wrapper page, the ``new`` launch path, the per-session JSON the page refreshes from, the health probe, and
     the app contract module at ``contract_path`` (the shell's build output, served from this origin)."""
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
@@ -294,6 +304,12 @@ def build_pages_blueprint(source: TmuxSessionSource, registry_path: Path, contra
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
         return jsonify({"status": "ok"})
+
+    @blueprint.post(WINDOW_CLOSED_PATH)
+    def window_closed() -> ResponseReturnValue:
+        # The body names the window; the sweep reads the shell for the truth rather than trusting it.
+        on_window_closed()
+        return "", HTTP_NO_CONTENT
 
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:
