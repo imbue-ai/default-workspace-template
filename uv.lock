@@ -1247,7 +1247,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "ruff" },
-    { name = "ty" },
 ]
 
 [package.metadata]
@@ -1271,7 +1270,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "ruff", specifier = "~=0.12.8" },
-    { name = "ty", specifier = "==0.0.24" },
 ]
 
 [[package]]
