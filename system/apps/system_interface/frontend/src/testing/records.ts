@@ -1,10 +1,10 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it, a desktop, a window, a
- * placement, a launch path, and a published template as the catalog lists it. Each takes
- * overrides so a test spells only what it is about.
+ * placement, a launch path, a connected user, and a published template as the catalog lists it.
+ * Each takes overrides so a test spells only what it is about.
  */
 
-import type { AppRecord, Desktop, LaunchPath, Placement, WindowRecord } from "../model/records";
+import type { AppRecord, Desktop, LaunchPath, Placement, PresentUser, WindowRecord } from "../model/records";
 import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
@@ -65,6 +65,21 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
 /** A shown, normal placement at the first cascade frame. */
 export function placementRecord(windowId: string, overrides: Partial<Placement> = {}): Placement {
   return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
+}
+
+/** A non-owner with one open tab, an email at example.com, and neither a display name nor an avatar. */
+export function presentUserRecord(userId: string, overrides: Partial<PresentUser> = {}): PresentUser {
+  return {
+    user_id: userId,
+    email: `${userId}@example.com`,
+    display_name: null,
+    avatar_url: null,
+    owner: false,
+    session_count: 1,
+    first_seen: "2026-09-19T10:00:00.000000000Z",
+    last_seen: "2026-09-19T10:00:00.000000000Z",
+    ...overrides,
+  };
 }
 
 /** A template titled after its slug, published by "someone" from a repository named after it, with a drawing and no requirements. */
