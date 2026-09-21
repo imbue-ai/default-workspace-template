@@ -128,6 +128,7 @@ Every error body is `{"detail": "<message>"}`.
 ### 5.1 Page and app routes
 
 Unchanged: `GET /` and the SPA catch-all (with `X-Frontend-Built`), `/assets/<path>`, `/favicon.ico`, `GET /api/health`, `GET /_static/app_contract.js`, `GET /api/templates-catalog`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (refused for critical apps), `POST /api/client-activity`, `/api/ws`.
+Presence (the share identity spec, `specs/share-identity-and-presence/spec.md` in the mngr repository, section 4.7): `POST /api/presence/heartbeat` and `POST /api/presence/leave` take `{"session_id"}` and read the requester's `X-Imbue-Identity` header (`204` and nothing recorded when it carries no `user_id`; the heartbeat answers `{"identity"}` otherwise); `GET /api/presence` answers `{"users": [present_user, ...]}`, one entry per connected user (`user_id`, `email`, `display_name`, `avatar_url`, `owner`, `session_count`, `first_seen`, `last_seen`).
 `POST /api/client-activity` takes `{"client_id", "desktop_id", "kind": "message", "app", "key", "text"}`: the client that sent a message to an app's page, the desktop it was on (from the shell's handshake), the app, the page's marker (a chat id; `""` for a page without one), and the text; the shell appends it to the client-activity log as a `message` event (the text truncated), which is what `layout.py context` and an op's requester attribution read.
 Removed: `POST /api/apps/<name>/changed`, `POST /api/apps/<name>/instances` and every `/instances/<key>/...` relay route, `POST /api/tabs/<tab_id>/instance`, every `/api/projects/...` route, `GET` and `POST /api/layouts/<view_id>`.
 
@@ -197,6 +198,7 @@ Outbound:
 | `placements_updated` | `{"desktop_id", "client_id", "save_id"}` | after any write of a layout file; a window applies it only when `client_id` is its own, the desktop is the one it shows, and `save_id` is not one it minted |
 | `active_desktop_changed` | `{"client_id", "desktop_id"}` | after a `client_state` report or an op changed the client's stored active desktop |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | only the transient ops `refresh` and `reload_system_interface` (section 8) |
+| `presence_updated` | `{"users": [present_user, ...]}` | on connect, and whenever a user's presence record appears or is removed (section 5.1) |
 
 `is_connected` on a client is whether any window of it holds the socket.
 
@@ -324,7 +326,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |
 | `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar and launcher |
-| `data-tray-widget="desktops"`, `data-desktop-switch="<id>"` | the tray |
+| `data-tray-widget="desktops"`, `data-desktop-switch="<id>"`, `data-tray-widget="presence"`, `data-presence-user="<user-id>"` | the tray |
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launch="<app>:<launch>"` | launcher tiles (today's `data-launch` spelling kept) |
 

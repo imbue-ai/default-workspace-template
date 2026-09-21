@@ -62,6 +62,7 @@ beforeEach(() => {
     onPlacementsUpdated: vi.fn(),
     onActiveDesktopChanged: vi.fn(),
     onLayoutOp: vi.fn(),
+    onPresenceUpdated: vi.fn(),
     onConnected: vi.fn(),
   };
   socket = new ShellSocket("client-1");

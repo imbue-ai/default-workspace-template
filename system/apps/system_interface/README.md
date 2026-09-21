@@ -59,15 +59,20 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   (`/api/client-activity`), the inventory (`/api/inventory`), the templates
   catalog (`/api/templates-catalog`), and the loopback-only op route
   (`/api/layout/broadcast`).
+- Presence (`/api/presence`, `/api/presence/heartbeat`,
+  `/api/presence/leave`): who is connected right now, with their identity
+  details (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
-  `placements_updated`, `active_desktop_changed`, and `layout_op` (contracts
-  section 6); it accepts each client's `client_state` report.
+  `presence_updated`, `placements_updated`, `active_desktop_changed`, and
+  `layout_op` (contracts section 6); it accepts each client's `client_state`
+  report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
 `placements/<desktop>/<client>.json`, `clients.json`, and the client-activity
 event log (`events/client_activity/events.jsonl`, what `layout.py context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
-`data/.apps/system_interface/wallpapers/` (files the user adds).
+`data/.apps/system_interface/wallpapers/` (files the user adds). Presence
+lives beside it under `data/.state/presence/` (`--presence-dir`).
 
 ### The desktop model
 
@@ -131,13 +136,44 @@ through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 stored on its window and reopens there, and one that declared `navigation`
 is sent `shell:navigate` when an agent points its window elsewhere.
 
+### Who is here
+
+Every request that reaches the shell carries the requester's identity in the
+`X-Imbue-Identity` header, stamped by whichever proxy admitted it -- the local
+`mngr forward` or the share gateway (the header contract is in
+`system/services/share_gateway/README.md`). The shell page mints a session id
+per page load and posts `/api/presence/heartbeat` with it every 30 seconds
+while the tab is visible (once immediately when it becomes visible), and
+beacons `/api/presence/leave` on `pagehide`. The page sends nothing about who
+it is; the heartbeat's answer is the requester's own identity record, which
+is what the account affordances render. A heartbeat whose identity carries no
+user id -- the owner of an unshared workspace, or a request that came through
+no current proxy -- answers 204 and records nothing: there is nobody to name.
+
+Each heartbeat upserts `data/.state/presence/users/<user_id>.json`: the
+user's latest identity snapshot (`user_id`, `email`, `display_name`,
+`avatar_url`, `owner`), the open tab sessions keyed by session id with each
+one's last heartbeat, and `first_seen` / `last_seen`. A session that misses
+three heartbeats (90 seconds) expires; a user whose last session expired or
+left is removed, and `data/.state/presence/events.jsonl` gets a `user_joined`
+or `user_left` line in the repo's event envelope (`timestamp`, `type`,
+`event_id`, `source: "presence"`, plus the record). Apps read the directory
+(a user is connected while `last_seen` is within 90 seconds) or tail the
+events. The shell sends the connected set on every WebSocket connect and
+pushes `presence_updated` -- one entry per user, however many tabs -- whenever
+someone joins or leaves, and the taskbar's Presence tray widget draws one
+avatar per user. Over a share that widget also links to the gateway's identity
+refresh, for a visitor who changed their name or avatar. A visitor granted a
+single app never loads the shell and so never appears: they are in one app,
+not in the workspace.
+
 ### The desktop, the taskbar, and the launcher
 
 The backdrop shows the active desktop's shortcuts and windows; each window is
 an iframe of an app page under a title bar with the page's title and the
 window menu. The taskbar shows the desktop switcher, one entry per window of
-the active desktop, the launcher button, and the tray (the desktop
-switcher, the update-staleness banner). Desktops are created, renamed, recoloured,
+the active desktop, the launcher button, and the tray (the Presence widget,
+the desktop switcher, the update-staleness banner). Desktops are created, renamed, recoloured,
 re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
 removed on the backdrop.
 

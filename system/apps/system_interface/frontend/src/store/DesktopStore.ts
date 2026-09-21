@@ -10,6 +10,8 @@
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import { launchPathOf, launchPathWithParams } from "../model/launch";
+import { applyPresence } from "../model/Presence";
+import type { PresentUser } from "../model/Presence";
 import type {
   AppRecord,
   Desktop,
@@ -273,6 +275,7 @@ export class DesktopStore {
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
       onActiveDesktopChanged: (event) => this.takeActiveDesktopChanged(event),
       onLayoutOp: (event) => this.handleLayoutOp(event),
+      onPresenceUpdated: (users) => this.takePresence(users),
     });
     let desktops: Desktop[];
     let clients: Awaited<ReturnType<DesktopApi["fetchClients"]>>;
@@ -336,6 +339,11 @@ export class DesktopStore {
   private takeApps(apps: AppRecord[]): void {
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
+  }
+
+  private takePresence(users: PresentUser[]): void {
+    applyPresence(users);
+    this.deps.redraw();
   }
 
   private async applyDeepLink(link: DeepLink): Promise<void> {

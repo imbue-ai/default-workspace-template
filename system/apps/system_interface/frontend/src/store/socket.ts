@@ -3,12 +3,15 @@
  * holds. On connect the server sends ``apps_updated`` and ``desktops_updated``; the window answers
  * with its ``client_state`` (which client it is, on which desktop) and re-sends it on every
  * switch. ``placements_updated``, ``active_desktop_changed``, and the transient ``layout_op`` are
- * how this client's other windows, the shell's own edits, and an agent's ops reach this one.
+ * how this client's other windows, the shell's own edits, and an agent's ops reach this one;
+ * ``presence_updated`` (also sent on connect) is who is connected to the workspace.
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { parsePresentUsers } from "../model/Presence";
+import type { PresentUser } from "../model/Presence";
 import { parseAppRecords, parseDesktops } from "../model/records";
 import type { AppRecord, Desktop } from "../model/records";
 
@@ -39,6 +42,8 @@ export interface SocketHandlers {
   onPlacementsUpdated(event: PlacementsUpdatedEvent): void;
   onActiveDesktopChanged(event: ActiveDesktopChangedEvent): void;
   onLayoutOp(event: LayoutOpEvent): void;
+  /** The connected users, one entry per user, on connect and whenever someone joins or leaves. */
+  onPresenceUpdated(users: PresentUser[]): void;
   /** The socket (re)opened: the client state is re-reported through ``reportClientState``. */
   onConnected(): void;
 }
@@ -54,6 +59,7 @@ interface RawSocketEvent {
   type?: unknown;
   apps?: unknown;
   desktops?: unknown;
+  users?: unknown;
   op?: unknown;
   args?: unknown;
   requester?: unknown;
@@ -137,6 +143,9 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "desktops_updated":
         handlers.onDesktopsUpdated(parseDesktops(event.desktops));
+        return;
+      case "presence_updated":
+        handlers.onPresenceUpdated(parsePresentUsers(event.users));
         return;
       case "placements_updated":
         handlers.onPlacementsUpdated({
