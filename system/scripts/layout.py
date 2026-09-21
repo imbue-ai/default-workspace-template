@@ -120,7 +120,7 @@ _RETIRED_VERBS = {
     "split": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h); 'open' puts a new window on the desktop",
     "move": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h)",
     "rename": "a title belongs to the app that owns the page: the chat's POST /api/chats/<id>/rename (the terminal offers no rename route yet)",
-    "delete": "close the window with 'close'; what backs the page is the app's to end (the chat's destroy route, the browser's DELETE /browsers/<name>; the terminal offers no delete route yet, so end its tmux session from a shell)",
+    "delete": "close the window with 'close'; a terminal or the browser is ended by its app once no window shows it, and a chat only by the chat's own destroy route",
     "stop": "the app's own route stops what backs a page (the chat's stop route, the browser's POST /browsers/<name>/stop)",
     "start": "the app's own route starts what backs a page (the browser's POST /browsers/<name>/start)",
     "replace-url": "'navigate <window> <path>' points a window at another path under its app",

@@ -9,3 +9,5 @@ The chat app follows phases 6 and 7 of the desktop interface (`docs/system/bluep
 - The manifest declares launch paths only; the retired `instances`, `instances_url`, and `actions` keys are gone.
 
 - The frontend no longer imports the contract module's `open(address)`, which is deleted; every open goes through `openPath`. The retired-address ratchet now also refuses `app:` literals in the chat frontend, and the comments that still described the page as a dockview tab describe a window.
+
+- The desktop shortcut opens the chat list: the manifest declares a `root` launch path at `/` ("Chat") as its default shortcut, in new mode, so a double click opens another list window and never a new chat; `new` stays for the launcher's seeded prompts. The shell URL helper is the one `app_manifest` now provides.

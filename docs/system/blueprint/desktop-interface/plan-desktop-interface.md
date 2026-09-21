@@ -188,7 +188,7 @@ A viewport resize re-renders every window from the same fractions, so windows sc
 
 Close removes the window from the desktop for every client: the shell drops it from `desktops.json`, drops it from every layout of that desktop, destroys every client's page for it, and broadcasts.
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
-Nothing else happens to the app: the shell has no notion of stopping or deleting what the window showed.
+The shell itself has no notion of stopping or deleting what the window showed; what the window showed is the app's to keep or collect, and the terminal and the browser collect it once no window shows it, told of the close through the manifest's `window_closed_path` and sweeping the shell's windows regardless (`docs/system/specs/window-bound-resources.md`).
 
 ### 4.6 Following the URL
 
@@ -394,6 +394,7 @@ The wrapper at `/?session=<name>` embeds `https://<terminal-pty origin>/?arg=_&a
 The wrapper posts the `ttyd-focus` message into its inner frame when the shell grants focus, as the shell does today.
 Session switching inside tmux is no longer reported to the shell; a reload reattaches to the session in the URL.
 The store of remembered terminals, their recreation at startup, and the dispatch scripts stay as they are.
+A terminal lives as long as a window shows it: once a window has shown one and none does any more, the app deletes it.
 
 ### 9.3 Files
 
@@ -403,7 +404,7 @@ There is nothing to navigate in-app, so it declares no navigation capability and
 
 ### 9.4 Browser
 
-The browser daemon keeps its pages at `/?session=<name>` and gains `/new[?url=]`, which creates a browser and redirects.
+The browser daemon keeps its pages at `/?session=<name>` and gains `/new[?url=]`, which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) and redirects; the browser is stopped, its profile kept, once a window has shown it and none does any more.
 Its page reports its path and the page title, and handles `shell:navigate` by switching session.
 The fleet CLI and the daemon's own routes are untouched.
 

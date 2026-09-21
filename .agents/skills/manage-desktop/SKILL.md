@@ -56,6 +56,12 @@ never applied to every client at once.
   most recently messaged you is almost always the requester.
 - **`load <desktop>` switches a client onto a desktop** without changing anything
   else (`load "Research"`).
+- **`open` is the one op that works with nobody to target**: with no client
+  settled, the window is still written on the desktop (`--desktop`, else the
+  first), unplaced, so every client sees it minimized in the taskbar. Pass
+  `--minimized` to any `open` you make for your own use (a terminal or browser you
+  are driving): the window then lands out of the way of what the user is doing, and a
+  window already there is left as they placed it.
 
 ## Naming a window
 
@@ -81,7 +87,7 @@ A window argument is one of:
 | Open a page with launch parameters | `python3 system/scripts/layout.py open terminal --launch new --param workdir=/data` |
 | Open a web page in a new browser | `python3 system/scripts/layout.py open https://example.com` |
 | Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
-| Close a window | `python3 system/scripts/layout.py close <window>` |
+| Close a window | `python3 system/scripts/layout.py close <window>` (a terminal's session, or the one browser, is ended by its app once no window shows it) |
 
 `open` prints the window's id (the new one's, or the focused one's) to **stdout**
 so you can name it in later ops. It opens the window at `--path`, or at a launch path (`--launch <id>` with
@@ -179,7 +185,8 @@ the app's own to name, stop, or end:
 |---|---|
 | Retitle a chat / a terminal | the chat's own route: `POST <chat url>/api/chats/<id>/rename`; the terminal offers no rename route yet |
 | Stop or start what backs a page | the app's own route (the chat's stop route; the browser's `POST /browsers/<name>/stop` and `.../start`) |
-| End a chat, a terminal, a browser | the app's own route (the chat's destroy route, the browser's `DELETE /browsers/<name>`); the terminal offers no delete route yet, so end its tmux session from a shell; `close` only closes the window |
+| End a chat | the chat's own destroy route; closing a chat window ends nothing |
+| End a terminal or the browser | `close` its last window: the terminal deletes a session no window shows, and the browser stops (profile and tabs kept) once none shows it |
 | Open another chat | the chat root page (`open chat`), or `open chat --path "/?chat=<id>"` |
 
 `layout.py` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,

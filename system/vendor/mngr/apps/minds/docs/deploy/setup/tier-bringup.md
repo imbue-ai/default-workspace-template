@@ -516,7 +516,7 @@ The terminal should print a `login_url`. Open it in a browser.
   `https://github.com/imbue-ai/default-workspace-template`). Watch the
   `/creating/<agent-id>` page; expect it to flip to `DONE` and
   redirect to the agent.
-- [ ] The agent's dockview UI loads and the `web` service is
+- [ ] The agent's desktop loads and the `web` service is
   reachable through its own origin, `web.host-<hex>.localhost:<port>/`.
 - [ ] Open the workspace options panel's Share tab, enable sharing for
   the email you signed in with, and verify the share URL (on the
