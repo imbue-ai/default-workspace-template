@@ -36,7 +36,10 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
     )
     shell.placements.save_browser_layout("home", "old", (placement_record(window_id),), None, {window_id}, stale_at)
     shell.window_paths.set_path(
-        ClientId("old"), window_id, StoredWindowPath(path=WindowPath("/x"), title=WindowTitle("")), {window_id}
+        ClientId("old"),
+        window_id,
+        StoredWindowPath(path=WindowPath("/x"), title=WindowTitle("")),
+        lambda: {window_id},
     )
     shell.start()
     try:
