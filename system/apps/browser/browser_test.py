@@ -1944,6 +1944,34 @@ async def _stop_in_place(self: bsession.LiveBrowser) -> None:
     self._lifecycle = "stopped"
 
 
+def test_a_close_hint_marks_the_browser_it_names_so_the_sweep_it_brings_stops_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _manager()
+    closed_early = _running_browser("browser-1")
+    never_shown = _running_browser("browser-2")
+    mgr._browsers = {"browser-1": closed_early, "browser-2": never_shown}
+    monkeypatch.setattr(bsession, "read_app_window_paths", lambda shell_url, app: [])
+    monkeypatch.setattr(bsession.LiveBrowser, "stop", _stop_in_place)
+
+    # A hint for a window closed at its launch path names no browser: the sweep it brings stops nothing.
+    assert asyncio.run(mgr.sweep_after_window_closed(None, "http://127.0.0.1:1")) == []
+    assert (closed_early._is_window_seen, never_shown._is_window_seen) == (False, False)
+    # browser-1's window opened and closed between two sweeps, so only the hint can mark it.
+    assert asyncio.run(mgr.sweep_after_window_closed("browser-1", "http://127.0.0.1:1")) == ["browser-1"]
+    assert closed_early._lifecycle == "stopped"
+    assert never_shown._lifecycle == "running"
+    # A hint naming a browser the fleet does not hold marks nothing.
+    assert asyncio.run(mgr.sweep_after_window_closed("browser-9", "http://127.0.0.1:1")) == []
+    assert never_shown._is_window_seen is False
+
+
+def test_closed_window_browser_reads_the_hints_path_and_nothing_else() -> None:
+    assert bsession.closed_window_browser({"path": "/?session=browser-1", "window_id": "win-1"}) == "browser-1"
+    assert bsession.closed_window_browser({"path": "/new?url=https%3A%2F%2Fx"}) is None
+    assert bsession.closed_window_browser({"path": 7}) is None
+    assert bsession.closed_window_browser(["/?session=browser-1"]) is None
+    assert bsession.closed_window_browser(None) is None
+
+
 def test_window_seen_rides_the_manifest_through_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_start(monkeypatch)
     manifest.write_manifest(

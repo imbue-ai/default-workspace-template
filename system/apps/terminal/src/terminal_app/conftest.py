@@ -7,6 +7,7 @@ from app_manifest.testing import ShellStub
 from flask.testing import FlaskClient
 
 from terminal_app.data_types import TerminalPaths
+from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -60,13 +61,13 @@ def session_source(
 
 
 @pytest.fixture
-def window_closed_posts() -> list[None]:
-    """One entry per window-closed post the pages under test took."""
+def window_closed_posts() -> list[TmuxSessionName | None]:
+    """One entry per window-closed post the pages under test took: the terminal the hint named."""
     return []
 
 
 @pytest.fixture
-def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_closed_posts: list[None]) -> FlaskClient:
+def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_closed_posts: list[TmuxSessionName | None]) -> FlaskClient:
     """A test client over the wrapper pages, with the pty registered and a built contract module to serve."""
     registry_path = write_registry_labels(tmp_path / "apps.toml", {"terminal-pty": TEST_PTY_LABEL})
     contract_path = tmp_path / "app_contract.js"

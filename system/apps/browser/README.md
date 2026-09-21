@@ -37,6 +37,8 @@ background agent, which is its own chat -- or the human).
   `BROWSER_WINDOW_SWEEP_SECONDS` (default 90) regardless: a browser some window
   showed (recorded as `window_seen` in the manifest) and none shows any more is
   stopped, never deleted, so its profile and tabs come back with its next window.
+  The posted path marks the browser it names as shown before the sweep it brings,
+  so a window closed between two sweeps still counts.
   A browser no window ever showed (an agent's, with nobody watching) outlives every
   sweep; a shell that cannot be read is a skipped sweep. Several windows can show
   the one browser at once (each is a viewer of the same display). A workspace saved

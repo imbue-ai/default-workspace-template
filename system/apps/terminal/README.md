@@ -100,8 +100,11 @@ no window shows any more is deleted. A terminal no window has ever shown (a
 hand-made session, one an agent opened with nobody watching, a window still
 settling at `/new`) is never collected, and a shell that cannot be read is a
 skipped sweep, never an empty desktop. The sweep runs every 90 seconds and at
-once whenever the shell posts a closed window to `/api/window-closed`; the post
-is a hint only, and the sweep reads the shell for the truth. The design is
+once whenever the shell posts a closed window to `/api/window-closed`; the
+terminal the posted path names is marked window-seen first
+(`TmuxSessionSource.mark_window_seen`), so a terminal whose window opened and
+closed between two sweeps is still collected, and the sweep reads the shell
+for what is shown now. The design is
 `docs/system/specs/window-bound-resources.md`.
 
 The store, `data/.apps/terminal/instances.json` (`store.py`; app data, beside

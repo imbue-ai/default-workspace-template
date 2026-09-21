@@ -1808,6 +1808,20 @@ class LiveBrowser(MutableModel):
             await asyncio.to_thread(_stop_xvfb, xvfb)
 
 
+def closed_window_browser(hint_body: object) -> str | None:
+    """The browser a closed window showed, from the ``path`` of the shell's close hint.
+
+    None for a window at a launch path (``/new?...`` names no browser) or a body of another shape than the
+    shell posts.
+    """
+    if not isinstance(hint_body, dict):
+        return None
+    path = hint_body.get("path")
+    if not isinstance(path, str):
+        return None
+    return window_query_value(path, SESSION_QUERY_KEY)
+
+
 class BrowserSessionManager(MutableModel):
     """Owns the whole fleet (all live browsers).
 
@@ -2134,6 +2148,27 @@ class BrowserSessionManager(MutableModel):
         if is_changed:
             self._spawn_save()
         return stopped
+
+    def mark_window_seen(self, name: str) -> bool:
+        """Record that a desktop window showed the browser, so a sweep stops it once none does.
+
+        The shell's close hint names the closed window's path, so a browser whose window closed before any sweep
+        saw it still counts as shown. Answers whether a browser was marked; an unknown or already marked name is
+        a no-op.
+        """
+        browser = self._browsers.get(name)
+        if browser is None or browser._is_window_seen:
+            return False
+        browser._is_window_seen = True
+        self._spawn_save()
+        return True
+
+    async def sweep_after_window_closed(self, closed_name: str | None, shell_url: str) -> list[str] | None:
+        """The shell says a window closed: mark the browser its path named (None when it named none), then run
+        one sweep over what the shell shows now. Answers what :meth:`sweep_from_shell` answers."""
+        if closed_name is not None and self.mark_window_seen(closed_name):
+            logger.debug("marked {} window-seen from the shell's close hint", closed_name)
+        return await self.sweep_from_shell(shell_url)
 
     async def sweep_from_shell(self, shell_url: str) -> list[str] | None:
         """One sweep over the shell's windows: the browsers stopped, or None when the shell could not be read
