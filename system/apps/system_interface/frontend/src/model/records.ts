@@ -1,8 +1,8 @@
 /**
  * The TypeScript mirrors of the shell's records (desktop-interface contracts.md sections 3 to
  * 5): what ``GET /api/desktops``, the placements routes, the client list, and the ``apps_updated``
- * push carry, spelled as the wire spells them (``snake_case``), and the parsers that read a wire
- * document into them. A document of the wrong shape is refused with ``WireShapeError`` rather
+ * and ``presence_updated`` pushes carry, spelled as the wire spells them (``snake_case``), and the
+ * parsers that read a wire document into them. A document of the wrong shape is refused with ``WireShapeError`` rather
  * than read as an empty one: an empty desktop list would be believed.
  */
 
@@ -128,6 +128,18 @@ export interface WallpaperListing {
   readonly kind: WallpaperKind;
   readonly name: string;
   readonly url: string;
+}
+
+/** One connected user as the shell serializes it (one entry per user, however many tabs). */
+export interface PresentUser {
+  readonly user_id: string;
+  readonly email: string;
+  readonly display_name: string | null;
+  readonly avatar_url: string | null;
+  readonly owner: boolean;
+  readonly session_count: number;
+  readonly first_seen: string;
+  readonly last_seen: string;
 }
 
 /** Raised when a wire document does not have the shape the contract gives it. */
@@ -327,6 +339,25 @@ export function parseWallpaperListing(raw: unknown): WallpaperListing {
     kind: asOneOf(record.kind, ["bundled", "file"], "wallpaper.kind"),
     name: asString(record.name, "wallpaper.name"),
     url: asString(record.url, "wallpaper.url"),
+  };
+}
+
+/** The ``users`` of a ``presence_updated`` message or of ``GET /api/presence``. */
+export function parsePresentUsers(raw: unknown): PresentUser[] {
+  return asArray(raw, "users").map(parsePresentUser);
+}
+
+export function parsePresentUser(raw: unknown): PresentUser {
+  const record = asObject(raw, "user");
+  return {
+    user_id: asString(record.user_id, "user.user_id"),
+    email: asString(record.email, "user.email"),
+    display_name: asOptionalString(record.display_name, "user.display_name"),
+    avatar_url: asOptionalString(record.avatar_url, "user.avatar_url"),
+    owner: asBoolean(record.owner, "user.owner"),
+    session_count: asNumber(record.session_count, "user.session_count"),
+    first_seen: asString(record.first_seen, "user.first_seen"),
+    last_seen: asString(record.last_seen, "user.last_seen"),
   };
 }
 

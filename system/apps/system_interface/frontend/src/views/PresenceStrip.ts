@@ -9,7 +9,7 @@
 
 import m from "mithril";
 import { getOwnIdentity, getPresentUsers, identityRefreshUrl } from "../model/Presence";
-import type { PresentUser } from "../model/Presence";
+import type { PresentUser } from "../model/records";
 
 const AVATAR_CLASS =
   "flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-default bg-surface text-(length:--font-size-row) text-secondary";

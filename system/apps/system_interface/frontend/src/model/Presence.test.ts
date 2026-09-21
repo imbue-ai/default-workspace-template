@@ -13,7 +13,7 @@ import {
   resetPresenceForTesting,
   startPresenceHeartbeat,
 } from "./Presence";
-import type { PresentUser } from "./Presence";
+import type { PresentUser } from "./records";
 
 interface RecordedRequest {
   url: string;
