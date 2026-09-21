@@ -48,6 +48,10 @@ _PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
 # path the skill documents and a `python3`/`uv run` prefix are both recognised. The
 # chat's reader (`is_secret_request_call` in tool_output.py) keys on the same name.
 _SECRET_REQUEST_SCRIPT = "request_secret.py"
+# The script's own required flag, in either spelling argparse accepts. It plays the
+# part `-XPOST` plays for the host below: what separates running the script from
+# naming it.
+_SECRET_REQUEST_FILE_FLAG = "--file"
 # Lowercased, because the flag is matched case-insensitively -- as the parser's
 # regex and the joined form below both are.
 _METHOD_FLAGS = ("-x", "--request")
@@ -118,14 +122,24 @@ def _writes_body_to_file(words: tuple[str, ...]) -> bool:
 def _files_secret_request(segment: CommandSegment) -> bool:
     """True when the segment runs the request script (directly or under python3 / uv run).
 
-    Matched on the basename of a word that is itself an argument: a commit message
-    or doc line quoting the script name keeps it inside one prose token, exactly as
-    the host check below distinguishes a filing from a mention.
+    Two things have to hold, as they do for the host below: the script's basename is
+    a word that is itself an argument (a commit message or doc line quoting the name
+    keeps it inside one prose token), and the script's required `--file` follows it.
+    Without the flag the segment only NAMES the script -- a `grep` for it, a `cat` of
+    it, a `--help` -- and files nothing, which is the same corroboration
+    `is_secret_request_call` in tool_output.py demands before it cards a call.
     """
-    return any(
-        _is_argument(word) and word.rsplit("/", 1)[-1] == _SECRET_REQUEST_SCRIPT
-        for word in segment.words
-    )
+    words = segment.words
+    for index, word in enumerate(words):
+        if not _is_argument(word) or word.rsplit("/", 1)[-1] != _SECRET_REQUEST_SCRIPT:
+            continue
+        if any(
+            later == _SECRET_REQUEST_FILE_FLAG
+            or later.startswith(f"{_SECRET_REQUEST_FILE_FLAG}=")
+            for later in words[index + 1 :]
+        ):
+            return True
+    return False
 
 
 def _request_count(segment: CommandSegment) -> int:

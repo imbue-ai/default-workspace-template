@@ -42,8 +42,9 @@ _MULTILINE_REQUEST = (
 
 # A secret request, exactly as the connect-external-service skill documents it: the
 # other kind of filing this gate governs (P9).
+_SECRET_REQUEST_PATH = ".agents/skills/connect-external-service/scripts/request_secret.py"
 _SECRET_REQUEST = (
-    "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+    f"python3 {_SECRET_REQUEST_PATH} "
     "--file svc --var SVC_TOKEN --rationale 'I need your key to call the widget API'"
 )
 # The same filing with its rationale left open, so a test can put more inside the quotes.
@@ -58,6 +59,11 @@ _ALLOWED = [
     # A rationale that mentions operators, or the script's own name, stays one token.
     f"{_SECRET_REQUEST_UNCLOSED} && run request_secret.py again'",
     "git commit -m 'document request_secret.py usage' && git push",
+    # Naming the script without its `--file` files nothing, so reading or grepping
+    # for it is ordinary work and not a filing to be held to the one-per-call rule.
+    "grep -rn request_secret.py .agents | wc -l",
+    f"cat {_SECRET_REQUEST_PATH} && echo done",
+    f"python3 {_SECRET_REQUEST_PATH} --help 2>&1",
     _REQUEST.replace("-XPOST", "-X POST"),
     _REQUEST.replace("-XPOST", "--request POST"),
     f"  {_REQUEST}  ",  # surrounding whitespace
