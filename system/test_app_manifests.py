@@ -258,6 +258,12 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert by_name[name].default_shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["draft"]
     assert [param.name for param in by_name["chat"].launch_paths[1].params] == ["account_id", "message"]
+    # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``new`` takes the
+    # typed text as its first message; nothing else declares a text param.
+    assert by_name["chat"].launch_paths[0].text_param is None
+    assert by_name["chat"].launch_paths[1].text_param == "message"
+    for name in ("terminal", "files", "browser"):
+        assert by_name[name].launch_paths[0].text_param is None, name
     assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
     assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
     assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]

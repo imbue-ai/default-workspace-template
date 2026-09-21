@@ -176,6 +176,7 @@ def launch_path_wire_json(launch_path: RegistryLaunchPath) -> dict[str, Any]:
         "label": str(launch_path.label),
         "path": str(launch_path.path),
         "params": [str(param) for param in launch_path.params],
+        "text_param": str(launch_path.text_param) if launch_path.text_param is not None else None,
     }
 
 
