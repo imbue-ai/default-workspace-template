@@ -19,6 +19,7 @@ def test_the_daemon_names_itself_after_its_manifest() -> None:
     manifest = load_manifest(_APP_MANIFEST_PATH)
     assert manifest.name == APP_NAME
     assert [launch_path.path for launch_path in manifest.launch_paths] == [runner.NEW_PATH]
+    assert manifest.window_closed_path == runner.WINDOW_CLOSED_PATH
 
 
 def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
@@ -76,3 +77,39 @@ def test_new_refuses_a_start_page_that_is_not_http(monkeypatch: pytest.MonkeyPat
 
     assert response.status_code == 400
     assert "url" in response.get_json()["error"]
+
+
+def test_new_answers_the_browser_already_up_without_another_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    launched: list[bsession.LiveBrowser] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager, "_spawn_launch", lambda self, session, **k: launched.append(session)
+    )
+    up = bsession.LiveBrowser(browser_id="browser-1")
+    up._lifecycle = "running"
+    runner.manager._browsers["browser-1"] = up
+
+    redirected = runner.application.test_client().get("/new", follow_redirects=False)
+    created = runner.application.test_client().post("/browsers", json={})
+
+    assert redirected.status_code == 302, redirected.text
+    assert redirected.headers["Location"] == "/?session=browser-1"
+    assert created.get_json() == {"name": "browser-1"}
+    assert launched == []
+
+
+def test_a_window_closed_post_sweeps_at_once_and_answers_no_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    swept: list[str] = []
+
+    async def fake_sweep(self: bsession.BrowserSessionManager, shell_url: str) -> list[str] | None:
+        swept.append(shell_url)
+        return []
+
+    monkeypatch.setattr(bsession.BrowserSessionManager, "sweep_from_shell", fake_sweep)
+
+    response = runner.application.test_client().post(
+        "/api/window-closed", json={"path": "/?session=browser-1", "window_id": "win-1", "desktop_id": "home"}
+    )
+
+    assert response.status_code == 204
+    assert len(swept) == 1

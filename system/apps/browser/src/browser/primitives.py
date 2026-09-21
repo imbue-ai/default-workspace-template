@@ -14,7 +14,7 @@ from browser.names import is_valid_browser_name
 APP_NAME: Final[AppName] = AppName("browser")
 
 # The viewer page selects its browser by this query parameter (assets/index.html).
-_SESSION_QUERY_KEY: Final[str] = "session"
+SESSION_QUERY_KEY: Final[str] = "session"
 
 # A start page is an absolute http(s) URL with a host; the length bound keeps a query string
 # from smuggling in an unbounded value.
@@ -45,7 +45,7 @@ class BrowserName(str):
 @pure
 def browser_page_path(name: BrowserName) -> str:
     """The viewer page for one browser: the app root with the browser selected by query."""
-    return f"/?{_SESSION_QUERY_KEY}={name}"
+    return f"/?{SESSION_QUERY_KEY}={name}"
 
 
 @pure
