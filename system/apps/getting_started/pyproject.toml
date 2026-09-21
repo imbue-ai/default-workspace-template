@@ -24,8 +24,8 @@ dev = [
     "coverage",
     "inline-snapshot>=0.13",
     "ruff~=0.12.8",
-    # Used by check_no_type_errors in test_ratchets.py. Pinned to the version the source was
-    # last verified clean against (see the system interface's pyproject).
+    # Used by check_no_type_errors in test_getting_started_ratchets.py. Pinned to the version the
+    # source was last verified clean against (see the system interface's pyproject).
     "ty==0.0.24",
 ]
 
