@@ -118,7 +118,7 @@ things in), but one suffices if the emergency scenarios (E15) are run last.
 | chat | `cd system/apps/chat && uv run pytest` | `test_chat_system.py` runs a real `mngr observe`; confirm it did not skip |
 | shell backend | `cd system/apps/system_interface && uv run pytest` | routes, notice watch, preview refusals |
 | shell e2e (release) | `cd system/apps/system_interface && uv run pytest -m release imbue/system_interface/test_e2e.py -k "rollback_point or preview"` | release tests do not run in CI |
-| shell frontend | `cd system && npm test` | UpdateNotice, UpdateNoticeBand, Sidebar, tabMenu, previewShell vitest |
+| shell frontend | `cd system && npm test` | UpdateNotice, UpdateNoticeBanner, Sidebar, tabMenu, previewShell vitest |
 | terminal | `cd system/apps/terminal && uv run pytest` | `--no-register` boot on two custom ports |
 | vendored mngr | `cd system/vendor/mngr && uv run pytest libs/mngr/imbue/mngr/api/observe_test.py libs/mngr/imbue/mngr/hosts/host_test.py libs/mngr/imbue/mngr/hosts/test_host.py libs/mngr_notifications/imbue/mngr_notifications/cli_test.py` | follower, `initial_branch`, notify's probe |
 

@@ -9,7 +9,7 @@
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 
-/** The shell's own app name: what the top banner (rather than a tab's band) keys on. */
+/** The shell's own app name, which the banner words as the workspace interface. */
 export const SHELL_APP_NAME = "system_interface";
 
 /** The record as the shell sends it. */
@@ -29,7 +29,7 @@ export interface UpdateNotice {
   /** Seconds since the epoch. */
   appliedAt: number;
   drivenBy: string;
-  /** The critical apps whose program or bundle the apply changed; their tabs carry the band. */
+  /** The critical apps whose program or bundle the apply changed; the banner names them. */
   apps: string[];
   programs: string[];
   /** The diff reached the workspace's own setup: a rollback restores the files but an agent
@@ -65,18 +65,9 @@ export function getUpdateNotice(): UpdateNotice | null {
   return notice;
 }
 
-/** Whether the apply touched no app's program or bundle: a change to how the workspace starts, say. The
- *  shell's banner carries such a notice, since no tab would. */
+/** Whether the apply touched no app's program or bundle: a change to how the workspace starts, say. */
 export function isWorkspaceOnlyNotice(current: UpdateNotice): boolean {
   return current.apps.length === 0;
-}
-
-/** The notice for one app's tabs (or the shell's banner), or null when it is not among what the apply touched. */
-export function updateNoticeForApp(appName: string): UpdateNotice | null {
-  if (notice === null) return null;
-  if (isWorkspaceOnlyNotice(notice)) return appName === SHELL_APP_NAME ? notice : null;
-  if (!notice.apps.includes(appName)) return null;
-  return notice;
 }
 
 export function isRollbackRunning(current: UpdateNotice): boolean {

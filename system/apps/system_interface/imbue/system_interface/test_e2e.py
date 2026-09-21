@@ -1748,31 +1748,30 @@ def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, pa
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_kept_rollback_point_raises_the_band_on_its_apps_tabs_and_everything_seems_good_clears_it(
+def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_seems_good_clears_it(
     e2e_server: E2EServer, page: Page
 ) -> None:
-    """The record an apply kept names the apps it touched; their tabs carry the band and the shell its
-    banner, "Everything seems good" runs the script's confirm, and the cleared record reaches every
-    window through the watch, so the band goes without a reload."""
+    """The record an apply kept names the apps it touched; the shell carries one banner naming them all (a
+    rollback takes them back together) and no tab carries a notice of its own, "Everything seems good" runs
+    the script's confirm, and the cleared record reaches every window through the watch, so the banner goes
+    without a reload."""
     write_stub_update_self_script(e2e_server.repo_root)
     page.goto(e2e_server.base_url)
     _wait_for_view(page, STARTER_PROJECT_ID)
     _serve_stub_pages(page, e2e_server)
     _open_fixture_instance(page)
-    expect(page.locator(".update-notice-band")).to_have_count(0)
     expect(page.locator(".update-notice-banner")).to_have_count(0)
 
     write_rollback_point(e2e_server.repo_root, apps=[_STUB_APP_NAME, "system_interface"])
 
-    band = page.locator(f'.si-iframe-panel:has(iframe[data-address="{_FIXTURE_ADDRESS}"]) .update-notice-band')
-    expect(band).to_be_visible(timeout=15000)
-    expect(band).to_contain_text("updated a moment ago")
-    expect(page.locator(".update-notice-banner")).to_be_visible()
-    # The frame the band sits above is still the same page: the notice's arrival reloaded nothing.
+    banner = page.locator(".update-notice-banner")
+    expect(banner).to_be_visible(timeout=15000)
+    expect(banner).to_contain_text(f"{_STUB_APP_DISPLAY_NAME} and the workspace interface were updated a moment ago")
+    expect(page.locator(".update-notice-rollback")).to_have_count(1)
+    # The frame of a touched app is still the same page: the notice's arrival reloaded nothing.
     expect(page.frame_locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]').locator("#held")).to_be_visible()
 
-    band.locator(".update-notice-confirm").click()
+    banner.locator(".update-notice-confirm").click()
 
-    expect(page.locator(".update-notice-band")).to_have_count(0, timeout=15000)
-    expect(page.locator(".update-notice-banner")).to_have_count(0)
+    expect(page.locator(".update-notice-banner")).to_have_count(0, timeout=15000)
     assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None

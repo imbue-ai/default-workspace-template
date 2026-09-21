@@ -373,11 +373,13 @@ copies it kept, and the critical apps and supervisord programs included in rollb
 A frontend apply includes both chat and shell, even if only one app's source changed,
 because it replaces both bundles. The shell turns that record into a notice only a
 person closes (`shell/update_notice.py`):
-every tab of an app the record names carries a band above its page, and the shell
-itself a top banner beside the staleness one, saying the app was updated a moment
-ago and offering "Roll back" and "Everything seems good". The shell watches the
-file and pushes every distinct reading over the socket as `update_notice_changed`
-(and seeds it on connect), so the band appears, shows a rollback's progress and
+one top banner beside the staleness one, naming every app the record names (or
+the workspace, when it names none), saying they were updated a moment ago and
+offering "Roll back" and "Everything seems good". It is one banner rather than a
+note on each touched app's tabs because the record is one rollback point: a
+rollback takes everything it names back together. The shell watches the file and
+pushes every distinct reading over the socket as `update_notice_changed` (and
+seeds it on connect), so the banner appears, shows a rollback's progress and
 outcome, and goes away on every window without a reload.
 
 Both verbs are the update-self script's own subcommands, run rather than

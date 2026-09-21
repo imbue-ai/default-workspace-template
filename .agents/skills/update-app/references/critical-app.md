@@ -53,9 +53,9 @@ time" describes. Three deltas:
 
 **Check for an open notice.** If a "recently updated" notice from an earlier
 apply is still open (`GET /api/updates/pending` on the shell answers a record
-rather than `null`; its `apps` are the apps whose tabs carry it, or empty when
-that apply changed only how the workspace starts and the shell's banner carries
-it alone), the previous update is unconfirmed. Proceed, but tell the user so,
+rather than `null`; its `apps` are the apps the banner names, or empty when
+that apply changed only how the workspace starts), the previous update is
+unconfirmed. Proceed, but tell the user so,
 and that this pass's apply will replace that rollback point, whichever apps it
 named.
 
@@ -346,12 +346,12 @@ interleave.
    - `1`: precondition error (a dirty tree, another apply in flight, a
      conflicted merge); nothing was changed.
 
-3. **The notice is the user's.** After a successful apply, every tab of a
-   critical app included in the rollback carries a band (a top banner
-   for the shell itself): recently updated, with "Roll back" and "Everything
-   seems good". Frontend applies include both chat and shell because both bundles
-   are replaced; an extra app restart is acceptable. Tell the user it is there and
-   what it does. **Never confirm or roll back on the user's behalf.** Only a person
+3. **The notice is the user's.** After a successful apply, one banner across
+   the top of the workspace names every critical app included in the rollback:
+   recently updated, with "Roll back" and "Everything seems good". It rolls all
+   of them back together. Frontend applies include both chat and shell because
+   both bundles are replaced; an extra app restart is acceptable. Tell the user
+   the banner is at the top of the workspace and what it does. **Never confirm or roll back on the user's behalf.** Only a person
    closes it: confirming
    discards the kept snapshots, rolling back restores them and restarts only the
    touched programs, and the outcome shows in the notice (and stays in its
