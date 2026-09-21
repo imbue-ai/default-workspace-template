@@ -72,8 +72,8 @@ On a stock machine the chat declares two: `new` ("New Chat", primary) and `send`
 
 Running a free-text row with text `t` means running its launch path with `t` as the value of its text param (URL-encoded into the query string, as `launchPathWithParams` does today), in **pinned-first** mode:
 
-1. When the row's app has a pinned window on the active desktop, this client's view of that window is pointed at the path (`navigateOwnWindow`, the write an agent's `navigate` makes, which for an independent window moves this client's page alone) and the window is restored and raised.
-2. Otherwise a new window is opened at the launch path (`openLaunchPath`, `if_present: new`, settling as today).
+1. When the row's app has a pinned window of independent scope on the active desktop, this client's view of that window is pointed at the path (`navigateOwnWindow`, the write an agent's `navigate` makes, which for an independent window moves this client's page alone) and the window is restored and raised.
+2. Otherwise a new window is opened at the launch path (`if_present: new`, settling as today). A linked pinned window is never navigated: every client shares its page, so pointing it at a launch path would run the launch on all of them.
 
 The text is bounded by the window path: a path is at most 2048 characters (contracts section 1), so a free-text row whose resulting path would exceed that is disabled, with "Too long to send from here" as its tooltip and no key binding while it is disabled.
 The bound is checked on the encoded path, not the typed length, since encoding can triple a non-ASCII text.
@@ -132,7 +132,7 @@ Running any row closes the menu and clears the field.
 
 ### 3.6 The Getting Started app
 
-An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), with one launch path, `open` at `/`, a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, `critical = false`, and the first-visit opener of section 3.4.
+An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), declaring no launch paths (so the shell synthesizes its one, `open` at `/`, labelled "Open Getting Started"; contracts section 2), a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, `critical = false`, and the first-visit opener of section 3.4.
 Its page holds, top to bottom: a search field over its own content; "Start something", the eight intent tiles of today's `startSomething.ts`; "Start from a template", the catalog shelves of today's `TemplateShelves.ts`.
 Picking a template shows the template's detail as a page inside the app (today's `TemplateDetailModal`, with a back control instead of a close), whose two actions are "Make it mine" and "Create a new machine from it".
 Every tile and both actions start a chat with a seeded text through `shell:start-with-text` (section 3.7); the Getting Started window stays where it is and the chat comes up beside it.

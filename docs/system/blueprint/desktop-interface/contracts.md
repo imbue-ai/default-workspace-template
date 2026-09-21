@@ -45,7 +45,7 @@ Built-in manifests:
 |---|---|---|---|---|---|
 | `system_interface` | true | `system_interface` | | none | none; `internal = true` |
 | `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, params `draft` optional); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional, `text_param = "message"`); `send` ("Send to chat...", `/send`, param `message` optional, `text_param = "message"`) |
-| `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | `open` ("Getting Started", `/`) |
+| `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
 | `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, params `path` optional) |
@@ -139,7 +139,7 @@ Every error body is `{"detail": "<message>"}`.
 
 ### 5.1 Page and app routes
 
-Unchanged: `GET /` and the SPA catch-all (with `X-Frontend-Built`), `/assets/<path>`, `/favicon.ico`, `GET /api/health`, `GET /_static/app_contract.js`, `GET /api/templates-catalog`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (refused for critical apps), `POST /api/client-activity`, `/api/ws`.
+Unchanged: `GET /` and the SPA catch-all (with `X-Frontend-Built`), `/assets/<path>`, `/favicon.ico`, `GET /api/health`, `GET /_static/app_contract.js`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (refused for critical apps), `POST /api/client-activity`, `/api/ws`.
 `POST /api/client-activity` takes `{"client_id", "desktop_id", "kind": "message", "app", "key", "text"}`: the client that sent a message to an app's page, the desktop it was on (from the shell's handshake), the app, the page's marker (a chat id; `""` for a page without one), and the text; the shell appends it to the client-activity log as a `message` event (the text truncated), which is what `layout.py context` and an op's requester attribution read.
 Removed: `POST /api/apps/<name>/changed`, `POST /api/apps/<name>/instances` and every `/instances/<key>/...` relay route, `POST /api/tabs/<tab_id>/instance`, every `/api/projects/...` route, `GET` and `POST /api/layouts/<view_id>`.
 
@@ -223,8 +223,8 @@ Outbound:
 ## 7. The app contract (`app_contract.js`)
 
 Built once, into the shell's static output, and served by every app at `/_static/app_contract.js` from its own origin (the shell serves it too, with `Access-Control-Allow-Origin: *`): a page imports it as a module, and a module import is a fetch without cookies, which the desktop client's forwarder and the share gateway refuse across origins.
-Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), disconnect()}`.
-`openPath` sends `shell:open` below.
+Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), disconnect()}`.
+`openPath` sends `shell:open` below; `startWithText` sends `shell:start-with-text`.
 `capabilities` is `{navigation: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect.
 
 | Direction | Type | Payload |
@@ -237,6 +237,7 @@ Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavig
 | page to shell | `shell:location` | `{"path", "title"}`; the shell remembers the pair as the page's last report and posts it to the window's location route when it differs from the stored one |
 | page to shell | `shell:focused` | `{}`; the shell raises the page's window |
 | page to shell | `shell:open` | `{"path", "ifPresent"}`; opens a window of the posting frame's own app on the posting window's desktop, with `client_id` the hosting client |
+| page to shell | `shell:start-with-text` | `{"text"}`; the shell runs the launcher's primary free-text row with the text (launcher-and-getting-started plan section 3.7), so a page starts a chat without naming the chat app; with no free-text row on the machine the shell notifies and does nothing |
 
 Following rule: after every `desktops_updated`, for every live page of a window whose stored `path` differs from that page's last reported path, the shell sends `shell:navigate` when the page declared navigation, else reassigns the iframe `src`, and records the stored path as that page's last report at once, so a second broadcast before the page lands does not navigate it again.
 A page's own report never navigates it.
@@ -329,6 +330,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-resize-corner` | `16px` | | | no |
 | `--desk-resize-overhang` | `3px` | | | no |
 | `--desk-resize-edge-inset` | `calc(var(--desk-resize-corner) - var(--desk-resize-overhang))` | | | no |
+| `--desk-launcher-menu-width` | `22rem` | `calc(100% - var(--spacing) * 4)` | | no |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
 The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.
@@ -346,10 +348,14 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-drag-handle`, `data-resize-edge="n\|s\|e\|w\|ne\|nw\|se\|sw"` | title bar, resize edges |
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |
-| `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar and launcher |
+| `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar, the launcher field, and its menu (the overlay's name kept from the tiles) |
 | `data-tray-widget="desktops"`, `data-desktop-switch="<id>"` | the tray |
 | `data-live-page="<window-id>"` | each iframe |
-| `data-launch="<app>:<launch>"` | launcher tiles (today's `data-launch` spelling kept) |
+| `data-launcher-row="launch:<app>:<launch>" \| "window:<window-id>" \| "text:<app>:<launch>"` | each row of the launcher's menu |
+| `data-launch="<app>:<launch>"` | each launch-path and free-text row (the tiles' spelling kept) |
+| `data-launcher-window="<window-id>"` | each window row |
+| `data-text-action="primary" \| "secondary"` | the first two free-text rows |
+| `data-highlighted="true" \| "false"`, `data-disabled="true"` | each row's highlight; a disabled free-text row |
 | `data-pinned="true\|false"` | each window's root and each taskbar entry |
 | `data-pinned-entry="<app>"`, `data-entry-mode="bar\|floating"`, `data-entry-style="plain\|avatar"` | each pinned entry, in the bar or floating |
 | `data-floating-entries` | the floating layer |
