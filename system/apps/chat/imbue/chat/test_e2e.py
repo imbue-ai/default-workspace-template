@@ -1086,8 +1086,7 @@ def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_p
             "Your next message switches this chat to Anthropic 2 (Claude Code)"
         )
         expect(chat.locator(".modal-card")).to_have_count(0)
-        chat.locator(".message-input-textbox").fill("Carry on on the other account")
-        chat.locator(".message-input-send-button--switch").click()
+        _switch_and_send(chat, "Carry on on the other account")
 
         snapshot = _rebound_chat_snapshot(server, server.account_ids[1])
         assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
