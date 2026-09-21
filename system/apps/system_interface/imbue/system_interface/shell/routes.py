@@ -2,8 +2,6 @@
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
-from datetime import datetime
-from datetime import timezone
 from typing import assert_never
 
 from app_manifest.manifest import PinStyle
@@ -17,7 +15,6 @@ from loguru import logger
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_wire_json
-from imbue.system_interface.shell.clients import entries_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import EntryPresentation
@@ -203,10 +200,7 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
         raise InvalidShellValueError(
             f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}"
         )
-    record = shell.clients.set_entry_presentation(
-        ClientId(client_id), str(AppName(app)), body, datetime.now(timezone.utc)
-    )
-    shell.broadcaster.broadcast_client_entries_changed(str(record.id), entries_wire_json(record.entries))
+    record = shell.set_client_entry_presentation(ClientId(client_id), str(AppName(app)), body)
     return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
