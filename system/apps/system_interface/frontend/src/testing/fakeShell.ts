@@ -24,6 +24,9 @@ import { withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../g
 import type { DesktopSocket, SocketHandlers } from "../store/socket";
 import { clientRecord } from "./records";
 
+/** The frame the shell answers for a pinned window a client has never placed (the shell's own constant). */
+export const PINNED_WINDOW_FRAME = { x: 0.46, y: 0.05, width: 0.5, height: 0.9 };
+
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
   clients: ClientRecord[] = [];
@@ -77,15 +80,26 @@ export class FakeDesktopApi implements DesktopApi {
     return desktop;
   }
 
-  /** The client's stored layout of the desktop, with its paths for the desktop's independent windows. */
+  /** The client's stored layout of the desktop, with its paths for the desktop's independent windows, and, as the
+   *  shell answers it, every pinned window the client never placed at the pinned frame, minimized, below the stack. */
   layoutOf(desktopId: string, clientId: string): Layout {
     const stored = this.layouts.get(`${desktopId}/${clientId}`) ?? { updated_at: null, placements: [] };
+    const windows = this.desktops.find((desktop) => desktop.id === desktopId)?.windows ?? [];
     const window_paths: Record<string, StoredWindowPath> = {};
-    for (const window of this.desktops.find((desktop) => desktop.id === desktopId)?.windows ?? []) {
+    for (const window of windows) {
       const path = this.windowPaths.get(`${clientId}/${window.id}`);
       if (window.scope === "independent" && path !== undefined) window_paths[window.id] = path;
     }
-    return { ...stored, window_paths };
+    const placed = new Set(stored.placements.map((placement) => placement.window_id));
+    const pinned = windows
+      .filter((window) => window.is_pinned && !placed.has(window.id))
+      .map((window) => ({
+        window_id: window.id,
+        frame: PINNED_WINDOW_FRAME,
+        state: "NORMAL" as const,
+        is_minimized: true,
+      }));
+    return { ...stored, placements: [...pinned, ...stored.placements], window_paths };
   }
 
   writeLayout(desktopId: string, clientId: string, layout: Pick<Layout, "updated_at" | "placements">): Layout {

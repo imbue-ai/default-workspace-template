@@ -54,6 +54,10 @@ CASCADE_WIDTH: Final[float] = 0.6
 CASCADE_HEIGHT: Final[float] = 0.7
 CASCADE_CYCLE: Final[int] = 6
 
+# Where a pinned window first shows (pinned-taskbar-entries plan section 4.3): the right half of the backdrop, a
+# margin in, above the corner its floating entry rests in; roughly where the first users put it by hand.
+PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.46, y=0.05, width=0.5, height=0.9)
+
 # The snap frames (fixed).
 SNAPPED_LEFT_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=0.5, height=1.0)
 SNAPPED_RIGHT_FRAME: Final[Frame] = Frame(x=0.5, y=0.0, width=0.5, height=1.0)
@@ -576,6 +580,22 @@ def default_placement(window_id: WindowId, stored_count: int) -> WindowPlacement
     return WindowPlacement(
         window_id=window_id, frame=cascade_frame(stored_count), state=WindowState.NORMAL, is_minimized=True
     )
+
+
+@pure
+def with_pinned_windows_placed(layout: DesktopLayout, desktop: Desktop) -> DesktopLayout:
+    """The layout with a placement for each pinned window the client has never placed: at the pinned frame, normal,
+    minimized, at the bottom of the stack in opening order. What a client's layout reads as, so the first restore
+    of a pinned window lands there rather than at the cascade; the same object when every pinned window is placed."""
+    placed = {placement.window_id for placement in layout.placements}
+    missing = tuple(
+        WindowPlacement(window_id=window.id, frame=PINNED_WINDOW_FRAME, state=WindowState.NORMAL, is_minimized=True)
+        for window in desktop.windows
+        if window.is_pinned and window.id not in placed
+    )
+    if not missing:
+        return layout
+    return layout.model_copy_update(to_update(layout.field_ref().placements, (*missing, *layout.placements)))
 
 
 @pure

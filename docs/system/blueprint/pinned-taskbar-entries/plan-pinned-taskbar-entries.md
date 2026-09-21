@@ -79,9 +79,9 @@ Desktop creation runs the same ensure before answering, so a new desktop is born
 An app registered later is reconciled on the next read after the registry change.
 When a pin is withdrawn, its windows stay as ordinary windows, `is_pinned` false, and can be closed like any other.
 
-A pinned window has no placement in a client's layout until the client touches it, so by the V1 rule it reads as minimized with a cascaded frame.
-A fresh client sees every pinned entry, all of them "closed", and the first press restores the window at the cascade frame.
-No default frame beyond the cascade is given in this version.
+A pinned window has no placement in a client's layout until the client touches it; the shell's layout answer places it for the client at the pinned frame (the right half of the backdrop, a margin in: `x 0.46, y 0.05, width 0.5, height 0.9`), normal and minimized, below every stored placement.
+A fresh client sees every pinned entry, all of them "closed", and the first press restores the window at that frame, half the screen beside its floating entry; the client's first save writes it.
+The frame is the shell's alone: neither editor's default-placement rule (the cascade) changes.
 
 ### 3.3 Location scope
 
@@ -180,7 +180,7 @@ In compact mode the floating layer is empty and every pinned entry is in the bar
 
 A press on a pinned entry, in either mode, is exactly the taskbar entry click of V1 section 4.10: restore and raise the window when minimized, minimize it when it is the focused window, raise it otherwise.
 There is no "open" step, because the window always exists.
-The first restore of a window the client has never placed lands at the cascade frame.
+The first restore of a window the client has never placed lands at the pinned frame of section 3.4.
 
 ### 4.4 Menus
 
@@ -442,7 +442,6 @@ A suggested commit order inside that pull request, each commit leaving the repos
 - A per-user override of the workspace's selected design; this version has the shared default set only.
 - Pinning and unpinning by the user or by an agent; the set is the manifests'.
 - A user toggle of a window's location scope; only a pin sets it.
-- A default frame for a pinned window anchored above its floating entry; the cascade is used.
 - Attention and error expressed on the avatar, and the prototype's badge dot, which stays removed.
 - The prototype's `listening` mood while the chat is open.
 - An editable draft for "Design your own..." (a `draft` launch parameter); the message is sent on open.

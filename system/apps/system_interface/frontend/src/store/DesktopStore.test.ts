@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
-import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
+import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, settle } from "../testing/fakeShell";
 import {
   appRecord,
   clientRecord,
@@ -753,6 +753,16 @@ describe("pinned entries", () => {
     await store.closeWindow("win-9");
     expect(api.calls).toContain("closeWindow:home:win-9");
     expect(store.getState().desktops[0].windows.map((window) => window.id)).toEqual(["win-1", "win-9"]);
+  });
+
+  it("restores a pinned window the client never placed at the frame the shell answered, not the cascade", async () => {
+    const store = await pinnedStore();
+    expect(store.windowRect("win-9")).toEqual({ x: 460, y: 40, width: 500, height: 720 });
+    store.toggleTaskbarEntry("win-9");
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")).toMatchObject({
+      frame: PINNED_WINDOW_FRAME,
+      is_minimized: false,
+    });
   });
 
   it("loads this client's entries with its record and takes the shell's word on a change", async () => {

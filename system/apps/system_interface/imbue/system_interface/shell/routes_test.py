@@ -377,6 +377,29 @@ def test_an_app_registered_later_is_reconciled_on_the_next_read_and_a_withdrawn_
     assert client.post(f"/api/desktops/home/windows/{freed['id']}/close").status_code == 204
 
 
+def test_a_pinned_window_first_shows_at_the_pinned_frame_and_a_restore_writes_it_there(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A client that never placed the pinned window reads it at the pinned frame, minimized, below every stored
+    placement; an agent's restore then writes that frame into the client's layout."""
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    (placement,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
+    assert placement["window_id"] == pinned["id"]
+    assert placement["is_minimized"] is True
+    assert placement["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+    answer = client.post(
+        "/api/layout/broadcast",
+        json={"op": "restore", "args": {"window": pinned["id"], "client": "c1"}, "requester": None},
+    )
+    assert answer.status_code == 200
+    (written,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
+    assert written["is_minimized"] is False
+    assert written["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+
+
 def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays_the_home_path(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:

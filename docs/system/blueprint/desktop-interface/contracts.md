@@ -108,7 +108,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 - `placements` is back to front; last is on top.
 - `frame` values are floats in `0..1` with `x + width <= 1` and `y + height <= 1`; `state` is `NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, or `MAXIMIZED`.
 - A placement naming a window the desktop no longer holds is dropped on read.
-- A window with no placement reads as `{frame: cascade(n), state: NORMAL, is_minimized: true}` at the start of the list (the bottom of the stack), where `n` is the count of stored placements.
+- A window with no placement reads as `{frame: cascade(n), state: NORMAL, is_minimized: true}` at the start of the list (the bottom of the stack), where `n` is the count of stored placements. A pinned window with no placement is answered by the layout route as `{frame: {x: 0.46, y: 0.05, width: 0.5, height: 0.9}, state: NORMAL, is_minimized: true}` at the start of the list instead (pinned-taskbar-entries plan section 3.4), unwritten until the client saves.
 - The old `layouts/` directory is never read.
 
 ### 4.3 `clients.json`
