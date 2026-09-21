@@ -114,6 +114,9 @@ def file_request() -> Response:
         filed = get_state().secret_requests.file_request(chat_id, file, variables, rationale)
     except InvalidSecretRequestError as e:
         return _error_response(str(e))
+    except SecretFileWriteError as e:
+        # Filing reads the file already there to report what a submit would replace.
+        return _error_response(str(e), 500)
     _notify_superseded_in_other_chats(filed)
     return json_response(filed.as_wire(), status_code=201)
 
