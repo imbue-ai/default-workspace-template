@@ -123,9 +123,12 @@ workspace's `agent_id` appears once `mngr create` finishes, so you **poll the
 typed operation route** until it's done:
 
 ```bash
+# The release the running Mind app supports -- the version to build from.
+REF=$(latchkey curl .../api/v1/app/version | jq -r .workspace_template_ref)
+
 OP=$(latchkey curl -XPOST .../api/v1/workspaces \
   -H 'Content-Type: application/json' \
-  -d '{"git_url": "<template-repo-url>"}' | jq -r .operation_id)
+  -d "{\"git_url\": \"<template-repo-url>\", \"branch\": \"$REF\"}" | jq -r .operation_id)
 
 # Poll create status (DONE -> the workspace is ready; FAILED -> read .error):
 latchkey curl .../api/v1/workspaces/operations/create/$OP | jq '{status, is_done, agent_id, error}'
@@ -134,9 +137,17 @@ latchkey curl -N .../api/v1/workspaces/operations/create/$OP/logs
 ```
 
 `git_url` is required (typically the template repo a fresh mind is built from).
-Many optional fields exist (`host_name`, `branch`, `launch_mode`, `ai_provider`,
-`account_id`, `region`, `backup_*`) -- see `CreateWorkspaceRequest` in the
-schema. A `400` with `{error, field}` means a field-level problem; a `422`
+
+**Always send `branch`, and take it from `GET /api/v1/app/version`.** Never the
+newest tag upstream: a release the app has not been updated to yet speaks a
+protocol it does not know, and the app caps `update-self` at its own version for
+exactly that reason. Omitting the field makes the new workspace whatever the
+template's default branch happens to be that day -- unreleased code, recorded as
+the app's release. A recent Mind app fills an omitted `branch` with the same
+value this command reads, but an older one does not, so send it.
+
+Other optional fields (`host_name`, `launch_mode`, `ai_provider`, `account_id`,
+`region`, `backup_*`) -- see `CreateWorkspaceRequest` in the schema. A `400` with `{error, field}` means a field-level problem; a `422`
 `{"errors":[{field,message}]}` means a structurally invalid body.
 
 **Backups: always create with backups unconfigured.** Leave every `backup_*`
@@ -219,7 +230,8 @@ Which side you are on decides what you do:
   and `-destroy` only if the user asks for that at the very end.
 - **In the OLD workspace** (the user says they want to move to a new one) --
   `migrate-workspace`'s own escape hatch covers this in two steps: create the
-  fresh workspace here (`POST /api/v1/workspaces` with the template `git_url`,
+  fresh workspace here (`POST /api/v1/workspaces` with the template `git_url`
+  and a `branch` from `GET /api/v1/app/version`,
   polling `operations/create/<op>` until `DONE`, every `backup_*` field left
   unset), then tell the user to open it and ask its agent to migrate. Copy nothing
   yourself.
