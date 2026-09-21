@@ -66,11 +66,19 @@ def _parse_arguments(argv: Sequence[str] | None) -> RegisterAvatarArguments:
     )
 
 
+def _read_bounded(source: Path) -> bytes:
+    """The file's first bytes, one past the largest design, so an oversized file is refused without being read whole."""
+    with source.open("rb") as stream:
+        return stream.read(MAX_SVG_BYTES + 1)
+
+
 def _read_registration(arguments: RegisterAvatarArguments) -> DesignRegistration:
     """The design as the shell will validate it; raises AvatarRegistrationError with the reason a file is not one."""
     source = arguments.source.resolve()
-    with source.open("rb") as stream:
-        contents = stream.read(MAX_SVG_BYTES + 1)
+    try:
+        contents = _read_bounded(source)
+    except OSError as e:
+        raise AvatarRegistrationError(f"cannot read the design at {source}: {e.strerror or e}") from e
     if len(contents) > MAX_SVG_BYTES:
         raise AvatarRegistrationError(f"the design at {source} exceeds {MAX_SVG_BYTES // 1024} KiB")
     try:
