@@ -13,6 +13,7 @@ from imbue.minds_admin.slices.storage_encryption import mount_unit_name
 from imbue.minds_admin.slices.storage_encryption import parse_storage_encryption_from_prep_output
 from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_encryption_section
 from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_relocation_section
+from imbue.minds_admin.slices.storage_encryption import render_gen2_tpm_preflight_section
 from imbue.minds_admin.slices.storage_encryption import render_journal_flush_drop_in
 from imbue.minds_admin.slices.storage_encryption import render_storage_bind_mount_unit
 from imbue.minds_admin.slices.storage_encryption import render_storage_header_backup_fetch_script
@@ -29,6 +30,7 @@ def _assert_bash_syntax_ok(script: str) -> None:
 
 def test_every_rendered_script_passes_bash_syntax_check() -> None:
     for script in (
+        render_gen2_tpm_preflight_section(),
         render_gen2_storage_encryption_section(),
         render_gen2_storage_relocation_section(),
         render_storage_unlock_script(),
@@ -37,6 +39,21 @@ def test_every_rendered_script_passes_bash_syntax_check() -> None:
         render_storage_header_backup_fetch_script(),
     ):
         _assert_bash_syntax_ok(script)
+
+
+def test_tpm_preflight_refuses_a_box_without_a_tpm_and_touches_no_storage() -> None:
+    section = render_gen2_tpm_preflight_section()
+    # Captured into a variable, never piped straight into grep -q (see the renderer's docstring).
+    assert "tpm_devices=$(systemd-cryptenroll --tpm2-device=list 2>/dev/null || true)" in section
+    assert "if ! grep -q '^/dev/' <<<\"$tpm_devices\"; then" in section
+    refusal = section[section.index("if ! grep") : section.index("fi\n")]
+    assert "no usable TPM 2.0 device" in refusal
+    assert "Intel PTT / AMD fTPM" in refusal
+    assert "The storage partition was not touched" in refusal
+    assert refusal.rstrip().endswith("exit 1")
+    # A pure check: it formats, mounts and enrolls nothing itself.
+    for mutating_command in ("cryptsetup", "mkfs", "mount ", "wipefs", "systemd-cryptenroll --unlock"):
+        assert mutating_command not in section
 
 
 def test_encryption_section_refuses_a_plain_partition_that_holds_slices() -> None:

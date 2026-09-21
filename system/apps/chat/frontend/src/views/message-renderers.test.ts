@@ -22,8 +22,8 @@ import { startChatOnAccount } from "../shell";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
 // the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
-// needs openSubagentTab, and the card path never calls MarkdownContent.
-vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
+// needs openSubagentView, and the card path never calls MarkdownContent.
+vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
 
 // The auth-error note moves the chat through the switch dialog's entry point and reads the chat
