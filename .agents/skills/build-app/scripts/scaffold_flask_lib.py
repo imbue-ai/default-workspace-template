@@ -294,7 +294,7 @@ app = Flask("{package}", static_folder=None)
 def index() -> Response:
     # The location beacon: post the path being viewed one hop up (to the
     # workspace shell embedding this page) on each page load, so the shell can
-    # reopen this app's tab at the same place. Keep the line on every page you
+    # reopen this app's window at the same place. Keep the line on every page you
     # serve; the shell validates the sender's origin and ignores the rest.
     return Response(
         "<!doctype html><html><body>"
@@ -461,14 +461,13 @@ def _write_lib(
 
 # The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
 # ``priority = "user"`` is what puts a user-built app in the user band the
-# ``oom_tag_service.py user`` prefix below also names; ``instances = false``
-# makes it a single tab. No ``default_shortcut``: an app pins itself to a
-# project's rail only when the user asks.
+# ``oom_tag_service.py user`` prefix below also names. No launch paths: the
+# shell offers ``open`` at the app's root. No ``default_shortcut``: an app
+# pins itself to a desktop's backdrop only when the user asks.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
-instances = false
 priority = "user"
 program = "{name}"
 """
@@ -652,7 +651,7 @@ def main() -> None:
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
         f"(app `{args.name}` on port {port}, registered in "
-        f"{program_path.relative_to(repo_root)}; the tab renders at the service's "
+        f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."

@@ -22,7 +22,7 @@ migrate_workspace = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(migrate_workspace)
 
 
-# --- detect_layout ---------------------------------------------------------
+# detect_layout
 
 
 def test_detect_layout_recognizes_the_current_layout() -> None:
@@ -71,7 +71,7 @@ def test_detect_layout_refuses_to_guess_on_mixed_or_absent_evidence() -> None:
     assert absent.reason
 
 
-# --- map_legacy_path -------------------------------------------------------
+# map_legacy_path
 
 
 def test_map_legacy_path_maps_the_state_tree_and_moved_root_files() -> None:
@@ -162,7 +162,7 @@ def test_map_legacy_path_normalizes_without_eating_a_leading_dot() -> None:
     )
 
 
-# --- rewrite_legacy_references ---------------------------------------------
+# rewrite_legacy_references
 
 
 def test_rewrite_legacy_references_rewrites_absolute_roots_longest_first() -> None:
@@ -238,7 +238,7 @@ def test_rewrite_legacy_references_leaves_ambiguous_prefixes_for_the_agent() -> 
     assert "runtime/email_triage" in rewritten
 
 
-# --- parse_baseline_diff ---------------------------------------------------
+# parse_baseline_diff
 
 
 def test_parse_baseline_diff_maps_paths_only_for_a_pre_declutter_source() -> None:
@@ -264,7 +264,7 @@ def test_parse_baseline_diff_maps_paths_only_for_a_pre_declutter_source() -> Non
     ]
 
 
-# --- classify_branches -----------------------------------------------------
+# classify_branches
 
 
 def test_classify_branches_splits_merged_from_unmerged() -> None:
@@ -302,7 +302,7 @@ def test_classify_branches_tolerates_worktree_and_blank_ref_lines() -> None:
     assert classification.unmerged == [{"branch": "mngr/b", "tip": "bbb2222"}]
 
 
-# --- agents ----------------------------------------------------------------
+# agents
 
 
 def test_is_excluded_agent_excludes_the_source_primary_by_label_or_name() -> None:
@@ -395,7 +395,7 @@ def test_build_recreate_argv_adopts_every_session_and_stays_dormant_capable() ->
     assert "--id" not in argv
 
 
-# --- ports -----------------------------------------------------------------
+# ports
 
 _SUPERVISORD_SNIPPET = """
 [program:dashboard]
@@ -457,13 +457,14 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
             conf.read_text(encoding="utf-8")
         )
     ]
-    # The chat, the terminal and the files app register from inside their own processes
-    # (the registry scan covers them), so the config itself names the other two.
+    # The chat and the terminal register from inside their own processes (the registry
+    # scan covers them); the others register from their program lines.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
         ("browser", 8081),
+        ("files", 8300),
     }
-    assert not {port.name for port in ports} & {"terminal", "files", "chat"}
+    assert not {port.name for port in ports} & {"terminal", "chat"}
     assert [port.name for port in ports].count("system_interface") == 1
 
 
@@ -605,7 +606,7 @@ def test_reconcile_ports_never_auto_resolves_a_real_wiring_collision() -> None:
     assert result["port_collisions"][0]["collides_with"]["name"] == "weather"
 
 
-# --- scheduled jobs --------------------------------------------------------
+# scheduled jobs
 
 
 def test_parse_cron_entries_rewrites_paths_and_keeps_paused_lines() -> None:
@@ -626,7 +627,7 @@ def test_parse_cron_entries_rewrites_paths_and_keeps_paused_lines() -> None:
     assert all(entry.job_name == "news" for entry in entries)
 
 
-# --- audit scanning --------------------------------------------------------
+# audit scanning
 
 
 def test_scan_audit_finds_each_kind_of_call_site() -> None:
@@ -690,7 +691,7 @@ def test_scan_audit_flags_an_account_scoped_latchkey_call() -> None:
     assert len(findings) == 1
 
 
-# --- ssh plumbing ----------------------------------------------------------
+# ssh plumbing
 
 
 def test_build_ssh_argv_uses_batch_mode_and_the_brokered_key() -> None:
@@ -769,7 +770,7 @@ def test_read_file_command_terminates_content_with_newline() -> None:
     assert "[ -f '/a/data.json' ]" in command
 
 
-# --- CLI wiring ------------------------------------------------------------
+# CLI wiring
 
 
 def test_shared_options_survive_being_passed_before_the_subcommand() -> None:

@@ -1,6 +1,5 @@
 """Fixtures for the scripts' tests: a registry file and a fake shell over loopback for
-layout.py, a fake chat app and a fake ``mngr`` for message_chat.py, and an old-format
-``workspace_layout`` directory and its registry for migrate_workspace_layouts.py."""
+layout.py, and a fake chat app and a fake ``mngr`` for message_chat.py."""
 
 from __future__ import annotations
 
@@ -16,6 +15,7 @@ from typing import Any
 
 import pytest
 import tomlkit
+from layout_testing import desktop_answer
 
 
 def _load_script_module(module_name: str, filename: str) -> Any:
@@ -35,33 +35,30 @@ seed_welcome_chat = _load_script_module(
     "seed_welcome_chat_for_fixtures", "seed_welcome_chat.py"
 )
 welcome_count = _load_script_module("welcome_count_for_fixtures", "welcome_count.py")
-migrate_workspace_layouts = _load_script_module(
-    "migrate_workspace_layouts_for_fixtures", "migrate_workspace_layouts.py"
-)
 
 
 def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
-    """A registry with one row per name; the value is the app's declared action ids (none for a
-    single-instance app). An app declaring more than one action gets a ``default_shortcut`` on
-    its last one, so the primary-action rule has something to prefer over the first."""
+    """A registry with one row per name, shaped as ``forward_port.py`` writes it; the value is the
+    app's declared launch path ids (none for an app that opens at its root). An app declaring
+    more than one gets a ``default_shortcut`` on its last one."""
     doc = tomlkit.document()
     apps = tomlkit.aot()
-    for name, action_ids in rows.items():
+    for name, launch_ids in rows.items():
         entry = tomlkit.table()
         entry["name"] = name
         entry["url"] = f"http://localhost:9000/{name}"
-        entry["instances"] = len(action_ids) > 0
-        if action_ids:
-            actions = tomlkit.aot()
-            for action_id in action_ids:
-                action = tomlkit.table()
-                action["id"] = action_id
-                action["label"] = f"{action_id.capitalize()} {name}"
-                actions.append(action)
-            entry["actions"] = actions
-        if len(action_ids) > 1:
+        if launch_ids:
+            launch_paths = tomlkit.aot()
+            for launch_id in launch_ids:
+                launch_path = tomlkit.table()
+                launch_path["id"] = launch_id
+                launch_path["label"] = f"{launch_id.capitalize()} {name}"
+                launch_path["path"] = f"/{launch_id}"
+                launch_paths.append(launch_path)
+            entry["launch_paths"] = launch_paths
+        if len(launch_ids) > 1:
             default_shortcut = tomlkit.inline_table()
-            default_shortcut["action"] = action_ids[-1]
+            default_shortcut["launch"] = launch_ids[-1]
             default_shortcut["mode"] = "focus"
             entry["default_shortcut"] = default_shortcut
         apps.append(entry)
@@ -72,46 +69,42 @@ def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
 @pytest.fixture(autouse=True)
 def _isolate_own_chat_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear the chat id the chat app stamps on its agents, so a test that asserts on the
-    address layout.py derives from MNGR_AGENT_ID is not steered by the developer's own."""
+    requester layout.py derives from MNGR_AGENT_ID is not steered by the developer's own."""
     monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
 
 
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "apps.toml"
-    _write_apps_toml(
-        path, {"files": (), "terminal": ("new",), "chat": ("subagent", "new")}
-    )
+    _write_apps_toml(path, {"files": (), "terminal": ("new",), "chat": ("subagent", "new"), "browser": ("new",)})
     monkeypatch.setenv(layout.ENV_APPS_FILE, str(path))
     return path
 
 
 class _FakeShellHandler(BaseHTTPRequestHandler):
-    """The shell's REST routes the relay verbs and the shortcut commands ride."""
+    """The shell's op route and inventory document, answering what the fixture holds."""
 
     def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def _respond(self, status: int, body: dict[str, Any]) -> None:
-        payload = json.dumps(body).encode("utf-8")
+    def _respond(self, status: int, body: dict[str, Any] | str) -> None:
+        """A dict is the shell's JSON answer; a str is a page a proxy in front of it might answer with instead."""
+        is_json = isinstance(body, dict)
+        payload = (json.dumps(body) if is_json else str(body)).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json" if is_json else "text/html")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
 
     def do_GET(self) -> None:
         server: Any = self.server
-        if self.path == "/api/projects":
-            self._respond(200, {"projects": server.projects})
-            return
         if self.path == "/api/inventory":
             self._respond(
                 200,
                 {
-                    "projects": server.projects,
-                    "everything": {"id": "everything", "tabs": server.everything_tabs},
                     "apps": server.inventory_apps,
+                    "desktops": server.inventory_desktops,
                     "clients": server.inventory_clients,
                 },
             )
@@ -123,58 +116,36 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
         body_length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(body_length) or b"{}")
         server.posted.append((self.path, body))
+        server.posted_content_types.append(self.headers.get("Content-Type"))
         if self.path == "/api/layout/broadcast":
-            self._respond(
-                200,
-                {
-                    "ok": True,
-                    "clients": server.context_clients,
-                    "view_id": "everything",
-                    "client_id": "c1",
-                    "target_client_id": "c1",
-                    "layout": server.op_layout,
-                    "created_address": server.created_address,
-                },
-            )
-            return
-        if self.path.startswith("/api/projects/") and "/shortcuts" in self.path:
-            self._respond(
-                200,
-                {"id": self.path.split("/")[3], "shortcuts": server.shortcuts_answer},
-            )
-            return
-        if self.path.startswith("/api/apps/"):
-            if server.relay_refuses:
-                self._respond(404, {"detail": "no such instance"})
-            elif self.path.endswith("/delete"):
-                self._respond(204, {})
+            if body.get("op") == "context":
+                self._respond(200, {"ok": True, "clients": server.context_clients})
+            elif body.get("op") == "refresh":
+                self._respond(200, {"ok": True, "target_client_id": server.refresh_target})
+            elif server.op_refusal is not None:
+                self._respond(*server.op_refusal)
             else:
-                self._respond(
-                    200,
-                    {
-                        "instance": {
-                            "key": self.path.split("/")[5],
-                            "title": body.get("title", ""),
-                        }
-                    },
-                )
+                self._respond(200, server.op_answer)
             return
         self._respond(404, {"detail": f"unknown path {self.path}"})
 
 
 @pytest.fixture
 def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A shell over loopback: ``server.posted`` is every ``(path, body)`` it received (``posted_content_types``
+    the matching ``Content-Type`` headers); ``server.op_answer`` is what a desktop op answers
+    (``server.op_refusal`` a ``(status, body)`` refusal instead, the body a dict or a page's text), and the ``inventory_*`` lists are the
+    inventory document."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeShellHandler)
-    server.projects = []
     server.posted = []
-    server.shortcuts_answer = []
+    server.posted_content_types = []
     server.context_clients = []
-    server.relay_refuses = False
-    server.everything_tabs = []
     server.inventory_apps = []
+    server.inventory_desktops = []
     server.inventory_clients = []
-    server.op_layout = {"active_panel": None, "panels": [], "tree": None}
-    server.created_address = None
+    server.op_answer = desktop_answer()
+    server.op_refusal = None
+    server.refresh_target = "c1"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     monkeypatch.setenv(
@@ -186,245 +157,6 @@ def fake_shell(monkeypatch: pytest.MonkeyPatch) -> Any:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-
-
-def _legacy_leaf(group_id: str, views: list[str], size: int) -> dict[str, Any]:
-    return {
-        "type": "leaf",
-        "data": {"views": views, "activeView": views[0], "id": group_id},
-        "size": size,
-    }
-
-
-def _legacy_content(
-    groups: list[tuple[str, list[str], int]], panels: dict[str, dict[str, Any]]
-) -> dict[str, Any]:
-    """One old ``projects/<id>.json``: dockview's own document (the old component names) plus the
-    ``panelParams`` sidecar the old frontend kept beside it."""
-    return {
-        "dockview": {
-            "grid": {
-                "root": {
-                    "type": "branch",
-                    "data": [_legacy_leaf(*group) for group in groups],
-                    "size": 800,
-                },
-                "width": 1200,
-                "height": 800,
-                "orientation": "HORIZONTAL",
-            },
-            "panels": {
-                panel_id: {
-                    "id": panel_id,
-                    "contentComponent": params.get("panelType", "iframe"),
-                    "title": params.get("title", panel_id),
-                    "params": params,
-                }
-                for panel_id, params in panels.items()
-            },
-            "activeGroup": groups[0][0],
-        },
-        "panelParams": panels,
-    }
-
-
-# The old panel params, one per kind the old frontend saved: the address each maps to is what
-# the migration tests assert.
-_LEGACY_PANELS: dict[str, dict[str, Any]] = {
-    "chat-agent-aaa": {
-        "panelType": "chat",
-        "agentId": "agent-aaa",
-        "chatAgentId": "agent-aaa",
-        "title": "Planning",
-    },
-    "iframe-terminal-1": {
-        "panelType": "iframe",
-        "agentId": "agent-primary",
-        "url": "http://terminal-x.host-1.localhost:8421/?arg=_&arg=session&arg=terminal-1",
-        "title": "Terminal 1",
-        "terminalSessionName": "terminal-1",
-        "terminalId": "t-1",
-    },
-    "iframe-browser-1": {
-        "panelType": "iframe",
-        "agentId": "agent-primary",
-        "serviceName": "browser",
-        "url": "http://browser-x.host-1.localhost:8421/?session=browser-1",
-        "title": "Browser 1",
-    },
-    "iframe-files-2": {
-        "panelType": "iframe",
-        "agentId": "agent-primary",
-        "serviceName": "files",
-        "serviceInstanceId": "files-2",
-        "url": "http://files-x.host-1.localhost:8421/data/notes",
-        "customTitle": "My notes",
-    },
-    "iframe-docs": {
-        "panelType": "iframe",
-        "agentId": "agent-primary",
-        "serviceName": "docs",
-        "url": "http://docs-x.host-1.localhost:8421/",
-        "title": "docs",
-    },
-    "iframe-url-1": {
-        "panelType": "iframe",
-        "agentId": "agent-primary",
-        "url": "https://example.com/",
-        "title": "Example",
-    },
-    "subagent-s1": {
-        "panelType": "subagent",
-        "agentId": "agent-aaa",
-        "subagentSessionId": "s1",
-        "title": "Subagent",
-    },
-    "new-tab-1": {"panelType": "launcher", "agentId": "agent-primary"},
-}
-
-
-def _write_legacy_layout_dir(layout_dir: Path) -> None:
-    """An old-format ``workspace_layout`` directory in the shape the old shell left: two projects
-    (one with every panel kind and the overrides map, one hand-edited with the legacy unpinned
-    list, the old sessionless files viewer as a member, and a corrupt mobile file), an
-    Everything view showing only an ad-hoc page, and the three per-ref side stores."""
-    projects_dir = layout_dir / "projects"
-    projects_dir.mkdir(parents=True)
-    (layout_dir / "projects_meta.json").write_text(
-        json.dumps(
-            {
-                "project_by_id": {
-                    "project-1": {
-                        "name": "Project 1",
-                        "color": "#F0603A",
-                        "glyph": 3,
-                        "members": [
-                            "chat:agent-aaa",
-                            "terminal:terminal-1",
-                            "service:browser?session=browser-1",
-                            "service:files?instance=files-2",
-                            "service:docs",
-                            "service:notes",
-                            "url:abcd1234",
-                            "subagent:s1",
-                            "terminal:bad.name",
-                        ],
-                        "shortcut_overrides": {
-                            "browser": {"is_pinned": False},
-                            "chat": {"mode": "focus"},
-                            "app:docs": {"mode": "new"},
-                        },
-                    },
-                    "research": {
-                        "name": "Research",
-                        "color": "purple",
-                        "glyph": 42,
-                        "members": ["chat:agent-bbb", "service:files"],
-                        "unpinned_shortcuts": ["files"],
-                    },
-                },
-                "last_active_id": "research",
-            }
-        )
-    )
-    (projects_dir / "project-1.json").write_text(
-        json.dumps(
-            _legacy_content(
-                [
-                    ("g1", ["chat-agent-aaa", "iframe-terminal-1", "new-tab-1"], 600),
-                    (
-                        "g2",
-                        [
-                            "iframe-browser-1",
-                            "iframe-files-2",
-                            "iframe-docs",
-                            "iframe-url-1",
-                            "subagent-s1",
-                        ],
-                        600,
-                    ),
-                ],
-                _LEGACY_PANELS,
-            )
-        )
-    )
-    (projects_dir / "project-1.mobile.json").write_text(
-        json.dumps(
-            _legacy_content(
-                [("m1", ["chat-agent-aaa"], 400)],
-                {"chat-agent-aaa": _LEGACY_PANELS["chat-agent-aaa"]},
-            )
-        )
-    )
-    # The older chat panel shape, from before ``chatAgentId`` existed: the agent is named by
-    # ``agentId`` alone.
-    research_chat = {"panelType": "chat", "agentId": "agent-bbb", "title": "Reading"}
-    (projects_dir / "research.json").write_text(
-        json.dumps(
-            _legacy_content(
-                [("r1", ["chat-agent-bbb", "iframe-url-1"], 1200)],
-                {
-                    "chat-agent-bbb": research_chat,
-                    "iframe-url-1": _LEGACY_PANELS["iframe-url-1"],
-                },
-            )
-        )
-    )
-    (projects_dir / "research.mobile.json").write_text("{not json")
-    (projects_dir / "everything.json").write_text(
-        json.dumps(
-            _legacy_content(
-                [("e1", ["iframe-url-1"], 1200)],
-                {"iframe-url-1": _LEGACY_PANELS["iframe-url-1"]},
-            )
-        )
-    )
-    (layout_dir / "member_titles.json").write_text(
-        json.dumps(
-            {
-                "title_by_ref": {
-                    "terminal:terminal-1": "Build log",
-                    "chat:agent-aaa": "Planning",
-                }
-            }
-        )
-    )
-    (layout_dir / "member_last_used.json").write_text(
-        json.dumps(
-            {
-                "last_used_ms_by_ref": {
-                    "chat:agent-aaa": 1700000000000,
-                    "service:files?instance=files-2": 1700000001000,
-                    "terminal:terminal-1": "not a number",
-                }
-            }
-        )
-    )
-    (layout_dir / "member_locations.json").write_text(
-        json.dumps(
-            {
-                "location_by_ref": {
-                    "service:files?instance=files-2": "/data/notes?sort=name"
-                }
-            }
-        )
-    )
-
-
-@pytest.fixture
-def legacy_layout_dir(tmp_path: Path) -> Path:
-    layout_dir = tmp_path / "host" / "agents" / "agent-primary" / "workspace_layout"
-    _write_legacy_layout_dir(layout_dir)
-    return layout_dir
-
-
-@pytest.fixture
-def migration_registry(tmp_path: Path) -> Path:
-    """A registry with a single-instance app (``docs``) and an app with instances (``notes``), the two
-    shapes an app pin can map onto."""
-    path = tmp_path / "migration-apps.toml"
-    _write_apps_toml(path, {"docs": (), "notes": ("new",)})
-    return path
 
 
 @pytest.fixture(autouse=True)

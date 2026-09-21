@@ -84,17 +84,15 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # a tree moved by anything else.)
 #
 # The imported-source prefixes are every workspace tree this process runs code
-# from: its own backend and the instances and manifest libraries. All are editable
-# installs resolving straight into these trees, so the moment one advances this
-# process is running old code. mngr (imported in-process and shelled out to) is
-# installed from the commit pyproject.toml pins, so a move of that pin reaches
-# this list through the root manifests below.
+# from: its own backend and the manifest library. Both are editable
+# installs resolving straight into these trees, so the moment one advances this process is
+# running old code. mngr (imported in-process and shelled out to) is installed from the commit
+# pyproject.toml pins, so a move of that pin reaches this list through the root manifests below.
 # ``test_every_imported_workspace_package_is_covered`` holds this list to the
 # app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
-    "system/libs/app_instances/",
     "system/libs/app_manifest/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
@@ -112,7 +110,6 @@ _IMPORTED_SOURCE_PREFIXES = (
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
-        "system/libs/app_instances/pyproject.toml",
         "system/libs/app_manifest/pyproject.toml",
         "pyproject.toml",
     }
