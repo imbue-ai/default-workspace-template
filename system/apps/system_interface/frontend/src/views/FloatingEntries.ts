@@ -12,8 +12,7 @@ import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelRect } from "../geometry/frames";
 import type { AvatarState, TaskbarEntry } from "../reducers/desktopState";
-import { AvatarImage, avatarTooltip } from "./AvatarImage";
-import { appGlyph } from "./glyphs";
+import { entryStyleParts } from "./AvatarImage";
 
 /** The intrinsic size the glyph markup carries; the drawing fills the tile (``[&>svg]:size-full``). */
 const FLOATING_GLYPH_MARKUP_SIZE = 32;
@@ -36,11 +35,10 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
       { "data-floating-entries": "", class: "floating-entries pointer-events-none absolute inset-0 z-(--z-sticky)" },
       attrs.entries.map((entry) => {
         const rect = attrs.rectOf(entry);
-        const look = entry.look;
-        const style = look?.style ?? "plain";
-        const isAvatar = style === "avatar";
+        const style = entry.look?.style ?? "plain";
         const isMenuOpen = attrs.openMenuWindowId === entry.window.id;
-        const tooltip = isAvatar ? avatarTooltip(entry.title, attrs.avatar.status) : entry.title;
+        const parts = entryStyleParts(entry, attrs.avatar, FLOATING_GLYPH_MARKUP_SIZE, "size-full");
+        const { isAvatar, tooltip } = parts;
         return m(
           "button",
           {
@@ -49,8 +47,7 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
             "data-pinned-entry": entry.window.app,
             "data-entry-mode": "floating",
             "data-entry-style": style,
-            "data-mood": isAvatar ? attrs.avatar.status.mood : undefined,
-            "data-stale": isAvatar ? (attrs.avatar.status.is_stale ? "true" : "false") : undefined,
+            ...parts.attrs,
             "data-minimized": entry.isMinimized ? "true" : "false",
             "data-focused": entry.isFocused ? "true" : "false",
             "aria-pressed": entry.isFocused ? "true" : "false",
@@ -79,14 +76,7 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
               attrs.onContextMenu(entry.window.id, event.clientX, event.clientY);
             },
           },
-          isAvatar
-            ? m(AvatarImage, {
-                design: attrs.avatar.design,
-                defaultDesign: attrs.avatar.defaultDesign,
-                mood: attrs.avatar.status.mood,
-                class: "size-full",
-              })
-            : m.trust(appGlyph(entry.app, FLOATING_GLYPH_MARKUP_SIZE)),
+          parts.image,
         );
       }),
     );

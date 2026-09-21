@@ -9,8 +9,7 @@
 import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
-import { AvatarImage, avatarTooltip } from "./AvatarImage";
-import { appGlyph } from "./glyphs";
+import { entryStyleParts } from "./AvatarImage";
 
 const ENTRY_GLYPH_SIZE = 16;
 
@@ -28,8 +27,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
     const { entry, avatar, isCompact, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
     const isDimmed = entry.isMinimized || entry.window.is_settling;
     const look = entry.look;
-    const isAvatar = look?.style === "avatar";
-    const tooltip = isAvatar ? avatarTooltip(entry.title, avatar.status) : entry.title;
+    const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_SIZE, "size-7");
     return m(
       "button",
       {
@@ -39,8 +37,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "data-pinned-entry": look === null ? undefined : entry.window.app,
         "data-entry-mode": look === null ? undefined : "bar",
         "data-entry-style": look === null ? undefined : look.style,
-        "data-mood": isAvatar ? avatar.status.mood : undefined,
-        "data-stale": isAvatar ? (avatar.status.is_stale ? "true" : "false") : undefined,
+        ...attrs,
         "data-minimized": entry.isMinimized ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         "data-settling": entry.window.is_settling ? "true" : "false",
@@ -64,18 +61,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         },
       },
       [
-        m(
-          "span",
-          { class: "flex shrink-0 items-center" + (isDimmed ? " opacity-60" : "") },
-          isAvatar
-            ? m(AvatarImage, {
-                design: avatar.design,
-                defaultDesign: avatar.defaultDesign,
-                mood: avatar.status.mood,
-                class: "size-7",
-              })
-            : m.trust(appGlyph(entry.app, ENTRY_GLYPH_SIZE)),
-        ),
+        m("span", { class: "flex shrink-0 items-center" + (isDimmed ? " opacity-60" : "") }, image),
         isCompact ? null : m("span", { class: "taskbar-entry-title min-w-0 truncate" }, entry.title),
       ],
     );
