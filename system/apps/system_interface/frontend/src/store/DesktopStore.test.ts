@@ -701,6 +701,25 @@ describe("pinned entries", () => {
     expect(store.getState().avatar.design).toBe("jelly-cat");
   });
 
+  it("an entries push that lands while the client records are read stands over the records' older answer", async () => {
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true })] })];
+    api.clients = [clientRecord(CLIENT, { entries: { buddy: { mode: "floating", style: "plain", position: null } } })];
+    let answerReads: () => void = () => undefined;
+    api.readGate = new Promise((resolve) => {
+      answerReads = resolve;
+    });
+    const store = makeStore();
+    const starting = store.start(NO_LINK);
+    await settle();
+    socket.deliver().onClientEntriesChanged({
+      clientId: CLIENT,
+      entries: { buddy: { mode: "bar", style: "avatar", position: null } },
+    });
+    answerReads();
+    await starting;
+    expect(store.getState().entries).toEqual({ buddy: { mode: "bar", style: "avatar", position: null } });
+  });
+
   it("leaves the pinned window where a close is refused", async () => {
     const store = await pinnedStore();
     await store.closeWindow("win-9");
@@ -791,6 +810,21 @@ describe("the avatar", () => {
     expect(store.getState().avatar.status).toEqual({ mood: "working", is_stale: false });
     socket.deliver().onAvatarSelectionChanged("gummy-seal");
     expect(store.getState().avatar.design).toBe("gummy-seal");
+  });
+
+  it("a selection pushed while the catalog is read stands over the catalog's older answer", async () => {
+    let answerReads: () => void = () => undefined;
+    api.readGate = new Promise((resolve) => {
+      answerReads = resolve;
+    });
+    const store = makeStore();
+    const starting = store.start(NO_LINK);
+    await settle();
+    socket.deliver().onAvatarSelectionChanged("jelly-cat");
+    answerReads();
+    await starting;
+    await settle();
+    expect(store.getState().avatar).toMatchObject({ design: "jelly-cat", defaultDesign: "gummy-seal" });
   });
 
   it("selects a design through the shell and tells the user about a refusal", async () => {

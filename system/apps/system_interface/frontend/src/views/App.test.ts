@@ -109,7 +109,7 @@ describe("the avatar chooser", () => {
     ]);
     m.redraw.sync();
     let answerCatalog: () => void = () => undefined;
-    api.avatarsGate = new Promise((resolve) => {
+    api.readGate = new Promise((resolve) => {
       answerCatalog = resolve;
     });
     const entry = document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
