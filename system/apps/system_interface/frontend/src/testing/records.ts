@@ -1,7 +1,8 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it, a desktop, a window, a
- * placement, a launch path, and a published template as the catalog lists it. Each takes
- * overrides so a test spells only what it is about.
+ * placement, a launch path, a client record, a layout, the avatar state, the theme metrics, and a
+ * published template as the catalog lists it. Each takes overrides so a test spells only what it
+ * is about.
  */
 
 import type { AppRecord, ClientRecord, Desktop, LaunchPath, Layout, Placement, WindowRecord } from "../model/records";
@@ -74,7 +75,7 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
   };
 }
 
-/** A connected client on ``activeDesktop`` with no entry presentations. */
+/** A connected client on no desktop yet, with no entry presentations. */
 export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}): ClientRecord {
   return {
     id,
@@ -86,7 +87,6 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
   };
 }
 
-/** A layout of ``placements`` with the stamp ``updatedAt`` and no stored window paths. */
 /** The default design, idle and fresh. */
 export function avatarStateRecord(overrides: Partial<AvatarState> = {}): AvatarState {
   return {
@@ -97,6 +97,7 @@ export function avatarStateRecord(overrides: Partial<AvatarState> = {}): AvatarS
   };
 }
 
+/** A layout of ``placements`` with the stamp ``updatedAt`` and no stored window paths. */
 export function layoutRecord(placements: readonly Placement[], updatedAt: string | null = null): Layout {
   return { updated_at: updatedAt, placements, window_paths: {} };
 }
