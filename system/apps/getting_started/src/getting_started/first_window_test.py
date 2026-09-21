@@ -2,8 +2,13 @@
 the ledger read back."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from flask import Flask
+from flask import jsonify
+from flask import request
+from flask.typing import ResponseReturnValue
 
 from app_manifest.primitives import AppName
 from getting_started.errors import ShellAnswerError
@@ -11,10 +16,12 @@ from getting_started.first_window import FIRST_WINDOW_FRAME
 from getting_started.first_window import FIRST_WINDOW_PATH
 from getting_started.first_window import FirstWindowLedger
 from getting_started.first_window import FirstWindowOpener
+from getting_started.first_window import HttpShellOps
 from getting_started.first_window import connected_client_ids_of
 from getting_started.first_window import first_desktop_id_of
 from getting_started.first_window import open_op_body
 from getting_started.first_window import place_op_body
+from getting_started.serving import serve_in_background
 from getting_started.testing import FakeShellOps
 
 _APP = AppName("getting-started")
@@ -132,3 +139,63 @@ def test_the_shells_answers_are_read_by_their_contract_shapes() -> None:
         first_desktop_id_of(["home"])
     with pytest.raises(ShellAnswerError):
         first_desktop_id_of({"desktops": [{"name": "Home"}]})
+
+
+def test_the_http_shell_ops_read_the_shell_and_post_the_ops() -> None:
+    """The loopback adapter against a stub shell: the connected clients and the first desktop are read off their
+    routes, the two ops go to the broadcast route as their bodies spell them, the open's answer yields the window id,
+    and a refusal, an answer of another shape, or a shell that cannot be reached each read as no answer."""
+    posted: list[dict[str, Any]] = []
+    # What the broadcast route does next: "accept", "refuse", "list" (a JSON array), or "nameless" (no window_id).
+    behaviour = {"mode": "accept"}
+    stub = Flask("stub-shell")
+
+    @stub.get("/api/clients")
+    def clients() -> ResponseReturnValue:
+        return jsonify({"clients": [{"id": "c1", "is_connected": True}, {"id": "c2", "is_connected": False}]})
+
+    @stub.get("/api/desktops")
+    def desktops() -> ResponseReturnValue:
+        return jsonify({"desktops": [{"id": "home"}, {"id": "work"}]})
+
+    @stub.post("/api/layout/broadcast")
+    def broadcast() -> ResponseReturnValue:
+        body = request.get_json()
+        posted.append(body)
+        match behaviour["mode"]:
+            case "refuse":
+                return jsonify({"detail": "no such client"}), 404
+            case "list":
+                return jsonify([])
+            case "nameless":
+                return jsonify({"window_id": None})
+            case _:
+                return jsonify({"window_id": "win-1" if body["op"] == "open" else None})
+
+    with serve_in_background("127.0.0.1", 0, stub) as server:
+        port = server.socket.getsockname()[1]
+        shell = HttpShellOps(shell_url=f"http://127.0.0.1:{port}")
+
+        assert shell.connected_client_ids() == ["c1"]
+        assert shell.first_desktop_id() == "home"
+        assert shell.open_window(_APP, FIRST_WINDOW_PATH, "c1", "home") == "win-1"
+        assert shell.place_window("win-1", FIRST_WINDOW_FRAME, "c1", "home") is True
+        assert posted == [
+            open_op_body(_APP, FIRST_WINDOW_PATH, "c1", "home"),
+            place_op_body("win-1", FIRST_WINDOW_FRAME, "c1", "home"),
+        ]
+
+        behaviour["mode"] = "refuse"
+        assert shell.open_window(_APP, FIRST_WINDOW_PATH, "c1", "home") is None
+        assert shell.place_window("win-1", FIRST_WINDOW_FRAME, "c1", "home") is False
+        behaviour["mode"] = "list"
+        assert shell.open_window(_APP, FIRST_WINDOW_PATH, "c1", "home") is None
+        behaviour["mode"] = "nameless"
+        assert shell.open_window(_APP, FIRST_WINDOW_PATH, "c1", "home") is None
+
+    # The server is gone: every read and op is a non-answer rather than an error.
+    unreachable = HttpShellOps(shell_url=f"http://127.0.0.1:{port}")
+    assert unreachable.connected_client_ids() == []
+    assert unreachable.first_desktop_id() is None
+    assert unreachable.open_window(_APP, FIRST_WINDOW_PATH, "c1", "home") is None
+    assert unreachable.place_window("win-1", FIRST_WINDOW_FRAME, "c1", "home") is False
