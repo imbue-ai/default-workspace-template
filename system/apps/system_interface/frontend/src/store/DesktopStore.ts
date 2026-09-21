@@ -907,6 +907,14 @@ export class DesktopStore {
     return gesture.currentRect;
   }
 
+  /** The rectangle the desktop draws a window at now: the gesture's while one moves or resizes it, else
+   *  its placement's. What a render positions the window by, and what the paint of a gesture writes
+   *  onto it when the gesture ends or is cancelled, so the DOM already equals what the next render
+   *  answers (a render diffs against the last render, not the DOM, and writes nothing it finds equal). */
+  windowRect(windowId: string): PixelRect {
+    return this.gestureRectFor(windowId) ?? this.renderedRect(placementOf(this.state.layout, windowId));
+  }
+
   /** The rectangle the snap preview draws, or null when the drag is in no zone. */
   snapPreviewRect(): PixelRect | null {
     const gesture = this.gesture;

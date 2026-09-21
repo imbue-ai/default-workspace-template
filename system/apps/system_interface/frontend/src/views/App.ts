@@ -113,16 +113,17 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
-  /** Paint a window drag or resize as it stands: the live rectangle straight onto the window's element,
-   *  its page over the content box that just moved, and the snap preview. No redraw: one per pointer
-   *  event would re-render the whole desktop and reposition every page. The store keeps the same
-   *  rectangle and zone, so a redraw from any other cause mid-gesture renders what was painted. */
-  function paintWindowGesture(current: DesktopStore, windowId: string): void {
+  /** Paint a window as the store now has it, straight onto the DOM: its rectangle onto its element, its
+   *  page over the content box that just moved, and the snap preview shown or hidden. Per pointer move
+   *  of a drag or resize, with no redraw (one per move would re-render the whole desktop and reposition
+   *  every page), and once more when the gesture ends or is cancelled: a redraw diffs against the last
+   *  render rather than the DOM and writes nothing it finds equal, so the DOM must already be at what
+   *  the render answers, which the store's ``windowRect`` and ``snapPreviewRect`` are at every point. */
+  function paintWindow(current: DesktopStore, windowId: string): void {
     const area = backdropArea;
     if (area === null) return;
-    const rect = current.gestureRectFor(windowId);
     const element = area.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
-    if (rect !== null && element !== null) applyRectStyle(element, rect);
+    if (element !== null) applyRectStyle(element, current.windowRect(windowId));
     pages?.placePage(windowId);
     const preview = area.querySelector<HTMLElement>(`[${SNAP_PREVIEW_ATTRIBUTE}]`);
     if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
@@ -179,11 +180,11 @@ export function App(): m.Component<AppAttrs> {
         switch (binding.kind) {
           case "window-move":
             current.updateWindowMove(point);
-            paintWindowGesture(current, binding.windowId);
+            paintWindow(current, binding.windowId);
             return;
           case "window-resize":
             current.updateWindowResize(delta);
-            paintWindowGesture(current, binding.windowId);
+            paintWindow(current, binding.windowId);
             return;
           case "shortcut":
             current.updateShortcutDrag(point);
@@ -197,9 +198,11 @@ export function App(): m.Component<AppAttrs> {
         switch (binding.kind) {
           case "window-move":
             current.endWindowMove(point);
+            paintWindow(current, binding.windowId);
             break;
           case "window-resize":
             current.endWindowResize(delta);
+            paintWindow(current, binding.windowId);
             break;
           case "shortcut":
             current.endShortcutDrag(point);
@@ -209,8 +212,9 @@ export function App(): m.Component<AppAttrs> {
         }
         pages?.setGestureActive(false);
       },
-      onCancel: () => {
+      onCancel: (binding) => {
         current.cancelGesture();
+        if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         pages?.setGestureActive(false);
       },
       onLongPress: (binding, client) => {

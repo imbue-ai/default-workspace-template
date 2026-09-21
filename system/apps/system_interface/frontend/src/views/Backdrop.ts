@@ -106,14 +106,13 @@ export function Backdrop(): m.Component<BackdropAttrs> {
               const window = windowsById.get(placement.window_id);
               if (placement.is_minimized || window === undefined) return [];
               const app = appByName(state, window.app);
-              const gestureRect = store.gestureRectFor(window.id);
               return [
                 m(Window, {
                   key: window.id,
                   window,
                   app,
                   title: windowTitle(window, app),
-                  rect: gestureRect ?? store.renderedRect(placement),
+                  rect: store.windowRect(window.id),
                   state: renderedState(placement, state.modes),
                   stackIndex: index,
                   isFocused: window.id === focusedWindowId,

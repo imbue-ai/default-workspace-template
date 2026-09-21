@@ -90,6 +90,45 @@ describe("a window drag", () => {
     expect(element.getAttribute("data-window-state")).toBe("SNAPPED_LEFT");
     expect(preview.style.display).toBe("none");
   });
+
+  // Mithril diffs a render against the last render, not the DOM: with no redraw between the begin and
+  // the end, the end render finds the same rectangle (a cancel) or the same hidden preview (a snap
+  // release) it rendered at the begin and writes nothing, so the paint itself must have put them right.
+  it("puts the window back and hides the preview when cancelled, with no redraw in between", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const listener = gestureListener as GestureListener;
+    const element = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
+    const preview = document.querySelector("[data-snap-preview]") as HTMLElement;
+    const binding = { kind: "window-move", windowId: "win-1" } as const;
+    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
+    m.redraw.sync();
+    listener.onMove(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    expect(element.style.left).not.toBe("50px");
+    expect(preview.style.display).toBe("");
+    listener.onCancel(binding);
+    expect(element.style.left).toBe("50px");
+    expect(preview.style.display).toBe("none");
+    m.redraw.sync();
+    expect(element.style.left).toBe("50px");
+    expect(preview.style.display).toBe("none");
+  });
+
+  it("hides the preview on a snap release, with no redraw in between", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const listener = gestureListener as GestureListener;
+    const preview = document.querySelector("[data-snap-preview]") as HTMLElement;
+    const binding = { kind: "window-move", windowId: "win-1" } as const;
+    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
+    m.redraw.sync();
+    listener.onMove(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    expect(preview.style.display).toBe("");
+    listener.onEnd(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    m.redraw.sync();
+    expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("SNAPPED_LEFT");
+    expect(preview.style.display).toBe("none");
+  });
 });
 
 describe("Escape", () => {
