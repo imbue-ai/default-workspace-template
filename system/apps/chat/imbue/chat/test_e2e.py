@@ -777,6 +777,9 @@ def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_i
         assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
 
 
+# Flaky: the failure notice reaches the chat page over its socket, whose connect has stalled for twenty seconds in
+# CI while the create failed at once, so the notice missed its wait.
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
