@@ -281,9 +281,7 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
-import json
 import os
-import time
 from pathlib import Path
 
 from flask import Flask, Response
@@ -303,8 +301,6 @@ DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 # instance on a spare port next to the live one (see the update-app skill).
 # Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
 PORT = int(os.environ.get("{port_env_var}", "{port}"))
-
-_START_TIME = time.time()
 
 app = Flask("{package}", static_folder=None)
 
@@ -328,15 +324,12 @@ def index() -> Response:
 
 @app.route("/health")
 def health() -> Response:
-    payload = json.dumps({{"status": "ok", "pid": os.getpid(), "started_at": _START_TIME}})
-    return Response(payload, mimetype="application/json")
+    return Response('{{"status": "ok"}}', mimetype="application/json")
 
 
 def main() -> None:
-    # use_reloader=True enables rapid local development and mock iterations
-    # without requiring supervisord service restarts.
     run_simple(
-        "127.0.0.1", PORT, app, threaded=True, use_reloader=True, use_debugger=False
+        "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
     )
 
 

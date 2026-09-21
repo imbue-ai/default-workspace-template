@@ -262,11 +262,9 @@ def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
     assert "minds-location" not in source
 
 
-def test_the_runner_uses_reloader_and_health_reports_metadata() -> None:
+def test_the_runner_does_not_use_reloader() -> None:
     source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard", 8081)
-    assert "use_reloader=True" in source
-    assert '"started_at": _START_TIME' in source
-    assert '"pid": os.getpid()' in source
+    assert "use_reloader=False" in source
 
 
 def test_main_parser_supports_start_flag() -> None:
