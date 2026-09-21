@@ -60,8 +60,6 @@ function bootstrap(): void {
     const chatId = message.chatId;
     if (typeof chatId === "string" && chatId !== "") void desktopStore.focusChat(chatId);
   });
-  // The handlers are up, so anything the embedder held for this page can come now.
-  announceReadyToEmbedder();
   const rootElement = document.getElementById("app");
   if (rootElement) {
     m.mount(rootElement, {
@@ -74,7 +72,11 @@ function bootstrap(): void {
         }),
     });
   }
-  void desktopStore.start(takeDeepLinkFromLocation());
+  const started = desktopStore.start(takeDeepLinkFromLocation());
+  // Announced once the page can act on what the embedder held, not merely once a handler is
+  // registered: a focus-chat ask needs the desktops ``start`` reads and the apps the socket
+  // delivers, and the embedder sends it the moment this announcement lands.
+  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
 }
 
 window.addEventListener("load", bootstrap);

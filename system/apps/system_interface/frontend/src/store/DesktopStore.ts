@@ -323,6 +323,13 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
   }
 
+  /** Resolves once the app list has landed. It arrives only over the socket, so ``start`` resolving
+   *  does not imply it: a caller that needs the apps (which app holds chats, which window is pinned)
+   *  waits on this too. */
+  whenAppsLoaded(): Promise<void> {
+    return this.appsLoaded;
+  }
+
   /** Read this client's record, pick the desktop (a deep link's first), connect, fetch the layout, and
    *  honour the deep link's open or launch. */
   async start(deepLink: DeepLink): Promise<void> {
