@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Final
 
 from app_manifest.manifest import LocationScope
+from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
@@ -357,7 +358,7 @@ class ShellState(MutableModel):
         return outcome.is_active_desktop_changed
 
     def set_client_entry_presentation(
-        self, client_id: ClientId, app: str, presentation: EntryPresentation
+        self, client_id: ClientId, app: AppName, presentation: EntryPresentation
     ) -> ClientRecord:
         """Store how a recorded client shows one pinned entry and tell that client's windows; raises
         ClientNotFoundError."""

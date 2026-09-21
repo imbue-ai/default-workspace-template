@@ -200,7 +200,7 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
         raise InvalidShellValueError(
             f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}"
         )
-    record = shell.set_client_entry_presentation(ClientId(client_id), str(AppName(app)), body)
+    record = shell.set_client_entry_presentation(ClientId(client_id), AppName(app), body)
     return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
