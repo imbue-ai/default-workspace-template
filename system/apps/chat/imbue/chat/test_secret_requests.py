@@ -55,10 +55,12 @@ def _running_chat_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Iter
         thread.join(timeout=10)
 
 
-def _run_request_script(tmp_path: Path, base_url: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+def _run_request_script(
+    tmp_path: Path, base_url: str, *arguments: str, chat_id: str = _AGENT_ID
+) -> subprocess.CompletedProcess[str]:
     apps_file = tmp_path / "apps.toml"
     apps_file.write_text(f'[[apps]]\nname = "chat"\nurl = "{base_url}"\n')
-    environment = {**os.environ, "MINDS_APPS_FILE": str(apps_file), "MINDS_CHAT_ID": _AGENT_ID}
+    environment = {**os.environ, "MINDS_APPS_FILE": str(apps_file), "MINDS_CHAT_ID": chat_id}
     return subprocess.run(
         [sys.executable, str(_REQUEST_SCRIPT), *arguments],
         capture_output=True,
@@ -110,6 +112,20 @@ def test_the_script_fails_plainly_when_no_chat_app_answers(tmp_path: Path) -> No
     assert completed.returncode == 1
     assert "cannot be reached" in completed.stderr or "could not connect" in completed.stderr
     assert "from a terminal" in completed.stderr
+
+
+def test_the_script_reports_what_the_chat_app_refused(tmp_path: Path) -> None:
+    """A filing the chat app rejects (here: for a chat it does not know) has to reach the
+    agent as the chat app's own reason, not as a bare non-zero exit."""
+    messenger = RecordingMngrMessenger()
+    with _running_chat_app(tmp_path, messenger) as (base_url, _):
+        completed = _run_request_script(
+            tmp_path, base_url, "--file", "svc", "--var", "SVC_TOKEN", "--rationale", "why", chat_id="agent-unknown"
+        )
+    assert completed.returncode == 1
+    assert "refused the request (HTTP 404): Chat 'agent-unknown' not found" in completed.stderr
+    # The chat app's own reason, lifted out of the answer rather than the answer dumped.
+    assert "{" not in completed.stderr
 
 
 def test_the_script_refuses_a_bad_file_or_variable_name_before_reaching_the_chat_app(tmp_path: Path) -> None:
