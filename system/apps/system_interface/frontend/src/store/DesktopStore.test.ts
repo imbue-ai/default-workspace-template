@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
+import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
-import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  desktopRecord,
+  placementRecord,
+  presentUserRecord,
+  themeMetricsRecord,
+  windowRecord,
+} from "../testing/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
@@ -56,6 +64,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetPresenceForTesting();
   vi.useRealTimers();
 });
 
@@ -575,6 +584,17 @@ describe("gestures", () => {
     store.setWindowState("win-1", "SNAPPED_RIGHT");
     store.beginWindowResize("win-1", "w");
     expect(last(activePlacements(store.getState()))).toMatchObject({ state: "NORMAL", frame: { x: 0.5, width: 0.5 } });
+  });
+
+  it("a pushed presence set replaces the connected users and schedules a redraw", async () => {
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    const before = redraws;
+    expect(getPresentUsers()).toEqual([]);
+    socket.deliver().onPresenceUpdated([presentUserRecord("user-bob-4471")]);
+    expect(getPresentUsers().map((user) => user.user_id)).toEqual(["user-bob-4471"]);
+    expect(redraws).toBe(before + 1);
+    expect(store.getState().desktops).toHaveLength(2);
   });
 
   it("a move or resize in progress schedules no redraw; its start and end do", async () => {
