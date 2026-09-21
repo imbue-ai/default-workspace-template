@@ -3380,7 +3380,7 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
     { name = "defusedxml", specifier = ">=0.7" },
-    { name = "flask", specifier = ">=3.0" },
+    { name = "flask", specifier = ">=3.1" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
