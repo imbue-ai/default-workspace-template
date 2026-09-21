@@ -9,6 +9,7 @@
 import m from "mithril";
 import type { PixelRect } from "../geometry/frames";
 import { rectStyle } from "./pixelStyle";
+import type { RectStyle } from "./pixelStyle";
 
 export const SNAP_PREVIEW_ATTRIBUTE = "data-snap-preview";
 
@@ -18,11 +19,7 @@ export interface SnapPreviewAttrs {
 }
 
 /** Every style property the preview carries, so a hide clears the rectangle a show wrote. */
-export interface SnapPreviewStyle {
-  readonly left: string;
-  readonly top: string;
-  readonly width: string;
-  readonly height: string;
+export interface SnapPreviewStyle extends RectStyle {
   readonly display: string;
 }
 
