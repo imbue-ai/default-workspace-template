@@ -254,6 +254,9 @@ The `register_avatar.py` helper (the prototype's `pet_register.py`) posts a file
 
 A new client sees every pinned entry in the pin's default mode and style, each showing its window as minimized.
 A new desktop is created with its pinned windows.
+
+The chat a workspace is born with (the welcome chat the Mind app seeds), and every chat the Mind app asks to have shown (its `auto_open` label), lands in the pinned window rather than in a window of its own: the chat app's auto-open asks the shell to `navigate` the client's view of the pinned window to the chat and to `restore` it, so the avatar's window is the one showing the conversation; only a desktop with no pinned chat window gets a root window opened, as before.
+The op route names that window with the `pinned` window argument, the requester's app's pinned window on the target desktop, beside `self` and an app name.
 A workspace upgraded to this version gets a pinned window on every existing desktop on the first read after the registry is read: an existing chat root window at `/` is adopted, otherwise one is created beside whatever chat windows the desktop already holds.
 A chat root that had drifted to a chat-specific path is not adopted; the desktop briefly holds it and the new pinned window, and closing the old one resolves it.
 

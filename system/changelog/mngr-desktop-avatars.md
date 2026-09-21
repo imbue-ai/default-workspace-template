@@ -5,3 +5,5 @@ A new blueprint, `docs/system/blueprint/pinned-taskbar-entries/plan-pinned-taskb
 `layout.py desktops` and `list` show each window's `is_pinned` and `scope`; a `close` of a pinned window prints the shell's refusal ("minimize it instead"). The desktop-interface concepts, plan, and contracts documents carry the pinned-window, independent-scope, presentation, and avatar amendments the pinned-taskbar-entries plan lists in its section 9, and `docs/system/avatar-designs.md` is the authoring guide for a design drawn through chat.
 
 `layout.py desktops` and `list` show each window's `client_paths` (each client's own path for an independent window). The window-bound-resources spec's reader section and the desktop contracts' desktops route describe the field.
+
+`layout.py` accepts `pinned` as a window argument (your app's pinned window on the target desktop).

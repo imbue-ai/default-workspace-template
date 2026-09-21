@@ -60,6 +60,7 @@ from imbue.system_interface.shell.layout_ops import DesktopOpArguments
 from imbue.system_interface.shell.layout_ops import INVENTORY_OPS
 from imbue.system_interface.shell.layout_ops import LOAD_OP
 from imbue.system_interface.shell.layout_ops import OpRequester
+from imbue.system_interface.shell.layout_ops import PINNED_WINDOW
 from imbue.system_interface.shell.layout_ops import RELOAD_SYSTEM_INTERFACE_OP
 from imbue.system_interface.shell.layout_ops import SELF_WINDOW
 from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
@@ -466,10 +467,17 @@ def _resolve_window(
     requester: OpRequester | None,
 ) -> Window:
     """The window an op names, as the shared record: a window id, ``self`` (the requester's app's window whose path,
-    as the target client sees it in ``seen_windows``, carries its marker), or an app name (that app's most recently
-    focused window in this client's layout)."""
+    as the target client sees it in ``seen_windows``, carries its marker), ``pinned`` (the requester's app's pinned
+    window on the desktop), or an app name (that app's most recently focused window in this client's layout)."""
     if not raw:
-        raise LayoutOpError("this op needs a window: a window id, 'self', or an app name")
+        raise LayoutOpError("this op needs a window: a window id, 'self', 'pinned', or an app name")
+    if raw == PINNED_WINDOW:
+        if requester is None:
+            raise LayoutOpError("'pinned' names the requester's app's pinned window, but this op carried no requester")
+        pinned = next((window for window in desktop.windows if window.is_pinned and window.app == requester.app), None)
+        if pinned is None:
+            raise WindowNotFoundError(f"pinned ({requester.app} has no pinned window on desktop {desktop.id})")
+        return pinned
     if raw == SELF_WINDOW:
         if requester is None or not requester.marker:
             raise LayoutOpError(

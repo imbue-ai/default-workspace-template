@@ -15,3 +15,5 @@ Pinned taskbar entries and the chat avatar (`docs/system/blueprint/pinned-taskba
 - A pinned window keeps its close control and its menus' Close row; on a pinned window each minimizes it, as the close chord already did, so a habitual reach for the corner control does what the user expects rather than landing on maximize.
 
 - The layout answer places a pinned window the client has never placed at the pinned frame (the right half of the backdrop, a margin in), minimized, so the first click on the avatar opens the chat over half the screen rather than at the cascade; the client's first save writes it.
+
+- The op route's window argument accepts `pinned`, the requesting app's pinned window on the target desktop (404 when it has none, 400 without a requester), so an app can point a client's view of its pinned window somewhere and show it without knowing the window's id.

@@ -33,7 +33,9 @@ from playwright.sync_api import expect
 from imbue.chat.accounts import account_dir
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
+from imbue.chat.auto_open import navigate_pinned_op_body
 from imbue.chat.auto_open import open_chat_op_body
+from imbue.chat.auto_open import restore_pinned_op_body
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
@@ -236,26 +238,38 @@ def _shown_chat(page: Page) -> FrameLocator:
 
 
 def _open_fixture_chat_by_op(server: RunningWorkspace, client_id: str) -> None:
-    """Open the fixture chat the way the agent-side auto-open does: the desktop ``open`` op naming the app, the
-    root path, and the client, retried until the shell has registered the client."""
-    payload = json.dumps(open_chat_op_body(ChatId(FIXTURE_AGENT_ID), client_id)).encode()
+    """Show the fixture chat the way the agent-side auto-open does: the desktop ``navigate`` op pointing the app's
+    pinned window at the chat for the client, then ``restore`` of it; with no pinned window on the desktop (this
+    server registers the chat without its pin) the ``open`` op instead, as the reactor falls back. Retried until the
+    shell has registered the client."""
+    chat_id = ChatId(FIXTURE_AGENT_ID)
 
-    def _attempt() -> bool:
+    def _post(body: dict[str, Any]) -> int:
+        """The op route's status: 200 for an applied op, the refusal's code otherwise, 0 when unreachable."""
         request = urllib.request.Request(
             f"{server.shell_url}/api/layout/broadcast",
-            data=payload,
+            data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=5):
-                return True
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return int(response.status)
         except urllib.error.HTTPError as e:
             if e.code in (404, 412):
-                return False
-            raise AssertionError(f"open op refused with HTTP {e.code}: {e.read().decode(errors='replace')}") from e
+                return int(e.code)
+            raise AssertionError(f"op refused with HTTP {e.code}: {e.read().decode(errors='replace')}") from e
         except (TimeoutError, urllib.error.URLError):
+            return 0
+
+    def _attempt() -> bool:
+        navigated = _post(navigate_pinned_op_body(chat_id, client_id))
+        if navigated == 404:
+            return _post(open_chat_op_body(chat_id, client_id)) == 200
+        if navigated != 200:
             return False
+        _post(restore_pinned_op_body(client_id))
+        return True
 
     wait_for(_attempt, timeout=15.0, poll_interval=0.2, error_message="the open op never succeeded")
 
