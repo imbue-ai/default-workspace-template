@@ -1663,11 +1663,13 @@ def _run_rollback(
             record,
             repo_root,
             "The previous version is restored, but this update also changed how the workspace "
-            "starts, which only a restart of the workspace finishes. Ask your agent to run "
+            "starts, which only a restart of the workspace's system services finishes. Ask your "
+            "agent to run "
             f"`{SERVICES_RESTART_COMMAND}`.",
         )
         sys.stderr.write(
-            "rolled back: the files are restored; the workspace must be restarted to finish "
+            "rolled back: the files are restored; the workspace's system services must be restarted "
+            "to finish "
             f"(`{SERVICES_RESTART_COMMAND}`).\n"
         )
         return 0

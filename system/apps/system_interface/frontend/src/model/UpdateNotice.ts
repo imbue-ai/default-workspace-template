@@ -22,7 +22,7 @@ export interface UpdateNotice {
   readonly apps: readonly string[];
   readonly programs: readonly string[];
   /** The diff reached the workspace's own setup: a rollback restores the files but an agent
-   *  must restart the workspace. */
+   *  must restart the workspace's system services. */
   readonly needsSystemServicesRestart: boolean;
   /** What a running rollback is doing right now. */
   readonly progress: string | null;
