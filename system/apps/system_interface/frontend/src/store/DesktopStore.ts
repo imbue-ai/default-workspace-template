@@ -139,6 +139,13 @@ export interface StoreDependencies {
   readonly reloadInterface: () => void;
 }
 
+/** A navigation this client asked for on its own page (the chooser's draft), which the live pages honour
+ *  even where the page just reported leaving that very path. */
+export interface OwnNavigation {
+  readonly windowId: string;
+  readonly path: string;
+}
+
 /** A window move in progress: the rendered rectangle it started from and where it is now. */
 export interface MoveGesture {
   readonly kind: "move";
@@ -198,6 +205,8 @@ export class DesktopStore {
   private hasSocketConnected = false;
   // The path each window's page reported last, so a report answered out of order is not applied.
   private readonly latestReportedPaths = new Map<string, string>();
+  /** The one navigation this client asked for itself and has not yet followed (``navigateOwnWindow``). */
+  private ownNavigation: OwnNavigation | null = null;
   // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast, its answer to a
   // linked window's navigate this window landed), and not by a local edit: the live pages follow their windows'
   // stored paths after the shell speaks.
@@ -513,6 +522,7 @@ export class DesktopStore {
   async navigateOwnWindow(windowId: string, path: string): Promise<boolean> {
     const found = findWindow(this.state, windowId);
     if (found === null) return false;
+    this.ownNavigation = { windowId, path };
     const title = effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
     let reported: WindowRecord;
     try {
@@ -534,6 +544,13 @@ export class DesktopStore {
     this.desktopsRevision += 1;
     this.dispatch({ type: "window_location_reported", desktopId: found.desktop.id, window: reported });
     return true;
+  }
+
+  /** The navigation this client asked for itself since the pages last followed, handed over once. */
+  takeOwnNavigation(): OwnNavigation | null {
+    const own = this.ownNavigation;
+    this.ownNavigation = null;
+    return own;
   }
 
   /** Choose the workspace's avatar design; every window (this one included) follows the shell's broadcast. */

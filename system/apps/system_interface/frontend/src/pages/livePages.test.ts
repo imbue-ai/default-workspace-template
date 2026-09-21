@@ -382,6 +382,27 @@ describe("the contract", () => {
     expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
   });
 
+  it("follows this client's own navigation even back to a path the page just reported leaving", async () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // The chooser's draft: this client points its own page at the draft path.
+    expect(await store.navigateOwnWindow("win-1", "/?draft=a")).toBe(true);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?draft=a" }]);
+    // The page takes the draft and reports its selection alone, leaving the draft path behind.
+    messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=1", title: "" });
+    await settle();
+    layer.reconcile();
+    spy.mockClear();
+    // The same draft again: a stale-snapshot guard would call this "the path the page reported leaving" and skip
+    // it; a navigation this client asked for is followed.
+    expect(await store.navigateOwnWindow("win-1", "/?draft=a")).toBe(true);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?draft=a" }]);
+  });
+
   it("a report the shell refuses leaves the page to follow the stored path again", async () => {
     const spy = spyOnFrame("win-1");
     load("win-1");

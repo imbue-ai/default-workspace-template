@@ -260,6 +260,13 @@ export class LivePagesLayer implements PageDriver {
 
   private follow(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
     const state = this.store.getState();
+    // A navigation this client asked for itself is meant even when it points the page back at a path the page
+    // just reported leaving (the same draft handed over twice): the guard below is for stale snapshots, not this.
+    const own = this.store.takeOwnNavigation();
+    if (own !== null) {
+      const page = this.pages.get(own.windowId);
+      if (page !== undefined) page.pendingReport = null;
+    }
     const reports = new Map<string, PageReport>();
     const windows: WindowRecord[] = [];
     for (const page of this.pages.values()) {
