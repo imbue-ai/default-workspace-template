@@ -1038,7 +1038,8 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
 def test_shortcut_menu_changes_mode_and_removes_and_an_agent_op_adds_one_back(
     e2e_server: E2EServer, page: Page
 ) -> None:
-    """The shortcut's menu flips its mode and removes it; an agent's ``shortcut set`` op puts it back on the backdrop."""
+    """The shortcut's menu flips its mode and removes it; an agent's ``shortcut set`` op puts it back on the
+    backdrop."""
     _land(page, e2e_server)
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
     shortcut.click(button="right")
