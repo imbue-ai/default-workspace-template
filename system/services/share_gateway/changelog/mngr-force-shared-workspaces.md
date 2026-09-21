@@ -1,0 +1,1 @@
+This branch carries the share identity cleanup merged from `josh/sharing-cleanup` (`X-Imbue-Identity`, user-id grants, the identity refresh route); that branch's own entry (`mngr-sharing-cleanup.md`) describes the changes in full. No gateway changes are needed for the shared-desktop work.
