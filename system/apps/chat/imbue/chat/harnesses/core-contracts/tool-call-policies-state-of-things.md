@@ -20,7 +20,7 @@ timeless; everything here is a snapshot.
 | P8 secret file read only by the wrapper | live | live | live | **partial** |
 | P9 secret request stands alone | live | **partial** | live | **partial** |
 
-No harness is fully `n/a` any more, and three rows are `partial` for reasons that are
+No harness is fully `n/a` any more, and five rows are `partial` for reasons that are
 structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1.
 
 - **agy P5 — partial.** The shim sees only `bash -c`, so agy's own editing tools
