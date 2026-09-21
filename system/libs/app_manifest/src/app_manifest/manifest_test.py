@@ -35,6 +35,7 @@ def _full_manifest_data() -> dict[str, object]:
             }
         ],
         "launcher_rank": 20,
+        "window_closed_path": "/api/window-closed",
     }
 
 
@@ -52,6 +53,12 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/")]
     assert manifest.launch_paths[0].params[0].name == "path"
     assert manifest.launcher_rank == 20
+    assert manifest.window_closed_path == "/api/window-closed"
+
+
+def test_window_closed_path_follows_the_launch_path_rule() -> None:
+    with pytest.raises(ValidationError, match="no query string"):
+        AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})
 
 
 def test_duplicate_launch_path_ids_are_rejected() -> None:
@@ -201,6 +208,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.default_shortcut is None
     assert manifest.launch_paths == ()
     assert manifest.launcher_rank is None
+    assert manifest.window_closed_path is None
     assert manifest.handles == {}
 
 

@@ -6,18 +6,14 @@ body is a warning: the two apps disagree about the route's shape. The auto-open 
 to know whether the shell accepted an op, makes its own requests (``auto_open.py``).
 """
 
-import os
 import time
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
 import httpx
+from app_manifest.shell_windows import shell_base_url as _shared_shell_base_url
 from loguru import logger
-
-# The shell's address, resolved exactly as system/scripts/layout.py resolves it.
-DEFAULT_SHELL_URL: Final[str] = "http://127.0.0.1:8000"
-ENV_SHELL_URL: Final[str] = "MINDS_WORKSPACE_SERVER_URL"
 
 # A post to the shell is one loopback request the shell answers without work; past the first
 # threshold it is suspicious, past the second it is broken.
@@ -29,7 +25,7 @@ _REFUSAL_DETAIL_LIMIT: Final[int] = 200
 
 
 def shell_base_url() -> str:
-    return os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/")
+    return _shared_shell_base_url()
 
 
 def post_to_shell(url: str, body: Mapping[str, Any]) -> None:

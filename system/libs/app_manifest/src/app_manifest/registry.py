@@ -86,6 +86,9 @@ class RegistryRow(FrozenModel):
     launcher_rank: int | None = Field(
         default=None, description="The app's place among the launcher's leading tiles; absent reads as none"
     )
+    window_closed_path: LaunchPathValue | None = Field(
+        default=None, description="Where the shell posts a closed window of the app; absent means no post"
+    )
 
 
 def registry_path() -> Path:
