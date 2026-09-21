@@ -14,22 +14,6 @@ from imbue.minds_admin.cli._tier_secrets import workspace_storage_config_from_se
 from imbue.observability.primitives import CollectorRole
 from imbue.observability.primitives import ObservabilityTierName
 
-_ALL_OVH_CREDENTIAL_ENV_VARS = (
-    "OVH_APPLICATION_KEY",
-    "OVH_APP_KEY",
-    "OVH_APPLICATION_SECRET",
-    "OVH_APP_SECRET",
-    "OVH_CONSUMER_KEY",
-    "OVH_CLIENT_ID",
-    "OVH_CLIENT_SECRET",
-)
-
-
-def _clear_ovh_and_activation_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for env_var in _ALL_OVH_CREDENTIAL_ENV_VARS:
-        monkeypatch.delenv(env_var, raising=False)
-    monkeypatch.delenv("MINDS_ROOT_NAME", raising=False)
-
 
 def test_observability_tier_maps_shared_tiers_to_themselves_and_everything_else_to_dev() -> None:
     # Production and staging each have their own observability instance; every
@@ -84,11 +68,12 @@ def test_ovh_config_from_vault_secret_names_every_missing_field() -> None:
     assert "OVH_APPLICATION_KEY" not in message.split("missing")[1].split(";")[0]
 
 
-def test_resolve_ovh_config_prefers_the_env_var_override(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_ovh_config_prefers_the_env_var_override(
+    _cleared_ovh_and_activation_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The OVH_* env vars are the non-activated one-off escape hatch and win over
     # any activated tier's Vault entry (no Vault read happens at all: an activated
     # env in this test would fail the read, and no such failure surfaces).
-    _clear_ovh_and_activation_env(monkeypatch)
     monkeypatch.setenv("OVH_APPLICATION_KEY", "env-ak-36284")
     monkeypatch.setenv("OVH_APPLICATION_SECRET", "env-as-36284")
     monkeypatch.setenv("OVH_CONSUMER_KEY", "env-ck-36284")
@@ -100,9 +85,8 @@ def test_resolve_ovh_config_prefers_the_env_var_override(monkeypatch: pytest.Mon
 
 
 def test_resolve_ovh_config_without_env_vars_or_activation_gives_an_actionable_error(
-    monkeypatch: pytest.MonkeyPatch,
+    _cleared_ovh_and_activation_env: None,
 ) -> None:
-    _clear_ovh_and_activation_env(monkeypatch)
     with pytest.raises(click.ClickException) as exc_info:
         resolve_ovh_config()
     message = str(exc_info.value)
