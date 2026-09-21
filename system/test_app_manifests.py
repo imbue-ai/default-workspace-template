@@ -28,14 +28,7 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
 # or with no manifest at all), and this suite runs there too.
-_BUILT_IN_APP_PACKAGES = (
-    "browser",
-    "chat",
-    "files",
-    "system_interface",
-    "terminal",
-    "terminal_pty",
-)
+_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal", "terminal_pty")
 
 
 def _built_in_manifest_paths() -> list[Path]:
@@ -145,9 +138,7 @@ def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) 
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
     command_by_program = _command_by_program()
     for manifest_path in _every_manifest_path():
-        for program in load_manifest(
-            manifest_path, repo_root=_REPO_ROOT
-        ).wiring.programs:
+        for program in load_manifest(manifest_path, repo_root=_REPO_ROOT).wiring.programs:
             assert program in command_by_program, (
                 f"{manifest_path} declares wiring program {program!r}, which supervisord.conf does not define"
             )
@@ -156,10 +147,7 @@ def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
 def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() -> None:
     # An app named after a standalone program's first label would claim that program as
     # its <name>-<role> sidecar when its footprint is computed, so the label is reserved.
-    app_programs = {
-        load_manifest(path, repo_root=_REPO_ROOT).program
-        for path in _every_manifest_path()
-    }
+    app_programs = {load_manifest(path, repo_root=_REPO_ROOT).program for path in _every_manifest_path()}
     standalone_labels = {
         program.partition("-")[0]
         for program in _command_by_program()
@@ -167,9 +155,7 @@ def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() ->
     }
     unreserved = sorted(standalone_labels - RESERVED_APP_NAMES)
 
-    assert unreserved == [], (
-        f"add these to RESERVED_APP_NAMES (and forward_port.py's RESERVED_NAMES): {unreserved}"
-    )
+    assert unreserved == [], f"add these to RESERVED_APP_NAMES (and forward_port.py's RESERVED_NAMES): {unreserved}"
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
@@ -258,41 +244,20 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["browser"].critical is False
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
-    for name, mode in (
-        ("chat", "new"),
-        ("terminal", "new"),
-        ("files", "new"),
-        ("browser", "focus"),
-    ):
+    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2).
     assert by_name["system_interface"].launch_paths == ()
-    assert [(entry.id, entry.path) for entry in by_name["chat"].launch_paths] == [
-        ("root", "/"),
-        ("new", "/new"),
-    ]
+    assert [(entry.id, entry.path) for entry in by_name["chat"].launch_paths] == [("root", "/"), ("new", "/new")]
     assert by_name["chat"].default_shortcut is not None
     assert by_name["chat"].default_shortcut.launch == "root"
-    for name, launch_path in (
-        ("terminal", "/new"),
-        ("files", "/"),
-        ("browser", "/new"),
-    ):
-        assert [(entry.id, entry.path) for entry in by_name[name].launch_paths] == [
-            ("new", launch_path)
-        ], name
+    for name, launch_path in (("terminal", "/new"), ("files", "/"), ("browser", "/new")):
+        assert [(entry.id, entry.path) for entry in by_name[name].launch_paths] == [("new", launch_path)], name
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["draft"]
-    assert [param.name for param in by_name["chat"].launch_paths[1].params] == [
-        "account_id",
-        "message",
-    ]
-    assert [param.name for param in by_name["terminal"].launch_paths[0].params] == [
-        "workdir"
-    ]
+    assert [param.name for param in by_name["chat"].launch_paths[1].params] == ["account_id", "message"]
+    assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
     assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
-    assert [param.name for param in by_name["browser"].launch_paths[0].params] == [
-        "url"
-    ]
+    assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]
