@@ -177,9 +177,7 @@ def _workspace_base_url() -> str:
 def _own_chat_id() -> str:
     """The caller's chat id: ``MINDS_CHAT_ID`` from the chat app that created the agent, else the
     agent's own id (an agent created any other way is its own chat), else "" outside an agent."""
-    return os.environ.get(ENV_MINDS_CHAT_ID, "") or os.environ.get(
-        ENV_MNGR_AGENT_ID, ""
-    )
+    return os.environ.get(ENV_MINDS_CHAT_ID, "") or os.environ.get(ENV_MNGR_AGENT_ID, "")
 
 
 def _requester() -> dict[str, str] | None:
@@ -205,9 +203,7 @@ def _fail(message: str) -> NoReturn:
 
 
 def _retired_spelling_message(value: str) -> str:
-    prefix = next(
-        candidate for candidate in _RETIRED_PREFIXES if value.startswith(candidate)
-    )
+    prefix = next(candidate for candidate in _RETIRED_PREFIXES if value.startswith(candidate))
     remainder = value[len(prefix) :]
     if prefix == "app:":
         name, _, query = remainder.partition("?")
@@ -227,7 +223,7 @@ def _retired_spelling_message(value: str) -> str:
     elif prefix == "service:":
         name, _, query = remainder.partition("?")
         hint = f"give the app name on its own: 'layout.py open {name or '<app>'}'" + (
-            f' (with --path "/?{query}" for one page of it)' if query else ""
+            f" (with --path \"/?{query}\" for one page of it)" if query else ""
         )
     elif prefix == "url:":
         hint = "pass the URL itself: 'layout.py open https://...' opens it in a new browser"
@@ -261,13 +257,9 @@ def _app_name(value: str) -> str:
     """An argument that must name an app; the retired spellings and a URL are refused by name."""
     _refuse_retired_spelling(value)
     if _is_external_url(value):
-        _fail(
-            f"{value!r} is a URL: only 'open' takes one (it opens the page in a new browser)"
-        )
+        _fail(f"{value!r} is a URL: only 'open' takes one (it opens the page in a new browser)")
     if not _is_app_name(value):
-        _fail(
-            f"{value!r} is not an app name (lowercase words joined by single dashes, at most {_MAX_APP_NAME_LENGTH} characters)"
-        )
+        _fail(f"{value!r} is not an app name (lowercase words joined by single dashes, at most {_MAX_APP_NAME_LENGTH} characters)")
     return value
 
 
@@ -294,9 +286,7 @@ def _read_registry_rows(path: Path) -> list[dict[str, Any]]:
     return [
         app
         for app in doc.get("apps", [])
-        if isinstance(app, dict)
-        and isinstance(app.get("name"), str)
-        and app.get("name")
+        if isinstance(app, dict) and isinstance(app.get("name"), str) and app.get("name")
     ]
 
 
@@ -381,9 +371,7 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
     if isinstance(body, dict):
         detail = str(body.get("detail", body))
         if status == 412:
-            sys.stderr.write(
-                f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n"
-            )
+            sys.stderr.write(f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n")
             return EXIT_ERROR
         if status in (409, 503):
             # The shell or the app cannot do it right now (a save in flight, an app still starting up): retry later.
@@ -439,9 +427,7 @@ def _describe_window(answer: dict[str, Any], window_id: str | None) -> str:
 def _describe_target(answer: dict[str, Any]) -> str:
     client_id = answer.get("client_id")
     if client_id is None:
-        return (
-            f"desktop {answer.get('desktop_id')} for no client (minimized everywhere)"
-        )
+        return f"desktop {answer.get('desktop_id')} for no client (minimized everywhere)"
     return f"desktop {answer.get('desktop_id')} for client {client_id}"
 
 
@@ -482,9 +468,7 @@ def _run_transient_op(op: str, args: dict[str, Any]) -> int:
 def _fetch_inventory() -> dict[str, Any] | None:
     status, body = _request_json("GET", f"{_workspace_base_url()}/api/inventory")
     if status != 200 or not isinstance(body, dict):
-        sys.stderr.write(
-            f"error: could not read the inventory (HTTP {status}): {body}\n"
-        )
+        sys.stderr.write(f"error: could not read the inventory (HTTP {status}): {body}\n")
         return None
     return body
 
@@ -513,11 +497,7 @@ def _listed_desktops(inventory: dict[str, Any]) -> list[dict[str, Any]]:
                 "name": desktop.get("name"),
                 "wallpaper": desktop.get("wallpaper"),
                 "shortcuts": desktop.get("shortcuts", []),
-                "windows": [
-                    _listed_window(window)
-                    for window in desktop.get("windows", []) or []
-                    if isinstance(window, dict)
-                ],
+                "windows": [_listed_window(window) for window in desktop.get("windows", []) or [] if isinstance(window, dict)],
             }
         )
     return listed
@@ -578,9 +558,7 @@ def _cmd_desktops(args: argparse.Namespace) -> int:
     inventory = _fetch_inventory()
     if inventory is None:
         return EXIT_ERROR
-    _emit_structured(
-        {"desktops": _listed_desktops(inventory), "clients": _listed_clients(inventory)}
-    )
+    _emit_structured({"desktops": _listed_desktops(inventory), "clients": _listed_clients(inventory)})
     return EXIT_OK
 
 
@@ -629,24 +607,14 @@ def _open_arguments(args: argparse.Namespace) -> dict[str, Any]:
     target: str = args.target
     if _is_external_url(target):
         if args.path or args.launch or params:
-            _fail(
-                "a URL is opened in a new browser; --path, --launch, and --param do not apply to it"
-            )
-        return {
-            "app": _BROWSER_APP_NAME,
-            "launch": _BROWSER_NEW_LAUNCH,
-            "params": {_BROWSER_URL_PARAM: target},
-        }
+            _fail("a URL is opened in a new browser; --path, --launch, and --param do not apply to it")
+        return {"app": _BROWSER_APP_NAME, "launch": _BROWSER_NEW_LAUNCH, "params": {_BROWSER_URL_PARAM: target}}
     op_args: dict[str, Any] = {"app": _app_name(target)}
     if args.path:
         if args.launch or params:
-            _fail(
-                "--path names the page to open; --launch and --param choose a launch path instead. Pass one or the other"
-            )
+            _fail("--path names the page to open; --launch and --param choose a launch path instead. Pass one or the other")
         if not args.path.startswith("/"):
-            _fail(
-                f"--path takes a path under the app's origin, starting with '/', not {args.path!r}"
-            )
+            _fail(f"--path takes a path under the app's origin, starting with '/', not {args.path!r}")
         op_args["path"] = args.path
     if args.launch:
         op_args["launch"] = args.launch
@@ -696,13 +664,8 @@ def _window_op(op: str, past_tense: str) -> Callable[[argparse.Namespace], int]:
 def _cmd_place(args: argparse.Namespace) -> int:
     window = _window_ref(args.window)
     if bool(args.zone) == bool(args.frame):
-        _fail(
-            "place takes exactly one of --zone (left, right, maximized) or --frame x,y,width,height"
-        )
-    op_args: dict[str, Any] = {
-        "window": window,
-        **_target_args(args.desktop, args.client),
-    }
+        _fail("place takes exactly one of --zone (left, right, maximized) or --frame x,y,width,height")
+    op_args: dict[str, Any] = {"window": window, **_target_args(args.desktop, args.client)}
     if args.zone:
         op_args["zone"] = args.zone
         what = f"in the {args.zone} zone"
@@ -719,34 +682,23 @@ def _cmd_place(args: argparse.Namespace) -> int:
 def _cmd_navigate(args: argparse.Namespace) -> int:
     window = _window_ref(args.window)
     if not args.path.startswith("/"):
-        _fail(
-            f"navigate takes a path under the window's app, starting with '/', not {args.path!r}"
-        )
+        _fail(f"navigate takes a path under the window's app, starting with '/', not {args.path!r}")
     return _run_desktop_op(
         "navigate",
-        {
-            "window": window,
-            "path": args.path,
-            **_target_args(args.desktop, args.client),
-        },
+        {"window": window, "path": args.path, **_target_args(args.desktop, args.client)},
         lambda answer: f"pointed window {_describe_window(answer, answer.get('window_id'))} at {args.path} on {_describe_target(answer)}",
     )
 
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
     if bool(args.window) == bool(args.app):
-        _fail(
-            "refresh takes a window (a window id, 'self', or an app name) or --app <name> for every page of an app"
-        )
+        _fail("refresh takes a window (a window id, 'self', or an app name) or --app <name> for every page of an app")
     if args.app:
         if args.client or args.desktop:
-            _fail(
-                "refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it"
-            )
+            _fail("refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it")
         return _run_transient_op("refresh", {"app": _app_name(args.app)})
     return _run_transient_op(
-        "refresh",
-        {"window": _window_ref(args.window), **_target_args(args.desktop, args.client)},
+        "refresh", {"window": _window_ref(args.window), **_target_args(args.desktop, args.client)}
     )
 
 
@@ -784,29 +736,21 @@ def _cmd_shortcut_set(args: argparse.Namespace) -> int:
     if args.cell:
         op_args["cell"] = args.cell
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write(
-        "shortcut_set", op_args, f"set shortcut {app} {args.launch} ({args.mode})"
-    )
+    return _run_shortcut_write("shortcut_set", op_args, f"set shortcut {app} {args.launch} ({args.mode})")
 
 
 def _cmd_shortcut_move(args: argparse.Namespace) -> int:
     app = _app_name(args.app)
     op_args: dict[str, Any] = {"app": app, "launch": args.launch, "cell": args.cell}
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write(
-        "shortcut_move",
-        op_args,
-        f"moved shortcut {app} {args.launch} to cell {args.cell}",
-    )
+    return _run_shortcut_write("shortcut_move", op_args, f"moved shortcut {app} {args.launch} to cell {args.cell}")
 
 
 def _cmd_shortcut_remove(args: argparse.Namespace) -> int:
     app = _app_name(args.app)
     op_args: dict[str, Any] = {"app": app, "launch": args.launch}
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write(
-        "shortcut_remove", op_args, f"removed shortcut {app} {args.launch}"
-    )
+    return _run_shortcut_write("shortcut_remove", op_args, f"removed shortcut {app} {args.launch}")
 
 
 def _cmd_wallpaper(args: argparse.Namespace) -> int:
@@ -817,18 +761,11 @@ def _cmd_wallpaper(args: argparse.Namespace) -> int:
         done = "cleared the wallpaper"
     else:
         if args.kind not in _WALLPAPER_KINDS or not args.name:
-            _fail(
-                f"wallpaper takes '<kind> <name>' with kind one of {list(_WALLPAPER_KINDS)}, or 'none'"
-            )
+            _fail(f"wallpaper takes '<kind> <name>' with kind one of {list(_WALLPAPER_KINDS)}, or 'none'")
         wallpaper = {"kind": args.kind, "name": args.name}
         done = f"set the wallpaper to {args.kind} {args.name}"
-    op_args: dict[str, Any] = {
-        "wallpaper": wallpaper,
-        **_target_args(args.desktop, args.client),
-    }
-    return _run_desktop_op(
-        "wallpaper", op_args, lambda answer: f"{done} on {_describe_target(answer)}"
-    )
+    op_args: dict[str, Any] = {"wallpaper": wallpaper, **_target_args(args.desktop, args.client)}
+    return _run_desktop_op("wallpaper", op_args, lambda answer: f"{done} on {_describe_target(answer)}")
 
 
 # The retired verbs
@@ -860,61 +797,40 @@ def _add_json_argument(subparser: argparse.ArgumentParser) -> None:
     # CLEANUP: drop --json once every workspace runs a release where JSON is the only output
     # (it became so in September 2026); it is accepted so instructions written for the YAML
     # default keep working.
-    subparser.add_argument(
-        "--json",
-        action="store_true",
-        help="Accepted for compatibility: the output is JSON either way",
-    )
+    subparser.add_argument("--json", action="store_true", help="Accepted for compatibility: the output is JSON either way")
 
 
-def _add_window_verb(
-    subparsers: Any, verb: str, help_text: str, past_tense: str
-) -> None:
+def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str) -> None:
     subparser = subparsers.add_parser(verb, help=help_text)
-    subparser.add_argument(
-        "window", help="A window id (win-<hex>), 'self', or an app name"
-    )
+    subparser.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
     _add_target_arguments(subparser)
     subparser.set_defaults(func=_window_op(verb, past_tense))
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_context = subparsers.add_parser(
-        "context",
-        help="Show each client: its active desktop, connection state, and recent messages",
+        "context", help="Show each client: its active desktop, connection state, and recent messages"
     )
     _add_json_argument(p_context)
     p_context.set_defaults(func=_cmd_context)
 
-    p_desktops = subparsers.add_parser(
-        "desktops",
-        help="List every desktop with its windows and shortcuts, and every client",
-    )
+    p_desktops = subparsers.add_parser("desktops", help="List every desktop with its windows and shortcuts, and every client")
     _add_json_argument(p_desktops)
     p_desktops.set_defaults(func=_cmd_desktops)
 
-    p_list = subparsers.add_parser(
-        "list",
-        help="List every app with its launch paths and windows, plus the desktops",
-    )
+    p_list = subparsers.add_parser("list", help="List every app with its launch paths and windows, plus the desktops")
     _add_json_argument(p_list)
     p_list.set_defaults(func=_cmd_list)
 
-    p_load = subparsers.add_parser(
-        "load", help="Switch the target client onto a desktop"
-    )
+    p_load = subparsers.add_parser("load", help="Switch the target client onto a desktop")
     p_load.add_argument("desktop", help="The desktop's name or id")
     p_load.add_argument("--client", default=None, help=_CLIENT_HELP)
     p_load.set_defaults(func=_cmd_load)
 
-    p_open = subparsers.add_parser(
-        "open", help="Open a window of an app (or a URL in a new browser)"
-    )
+    p_open = subparsers.add_parser("open", help="Open a window of an app (or a URL in a new browser)")
     p_open.add_argument(
         "target",
         help="An app name (open a window of it), or a bare https:// URL (open it in a new browser)",
@@ -955,124 +871,65 @@ def main(argv: list[str] | None = None) -> int:
 
     _add_window_verb(subparsers, "focus", "Restore and raise a window", "focused")
     _add_window_verb(subparsers, "minimize", "Put a window out of sight", "minimized")
-    _add_window_verb(
-        subparsers, "restore", "Bring a window back to its frame", "restored"
-    )
-    _add_window_verb(
-        subparsers, "maximize", "Fill the backdrop with a window", "maximized"
-    )
+    _add_window_verb(subparsers, "restore", "Bring a window back to its frame", "restored")
+    _add_window_verb(subparsers, "maximize", "Fill the backdrop with a window", "maximized")
     _add_window_verb(subparsers, "close", "Close a window for everyone", "closed")
 
-    p_place = subparsers.add_parser(
-        "place", help="Snap a window to a zone or set its frame"
-    )
+    p_place = subparsers.add_parser("place", help="Snap a window to a zone or set its frame")
+    p_place.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    p_place.add_argument("--zone", choices=_ZONES, default=None, help="Snap to the left or right half, or maximize")
     p_place.add_argument(
-        "window", help="A window id (win-<hex>), 'self', or an app name"
-    )
-    p_place.add_argument(
-        "--zone",
-        choices=_ZONES,
-        default=None,
-        help="Snap to the left or right half, or maximize",
-    )
-    p_place.add_argument(
-        "--frame",
-        default=None,
-        metavar="X,Y,WIDTH,HEIGHT",
-        help="The frame in fractions of the backdrop (0..1)",
+        "--frame", default=None, metavar="X,Y,WIDTH,HEIGHT", help="The frame in fractions of the backdrop (0..1)"
     )
     _add_target_arguments(p_place)
     p_place.set_defaults(func=_cmd_place)
 
-    p_navigate = subparsers.add_parser(
-        "navigate", help="Point a window at another path under its app"
-    )
-    p_navigate.add_argument(
-        "window", help="A window id (win-<hex>), 'self', or an app name"
-    )
-    p_navigate.add_argument(
-        "path", help="The path under the app's origin, starting with '/'"
-    )
+    p_navigate = subparsers.add_parser("navigate", help="Point a window at another path under its app")
+    p_navigate.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    p_navigate.add_argument("path", help="The path under the app's origin, starting with '/'")
     _add_target_arguments(p_navigate)
     p_navigate.set_defaults(func=_cmd_navigate)
 
-    p_refresh = subparsers.add_parser(
-        "refresh", help="Reload one window's page, or every page of an app"
-    )
-    p_refresh.add_argument(
-        "window",
-        nargs="?",
-        default=None,
-        help="A window id (win-<hex>), 'self', or an app name",
-    )
-    p_refresh.add_argument(
-        "--app", default=None, help="Reload every page of this app, on every client"
-    )
+    p_refresh = subparsers.add_parser("refresh", help="Reload one window's page, or every page of an app")
+    p_refresh.add_argument("window", nargs="?", default=None, help="A window id (win-<hex>), 'self', or an app name")
+    p_refresh.add_argument("--app", default=None, help="Reload every page of this app, on every client")
     _add_target_arguments(p_refresh)
     p_refresh.set_defaults(func=_cmd_refresh)
 
-    p_shortcuts = subparsers.add_parser(
-        "shortcuts", help="List a desktop's backdrop shortcuts"
-    )
+    p_shortcuts = subparsers.add_parser("shortcuts", help="List a desktop's backdrop shortcuts")
     _add_json_argument(p_shortcuts)
     _add_target_arguments(p_shortcuts)
     p_shortcuts.set_defaults(func=_cmd_shortcuts)
 
-    p_shortcut = subparsers.add_parser(
-        "shortcut", help="Add, move, or remove a desktop's shortcuts"
-    )
-    shortcut_subparsers = p_shortcut.add_subparsers(
-        dest="shortcut_command", required=True
-    )
-    p_shortcut_set = shortcut_subparsers.add_parser(
-        "set", help="Add a shortcut, or change its mode or cell"
-    )
+    p_shortcut = subparsers.add_parser("shortcut", help="Add, move, or remove a desktop's shortcuts")
+    shortcut_subparsers = p_shortcut.add_subparsers(dest="shortcut_command", required=True)
+    p_shortcut_set = shortcut_subparsers.add_parser("set", help="Add a shortcut, or change its mode or cell")
     p_shortcut_set.add_argument("app", help="The registered app")
-    p_shortcut_set.add_argument(
-        "launch", help="The launch path the shortcut runs (an id from 'list')"
-    )
+    p_shortcut_set.add_argument("launch", help="The launch path the shortcut runs (an id from 'list')")
     p_shortcut_set.add_argument(
         "--mode",
         choices=_SHORTCUT_MODES,
         default="focus",
         help="focus: raise the app's most recent window, opening one only when it has none; new: always open one",
     )
-    p_shortcut_set.add_argument(
-        "--cell",
-        default=None,
-        metavar="COLUMN,ROW",
-        help="The grid cell; the next free one by default",
-    )
+    p_shortcut_set.add_argument("--cell", default=None, metavar="COLUMN,ROW", help="The grid cell; the next free one by default")
     _add_target_arguments(p_shortcut_set)
     p_shortcut_set.set_defaults(func=_cmd_shortcut_set)
-    p_shortcut_move = shortcut_subparsers.add_parser(
-        "move", help="Move a shortcut to another cell"
-    )
+    p_shortcut_move = shortcut_subparsers.add_parser("move", help="Move a shortcut to another cell")
     p_shortcut_move.add_argument("app", help="The registered app")
     p_shortcut_move.add_argument("launch", help="The launch path the shortcut runs")
-    p_shortcut_move.add_argument(
-        "--cell", required=True, metavar="COLUMN,ROW", help="The grid cell to move to"
-    )
+    p_shortcut_move.add_argument("--cell", required=True, metavar="COLUMN,ROW", help="The grid cell to move to")
     _add_target_arguments(p_shortcut_move)
     p_shortcut_move.set_defaults(func=_cmd_shortcut_move)
-    p_shortcut_remove = shortcut_subparsers.add_parser(
-        "remove", help="Take a shortcut off the desktop"
-    )
+    p_shortcut_remove = shortcut_subparsers.add_parser("remove", help="Take a shortcut off the desktop")
     p_shortcut_remove.add_argument("app", help="The registered app")
     p_shortcut_remove.add_argument("launch", help="The launch path the shortcut runs")
     _add_target_arguments(p_shortcut_remove)
     p_shortcut_remove.set_defaults(func=_cmd_shortcut_remove)
 
-    p_wallpaper = subparsers.add_parser(
-        "wallpaper", help="Set or clear a desktop's wallpaper"
-    )
+    p_wallpaper = subparsers.add_parser("wallpaper", help="Set or clear a desktop's wallpaper")
     p_wallpaper.add_argument("kind", help="'bundled' or 'file', or 'none' to clear it")
-    p_wallpaper.add_argument(
-        "name",
-        nargs="?",
-        default=None,
-        help="The image's file name without its extension",
-    )
+    p_wallpaper.add_argument("name", nargs="?", default=None, help="The image's file name without its extension")
     _add_target_arguments(p_wallpaper)
     p_wallpaper.set_defaults(func=_cmd_wallpaper)
 
