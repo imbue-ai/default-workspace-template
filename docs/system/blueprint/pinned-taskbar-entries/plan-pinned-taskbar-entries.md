@@ -93,7 +93,7 @@ An **independent** window has a shared path that never changes, its home path, a
 When a page of an independent window reports its location, the shell stores the report under the reporting client in that client's window-paths file (section 5.1) rather than on the window record, and announces it to that client's windows alone.
 A client that has no stored path for an independent window opens it at the home path.
 The following rule of V1 section 4.6 runs against the client's own stored path for an independent window: the report the driving page made is already stored there, so nothing bounces, and the only things that move an independent page are an agent's `navigate` (which targets one client) and a reconnect that finds a newer stored path.
-The taskbar entry, the launcher row, and the Running apps popover show the client's own title for an independent window, falling back to the app's display name.
+The taskbar entry and the launcher row show the client's own title for an independent window, falling back to the app's display name.
 
 The home path never changing has a side effect worth stating: an open of the app at the home path with the default `focus` behaviour finds the pinned window and raises it rather than opening a second root.
 
