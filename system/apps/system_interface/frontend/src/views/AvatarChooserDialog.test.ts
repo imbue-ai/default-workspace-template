@@ -57,7 +57,9 @@ describe("AvatarChooserDialog", () => {
   });
 
   it("shows the loading and error states, and closes on Done, which holds the focus when it opens", () => {
-    expect(render({ designs: null }).querySelector("[role='status']")?.textContent).toBe("Loading designs…");
+    const loading = render({ designs: null });
+    expect(loading.querySelector("[role='status']")?.textContent).toBe("Loading designs…");
+    expect(loading.querySelector("[data-avatar-source]")).toBeNull();
     expect(render({ designs: null, loadError: "down" }).querySelector("[role='alert']")?.textContent).toBe("down");
     const onClose = vi.fn();
     const done = render({ onClose }).querySelector(".avatar-chooser-done") as HTMLElement;
