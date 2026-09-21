@@ -86,6 +86,11 @@ def agent_events_path(environ: Mapping[str, str]) -> Path:
     return base / AGENT_EVENTS_RELATIVE_PATH
 
 
+def agent_events_path_from_environment() -> Path:
+    """The agents event file for this process, by its own environment."""
+    return agent_events_path(os.environ)
+
+
 @pure
 def parse_event_timestamp(raw: str) -> datetime | None:
     """The envelope's timestamp as an aware datetime, or None for one that does not parse."""
