@@ -7,12 +7,11 @@ from flask import Flask
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
-from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
+from imbue.system_interface.avatar.designs import MAXMINIMAL_DESIGN_SVG_BYTES
 from imbue.system_interface.avatar.register_avatar import AvatarRegistrationError
 from imbue.system_interface.avatar.register_avatar import main
+from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
 from imbue.system_interface.testing import serve_app
-
-_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle r="9" fill="#8cd"/></svg>'
 
 
 def _run(shell_url: str, source: Path, design_id: str, *extra: str) -> None:
@@ -21,11 +20,11 @@ def _run(shell_url: str, source: Path, design_id: str, *extra: str) -> None:
 
 def test_the_helper_registers_a_file_and_selects_it_when_asked(app: Flask, tmp_path: Path) -> None:
     source = tmp_path / "mine.svg"
-    source.write_text(_SVG)
+    source.write_text(MINIMAL_DESIGN_SVG)
     shell = state_of(app).shell
     with serve_app(app) as served:
         _run(served.http_url, source, "mine")
-        assert shell.avatar_catalog.source("mine") == _SVG
+        assert shell.avatar_catalog.source("mine") == MINIMAL_DESIGN_SVG
         assert shell.avatar_selection.read() == DEFAULT_DESIGN_ID
         _run(served.http_url, source, "mine", "--select")
     assert shell.avatar_selection.read() == "mine"
@@ -35,11 +34,11 @@ def test_the_helper_registers_a_file_and_selects_it_when_asked(app: Flask, tmp_p
 
 def test_the_helper_names_the_reason_a_design_is_refused(app: Flask, tmp_path: Path) -> None:
     fine = tmp_path / "fine.svg"
-    fine.write_text(_SVG)
+    fine.write_text(MINIMAL_DESIGN_SVG)
     custom = tmp_path / "custom.svg"
     custom.write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><style>*{x:1}</style></svg>')
     oversized = tmp_path / "big.svg"
-    oversized.write_bytes(b" " * (MAX_SVG_BYTES + 1))
+    oversized.write_bytes(b" " * (MAXMINIMAL_DESIGN_SVG_BYTES + 1))
     binary = tmp_path / "binary.svg"
     binary.write_bytes(b"\xff\xfe")
     with serve_app(app) as served:

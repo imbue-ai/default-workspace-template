@@ -13,33 +13,29 @@ from imbue.system_interface.avatar.catalog import _MAX_CATALOG_BYTES
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.primitives import DesignId
+from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
+from imbue.system_interface.avatar.testing import design_registration
 from imbue.system_interface.shell.errors import InvalidShellValueError
-
-_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle r="9"/></svg>'
-
-
-def _registration(design_id: str, label: str = "Mine") -> DesignRegistration:
-    return DesignRegistration(id=DesignId(design_id), label=label, svg=_SVG, source_path=f"/tmp/{design_id}.svg")
 
 
 def test_the_catalog_lists_the_bundled_designs_then_the_registered_ones(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
     assert [listing.id for listing in store.entries()] == [design.id for design in BUNDLED_DESIGNS]
-    store.register(_registration("mine"))
+    store.register(design_registration("mine"))
     listings = store.entries()
     assert listings[-1].id == "mine"
     assert listings[-1].source_path == "/tmp/mine.svg"
     assert listings[0].source_path is None
-    assert store.source("mine") == _SVG
+    assert store.source("mine") == MINIMAL_DESIGN_SVG
     assert store.source(DEFAULT_DESIGN_ID) is not None
     assert store.source("nobody") is None
 
 
 def test_registering_an_id_again_replaces_it_and_moves_it_last(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
-    store.register(_registration("mine", "First"))
-    store.register(_registration("other"))
-    store.register(_registration("mine", "Second"))
+    store.register(design_registration("mine", "First"))
+    store.register(design_registration("other"))
+    store.register(design_registration("mine", "Second"))
     labels = [listing.label for listing in store.entries() if listing.source_path is not None]
     assert labels == ["Mine", "Second"]
 
@@ -64,16 +60,16 @@ def test_a_stored_design_outlives_a_change_to_the_shared_stylesheet(tmp_path: Pa
 def test_a_bundled_id_is_never_replaced(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
     with pytest.raises(InvalidShellValueError, match="bundled"):
-        store.register(_registration(str(DEFAULT_DESIGN_ID)))
+        store.register(design_registration(str(DEFAULT_DESIGN_ID)))
 
 
 def test_the_catalog_never_grows_past_its_bound(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
     for index in range(MAX_REGISTERED_DESIGNS):
-        store.register(_registration(f"design-{index}"))
+        store.register(design_registration(f"design-{index}"))
     with pytest.raises(InvalidShellValueError, match="replace one"):
-        store.register(_registration("one-too-many"))
-    store.register(_registration("design-0", "Replaced"))
+        store.register(design_registration("one-too-many"))
+    store.register(design_registration("design-0", "Replaced"))
 
 
 def test_an_oversized_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Path) -> None:
@@ -84,7 +80,7 @@ def test_an_oversized_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Pa
     store = AvatarCatalogStore(directory=directory)
     assert [listing.id for listing in store.entries()] == [design.id for design in BUNDLED_DESIGNS]
     with pytest.raises(InvalidShellValueError, match="storage bound"):
-        store.register(_registration("mine"))
+        store.register(design_registration("mine"))
 
 
 def test_an_invalid_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Path) -> None:
@@ -94,7 +90,7 @@ def test_an_invalid_catalog_reads_as_empty_but_is_not_overwritten(tmp_path: Path
     store = AvatarCatalogStore(directory=directory)
     assert store.read().designs == ()
     with pytest.raises(InvalidShellValueError, match="invalid"):
-        store.register(_registration("mine"))
+        store.register(design_registration("mine"))
 
 
 def test_a_registration_carries_a_valid_design() -> None:

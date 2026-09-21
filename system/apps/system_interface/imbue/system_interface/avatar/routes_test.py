@@ -10,10 +10,11 @@ from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.selection import SELECTION_FILENAME
+from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
+from imbue.system_interface.avatar.testing import design_registration
 from imbue.system_interface.shell.testing import drain_messages
 
-_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle r="9" fill="#8cd"/></svg>'
-_REGISTRATION = {"id": "mine", "label": "Mine", "svg": _SVG, "source_path": "/tmp/mine.svg"}
+_REGISTRATION = design_registration("mine").model_dump(mode="json")
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
 
 
@@ -47,7 +48,7 @@ def test_the_source_is_the_original_as_an_attachment(client: FlaskClient) -> Non
     client.post("/api/avatars", json=_REGISTRATION)
     response = client.get("/api/avatars/mine/source.svg")
     assert response.status_code == 200
-    assert response.get_data(as_text=True) == _SVG
+    assert response.get_data(as_text=True) == MINIMAL_DESIGN_SVG
     assert response.headers["Content-Disposition"] == 'attachment; filename="mine.svg"'
     assert client.get("/api/avatars/nobody/source.svg").status_code == 404
 
