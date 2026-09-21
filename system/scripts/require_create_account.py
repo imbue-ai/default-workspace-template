@@ -36,7 +36,7 @@ import os
 import sys
 from pathlib import Path
 
-NO_ACCOUNT_MESSAGE = "No provider account is signed in on this machine. Sign in from a chat tab, then try again."
+NO_ACCOUNT_MESSAGE = "No provider account is signed in on this machine. Sign in from a chat, then try again."
 
 _DEFAULT_PROJECT_CONFIG_DIR = Path(".mngr")
 _LOCAL_SETTINGS_FILENAME = "settings.local.toml"

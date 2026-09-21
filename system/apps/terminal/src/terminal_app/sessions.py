@@ -1,49 +1,32 @@
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Final
 
-from app_instances.data_types import InstanceLifetime, InstanceRecord, InstanceStatus
-from app_instances.errors import (
-    InstanceConflictError,
-    InvalidInstanceValueError,
-    InvalidParamsError,
-    LocationNotTrackedError,
-    UnknownActionError,
-    UnknownInstanceError,
-)
-from app_instances.interfaces import InstanceSourceInterface
-from app_instances.json_store import NEW_ACTION_ID, allocate_key
-from app_instances.primitives import (
-    InstanceKey,
-    InstanceKeyPrefix,
-    InstanceTitle,
-    LocationTarget,
-    canonical_name_from_title,
-    is_name_conflict,
-)
-from app_manifest.primitives import ActionId
+from app_manifest.primitives import canonical_name_from_title, is_name_conflict
+from app_manifest.shell_windows import window_query_value
 from imbue.imbue_common.model_update import to_update
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field, PrivateAttr
 
-from terminal_app.data_types import TerminalSessionRecord, TmuxSession
-from terminal_app.errors import InvalidTerminalValueError, TmuxCommandError
+from terminal_app.data_types import TerminalListing, TerminalSessionRecord, TmuxSession
+from terminal_app.errors import (
+    InvalidTerminalValueError,
+    TerminalConflictError,
+    TmuxCommandError,
+    UnknownTerminalError,
+)
 from terminal_app.interfaces import TerminalSessionStoreInterface, TmuxInterface
 from terminal_app.primitives import (
+    SESSION_QUERY_KEY,
+    TerminalTitle,
     TmuxSessionId,
     TmuxSessionName,
     Workdir,
+    allocate_terminal_name,
     derive_terminal_title,
-    instance_url_for_session,
 )
-
-# The names the ``new`` action mints: the lowest free ``terminal-<N>``.
-TERMINAL_KEY_PREFIX: Final[InstanceKeyPrefix] = InstanceKeyPrefix("terminal")
-
-# The one parameter ``new`` accepts (contracts.md section 4.3).
-WORKDIR_PARAM: Final[str] = "workdir"
 
 
 @pure
@@ -93,7 +76,7 @@ def _unclaimed_session_named(
 ) -> TmuxSession | None:
     """The live session tmux lists under ``name``, unless a terminal already holds it by id.
 
-    A session renamed inside tmux to another terminal's key stays with the terminal that holds
+    A session renamed inside tmux to another terminal's name stays with the terminal that holds
     its id; its name is not a second way to claim it, or two terminals would share one session
     and stopping either would kill the other's.
     """
@@ -108,44 +91,34 @@ def _unclaimed_session_named(
 
 
 @pure
-def _live_instance_record(
-    session: TmuxSession, record: TerminalSessionRecord | None
-) -> InstanceRecord:
+def _live_listing(session: TmuxSession, record: TerminalSessionRecord | None) -> TerminalListing:
     name = record.name if record is not None else TmuxSessionName(session.name)
-    return InstanceRecord(
-        key=InstanceKey(name),
-        url=instance_url_for_session(name, record.workdir if record else None),
+    return TerminalListing(
+        name=name,
         title=record.title if record and record.title else derive_terminal_title(name),
-        status=InstanceStatus.IDLE,
-        lifetime=InstanceLifetime.EXPLICIT,
-        last_active=session.last_activity,
-        renameable=True,
-        stoppable=True,
+        is_stopped=False,
+        last_activity=session.last_activity,
     )
 
 
 @pure
-def _stopped_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
-    return InstanceRecord(
-        key=InstanceKey(record.name),
-        url=instance_url_for_session(record.name, record.workdir),
+def _stopped_listing(record: TerminalSessionRecord) -> TerminalListing:
+    return TerminalListing(
+        name=record.name,
         title=record.title if record.title else derive_terminal_title(record.name),
-        status=InstanceStatus.STOPPED,
-        lifetime=InstanceLifetime.EXPLICIT,
-        last_active=None,
-        renameable=True,
-        stoppable=True,
+        is_stopped=True,
+        last_activity=None,
     )
 
 
 @pure
-def _fresh_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
-    """The idle record of a terminal whose session was just created, so has seen no activity."""
+def _fresh_listing(record: TerminalSessionRecord) -> TerminalListing:
+    """The listing of a terminal whose session was just created, so has seen no activity."""
     if record.session_id is None:
         raise InvalidTerminalValueError(
             f"terminal {record.name!r} has no session id although its session was just created"
         )
-    return _live_instance_record(
+    return _live_listing(
         TmuxSession(
             name=record.name,
             session_id=record.session_id,
@@ -159,8 +132,8 @@ def _fresh_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
 @pure
 def match_live_sessions(
     live_sessions: Sequence[TmuxSession], records: Sequence[TerminalSessionRecord]
-) -> list[InstanceRecord]:
-    """Every live user session as ``idle`` (in tmux order), then every remembered terminal tmux no longer has as ``stopped``.
+) -> list[TerminalListing]:
+    """Every live user session (in tmux order), then every remembered terminal tmux no longer has as stopped.
 
     A live session is the terminal whose record holds its id, whatever tmux now calls it; a
     session no record holds by id falls back to the record of its name when that record's own
@@ -174,7 +147,7 @@ def match_live_sessions(
         str(record.name): record for record in records
     }
     matched: set[TmuxSessionName] = set()
-    instances: list[InstanceRecord] = []
+    listings: list[TerminalListing] = []
     for session in live_sessions:
         record = _find_record_of_session(session, records)
         if record is None:
@@ -191,50 +164,21 @@ def match_live_sessions(
                 continue
         if record is not None:
             matched.add(record.name)
-        instances.append(_live_instance_record(session, record))
-    instances.extend(
-        _stopped_instance_record(record) for record in records if record.name not in matched
-    )
-    return instances
+        listings.append(_live_listing(session, record))
+    listings.extend(_stopped_listing(record) for record in records if record.name not in matched)
+    return listings
 
 
 @pure
-def _parse_workdir(params: Mapping[str, str], default_workdir: Workdir) -> Workdir:
-    unknown_params = sorted(set(params) - {WORKDIR_PARAM})
-    if unknown_params:
-        raise InvalidParamsError(
-            f"unknown params {unknown_params}: {NEW_ACTION_ID!r} only accepts {WORKDIR_PARAM!r}"
-        )
-    raw_workdir = params.get(WORKDIR_PARAM)
-    if raw_workdir is None or raw_workdir == "":
-        return default_workdir
-    try:
-        return Workdir(raw_workdir)
-    except InvalidTerminalValueError as e:
-        raise InvalidParamsError(f"invalid {WORKDIR_PARAM!r}: {e}") from e
-
-
-@pure
-def _session_name_for_key(key: InstanceKey) -> TmuxSessionName:
-    """The key as a session name; a key that cannot be one (it carries a dot) names no terminal."""
-    try:
-        return TmuxSessionName(key)
-    except InvalidTerminalValueError as e:
-        raise UnknownInstanceError(f"no terminal has the key {key!r}") from e
-
-
-@pure
-def _require_usable_title(title: InstanceTitle) -> None:
+def _require_usable_title(title: TerminalTitle) -> None:
     """A title must canonicalize to something a name could be made of; one that does not is a bad title."""
     canonical = canonical_name_from_title(title)
     if not canonical:
-        raise InvalidInstanceValueError(
-            f"invalid title {title!r}: it contains no usable characters"
-        )
+        raise InvalidTerminalValueError(f"invalid title {title!r}: it contains no usable characters")
     try:
         TmuxSessionName(canonical)
     except InvalidTerminalValueError as e:
-        raise InvalidInstanceValueError(f"invalid title {title!r}: {e}") from e
+        raise InvalidTerminalValueError(f"invalid title {title!r}: {e}") from e
 
 
 @pure
@@ -246,10 +190,10 @@ def _is_session_name(name: str) -> bool:
     return True
 
 
-class TmuxSessionSource(InstanceSourceInterface):
-    """The terminal's instances: the user's tmux sessions, plus the terminals the store remembers that tmux no longer has.
+class TmuxSessionSource(MutableModel):
+    """The terminals: the user's tmux sessions, plus the terminals the store remembers that tmux no longer has.
 
-    Keys are the names the app allocated (``terminal-<N>``) and never change: a record is matched
+    Names are the ones the app allocated (``terminal-<N>``) and never change: a record is matched
     to its live session by tmux's session id and the session's creation time (``is_same_session``),
     a rename changes only the record's title, and the session id and creation time of every
     terminal the app created or adopted are written under ``sessions_dir`` for the dispatch
@@ -271,7 +215,7 @@ class TmuxSessionSource(InstanceSourceInterface):
     )
     sessions_dir: Path = Field(
         frozen=True,
-        description="Where the session id and creation time of each terminal are written, named by key, for the dispatch to attach by",
+        description="Where the session id and creation time of each terminal are written, named by terminal name, for the dispatch to attach by",
     )
     session_command: tuple[str, ...] = Field(
         frozen=True,
@@ -279,39 +223,27 @@ class TmuxSessionSource(InstanceSourceInterface):
     )
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    def list_instances(self) -> list[InstanceRecord]:
+    def list_terminals(self) -> list[TerminalListing]:
         with self._lock:
             live_sessions = self._user_sessions()
             records = self.store.list_records()
         return match_live_sessions(live_sessions, records)
 
-    def create_instance(
-        self, action: ActionId, params: Mapping[str, str]
-    ) -> InstanceRecord:
-        if action != NEW_ACTION_ID:
-            raise UnknownActionError(
-                f"unknown action {action!r}: the terminal only declares {NEW_ACTION_ID!r}"
-            )
-        workdir = _parse_workdir(params, self.default_workdir)
+    def create_terminal(self, workdir: Workdir | None) -> TerminalListing:
+        """Allocate the lowest free ``terminal-<N>`` and create its session at once, in ``workdir`` (the default when None)."""
         with self._lock:
-            taken_names = self._taken_names()
-            name = TmuxSessionName(allocate_key(TERMINAL_KEY_PREFIX, taken_names))
+            name = allocate_terminal_name(self._taken_names())
             record = self._create_session_for(
-                TerminalSessionRecord(name=name, title=None, workdir=workdir)
+                TerminalSessionRecord(
+                    name=name, title=None, workdir=workdir if workdir is not None else self.default_workdir
+                )
             )
-        return _fresh_instance_record(record)
+        return _fresh_listing(record)
 
-    def delete_instance(self, key: InstanceKey) -> None:
-        try:
-            name = _session_name_for_key(key)
-        except UnknownInstanceError:
-            # DELETE of an unknown key is a 204 by contract; a key no terminal can have is one.
-            logger.debug("Ignored deleting {!r}: no terminal can have that key", key)
-            return
+    def delete_terminal(self, name: TmuxSessionName) -> None:
+        """Kill the terminal's session and forget it; an unknown name is not an error."""
         if is_agent_session(name, self.agent_session_prefix):
-            raise InstanceConflictError(
-                f"Refusing to destroy non-terminal session: {name!r}"
-            )
+            raise TerminalConflictError(f"Refusing to destroy non-terminal session: {name!r}")
         with self._lock:
             record = self._record_named(name)
             live = self._live_session_of(name, record, self._user_sessions())
@@ -320,22 +252,57 @@ class TmuxSessionSource(InstanceSourceInterface):
             self.store.remove_record(name)
             self._remove_session_id_file(name)
 
-    def rename_instance(self, key: InstanceKey, title: InstanceTitle) -> InstanceRecord:
-        name = _session_name_for_key(key)
+    def mark_window_seen(self, name: TmuxSessionName) -> bool:
+        """Record that a desktop window showed the terminal, so a sweep collects it once none does.
+
+        The shell's close hint names the closed window's path, so a terminal whose window closed before any sweep
+        saw it still counts as shown. Answers whether a record was marked; an unknown or already marked terminal
+        is a no-op.
+        """
+        with self._lock:
+            record = self._record_named(name)
+            if record is None or record.is_window_seen:
+                return False
+            self.store.save_record(record.model_copy_update(to_update(record.field_ref().is_window_seen, True)))
+            return True
+
+    def sweep_windows(self, window_paths: Sequence[str]) -> list[TmuxSessionName]:
+        """Mark every remembered terminal a window shows, and delete the ones a window showed once and none shows now.
+
+        ``window_paths`` is what the shell reports for this app; a path naming no session (a window still
+        settling at ``/new``) shows nothing. A terminal no window has ever shown is left alone, so a session
+        made by hand or opened by an agent with nobody watching outlives any sweep. Answers what was collected.
+        """
+        shown_names = {
+            name for path in window_paths if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None
+        }
+        collected: list[TmuxSessionName] = []
+        with self._lock:
+            for record in self.store.list_records():
+                if record.name in shown_names:
+                    if not record.is_window_seen:
+                        self.store.save_record(record.model_copy_update(to_update(record.field_ref().is_window_seen, True)))
+                elif record.is_window_seen:
+                    collected.append(record.name)
+        for name in collected:
+            self.delete_terminal(name)
+        return collected
+
+    def rename_terminal(self, name: TmuxSessionName, title: TerminalTitle) -> TerminalListing:
+        """Retitle the terminal; its name and its tmux session stay. Raises UnknownTerminalError, or
+        TerminalConflictError for an agent's session or a title another terminal holds."""
         if is_agent_session(name, self.agent_session_prefix):
-            raise InstanceConflictError(
-                f"Refusing to rename a non-terminal session: {name!r}"
-            )
+            raise TerminalConflictError(f"Refusing to rename a non-terminal session: {name!r}")
         _require_usable_title(title)
         with self._lock:
             live_sessions = self._user_sessions()
             records = self.store.list_records()
             listed = match_live_sessions(live_sessions, records)
-            if not any(instance.key == name for instance in listed):
-                raise UnknownInstanceError(f"no terminal has the key {key!r}")
-            other_titles = [str(instance.title) for instance in listed if instance.key != name]
+            if not any(listing.name == name for listing in listed):
+                raise UnknownTerminalError(f"no terminal is named {name!r}")
+            other_titles = [str(listing.title) for listing in listed if listing.name != name]
             if is_name_conflict(title, other_titles):
-                raise InstanceConflictError(
+                raise TerminalConflictError(
                     f"another terminal is already named {canonical_name_from_title(title)!r}"
                 )
             existing = next((record for record in records if record.name == name), None)
@@ -350,21 +317,18 @@ class TmuxSessionSource(InstanceSourceInterface):
             else:
                 self.store.save_record(retitled)
         if live_session is None:
-            return _stopped_instance_record(retitled)
-        return _live_instance_record(live_session, retitled)
+            return _stopped_listing(retitled)
+        return _live_listing(live_session, retitled)
 
-    def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
-        raise LocationNotTrackedError("the terminal does not track where its pages are")
-
-    def stop_instance(self, key: InstanceKey) -> InstanceRecord:
+    def stop_terminal(self, name: TmuxSessionName) -> TerminalListing:
         """Kill the terminal's session and remember it as stopped, so neither a startup nor a start brings it back unasked."""
-        name = self._terminal_name_or_raise(key, "stop")
+        self._refuse_agent_session(name, "stop")
         with self._lock:
             live_sessions = self._user_sessions()
             record = self._record_named(name)
             live = self._live_session_of(name, record, live_sessions)
             if record is None and live is None:
-                raise UnknownInstanceError(f"no terminal has the key {key!r}")
+                raise UnknownTerminalError(f"no terminal is named {name!r}")
             if live is not None:
                 self.tmux.kill_session(TmuxSessionId(live.session_id))
             stopped = TerminalSessionRecord(
@@ -377,11 +341,11 @@ class TmuxSessionSource(InstanceSourceInterface):
             )
             self.store.save_record(stopped)
             self._remove_session_id_file(name)
-        return _stopped_instance_record(stopped)
+        return _stopped_listing(stopped)
 
-    def start_instance(self, key: InstanceKey) -> InstanceRecord:
+    def start_terminal(self, name: TmuxSessionName) -> TerminalListing:
         """Recreate a stopped terminal's session in its workdir; a running terminal is left as it is."""
-        name = self._terminal_name_or_raise(key, "start")
+        self._refuse_agent_session(name, "start")
         with self._lock:
             live_sessions = self._user_sessions()
             record = self._record_named(name)
@@ -389,26 +353,20 @@ class TmuxSessionSource(InstanceSourceInterface):
             if live is not None:
                 if record is not None and not is_same_session(record, live):
                     self._adopt(record, live)
-                return _live_instance_record(live, record)
+                return _live_listing(live, record)
             if record is None:
-                raise UnknownInstanceError(f"no terminal has the key {key!r}")
+                raise UnknownTerminalError(f"no terminal is named {name!r}")
             try:
                 created = self._create_session_for(record)
             except TmuxCommandError as e:
                 # tmux refuses a name a session already carries: one renamed inside tmux to this
-                # terminal's key, which belongs to the terminal holding its id, not to this one.
-                raise InstanceConflictError(
-                    f"could not start terminal {name!r}: {e}"
-                ) from e
-        return _fresh_instance_record(created)
+                # terminal's name, which belongs to the terminal holding its id, not to this one.
+                raise TerminalConflictError(f"could not start terminal {name!r}: {e}") from e
+        return _fresh_listing(created)
 
-    def _terminal_name_or_raise(self, key: InstanceKey, verb: str) -> TmuxSessionName:
-        name = _session_name_for_key(key)
+    def _refuse_agent_session(self, name: TmuxSessionName, verb: str) -> None:
         if is_agent_session(name, self.agent_session_prefix):
-            raise InstanceConflictError(
-                f"Refusing to {verb} a non-terminal session: {name!r}"
-            )
-        return name
+            raise TerminalConflictError(f"Refusing to {verb} a non-terminal session: {name!r}")
 
     def recreate_remembered_sessions(self) -> None:
         """Bring every remembered terminal back at startup: a live session is adopted, a lost one is recreated unless the user stopped it.
@@ -445,46 +403,6 @@ class TmuxSessionSource(InstanceSourceInterface):
                         "Could not recreate the session of terminal {}: {}", record.name, e
                     )
 
-    def observe_attached_session(
-        self, session_id: str, session_name: str
-    ) -> TmuxSessionName | None:
-        """The key of the session a client now shows, adopting it when a record of that name has no live session yet.
-
-        None for an agent's session, a name that cannot be a key, or a session under the old
-        name of a terminal whose own session is live (no terminal, as the listing has it). A
-        record of that name whose own session is not live (it holds no id, or the dispatch
-        created the session on attach) takes the live session's id, and is no longer stopped.
-        """
-        if is_agent_session(session_name, self.agent_session_prefix):
-            return None
-        with self._lock:
-            live_sessions = self._user_sessions()
-            live = next((session for session in live_sessions if session.session_id == session_id), None)
-            if live is None:
-                # The session is gone already, or is one the listing skips (a name that cannot be a key).
-                return None
-            records = self.store.list_records()
-            record = _find_record_of_session(live, records)
-            if record is not None:
-                return record.name
-            if not _is_session_name(session_name):
-                return None
-            name = TmuxSessionName(session_name)
-            record = next((record for record in records if record.name == name), None)
-            if record is None:
-                return name
-            if _find_session_of_record(record, live_sessions) is not None:
-                logger.debug(
-                    "Ignored tmux session {!r} ({}): terminal {!r} is backed by session {}",
-                    session_name,
-                    session_id,
-                    name,
-                    record.session_id,
-                )
-                return None
-            self._adopt(record, live)
-            return name
-
     def _create_session_for(self, record: TerminalSessionRecord) -> TerminalSessionRecord:
         """Create the record's session, then remember it with the new id and its id file written; the caller holds the lock."""
         session = self.tmux.create_session(
@@ -507,6 +425,11 @@ class TmuxSessionSource(InstanceSourceInterface):
         self._write_session_id_file(bound)
         return bound
 
+    def remembered_record(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
+        """The store's record of the terminal named ``name``, or None for a session the store never saw."""
+        with self._lock:
+            return self._record_named(name)
+
     def _record_named(self, name: TmuxSessionName) -> TerminalSessionRecord | None:
         return next(
             (record for record in self.store.list_records() if record.name == name), None
@@ -526,14 +449,14 @@ class TmuxSessionSource(InstanceSourceInterface):
         return _unclaimed_session_named(name, live_sessions, self.store.list_records())
 
     def _user_sessions(self) -> list[TmuxSession]:
-        """The live sessions that are terminals: not an agent's, and named so the name can be a key."""
+        """The live sessions that are terminals: not an agent's, and named so the name can be a terminal name."""
         user_sessions: list[TmuxSession] = []
         for session in self.tmux.list_sessions():
             if is_agent_session(session.name, self.agent_session_prefix):
                 continue
             if not _is_session_name(session.name):
                 logger.debug(
-                    "Skipped tmux session {!r}: its name cannot be an instance key",
+                    "Skipped tmux session {!r}: its name cannot be a terminal name",
                     session.name,
                 )
                 continue

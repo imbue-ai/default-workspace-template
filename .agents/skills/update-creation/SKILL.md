@@ -48,7 +48,7 @@ exploratory work is NOT an update candidate.
 `type` is `skill`, `app`, `service`, or `system-interface`. It drives where the
 worker looks (`type-<TYPE>.md`) and the **go-live** strategy (Step 4):
 skill → cross-reference sweep is part of the edit, nothing else; app →
-refresh the tab (a background service has no tab -- restart it instead);
+refresh the window (a background service has no window -- restart it instead);
 system-interface → the `update-system-interface` wrapper owns a
 preview-before-merge and a go-live through the atomic update apply, and calls
 into this flow for the orchestration core only (see that skill).
@@ -205,8 +205,8 @@ Then merge `mngr/update-$TARGET`, destroy the worker per `lead-proxy.md`
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
   of the change). If the target is a built-in upstream skill, note the local
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
-- **service**: refresh the tab (`python3 system/scripts/layout.py refresh
-  <service-name>`).
+- **service**: refresh its window (`python3 system/scripts/layout.py refresh
+  --app <service-name>`).
 - **system-interface**: do **not** merge or go live here -- the
   `update-system-interface` wrapper drives preview-before-merge and the
   go-live through the atomic update apply. (That wrapper uses this flow for
