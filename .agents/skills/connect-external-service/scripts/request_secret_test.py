@@ -42,7 +42,9 @@ class _RecordingChatApp:
         self.statuses = statuses
         self.bodies: list[Mapping[str, object]] = []
 
-    def post_json(self, base_url: str, path: str, body: Mapping[str, object]) -> _Answer:
+    def post_json(
+        self, base_url: str, path: str, body: Mapping[str, object]
+    ) -> _Answer:
         del base_url, path
         self.bodies.append(body)
         status = self.statuses[min(len(self.bodies) - 1, len(self.statuses) - 1)]
@@ -84,13 +86,21 @@ def test_arguments_that_cannot_become_a_card_are_refused(
 
 
 def test_a_well_formed_request_passes_validation() -> None:
-    assert request_secret.validate_arguments("svc", ["SVC_TOKEN", "SVC_URL"], "why") is None
+    assert (
+        request_secret.validate_arguments("svc", ["SVC_TOKEN", "SVC_URL"], "why")
+        is None
+    )
 
 
 def test_the_chat_the_request_belongs_to_prefers_the_chat_app_s_own_variable() -> None:
     # The chat app sets MINDS_CHAT_ID on every agent it creates; an agent created any
     # other way is its own chat, and MNGR_AGENT_ID is what names it.
-    assert request_secret.chat_id_from_environment({"MINDS_CHAT_ID": "c", "MNGR_AGENT_ID": "a"}) == "c"
+    assert (
+        request_secret.chat_id_from_environment(
+            {"MINDS_CHAT_ID": "c", "MNGR_AGENT_ID": "a"}
+        )
+        == "c"
+    )
     assert request_secret.chat_id_from_environment({"MNGR_AGENT_ID": "a"}) == "a"
     assert request_secret.chat_id_from_environment({"MINDS_CHAT_ID": ""}) is None
     assert request_secret.chat_id_from_environment({}) is None
@@ -100,7 +110,9 @@ def test_a_chat_app_that_is_not_ready_yet_is_retried_within_its_window() -> None
     chat_app = _RecordingChatApp([503, 503, 201])
     clock = _FakeClock()
 
-    status, _ = request_secret.file_request(chat_app, "http://x", {"file": "svc"}, clock.read, clock.sleep)
+    status, _ = request_secret.file_request(
+        chat_app, "http://x", {"file": "svc"}, clock.read, clock.sleep
+    )
 
     assert status == 201
     assert len(chat_app.bodies) == 3
@@ -111,12 +123,18 @@ def test_a_chat_app_stuck_not_ready_gives_up_once_the_window_has_passed() -> Non
     chat_app = _RecordingChatApp([503])
     clock = _FakeClock()
 
-    status, _ = request_secret.file_request(chat_app, "http://x", {"file": "svc"}, clock.read, clock.sleep)
+    status, _ = request_secret.file_request(
+        chat_app, "http://x", {"file": "svc"}, clock.read, clock.sleep
+    )
 
     assert status == 503
     # It waited roughly the window and no longer, rather than forever or not at all.
     assert clock.now >= request_secret.NOT_READY_RETRY_WINDOW_SECONDS
-    assert clock.now < request_secret.NOT_READY_RETRY_WINDOW_SECONDS + request_secret.NOT_READY_RETRY_INTERVAL_SECONDS
+    assert (
+        clock.now
+        < request_secret.NOT_READY_RETRY_WINDOW_SECONDS
+        + request_secret.NOT_READY_RETRY_INTERVAL_SECONDS
+    )
 
 
 def test_an_answer_that_is_not_503_is_taken_as_it_stands() -> None:
@@ -124,7 +142,9 @@ def test_an_answer_that_is_not_503_is_taken_as_it_stands() -> None:
         chat_app = _RecordingChatApp([status_code])
         clock = _FakeClock()
 
-        status, _ = request_secret.file_request(chat_app, "http://x", {"file": "svc"}, clock.read, clock.sleep)
+        status, _ = request_secret.file_request(
+            chat_app, "http://x", {"file": "svc"}, clock.read, clock.sleep
+        )
 
         assert status == status_code
         assert clock.slept == []
