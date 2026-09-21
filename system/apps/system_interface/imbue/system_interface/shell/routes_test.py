@@ -441,6 +441,31 @@ def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays
     assert "desktops_updated" in [message["type"] for message in drain_messages(first_queue)]
 
 
+def test_a_clients_stored_paths_on_other_desktops_survive_a_report(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A client's window-paths file spans every desktop: a report on one desktop's independent pinned window keeps
+    the same client's stored path for another desktop's, and each layout answers its own desktop's entry."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (home_pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    created = client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4}).get_json()
+    (research_pinned,) = created["windows"]
+
+    for desktop_id, window_id, doc in (("home", home_pinned["id"], 1), ("research", research_pinned["id"], 2)):
+        client.post(
+            f"/api/desktops/{desktop_id}/windows/{window_id}/location",
+            json={"client_id": "c1", "path": f"/?doc={doc}", "title": f"Doc {doc}"},
+        )
+    assert client.get("/api/placements/home?client=c1").get_json()["window_paths"] == {
+        home_pinned["id"]: {"path": "/?doc=1", "title": "Doc 1"}
+    }
+    assert client.get("/api/placements/research?client=c1").get_json()["window_paths"] == {
+        research_pinned["id"]: {"path": "/?doc=2", "title": "Doc 2"}
+    }
+
+
 def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_checked_against_the_pin(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
