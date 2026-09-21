@@ -3,13 +3,14 @@ import "../testing/dom";
 import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
+import type { PixelRect } from "../geometry/frames";
 import { SnapPreview, applySnapPreviewStyle } from "./SnapPreview";
 
 afterEach(unmountViews);
 
-const ZONE = { x: 0, y: 0, width: 500, height: 800 };
+const ZONE: PixelRect = { x: 0, y: 0, width: 500, height: 800 };
 
-function render(rect: typeof ZONE | null): HTMLElement {
+function render(rect: PixelRect | null): HTMLElement {
   return mountView(() => m(SnapPreview, { rect })).querySelector("[data-snap-preview]") as HTMLElement;
 }
 
