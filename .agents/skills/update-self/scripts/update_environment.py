@@ -290,6 +290,9 @@ def remove_shadowing_mngr_installs(runner: Runner, homes: Sequence[Path]) -> lis
     return tool_env.remove_shadowing_installs(canonical[0], homes, MNGR_TOOL_NAME)
 
 
+# CLEANUP: remove this function, its call in update_apply.py, and its test once no
+# supported workspace can still have been created before the tool directories were
+# pinned (those creates installed a second copy of every app tool under $HOME/.local).
 def remove_shadowing_app_tool_installs(
     runner: Runner, homes: Sequence[Path], app_tools: Sequence[AppTool]
 ) -> list[Path]:
