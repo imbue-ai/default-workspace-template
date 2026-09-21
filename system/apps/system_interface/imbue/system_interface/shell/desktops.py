@@ -12,7 +12,6 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
-from pydantic import ValidationError
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -45,6 +44,7 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
@@ -235,16 +235,12 @@ class DesktopStore(MutableModel):
     def _read_unlocked(self) -> DesktopsDocument | None:
         """The stored document, or None when the file is absent, unreadable, or of another version (logged)."""
         raw = read_json_object(self._path())
-        if raw is None:
-            return None
-        if raw.get("version") != DESKTOPS_FILE_VERSION:
-            logger.warning("Ignored a desktops file of version {!r} at {}", raw.get("version"), self._path())
-            return None
-        try:
-            return DesktopsDocument.model_validate(_without_retired_keys(raw))
-        except ValidationError as e:
-            logger.warning("Ignored an unreadable desktops file at {}: {}", self._path(), e.errors()[0]["msg"])
-            return None
+        return parse_versioned_document(
+            _without_retired_keys(raw) if raw is not None else None,
+            DesktopsDocument,
+            DESKTOPS_FILE_VERSION,
+            self._path(),
+        )
 
     def _write_unlocked(self, document: DesktopsDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))

@@ -17,6 +17,7 @@ from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
@@ -73,23 +74,10 @@ class UserStore(MutableModel):
         return self.state_directory / USERS_FILENAME
 
     def _read_unlocked(self) -> UsersDocument:
-        raw = read_json_object(self._path())
-        if raw is None:
-            return UsersDocument(version=USERS_FILE_VERSION, users={})
-        try:
-            document = UsersDocument.model_validate(raw)
-        except ValidationError as e:
-            logger.warning("Ignored an unreadable users file at {}: {}", self._path(), e.errors()[0]["msg"])
-            return UsersDocument(version=USERS_FILE_VERSION, users={})
-        if document.version != USERS_FILE_VERSION:
-            logger.warning(
-                "Ignored a users file at {} of version {} (expected {})",
-                self._path(),
-                document.version,
-                USERS_FILE_VERSION,
-            )
-            return UsersDocument(version=USERS_FILE_VERSION, users={})
-        return document
+        document = parse_versioned_document(
+            read_json_object(self._path()), UsersDocument, USERS_FILE_VERSION, self._path()
+        )
+        return document if document is not None else UsersDocument(version=USERS_FILE_VERSION, users={})
 
     def _write_unlocked(self, document: UsersDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))

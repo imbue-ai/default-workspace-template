@@ -25,15 +25,16 @@ from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 CLIENTS_FILENAME: Final[str] = "clients.json"
 CLIENTS_FILE_VERSION: Final[int] = 2
 # The tabbed shell's file: each client carried ``device_kind`` and ``active_view`` beside ``active_desktop``.
-# CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION``, ``_fold_legacy_client``, the ``is_legacy`` fold in
-# ``_read_unlocked``, and clients_test's version-one test around late October 2026, once every workspace has
-# written a version-2 clients.json (the first write after this release does).
+# CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION``, ``_fold_legacy_client``, ``_folded_if_legacy`` (reading the
+# file straight through ``parse_versioned_document``), and clients_test's version-one test around late October
+# 2026, once every workspace has written a version-2 clients.json (the first write after this release does).
 _LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
 
 # A client unseen for this long is dropped, together with every layout it owns.
@@ -86,6 +87,17 @@ def _fold_legacy_client(entry: Any) -> Any:
 
 
 @pure
+def _folded_if_legacy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A version-1 document as a version-2 one, entry by entry; any other document (or none) as it is."""
+    if raw is None or raw.get("version") != _LEGACY_CLIENTS_FILE_VERSION or not isinstance(raw.get("clients"), dict):
+        return raw
+    return {
+        "version": CLIENTS_FILE_VERSION,
+        "clients": {client_id: _fold_legacy_client(entry) for client_id, entry in raw["clients"].items()},
+    }
+
+
+@pure
 def _moved_client(
     client_id: ClientId, previous: _StoredClient | None, desktop_id: DesktopId, stamped: datetime
 ) -> _StoredClient:
@@ -107,32 +119,10 @@ class ClientStore(MutableModel):
         return self.state_directory / CLIENTS_FILENAME
 
     def _read_unlocked(self) -> ClientsDocument:
-        raw = read_json_object(self._path())
-        if raw is None:
-            return ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
-        is_legacy = raw.get("version") == _LEGACY_CLIENTS_FILE_VERSION and isinstance(raw.get("clients"), dict)
-        document_raw = (
-            {
-                "version": CLIENTS_FILE_VERSION,
-                "clients": {client_id: _fold_legacy_client(entry) for client_id, entry in raw["clients"].items()},
-            }
-            if is_legacy
-            else raw
+        document = parse_versioned_document(
+            _folded_if_legacy(read_json_object(self._path())), ClientsDocument, CLIENTS_FILE_VERSION, self._path()
         )
-        try:
-            document = ClientsDocument.model_validate(document_raw)
-        except ValidationError as e:
-            logger.warning("Ignored an unreadable clients file at {}: {}", self._path(), e.errors()[0]["msg"])
-            return ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
-        if document.version != CLIENTS_FILE_VERSION:
-            logger.warning(
-                "Ignored a clients file at {} of version {} (expected {})",
-                self._path(),
-                document.version,
-                CLIENTS_FILE_VERSION,
-            )
-            return ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
-        return document
+        return document if document is not None else ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
 
     def _write_unlocked(self, document: ClientsDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))
