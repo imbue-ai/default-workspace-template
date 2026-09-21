@@ -3,11 +3,14 @@
 The models behind a workspace app's two descriptions:
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
-  declarations (name, display name, icon, whether it serves instances, its
-  memory-shedding priority, whether it is critical, its supervisord program, the
-  actions it declares, the rail shortcut a new project is seeded with, and what
-  it owns outside its own directory). The schema is `contracts.md` section 2 of
-  the workspace app model (`docs/system/blueprint/workspace-app-model/`).
+  declarations (name, display name, icon, its memory-shedding priority, whether
+  it is critical, its supervisord program, the launch paths the desktop opens
+  windows at, the shortcut a new desktop is seeded with, and what it owns
+  outside its own directory). The schema is `contracts.md` section 2 of the
+  desktop interface (`docs/system/blueprint/desktop-interface/`), which carries
+  section 2 of the workspace app model
+  (`docs/system/blueprint/workspace-app-model/`) forward without its instance
+  fields.
 - **The registry**, `data/.state/apps.toml`: the runtime record of registered
   apps, written only by `system/scripts/forward_port.py` (which copies the
   manifest's fields onto the row at registration and adds the URL and the
@@ -16,8 +19,10 @@ The models behind a workspace app's two descriptions:
 ## API
 
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
-  cross-field rule of the contract is a validator), `AppAction`,
-  `DefaultShortcut`, `ShortcutMode`, `AppReference` (`path`, optional `note`),
+  cross-field rule of the contract is a validator), `LaunchPath`
+  (`id`, `label`, `path`, `params`; `open` is reserved for the root launch path
+  the shell synthesizes for an app that declares none), `DefaultShortcut`
+  (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
   a throwaway instance boots, with named free ports, a scratch copy of the
   directories it names, and placeholders in its command, args, and env;
@@ -35,7 +40,19 @@ The models behind a workspace app's two descriptions:
   validation is logged and skipped; an unreadable file raises
   `RegistryReadError`), and `registry_path()` (honours `MINDS_APPS_FILE`,
   default `data/.state/apps.toml` relative to the cwd, exactly like
-  `forward_port.py` and `layout.py`).
+  `forward_port.py` and `layout.py`). `register_app(manifest_path, app_url)` is
+  the startup registration every app's entry point calls: it runs
+  `system/scripts/forward_port.py --manifest <path> --url <url>` under the
+  current interpreter from the repo root, which upserts the app's row from its
+  manifest (a re-registration updates the row in place), and raises
+  `AppRegistrationError` when the script is missing, fails, or times out.
+  `read_origin_label(path, name)` answers
+  one app's origin label, or `""` when no such app is registered or the registry
+  cannot be read (logged as a warning), for a page that derives another app's
+  origin. `SHELL_APP_CONTRACT_PATH` is where the shell's frontend build writes
+  the app contract module, which every app serves at `APP_CONTRACT_ROUTE` from
+  its own origin (a cross-origin module import carries no cookie, and the
+  forwarder refuses it).
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
@@ -51,11 +68,16 @@ The models behind a workspace app's two descriptions:
   lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
   raises `ScopeComputationError` rather than reporting an empty diff.
 - `app_manifest.primitives`: the validated string types (`AppName`,
-  `DisplayName`, `ActionId`, `InstancesUrl`, `PriorityName`, `ProgramName`,
+  `DisplayName`, `LaunchPathId`, `LaunchPathValue` (rooted with one
+  slash, no query string or fragment, nothing a URL would escape),
+  `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
   the name rule shared with `forward_port.py` (a drift test in
-  `system/scripts/forward_port_test.py` keeps them identical).
+  `system/scripts/forward_port_test.py` keeps them identical), with
+  `canonical_name_from_title(title)` (the name a user-facing title registers
+  as) and `is_name_conflict(candidate_title, taken_names)` (whether a title
+  would collide with a name already taken) for apps that mint names from titles.
 - The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
   build-app scaffold and tests. Without `--repo-root` the reference location
   checks run against the root the `system/apps/<package>/app.toml` layout

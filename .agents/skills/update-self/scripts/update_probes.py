@@ -1,6 +1,6 @@
 """Liveness and frontend probes: the pre-flight boots of the merged shell and chat app,
-the shell's health poll, the instances-API poll of every critical app that serves one,
-the served-bundle check, and the view refresh that follows a change.
+the settled verdict over the shell's health and the health of every critical app the
+user can open, the served-bundle check, and the view refresh that follows a change.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence
+from typing import Callable, Sequence
 
 from update_banding import ExpendWrapper, as_expendable
 from update_layout import (
@@ -49,24 +49,13 @@ FRONTEND_BUILT_HEADER = "x-frontend-built"
 # real app shell from the placeholder even on a backend too old for the header.
 _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 
-# The shell's probe route (the workspace app model, contracts section 5): alive,
-# and whether the built frontend is being served.
+# The probe route the shell and every critical app serve: 200 with a JSON body once
+# the app is bound and answering. The body is what tells the app itself from the
+# shell's SPA catch-all, which a stale registry row would land the probe on.
 HEALTH_PATH = "/api/health"
 
-# The chat app's own probe route, polled by its pre-flight boot: ``--preflight`` runs no
-# agent manager, so the instances API is not there to ask, and health is the boot
-# having imported mngr and the harness plugins and bound its socket.
-CHAT_HEALTH_PATH = "/api/health"
 # The chat program's entry point; a tree without it has no chat program to pre-flight.
 CHAT_PROGRAM_ENTRY = f"{CHAT_DIR}/imbue/chat/main.py"
-
-# The instances API (the workspace app model, contracts section 4), polled after the
-# restart on every critical app that serves instances: the route the shell reads, so
-# it is the one that says the app is usable rather than merely bound. It answers 503
-# while the app is initialising (the chat, until its first agent list arrives) and
-# hangs when the app's own machinery is stuck -- both of which a plain health route
-# would pass over.
-INSTANCES_PATH = "/_instances"
 
 SERVE_PATH = "/"
 
@@ -117,37 +106,50 @@ def has_chat_program(repo_root: Path) -> bool:
     return (repo_root / CHAT_PROGRAM_ENTRY).is_file()
 
 
-class CriticalInstanceApp(NamedTuple):
-    """An app the apply holds to its instances API after the restart: one whose
-    manifest says ``critical = true`` and ``instances = true``.
-
-    ``instances_url`` is the manifest's own declaration when it makes one (the
-    terminal's sidecar port); ``None`` means the API lives at the app URL, which
-    only the registry knows. ``program`` is the supervisord program that runs
-    it, whose pid the settled verdict holds steady.
-    """
-
-    name: str
-    instances_url: str | None
-    program: str = ""
-
-
-def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, ...]:
-    """Every critical app with an instances API in the tree at ``repo_root``, in
-    directory order.
+def read_critical_apps(repo_root: Path) -> tuple[str, ...]:
+    """The name of every critical app the user can open in the tree at ``repo_root``,
+    in directory order: the manifests that say ``critical = true`` and not
+    ``internal = true``. The shell is internal and has its own probe; an internal
+    sidecar such as ``terminal-pty`` is covered by the app that fronts it.
 
     Read off the tree being applied (the merged tree, or the restored one on
     rollback) rather than the registry: right after the restart the registry
     still holds whatever rows the programs wrote before it, so the manifests are
     what say which apps the tree runs. A tree with no manifests probes nothing
-    but the shell. A manifest that will not parse or
-    names no app is skipped with a note: this runs on the rollback path too, where
-    an exception would escape the apply's last line of defense.
+    but the shell.
     """
+    return tuple(
+        manifest["name"]
+        for manifest in _read_app_manifests(repo_root)
+        if manifest.get("critical") is True and manifest.get("internal") is not True
+    )
+
+
+def read_critical_programs(repo_root: Path) -> tuple[str, ...]:
+    """The supervisord program of every critical manifest in the tree at ``repo_root``,
+    the shell's and the internal sidecars' (``terminal-pty``) included, each once in
+    directory order: what the settled verdict holds on steady pids after a restart.
+    A manifest that names no program is run by the program named after it."""
+    programs: list[str] = []
+    for manifest in _read_app_manifests(repo_root):
+        if manifest.get("critical") is not True:
+            continue
+        program = manifest.get("program")
+        resolved = program if isinstance(program, str) and program else manifest["name"]
+        if resolved not in programs:
+            programs.append(resolved)
+    return tuple(programs)
+
+
+def _read_app_manifests(repo_root: Path) -> list[dict]:
+    """Every app manifest in the tree at ``repo_root`` that parses and names its app,
+    in directory order. A manifest that will not parse or names no app is skipped
+    with a note: this runs on the rollback path too, where an exception would
+    escape the apply's last line of defense."""
     apps_dir = repo_root / APPS_DIR
     if not apps_dir.is_dir():
-        return ()
-    apps: list[CriticalInstanceApp] = []
+        return []
+    manifests: list[dict] = []
     for directory in sorted(apps_dir.iterdir()):
         manifest_path = directory / MANIFEST_FILENAME
         if not manifest_path.is_file():
@@ -167,25 +169,8 @@ def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, .
                 f"its {MANIFEST_FILENAME} names no app.\n"
             )
             continue
-        if (
-            manifest.get("critical") is not True
-            or manifest.get("instances") is not True
-        ):
-            continue
-        declared_url = manifest.get("instances_url")
-        program = manifest.get("program")
-        apps.append(
-            CriticalInstanceApp(
-                name=name,
-                instances_url=(
-                    declared_url
-                    if isinstance(declared_url, str) and declared_url
-                    else None
-                ),
-                program=program if isinstance(program, str) and program else name,
-            )
-        )
-    return tuple(apps)
+        manifests.append(manifest)
+    return manifests
 
 
 # The supervisord program that runs the live shell, and the client used to ask
@@ -244,14 +229,14 @@ def wait_settled(
     *,
     shell_url: str,
     programs: Sequence[str],
-    instance_apps: Sequence[CriticalInstanceApp],
+    app_names: Sequence[str],
     require_stable_pid: bool,
     attempts: int = HEALTH_ATTEMPTS,
 ) -> str | None:
     """Whether the live workspace reaches -- and holds -- a healthy state; None when it does.
 
-    Healthy is the shell's health answering together with every ``instance_apps``
-    entry's instances API answering (re-reading the registry each time, as the
+    Healthy is the shell's health answering together with every ``app_names``
+    entry's health route answering (re-reading the registry each time, as the
     apps re-register). It takes ``SETTLED_HEALTHY_PROBES`` consecutive healthy
     answers rather than one, and, when the caller has just restarted programs,
     supervisord reporting every one of ``programs`` RUNNING on the same pids
@@ -270,19 +255,16 @@ def wait_settled(
         finding: str | None = None
         if http.get_status(shell_url, timeout=5.0) != 200:
             finding = f"the shell's health at {shell_url} did not answer 200"
-        for app in instance_apps:
+        for app_name in app_names:
             if finding is not None:
                 break
-            url = instances_probe_url(repo_root, app)
+            url = health_probe_url(repo_root, app_name)
             if url is None:
-                finding = _describe_missing_registry_url(repo_root, app.name)
+                finding = _describe_missing_registry_url(repo_root, app_name)
             else:
                 page = http.get_page(url, timeout=5.0)
-                if not is_instances_answer(page):
-                    finding = (
-                        f"the {app.name} app's instances API at "
-                        f"{_describe_instances_non_answer(url, page)}"
-                    )
+                if not is_health_answer(page):
+                    finding = f"the {app_name} app's health at {_describe_health_non_answer(url, page)}"
         pids: dict[str, str | None] | None = None
         if finding is None and require_stable_pid:
             pids = read_supervisor_pids(repo_root, runner, programs)
@@ -337,18 +319,17 @@ def registry_app_url(repo_root: Path, app_name: str) -> str | None:
     return None
 
 
-def instances_probe_url(repo_root: Path, app: CriticalInstanceApp) -> str | None:
-    """Where ``app``'s instances API is reached right now: the manifest's own
-    ``instances_url``, else the registry row's ``url``; ``None`` while the app has
-    no row yet."""
-    base = app.instances_url or registry_app_url(repo_root, app.name)
+def health_probe_url(repo_root: Path, app_name: str) -> str | None:
+    """Where ``app_name``'s health route is reached right now: under the URL its
+    registry row names; ``None`` while the app has no row yet."""
+    base = registry_app_url(repo_root, app_name)
     if base is None:
         return None
-    return f"{base.rstrip('/')}{INSTANCES_PATH}"
+    return f"{base.rstrip('/')}{HEALTH_PATH}"
 
 
-def is_instances_answer(page: FetchedPage | None) -> bool:
-    """Whether a response is the instances API answering: 200 with a JSON body.
+def is_health_answer(page: FetchedPage | None) -> bool:
+    """Whether a response is the app's health route answering: 200 with a JSON body.
 
     The body's type is what tells the app from a stale registry row: until the
     restarted app re-registers at the end of its boot, its row can still name
@@ -377,14 +358,14 @@ def _describe_missing_registry_url(repo_root: Path, app_name: str) -> str:
     return f"the app registry at {APPS_REGISTRY_PATH} never listed '{app_name}'"
 
 
-def _describe_instances_non_answer(url: str, page: FetchedPage | None) -> str:
+def _describe_health_non_answer(url: str, page: FetchedPage | None) -> str:
     if page is None:
         return f"{url} did not answer"
     if page.status != 200:
         return f"{url} answered HTTP {page.status}"
     return (
         f"{url} answered 200 but as '{page.content_type}' rather than JSON, so it is "
-        "not the app's instances API (a registry row that still names another server)"
+        "not the app's health route (a registry row that still names another server)"
     )
 
 
@@ -435,7 +416,10 @@ def preflight_chat(
         # The repo root, where supervisord runs the chat from (its paths are relative to it).
         cwd=repo_root,
         env_overrides={"CHAT_HOST": "127.0.0.1", "CHAT_PORT": str(port)},
-        health_url=f"http://127.0.0.1:{port}{CHAT_HEALTH_PATH}",
+        # The chat's pre-flight boot answers the same probe route: ``--preflight`` runs no agent
+        # manager, and health is the boot having imported mngr and the harness plugins and
+        # bound its socket.
+        health_url=f"http://127.0.0.1:{port}{HEALTH_PATH}",
         what="the merged chat app",
         http=http,
         spawner=spawner,
@@ -590,29 +574,27 @@ def refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
         sys.stderr.write(completed.stderr)
 
 
-# The health route (contracts.md section 5) every built-in app with a page answers,
-# and the field on it that says whether that page is the built bundle or the "not
-# built" placeholder.
-APP_HEALTH_PATH = "/api/health"
+# The field on the health route (desktop contracts.md section 5) that says whether
+# the app's page is the built bundle or the "not built" placeholder.
 FRONTEND_BUILT_KEY = "is_frontend_built"
 
 
 def describe_app_frontend_failure(
-    http: HttpClient, repo_root: Path, app: CriticalInstanceApp
+    http: HttpClient, repo_root: Path, app_name: str
 ) -> str | None:
-    """Why ``app`` serves no built frontend by its own account, or ``None``.
+    """Why ``app_name`` serves no built frontend by its own account, or ``None``.
 
     Asks the app's health route on its registry URL and reads ``is_frontend_built``.
-    An app that answers no JSON there, or JSON without the field (the terminal's
-    page is ttyd's), has no verdict to give and is not failed on it: this is the
-    check that a restored copy of a bundle actually restored a page, on top of the
-    instances API answering, which it does whether or not the bundle is there.
+    An app that answers no JSON there, or JSON without the field, has no verdict to
+    give and is not failed on it: this is the check that a restored copy of a bundle
+    actually restored a page, on top of the health route answering, which it does
+    whether or not the bundle is there.
     """
-    base = registry_app_url(repo_root, app.name)
-    if base is None:
+    url = health_probe_url(repo_root, app_name)
+    if url is None:
         return None
-    page = http.get_page(f"{base.rstrip('/')}{APP_HEALTH_PATH}", timeout=5.0)
-    if page is None or page.status != 200 or "json" not in page.content_type.lower():
+    page = http.get_page(url, timeout=5.0)
+    if not is_health_answer(page):
         return None
     try:
         document = json.loads(page.body)
@@ -621,6 +603,6 @@ def describe_app_frontend_failure(
     if not isinstance(document, dict) or document.get(FRONTEND_BUILT_KEY) is not False:
         return None
     return (
-        f"the {app.name} app reports {FRONTEND_BUILT_KEY}: false on its health route, so "
+        f"the {app_name} app reports {FRONTEND_BUILT_KEY}: false on its health route, so "
         "it is serving the 'not built' placeholder rather than its page"
     )

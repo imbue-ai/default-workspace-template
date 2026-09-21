@@ -8,10 +8,10 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
-from terminal_app.data_types import TmuxClient, TmuxSession
+from terminal_app.data_types import TmuxSession
 from terminal_app.errors import InvalidTerminalValueError, TmuxCommandError
 from terminal_app.interfaces import TmuxInterface
-from terminal_app.primitives import ClientTty, TmuxSessionId, TmuxSessionName, Workdir
+from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
 
 # A tmux command is one round trip to a local socket; past the first threshold it is suspicious,
 # past the second it is broken.
@@ -19,7 +19,6 @@ TMUX_SLOW_SECONDS: Final[float] = 1.0
 TMUX_TIMEOUT_SECONDS: Final[float] = 5.0
 
 SESSIONS_FORMAT: Final[str] = "#{session_name}\t#{session_id}\t#{session_activity}\t#{session_created}"
-CLIENTS_FORMAT: Final[str] = "#{client_tty}\t#{session_name}\t#{session_id}"
 CREATED_SESSION_FORMAT: Final[str] = "#{session_id}\t#{session_created}"
 
 
@@ -61,41 +60,11 @@ def _parse_activity(raw_activity: str) -> datetime | None:
 
 
 @pure
-def parse_tmux_clients(output: str) -> list[TmuxClient]:
-    """Parse ``tmux list-clients`` lines of ``tty\\tname\\tid``; a line with fewer fields, or whose tty is not a device path, is skipped."""
-    clients: list[TmuxClient] = []
-    for line in output.splitlines():
-        fields = line.split("\t", 2)
-        if len(fields) < 3:
-            continue
-        client_tty, session_name, session_id = fields
-        if not _is_client_tty(client_tty):
-            continue
-        clients.append(
-            TmuxClient(
-                client_tty=ClientTty(client_tty),
-                session_name=session_name,
-                session_id=session_id,
-            )
-        )
-    return clients
-
-
-@pure
 def tmux_target(target: TmuxSessionName | TmuxSessionId) -> str:
     """The ``-t`` argument that names exactly this session: ``=<name>``, or the id verbatim."""
     if isinstance(target, TmuxSessionId):
         return str(target)
     return f"={target}"
-
-
-@pure
-def _is_client_tty(value: str) -> bool:
-    try:
-        ClientTty(value)
-    except InvalidTerminalValueError:
-        return False
-    return True
 
 
 class SubprocessTmux(TmuxInterface):
@@ -112,13 +81,6 @@ class SubprocessTmux(TmuxInterface):
             logger.debug("Listed no tmux sessions: {}", completed.stderr.strip())
             return []
         return parse_tmux_sessions(completed.stdout)
-
-    def list_clients(self) -> list[TmuxClient]:
-        completed = self._run(["list-clients", "-F", CLIENTS_FORMAT])
-        if completed.returncode != 0:
-            logger.debug("Listed no tmux clients: {}", completed.stderr.strip())
-            return []
-        return parse_tmux_clients(completed.stdout)
 
     def create_session(
         self, name: TmuxSessionName, workdir: Workdir, command: Sequence[str]

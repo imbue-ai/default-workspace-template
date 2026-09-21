@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 
 import pytest
-from app_instances.testing import wait_until
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.testing import drain_messages
@@ -68,18 +68,18 @@ def test_the_watch_announces_each_distinct_reading_of_the_record(tmp_path: Path)
     watch.start()
     try:
         write_rollback_point(watch.repo_root, apps=["terminal"])
-        assert wait_until(lambda: not client_queue.empty(), timeout_seconds=10)
+        wait_for(lambda: not client_queue.empty(), timeout=10.0)
         raised = drain_messages(client_queue)
         assert [message["type"] for message in raised] == ["update_notice_changed"]
         assert raised[0]["notice"]["apps"] == ["terminal"]
 
         write_rollback_point(watch.repo_root, apps=["terminal"], progress="Reverting the update")
-        assert wait_until(lambda: not client_queue.empty(), timeout_seconds=10)
+        wait_for(lambda: not client_queue.empty(), timeout=10.0)
         progressed = drain_messages(client_queue)
         assert [message["notice"]["progress"] for message in progressed] == ["Reverting the update"]
 
         (watch.repo_root / "data/.state/update-apply/last-good.json").unlink()
-        assert wait_until(lambda: not client_queue.empty(), timeout_seconds=10)
+        wait_for(lambda: not client_queue.empty(), timeout=10.0)
         cleared = drain_messages(client_queue)
         assert [message["notice"] for message in cleared] == [None]
     finally:

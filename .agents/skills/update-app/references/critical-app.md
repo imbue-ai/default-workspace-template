@@ -12,9 +12,10 @@ handoff are all `update-app`'s and the references it points at.
 1. **Code isolation.** You edit an *isolated git worktree*, never the served
    tree. A half-broken build can never reach the served app.
 2. **The preview is the user's view.** For an ordinary app the user watches the
-   live tab and a preview is the exception; here the live tab is off-limits, so
-   the labeled `<name>-preview` tab is the normal, always-on way the user sees
-   the change as you iterate. Every critical app previews, the terminal included.
+   live app and a preview is the exception; here the live app is off-limits, so
+   a window of the labeled `<name>-preview` app is the normal, always-on way the
+   user sees the change as you iterate. Every critical app previews, the
+   terminal included.
 3. **Go-live is the atomic apply, after the harden pass.** Merging is not
    enough: the change lands through the update apply (pre-flight,
    health-checked, auto-rollback), and only once a background worker has
@@ -41,13 +42,13 @@ is the one exception, and `heal-creation` says what it costs.)
 time" describes. Three deltas:
 
 - **The lease name is fixed:** `editing critical apps`. One lease covers every
-  critical app, because one apply lands them all and one preview tab per app is
+  critical app, because one apply lands them all and one preview per app is
   all the workspace can show.
 - **It is held for the whole pass**, not per turn: entry through go-live or
   abandonment, including the waits for the user's feedback. Release it only at
   final teardown (step 4) or on explicit abandonment.
 - **Breaking a stale one means tearing down its orphaned pass too:** its
-  preview and tab, its worktree, and its worker if one exists. Run the step 4
+  preview and its window, its worktree, and its worker if one exists. Run the step 4
   teardown for whatever the abandoned pass left behind. A stale lease is broken
   only on the user's call, never silently.
 
@@ -100,11 +101,11 @@ you need a clean build, not the full gate.
 
 `update-app`'s step 4, **Verify**, carries over with its timing rule intact:
 *verify before the user can see it*. Here that rule is per round, not just the
-first: the tab is closed while you edit and check, and re-opened when the round
-is ready. The preview reads real state (the chat preview follows the real
-agents, the shell preview lists the real apps), so driving it while the user is
-looking at it is driving their workspace under them; with the tab closed you
-can drive it freely on its own port.
+first: the preview's window is closed while you edit and check, and re-opened
+when the round is ready. The preview reads real state (the chat preview follows
+the real agents, the shell preview lists the real apps), so driving it while the
+user is looking at it is driving their workspace under them; with the window
+closed you can drive it freely on its own port.
 
 **First round: boot the preview, confirm it came up, then hand it over.** Boot
 it first, on its own:
@@ -119,38 +120,44 @@ The manifest's `[preview]` table says what boots: the shell as a read-only
 preview over a seeded copy of the live state directory and a copied registry;
 the chat as a secondary chat following the real agents and reading the real
 accounts, opened on the conversation you pass as `--instance-key` (a chat id;
-usually your own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`); the terminal on two free ports over a copy of its
-store. A `workspace_ui` change previews as the shell with the chat:
+usually your own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`); the terminal as its wrapper pages on a
+free port over a copy of its store, framing a pty preview it is booted with
+(`--app terminal --with terminal-pty`), since the pages frame the pty the
+registry names. A `workspace_ui` change previews as the shell with the chat:
 `--app system_interface --with chat --instance-key "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`, and the
 preview shell's copied registry points at that secondary chat. Exit 0 means it
 came up healthy; on a non-zero exit, fix the build and re-run, and do not open
-the tab on a broken boot. It refuses to boot if another pass's preview of the
-same app is up rather than hijacking the tab; surface that and coordinate.
+a window on a broken boot. It refuses to boot if another pass's preview of the
+same app is up rather than hijacking it; surface that and coordinate.
 
-Only once it is up, open the tab:
+Only once it is up, open its window:
 
 ```bash
 python3 system/scripts/layout.py open <name>-preview
 ```
 
-**That `open` is the hand-off, not setup.** It puts the tab on the user's screen
-the moment it returns, so from here the pass is interactive: every round ends by
-telling the user what changed and waiting. Do not drive the preview yourself
-while the tab is open, and never tell the user to open a tab you already opened.
+**That `open` is the hand-off, not setup.** It puts the window on the user's
+screen the moment it returns, so from here the pass is interactive: every round
+ends by telling the user what changed and waiting. Do not drive the preview
+yourself while the window is open, and never tell the user to open a window you
+already opened.
 
 What to point the user at: for the chat, the conversation the preview opened on
 (the one that motivated the change, when one did; sends from the preview are
 real, so a change about what happens when a message is sent can be tried for
-real); for the shell, their real projects and tabs, with the previewed app in
-place of the live one and every live app's instances beside it; for the
-terminal, a session the preview creates (a real tmux session).
+real); for the shell, their real desktops and windows, with the previewed app in
+place of the live one and every live app beside it; for the terminal, a session
+the preview creates (a real tmux session).
 
-A preview shell creates for real: its New Tab page, rail, and All apps popover
-all work, and what they make is a real instance of whatever app the copied
-registry names -- a sibling booted with `--with` gets the instance, and an app
-that was not previewed gets a live one the user can delete afterwards. What a
-preview refuses is every verb that would change an instance the user already
-has: rename, stop, start, delete, and stopping or starting an app.
+A preview shell is the real desktop over a copy of its state: its launcher,
+shortcuts, and windows all work, and a window it opens frames whatever app the
+copied registry names -- a sibling booted with `--with` gets the window, and an
+app that was not previewed shows the live one. Opening, placing, and closing
+windows, a refresh, the interface reload, and the avatar edit the preview's own
+copy or reach only its own windows, so they stay live. What a preview refuses is
+the two kinds of verb whose effect lands outside that copy: stopping or starting
+an app (supervisord is the live workspace's) and the update notice's confirm and
+roll back.
 
 **If the `open` was refused** (no connected client: `has no client to apply it
 (HTTP 412)`), the hand-off did not happen. Drive the preview privately
@@ -160,9 +167,9 @@ rather than the surface. Keep trying the `open`; the moment one lands, that is
 the delivered preview. Approval given on a screenshot is not approval of the
 live surface; name that gap when you report the pass.
 
-**Each subsequent round: close the tab, refresh in place, re-open it.** The
+**Each subsequent round: close the window, refresh in place, re-open it.** The
 preview itself stays up the whole pass -- same process record, same ports, same
-registrations, same wrapper page -- and only the tab comes and goes. Close it
+registrations, same wrapper page -- and only the window comes and goes. Close it
 first, so the user is not watching a half-built round land:
 
 ```bash
@@ -170,7 +177,7 @@ python3 system/scripts/layout.py close <name>-preview
 ```
 
 (A `close` with no connected client answers the same `HTTP 412` an `open` does;
-there was no tab on screen to take away, so carry on.)
+there was no window on screen to take away, so carry on.)
 
 Then edit, and refresh the preview in place:
 
@@ -188,10 +195,10 @@ Then edit, and refresh the preview in place:
   ```
 
   If `refresh` exits non-zero the new build did not boot. Fix it and refresh
-  again; the live app is unaffected either way, and with the tab closed the user
-  never sees the broken round.
+  again; the live app is unaffected either way, and with the window closed the
+  user never sees the broken round.
 
-Check the round on the preview's own port while the tab is still closed, then
+Check the round on the preview's own port while the window is still closed, then
 `layout.py open <name>-preview` again. That re-open is the round's hand-off,
 exactly as the first one was.
 
@@ -226,8 +233,8 @@ shapes.
 worktrees, so before creating the worker, release your hold on it:
 
 ```bash
-uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 python3 system/scripts/layout.py close <name>-preview
+uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 git worktree remove "data/.tasks/critical-live/update-$SLUG"
 ```
 
@@ -360,17 +367,19 @@ interleave.
    they roll back, the branch and the worker's report are the retry's input.
 
 4. **Tear down and release.** Whatever the exit code, and after a rejection
-   where nothing was merged, tear down the preview and its tab, retire the
+   where nothing was merged, close the preview's window and tear it down, retire the
    worker (destroy it, or stop it after a failed apply; see below), close the
    ticket, and release the lease:
 
    ```bash
-   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
    python3 system/scripts/layout.py close <name>-preview
+   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
    ```
 
-   `down` is idempotent and tears down the siblings it booted; the tab is a
-   layout panel you close yourself. This flow does not pass through
+   The close goes first: nothing takes a window away when its app leaves the
+   registry, so a window closed after `down` would stay on the desktop pointing
+   at a page nothing serves. `down` is idempotent and tears down the siblings it
+   booted. This flow does not pass through
    `update-creation` step 4, so the worker's teardown is yours. After a `0`,
    destroy it:
 

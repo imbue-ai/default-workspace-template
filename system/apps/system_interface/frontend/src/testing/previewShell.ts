@@ -2,7 +2,7 @@
  * Marks the test page as a preview shell the way the backend does, and returns the undo.
  */
 
-import { PREVIEW_SHELL_META_TAG } from "../models/PreviewShell";
+import { PREVIEW_SHELL_META_TAG } from "../model/PreviewShell";
 
 export function markPageAsPreviewShell(): () => void {
   const metaElement = document.createElement("meta");

@@ -64,15 +64,6 @@ def test_preflight_is_off_by_default_and_a_flag_of_its_own() -> None:
     assert _parse_args(["--preflight"]).preflight is True
 
 
-def test_secondary_is_off_by_default_and_names_its_own_shell() -> None:
-    """``--secondary`` is a preview's boot; the shell it nudges is the one named beside it, else none."""
-    assert _parse_args([]).secondary is False
-    assert _parse_args([]).nudge_shell_url == ""
-    secondary = _parse_args(["--secondary", "--nudge-shell-url", "http://127.0.0.1:9"])
-    assert secondary.secondary is True
-    assert secondary.nudge_shell_url == "http://127.0.0.1:9"
-
-
 def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
     """The chat's data directory is the config's: a secondary chat pointed at a scratch copy writes nowhere else."""
     state = build_production_state(Config(chat_data_dir=tmp_path / "scratch"), is_secondary=True)

@@ -4,24 +4,26 @@
  * the apply touched, since a rollback takes all of it back together. Three states, all read off
  * the notice the socket keeps current: open (Roll back / Everything seems good), a rollback
  * running (its progress, no verbs), and settled (the outcome, and Close). Roll back asks first,
- * naming the update and what it restarts.
+ * naming the update and what it restarts. The notice and the apps' names are read off the
+ * store's state, which the socket keeps current.
  */
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { bannerClass } from "@imbue/workspace-ui/src/components/banner";
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
-import { getApp } from "../models/Inventory";
 import {
   SHELL_APP_NAME,
   confirmUpdate,
-  getUpdateNotice,
   isNoticeSettled,
   isRollbackRunning,
   isWorkspaceOnlyNotice,
   rollbackUpdate,
-} from "../models/UpdateNotice";
-import type { UpdateNotice } from "../models/UpdateNotice";
+} from "../model/UpdateNotice";
+import type { UpdateNotice } from "../model/UpdateNotice";
+import { appByName } from "../reducers/desktopState";
+import type { DesktopState } from "../reducers/desktopState";
+import type { DesktopStore } from "../store/DesktopStore";
 
 export const UPDATE_NOTICE_BANNER_MARKER = "update-notice-banner";
 
@@ -31,19 +33,21 @@ export const SYSTEM_SERVICES_RESTART_DETAILS =
   "restart the workspace's system services before the previous version runs.";
 
 /** The shell's display name is "Workspace", which reads as the whole workspace in a sentence. */
-function displayName(appName: string): string {
+function displayName(state: DesktopState, appName: string): string {
   if (appName === SHELL_APP_NAME) return "the workspace interface";
-  return getApp(appName)?.display_name ?? appName;
+  return appByName(state, appName)?.display_name ?? appName;
 }
 
-function listed(names: string[]): string {
+function listed(names: readonly string[]): string {
   if (names.length <= 1) return names.join("");
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** What the apply touched, as a sentence subject: the apps it named, or the workspace. */
-function touchedText(notice: UpdateNotice): string {
-  return isWorkspaceOnlyNotice(notice) ? "the workspace" : listed(notice.apps.map(displayName));
+function touchedText(state: DesktopState, notice: UpdateNotice): string {
+  return isWorkspaceOnlyNotice(notice)
+    ? "the workspace"
+    : listed(notice.apps.map((appName) => displayName(state, appName)));
 }
 
 function capitalized(text: string): string {
@@ -59,7 +63,11 @@ function stateKey(notice: UpdateNotice): string {
   return JSON.stringify([notice.progress, notice.outcome]);
 }
 
-export function UpdateNoticeBanner(): m.Component {
+export interface UpdateNoticeBannerAttrs {
+  readonly store: DesktopStore;
+}
+
+export function UpdateNoticeBanner(): m.Component<UpdateNoticeBannerAttrs> {
   let isDialogOpen = false;
   let isRequestInFlight = false;
   let error: string | null = null;
@@ -123,16 +131,16 @@ export function UpdateNoticeBanner(): m.Component {
     ];
   }
 
-  function text(notice: UpdateNotice): string {
+  function text(state: DesktopState, notice: UpdateNotice): string {
     if (isRollbackRunning(notice)) return `Rolling back: ${notice.progress}...`;
     if (isNoticeSettled(notice)) return notice.outcome ?? "";
     const verb = notice.apps.length > 1 ? "were" : "was";
-    return `${capitalized(touchedText(notice))} ${verb} updated ${OPEN_NOTICE_TEXT_SUFFIX}`;
+    return `${capitalized(touchedText(state, notice))} ${verb} updated ${OPEN_NOTICE_TEXT_SUFFIX}`;
   }
 
-  function dialog(notice: UpdateNotice): m.Children {
+  function dialog(state: DesktopState, notice: UpdateNotice): m.Children {
     if (!isDialogOpen) return null;
-    const apps = touchedText(notice);
+    const apps = touchedText(state, notice);
     const restarts =
       notice.programs.length === 0 ? "no app restarts on its own" : `${listed(notice.programs)} will restart`;
     return m(DestroyConfirmDialog, {
@@ -158,8 +166,9 @@ export function UpdateNoticeBanner(): m.Component {
   }
 
   return {
-    view() {
-      const notice = getUpdateNotice();
+    view(vnode) {
+      const state = vnode.attrs.store.getState();
+      const notice = state.updateNotice;
       if (notice === null) return null;
       if (error !== null && errorState !== stateKey(notice)) {
         error = null;
@@ -170,12 +179,12 @@ export function UpdateNoticeBanner(): m.Component {
       return [
         m("div", { class: bannerClass(marker, tone) }, [
           m("span", { class: `${marker}-text min-w-0` }, [
-            text(notice),
+            text(state, notice),
             error === null ? null : m("span", { class: `${marker}-error ml-2 text-danger` }, error),
           ]),
           m("span", { class: "flex flex-none items-center gap-1.5" }, verbs(notice)),
         ]),
-        dialog(notice),
+        dialog(state, notice),
       ];
     },
   };

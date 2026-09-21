@@ -1,69 +1,134 @@
 # System Interface
 
 The workspace's shell: its window manager and app management. It serves one
-document (`/`, the dockview UI) that arranges tabs, keeps projects, and
-manages apps, and it knows every app only through the workspace app model: a
-manifest, a registry row, an instances API, and the browser-side contract.
+document (`/`, the desktop) that arranges windows, keeps desktops, and
+manages apps, and it knows every app only through the desktop interface's
+contracts: a manifest, a registry row, and the browser-side contract module.
 This package imports nothing from mngr or from any app, never runs the `mngr`
 binary, and names no app (`test_project_ratchets.py` holds all three).
 
 ## Model
 
-The shell speaks the vocabulary of the workspace app model. The meta spec,
-`docs/system/blueprint/workspace-app-model/plan-workspace-app-model.md`, is
-the reference; `contracts.md` beside it holds every route, message, and file
+The shell speaks the vocabulary of the desktop interface. The spec,
+`docs/system/blueprint/desktop-interface/plan-desktop-interface.md`, is the
+reference; `contracts.md` beside it holds every route, message, and file
 format. In brief:
 
 - An **app** is a supervised program with a manifest (`app.toml`), a row in
   the registry (`data/.state/apps.toml`), and its own browser origin. It is the
-  unit you install, stop, start, and share.
-- An **instance** is something an app owns, lists, and reports status for:
-  a chat, a terminal session, a file viewer, a browser. An app that declares
-  none has exactly one, itself. Every tab shows an instance, and an
-  **address** (`app:<name>` or `app:<name>?instance=<key>`) is the whole of
-  what the shell knows about what a tab shows.
-- A **view** is a project or Everything. A **project** is a shared tab set (a
-  list of addresses), a name, a color, a glyph, and its rail **shortcuts**
-  (`(app, action)` rows in focus or new mode); Everything is the unfiltered
-  view of the whole machine.
-- A **layout** is one client's arrangement of one view. A **client** is one
-  browser context, identified by a stored id, with a device kind. Truth is
-  shared, arrangement is scoped.
-- **Status** (`working`, `idle`, `attention`, `stopped`, `error`), titles,
-  icons, and recency all come from the apps. The shell stores no titles, no
-  recency, and no locations of its own.
+  unit you install, stop, start, and share. Its manifest declares **launch
+  paths** (`new` at `/new`, say, with documented query params); an app that
+  declares none offers `open` at its root.
+- A **desktop** is a named, shared collection of windows and shortcuts over a
+  wallpaper, with a colour, a glyph, and a sharing mode. Everyone sees the
+  same desktops and the same windows on them.
+- A **window** is one page of one app on one desktop: the app, the path under
+  its origin the page is at, and the title the page last reported. That is
+  the whole of what the shell knows about what a window shows.
+- A **placement** is where one client keeps one window: its frame in fractions
+  of the backdrop, whether it is snapped or maximized, whether it is
+  minimized; the order is the stack. A **client** is one browser context,
+  identified by a stored id, with an active desktop. Truth is shared,
+  arrangement is scoped.
+- A **shortcut** is an icon on a desktop's backdrop that runs one app's launch
+  path, in `focus` mode (raise the app's most recent window, opening one only
+  when it has none) or `new` mode (always open one).
+- Titles come from the pages, icons and launch paths from the manifests, and
+  liveness from supervisord. The shell stores no status and no recency of its
+  own.
 
 ## What the process serves
 
 The `system-interface` tool (the shell's own uv tool environment, run by
 supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
 
-- `/` and the SPA catch-all: the dockview UI, built into
+- `/` and the SPA catch-all: the desktop, built into
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
-- `/_static/app_contract.js`: the browser-side contract module every app page
-  imports (source in `system/libs/workspace_ui/src/app_contract.ts`).
-- The shell routes of contracts sections 5 and 6: the app registry and the
-  per-app Stop and Start (`/api/apps/<name>/...`), the instance relay
-  (`.../instances`, `.../instances/<key>/rename|delete|location|stop|start`),
-  projects (`/api/projects/...`), layouts (`/api/layouts/<view>`), clients,
-  tabs (`/api/tabs/<tab_id>/instance`), client activity, the inventory
-  (`/api/inventory`), and the loopback-only op route (`/api/layout/broadcast`).
-- The WebSocket (`/api/ws`): `apps_updated`, `projects_updated`,
-  `layout_updated`, `active_view_changed`, `tab_rebound`, `layout_op`
-  (contracts section 8).
+- `/_static/app_contract.js`: the browser-side contract module (source in
+  `system/libs/workspace_ui/src/app_contract.ts`), built into this app's static
+  output; every app serves that same file from its own origin, since a
+  cross-origin module import carries no cookie and the forwarder refuses it.
+- The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
+  `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
+  windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
+  placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
+  `/wallpapers/<kind>/<name>`), the per-app Stop and Start
+  (`/api/apps/<name>/stop|start`), clients (`/api/clients`), client activity
+  (`/api/client-activity`), the inventory (`/api/inventory`), the templates
+  catalog (`/api/templates-catalog`), each client's pinned-entry presentation
+  (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
+  `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
+  registration `POST /api/avatars` is loopback-only), and the loopback-only
+  op route (`/api/layout/broadcast`).
+- The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
+  `placements_updated`, `active_desktop_changed`, `client_entries_changed`,
+  `avatar_status`, `avatar_selection_changed`, and `layout_op` (contracts
+  section 6); it accepts each client's `client_state` report.
 
-Its state lives under `data/.state/system_interface/`: `projects.json`,
-`layouts/<view>/<client>.json` with a per-device seed beside each,
-`clients.json`, the migration marker, and the client-activity event log
-(`events/client_activity/events.jsonl`, what `layout.py context` reads).
+Its state lives under `data/.state/system_interface/`: `desktops.json`,
+`placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
+own paths for independent windows), `clients.json`, `avatar_selection.json`,
+and the client-activity event log (`events/client_activity/events.jsonl`, what
+`layout.py context` reads). Wallpapers are listed from `static/wallpapers/`
+(bundled) and `data/.apps/system_interface/wallpapers/` (files the user adds);
+avatar designs an agent registers live in
+`data/.apps/system_interface/avatars/catalog.json` beside the seven bundled
+ones (`docs/system/avatar-designs.md`).
 
-The backend is the `imbue/system_interface/shell/` subpackage (inventory,
-relay, projects, layouts, clients, client activity, layout ops, the pure
-dockview document editor, routes, state); the package root holds the process
-(`main.py`, `server.py`), the not-built placeholder, and the update-staleness
-check. The frontend (`frontend/`) is one member of the npm workspace rooted at
+### The desktop model
+
+- **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
+  sharing mode, wallpaper, shortcuts, windows), a `Window` (an app, a path
+  under its origin, and the title its page last reported; shared), and per
+  client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
+  backdrop, state, minimized; the order is the stack).
+- **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
+  app whose manifest declares a `[pin]` has exactly one pinned window on
+  every desktop, reconciled on every read after the registry is read and
+  never closed. With the `independent` scope the window's shared path stays
+  its home path and each client's own path and title live in
+  `shell/window_paths.py`'s per-client file. How a client shows the entry
+  (in the bar or floating, plain or as the avatar) is on its client record.
+- **The avatar** (`avatar/`): the bundled and registered designs, the
+  workspace's selection, the rendered image routes, and the status reader,
+  which folds mngr's agents event file into a mood (working when any agent
+  but the services agent is running) and pushes `avatar_status` on change.
+- **State files**: a fresh workspace gets one desktop, `Home`, seeded from
+  every registered app's `default_shortcut` on the first read after the
+  registry has been read. A client record holds the client's active desktop
+  and when it was last seen; clients unseen for a while are pruned with their
+  placement files.
+- **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
+  focus, minimize, restore, maximize, snap, place, the shortcut edits) and
+  every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
+  free cell, reading order, shortcut placement) as pure functions over the
+  records. The rules the frontend also applies pass the shared vectors in
+  `docs/system/blueprint/desktop-interface/geometry_vectors.json`.
+- **Routes** (`shell/desktop_routes.py`): the desktop, window, placement, and
+  wallpaper routes above. A placements save carries a save id and the stamp it
+  was based on; a save over a newer arrangement is refused with 409 and the
+  browser refetches. `GET /api/inventory` is `{desktops, apps, clients}`, each
+  `app` carrying its `launch_paths`, `default_shortcut`, and `is_running`.
+- **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
+  the requester `{app, marker}` or null; `self` names the requester's app's
+  window whose path carries the marker. The document verbs (`open`, `focus`,
+  `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`, the
+  shortcut and wallpaper edits) are applied to the files and announced as
+  `desktops_updated` and `placements_updated`; `context` answers every
+  client's recent activity, folded from the client-activity log and the live
+  socket registrations, and `desktops` and `list` answer the inventory
+  document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
+  `refresh` and `reload_system_interface` reach the browser as `layout_op`
+  messages.
+
+The backend is the `imbue/system_interface/shell/` subpackage (inventory and
+liveness, desktops, placements, wallpapers, clients, client activity, layout
+ops, the pure desktop document editor, the routes with their shared helpers,
+state); the package root holds the process (`main.py`, `server.py`), the
+not-built placeholder, and the update-staleness check. The frontend
+(`frontend/`) is one member of the npm workspace rooted at
 `system/package.json`; the design system, the base helpers, and the contract
 modules it shares with the app pages live in `system/libs/workspace_ui`, and
 `src/relay.ts` is the shell's side of the embedder relay (it forwards the
@@ -73,68 +138,49 @@ framed pages' `minds:` messages to the minds chrome unchanged).
 
 The **inventory** (`shell/inventory.py`) watches the registry, probes each
 app's liveness (supervisord for rows with a `program`, a TCP connect
-otherwise), fetches each app's instance list from its instances API, refetches
-on the app's nudge (`POST /api/apps/<name>/changed`, coalesced over a short
-window) and on a periodic sweep, and pushes the diffed result to every browser
-as `apps_updated`.
+otherwise) on a periodic sweep, and pushes the diffed result to every browser
+as `apps_updated`. That is all it knows of an app: its row (display name,
+icon, launch paths, default shortcut, launcher rank) and whether it is running.
 
-Every verb an instance accepts goes through the **relay** to the app that owns
-it, so the tab menu and the rail row offer exactly what the record allows
-(`renameable`, `stoppable` read with the record's status; the app's
-`instances`, `program`, and `critical` flags), from one definition
-(`frontend/src/views/tabMenu.ts`). Stop and Start of the whole app act on its
-supervisord program and are refused for critical apps; a single-instance app
-offers them on its tab, every other app on the rail's per-app row menu
-(`frontend/src/views/Sidebar.ts`). A framed page reaches the shell only
-through the contract module (`shell:open`, `shell:focused`, `shell:location`);
-a page that reports the path it is showing gets it stored on its own record
-and reopens there.
+Stop and Start of the whole app act on its supervisord program and are refused
+for critical apps; the desktop offers them on the window menu
+(`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
+through the contract module (`shell:open`, `shell:focused`, `shell:location`,
+`shell:capabilities`); a page that reports the path it is showing gets it
+stored on its window and reopens there, and one that declared `navigation`
+is sent `shell:navigate` when an agent points its window elsewhere.
 
-### Views, layouts, and the New Tab page
+### The desktop, the taskbar, and the launcher
 
-Every open in a project files the address into its tab set, whichever way it
-was opened; "Remove from project" unfiles it. Each client keeps its own
-arrangement of each view: the browser saves the user's gestures with a save
-id and the stamp it was based on (a save over a newer arrangement is refused
-with 409 and the window refetches), the shell writes the file for agent ops
-and deletes, and every write is announced as `layout_updated` so the
-client's other windows mirror it. The active view lives on the client record.
-A tab leaves its tab sets and layouts only when its instance is deleted through
-the shell; one whose app stops listing it stays, shown as unavailable, and
-reconnects when the app lists it again. An instance whose record says
-`lifetime = "referenced"` is deleted through its app once nothing references it.
+The backdrop shows the active desktop's shortcuts and windows; each window is
+an iframe of an app page under a title bar with the page's title and the
+window menu. The taskbar shows the desktop switcher, one entry per window of
+the active desktop, the launcher button, and the tray (the desktop
+switcher, the update-staleness banner). A pinned window's entry may float above
+the windows instead, drawn as the workspace's avatar (the chat's default); its
+context menu moves it between the bar and the desktop, switches its style, and
+opens the avatar chooser. Desktops are created, renamed, recoloured,
+re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
+removed on the backdrop.
 
-The rail shows the view's identity (the switcher; right-click for project
-settings), its shortcut rows (seeded from every app's `default_shortcut`;
-Everything's rail is every app's primary action), the "All apps" popover, a
-search pill, and the view's tab list. The New Tab page is
-the only empty state, and the page for starting things. It is an ordinary tab:
-the "+" opens another no matter how many are already up, in one pane or across
-panes, and one stays open until it is closed or answered -- by opening something
-from inside it, or by a tab docking into the pane where it was the only tab. Its
-contents: a search field; "Open
-new" (every app's primary action as a tile, four to a row, the apps that
-declare a `launcher_rank` in their manifest first in rank order and the rest
-after them); "In this project" (the tab set, with an app filter and a last-active
-column, omitted when empty); "Start something" (hardcoded intents, each a new
-chat seeded with a prompt, six at a time behind "See more"); and "Start from a
-template" (the published templates by category, in sideways rails, with a
-detail dialog whose "Make it mine" starts a chat that adopts the template).
-Typing in the search field swaps the page for results: the machine's
-instances and actions, the matching intents, the matching templates. A seeded
-prompt goes to whichever app declares an action with a `message` param (the
-chat app's `new`), so the shell still names no app. The template catalog is a
-JSON document the shell fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`
-(`catalog/README.md` at the repo root describes it), reuses for six hours,
-keeps the last good copy under `data/.state/system_interface/`, and serves
-to the page at `GET /api/templates-catalog`; the design is
-`docs/system/blueprint/new-tab-page/plan-new-tab-page.md`. A fresh install lands
-there with no project.
-
-A workspace that predates the app model is carried over once by
-`system/scripts/migrate_workspace_layouts.py`, which bootstrap runs at every
-boot behind its marker and the update apply runs before its restart; `plan
---json` shows what a run would write.
+The launcher is the page for starting things, an overlay over the desktop
+rather than a window. Its resting contents: a search field; "Open new" (one
+tile per launch path of every non-internal app, the apps that declare a
+`launcher_rank` in their manifest first in rank order and the rest after
+them); "On this desktop" (the active desktop's windows by title); "Start
+something" (hardcoded intents, each a new chat seeded with a prompt, six at a
+time behind "See more"); and "Start from a template" (the published templates
+by category, in sideways rails, with a detail dialog whose "Make it mine"
+starts a chat that adopts the template). Typing in the search field swaps the
+overlay for results: the matching launch paths and windows, the matching
+intents, the matching templates. A seeded prompt goes to whichever app
+declares a launch path with a `message` param (the chat app's `new`), so the
+shell still names no app. The template catalog is a JSON document the shell
+fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (`catalog/README.md` at
+the repo root describes it), reuses for six hours, keeps the last good copy
+under `data/.state/system_interface/`, and serves to the page at
+`GET /api/templates-catalog`. A fresh install lands on its `Home` desktop with
+the launcher's tiles one click away.
 
 ## Running and developing
 
@@ -166,33 +212,37 @@ when extending the default look; see [`frontend/style_guide.md`](frontend/style_
 It is a convention, not a rule: a user who wants their interface restyled gets
 that, tokens or not.
 
-## Driving the workspace layout from an agent
+## Driving the desktop from an agent
 
-An agent inside the workspace rearranges the dockview through
-`system/scripts/layout.py` (`list / inspect / where / context / views / load /
-open / focus / split / close / move / rename / delete / stop / start /
-maximize / restore / replace-url / refresh / shortcuts / shortcut set /
-shortcut remove`), which speaks addresses:
+An agent inside the workspace arranges the desktop through
+`system/scripts/layout.py` (`context / desktops / list / load / open / focus /
+minimize / restore / maximize / place / close / navigate / refresh / shortcuts /
+shortcut set / shortcut move / shortcut remove / wallpaper`), which names apps
+and windows (desktop-interface contracts.md section 8):
 
 ```bash
-python3 system/scripts/layout.py list
+python3 system/scripts/layout.py desktops
 python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open app:files?instance=files-2 --view Everything
+python3 system/scripts/layout.py open files --path /notes/ --desktop Research
 python3 system/scripts/layout.py open terminal
-python3 system/scripts/layout.py rename app:terminal?instance=terminal-3 "Build log"
-python3 system/scripts/layout.py inspect --view Everything
+python3 system/scripts/layout.py place self --zone left
+python3 system/scripts/layout.py navigate win-0123456789abcdef /other/
 ```
 
-The document ops (`open`, `focus`, `split`, `close`, `move`) are applied by
-the shell to the target client's layout file and announced as
-`layout_updated`, so an op lands whether or not a browser is connected. Every
-op targets exactly one client (`--client <id>`, else the client that last
+The document ops are applied by the shell to the desktop and to the target
+client's placements and announced as `desktops_updated` and
+`placements_updated`, so an op lands whether or not a browser is connected.
+Every op targets exactly one client (`--client <id>`, else the client that last
 messaged the requesting agent, else the one connected client; refused with the
-clients listed otherwise); `--view` edits that view and switches the client to
-it; `open` of an app with instances creates one through the relay inside the
-op (`--action`, `--param`; a bare URL is the browser's `new`). Only
-`maximize`, `restore`, `refresh`, and the interface reload reach the browser
-as messages. See the `manage-layout` skill for end-to-end orientation.
+clients listed otherwise); `--desktop` edits that desktop and switches the
+client to it; `open` opens a window at `--path` or at a launch path
+(`--launch`, `--param`; a bare URL is the browser's `new`), minimized with
+`--minimized`, and prints the window's id; an `open` with no client to target
+still writes the window, unplaced. A close is posted to the app's registered
+`window_closed_path`, when it has one, so an app whose resources live as long
+as their windows (the terminal, the browser) can collect at once
+(`docs/system/specs/window-bound-resources.md`). Only `refresh` and the
+interface reload reach the browser as messages. See the `manage-desktop` skill for end-to-end orientation.
 
 ## Updating the running UI
 
@@ -200,7 +250,7 @@ The deployed system interface is the live web UI the user is looking at, so
 changes are not applied in place. Its manifest says `critical = true`, which
 routes every edit through `update-app`'s careful flow
 (`.agents/skills/update-app/references/critical-app.md`): the change is made in
-an isolated worktree, **previewed** to the user as a tab
+an isolated worktree, **previewed** to the user as a window
 (`preview_app.py up --app system_interface --worktree <dir>` boots
 `system-interface --preview` from the worktree, read-only over a seeded copy of
 the live state directory and a copied registry, and registers it with a labeled
@@ -220,8 +270,8 @@ The apply merges the worker's branch, classifies what changed and does only
 what is needed (a dependency refresh, the worker's already-built bundles or a
 live build, a pre-flight boot of the merged shell and chat on throwaway
 ports), restarts the services agent, then probes: the shell's `/api/health`,
-the instances API of every critical app that serves one (at the manifest's
-`instances_url` when it declares one, else the app's registered URL), and that
+the `/api/health` of every critical app the user can open (at the URL its
+registry row names, re-read as the app re-registers), and that
 the frontend really serves (the "not built" placeholder and an unserved
 `/assets` path are both HTTP 200, so the probe reads the `X-Frontend-Built`
 header and checks that the module script comes back as JavaScript). Only then

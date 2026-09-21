@@ -3,15 +3,14 @@
 
 A preview is a throwaway instance of an app built in an editing worktree, served on
 free ports beside the live one and surfaced to the user as a labeled ``<name>-preview``
-tab. What it takes to boot one is the app's own business, declared in its
-``app.toml`` (``PreviewSpec`` in ``system/libs/app_manifest``): the command, the
-named ports, the environment, the directories copied into its scratch space, the
-health path, and the path the tab opens on. This script reads that table from the
-worktree, fills in the two placeholders only it knows -- ``{registry}`` (a copy of
-the live registry whose rows for previewed sibling apps point at their previews)
-and ``{shell_url}`` (the preview shell's URL when one is up) -- and hands the rest
-to the shared ``serve_isolated_instance.py``, which owns the ports, the copies, the
-processes, the registrations, and the state file.
+app whose window frames it. What it takes to boot one is the app's own business,
+declared in its ``app.toml`` (``PreviewSpec`` in ``system/libs/app_manifest``): the
+command, the named ports, the environment, the directories copied into its scratch
+space, the health path, and the path the window opens on. This script reads that
+table from the worktree, fills in the one placeholder only it knows -- ``{registry}``,
+a copy of the live registry whose rows for previewed sibling apps point at their
+previews -- and hands the rest to the shared ``serve_isolated_instance.py``, which
+owns the ports, the copies, the processes, the registrations, and the state file.
 
 One preview per app at a time: a preview of the same app from a different worktree
 (another pass) is refused rather than hijacked. ``--with`` boots sibling previews
@@ -26,11 +25,11 @@ the root venv):
     uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name> [--repo-root PATH]
     uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name> [--repo-root PATH]
 
-``up`` prints the preview's tab name (``<name>-preview``) on stdout; open it with
-``python3 system/scripts/layout.py open <name>-preview``. ``refresh`` re-boots the
-inner process in place after a rebuild, leaving the ports, the wrapper, the
-registrations, and the tab untouched. ``down`` tears the preview down together with
-the siblings it booted, and verifies the processes died.
+``up`` prints the preview's app name (``<name>-preview``) on stdout; open a window
+of it with ``python3 system/scripts/layout.py open <name>-preview``. ``refresh``
+re-boots the inner process in place after a rebuild, leaving the ports, the wrapper,
+the registrations, and the window untouched. ``down`` tears the preview down together
+with the siblings it booted, and verifies the processes died.
 
 Exit codes:
     0  Success.
@@ -67,13 +66,12 @@ REGISTRY_COPY_SUFFIX = ".registry.toml"
 
 # The registrations a preview makes: the inner app at its own origin (internal, since
 # the frame is how it is meant to be reached), and the labeled wrapper frame the user
-# opens, which is the one row a preview puts on the rail and the tab list.
+# opens, which is the one row a preview puts in the launcher.
 INNER_SERVICE_SUFFIX = "-preview-app"
 PREVIEW_SERVICE_SUFFIX = "-preview"
 
-# The placeholders this script fills before the shared script sees the table.
+# The placeholder this script fills before the shared script sees the table.
 REGISTRY_PLACEHOLDER = "{registry}"
-SHELL_URL_PLACEHOLDER = "{shell_url}"
 
 # The shell's app name: the one preview whose registry copy other previews are framed through.
 SHELL_APP_NAME = "system_interface"
@@ -193,7 +191,7 @@ def write_registry_copy(
 ) -> None:
     """Copy the live registry with each previewed sibling's row pointing at its preview.
 
-    A row's ``url`` and ``instances_url`` are where a shell reaches the app over loopback;
+    A row's ``url`` is where a shell reaches the app over loopback;
     its ``label`` is the origin the browser frames it at, so the sibling's row takes the
     label the sibling's own ``<name>-preview-app`` registration was given. Every other
     row is the live one: a preview shell shows the real workspace with one app swapped.
@@ -214,8 +212,6 @@ def write_registry_copy(
             continue
         preview_url = preview_url_by_app[name]
         app["url"] = preview_url
-        if "instances_url" in app:
-            app["instances_url"] = preview_url
         preview_label = label_by_name.get(f"{name}{INNER_SERVICE_SUFFIX}")
         if preview_label is None:
             raise PreviewError(
@@ -227,9 +223,7 @@ def write_registry_copy(
     destination.write_text(dump_registry(apps))
 
 
-def resolve_own_placeholders(
-    text: str, registry_copy: Path | None, shell_url: str
-) -> str:
+def resolve_own_placeholders(text: str, registry_copy: Path | None) -> str:
     """Fill the placeholders only this script knows; the shared script fills the rest."""
     if REGISTRY_PLACEHOLDER in text:
         if registry_copy is None:
@@ -237,7 +231,7 @@ def resolve_own_placeholders(
                 f"{REGISTRY_PLACEHOLDER} is used, but no registry copy was made"
             )
         text = text.replace(REGISTRY_PLACEHOLDER, str(registry_copy))
-    return text.replace(SHELL_URL_PLACEHOLDER, shell_url)
+    return text
 
 
 def resolve_open_path(manifest: AppManifest, instance_key: str | None) -> str:
@@ -257,7 +251,6 @@ def build_up_argv(
     repo_root: Path,
     title: str,
     registry_copy: Path | None,
-    shell_url: str,
     inner_path: str,
 ) -> list[str]:
     """The shared script's ``up`` invocation for the manifest's preview table."""
@@ -289,7 +282,7 @@ def build_up_argv(
         argv.extend(
             [
                 "--env",
-                f"{key}={resolve_own_placeholders(value, registry_copy, shell_url)}",
+                f"{key}={resolve_own_placeholders(value, registry_copy)}",
             ]
         )
     for key, source in preview.copies.items():
@@ -301,7 +294,7 @@ def build_up_argv(
         [
             *LAUNCHER,
             *(
-                resolve_own_placeholders(part, registry_copy, shell_url)
+                resolve_own_placeholders(part, registry_copy)
                 for part in launch
             ),
         ]
@@ -325,23 +318,19 @@ def up(
     if other is not None and not _is_same_worktree(other, worktree):
         sys.stderr.write(
             f"preview: another pass's preview of {app_name!r} is already up, serving {other}; the "
-            f"'{instance_name(app_name)}' tab can only show one at a time, so booting this one would "
+            f"'{instance_name(app_name)}' app can only be one at a time, so booting this one would "
             "hijack it. Surface this to the user and coordinate with that pass -- or, if it is "
             f"abandoned, tear it down first with 'down --app {app_name}'.\n"
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
-    for sibling in with_apps:
-        _require_frameable_sibling(worktree, sibling)
     dump = (
         dump_registry
         if dump_registry is not None
         else _load_forward_port_module().dump_registry
     )
     # Siblings first, because the registry copy this app is booted with has to name their
-    # URLs. A sibling therefore boots before this app exists: a chat previewed under a shell
-    # resolves {shell_url} to "" and runs without a nudger, so the preview shell refetches
-    # its instance list on its own sweep rather than on the chat's word.
+    # URLs.
     preview_url_by_app: dict[str, str] = {}
     for sibling in with_apps:
         # A sibling opens on the same instance when its path takes one (the chat under a shell
@@ -369,18 +358,12 @@ def up(
     if _uses_placeholder(manifest, REGISTRY_PLACEHOLDER):
         registry_copy = _registry_copy_path(repo_root, app_name)
         write_registry_copy(registry_path(), registry_copy, preview_url_by_app, dump)
-    shell_url = (
-        ""
-        if app_name == SHELL_APP_NAME
-        else (live_preview_url(repo_root, SHELL_APP_NAME) or "")
-    )
     argv = build_up_argv(
         manifest,
         worktree,
         repo_root,
         title if title is not None else f"{manifest.display_name} ({worktree.name})",
         registry_copy,
-        shell_url,
         resolve_open_path(manifest, instance_key),
     )
     # An earlier ``up --with`` of this preview may have booted siblings this call does not
@@ -449,22 +432,6 @@ def _reframe_previews_naming(
         }
         write_registry_copy(
             registry_path(), registry_copy, preview_url_by_app, dump_registry
-        )
-
-
-def _require_frameable_sibling(worktree: Path, sibling: str) -> None:
-    """Refuse a sibling whose instances API is served apart from its page.
-
-    The registry copy points a sibling's row, ``instances_url`` included, at the
-    preview's main port. A manifest that declares its own ``instances_url`` (the
-    terminal's sidecar) serves that API on another port, and the preview table does
-    not say which, so the preview shell would be handed the wrong one.
-    """
-    _, manifest = find_manifest(worktree, sibling)
-    if manifest.instances_url is not None:
-        raise PreviewError(
-            f"{sibling!r} serves its instances API apart from its page ({manifest.instances_url}), "
-            "so a shell preview cannot frame its preview; preview it on its own instead"
         )
 
 
@@ -556,7 +523,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     up_parser = subparsers.add_parser(
-        "up", help="Boot the app's preview from a worktree and surface it as a tab."
+        "up", help="Boot the app's preview from a worktree and surface it as an app to open."
     )
     up_parser.add_argument(
         "--app", required=True, help="The app's registered name (its manifest's name)."
@@ -575,7 +542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     up_parser.add_argument(
         "--instance-key",
         default=None,
-        help="The instance the tab opens on, for an app whose open_path takes one.",
+        help="The instance the window opens on, for an app whose open_path takes one.",
     )
     up_parser.add_argument(
         "--title",
