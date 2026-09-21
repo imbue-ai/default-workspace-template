@@ -180,7 +180,7 @@ In compact mode the floating layer is empty and every pinned entry is in the bar
 
 A press on a pinned entry, in either mode, is exactly the taskbar entry click of V1 section 4.10: restore and raise the window when minimized, minimize it when it is the focused window, raise it otherwise.
 There is no "open" step, because the window always exists.
-The first restore of a window the client has never placed lands at the pinned frame of section 3.4.
+The first restore of a window the client has never placed lands at the pinned frame of section 3.2.
 
 ### 4.4 Menus
 
