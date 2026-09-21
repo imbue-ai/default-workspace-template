@@ -62,16 +62,23 @@ afterEach(() => {
 });
 
 describe("a window drag", () => {
-  it("paints the window, and the snap preview, per move with no redraw, and saves on release", async () => {
+  const binding = { kind: "window-move", windowId: "win-1" } as const;
+
+  /** Render win-1 on a 1000x800 backdrop and begin dragging it at (100, 60), with no redraw after the begin. */
+  function beginDrag(): { listener: GestureListener; element: HTMLElement; preview: HTMLElement } {
     store.setBackdropSize({ width: 1000, height: 800 });
     m.redraw.sync();
     const listener = gestureListener as GestureListener;
     const element = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
     const preview = document.querySelector("[data-snap-preview]") as HTMLElement;
+    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
+    return { listener, element, preview };
+  }
+
+  it("paints the window, and the snap preview, per move with no redraw, and saves on release", async () => {
+    const { listener, element, preview } = beginDrag();
     expect(element.style.left).toBe("50px");
     expect(preview.style.display).toBe("none");
-    const binding = { kind: "window-move", windowId: "win-1" } as const;
-    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
     // Straight onto the element, before any redraw could run (mithril's are asynchronous).
     listener.onMove(binding, { x: 150, y: 90 }, { x: 50, y: 30 });
     expect(element.style.left).toBe("100px");
@@ -95,13 +102,7 @@ describe("a window drag", () => {
   // the end, the end render finds the same rectangle (a cancel) or the same hidden preview (a snap
   // release) it rendered at the begin and writes nothing, so the paint itself must have put them right.
   it("puts the window back and hides the preview when cancelled, with no redraw in between", () => {
-    store.setBackdropSize({ width: 1000, height: 800 });
-    m.redraw.sync();
-    const listener = gestureListener as GestureListener;
-    const element = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
-    const preview = document.querySelector("[data-snap-preview]") as HTMLElement;
-    const binding = { kind: "window-move", windowId: "win-1" } as const;
-    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
+    const { listener, element, preview } = beginDrag();
     m.redraw.sync();
     listener.onMove(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
     expect(element.style.left).not.toBe("50px");
@@ -115,12 +116,7 @@ describe("a window drag", () => {
   });
 
   it("hides the preview on a snap release, with no redraw in between", () => {
-    store.setBackdropSize({ width: 1000, height: 800 });
-    m.redraw.sync();
-    const listener = gestureListener as GestureListener;
-    const preview = document.querySelector("[data-snap-preview]") as HTMLElement;
-    const binding = { kind: "window-move", windowId: "win-1" } as const;
-    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
+    const { listener, preview } = beginDrag();
     m.redraw.sync();
     listener.onMove(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
     expect(preview.style.display).toBe("");
