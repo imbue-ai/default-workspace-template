@@ -358,10 +358,106 @@ describe("opening", () => {
     expect(api.calls).toContain("openWindow:work:docs:/new:new:new");
   });
 
-  it("a seeded launch carries its params as the query string", async () => {
+  /** A store whose home desktop holds buddy's independent pinned window, win-9, minimized for this client. */
+  async function storeWithPinnedBuddy(): Promise<DesktopStore> {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
+        ],
+      }),
+    ];
+    return startedStore();
+  }
+
+  it("a launch-path row opens a new window, or raises the pinned window when its path is the pin's", async () => {
+    const store = await storeWithPinnedBuddy();
+    await store.runLaunchRow("docs", "new");
+    expect(api.calls).toContain("openWindow:home:docs:/new:new:new");
+    socket.deliver().onAppsUpdated([
+      appRecord("buddy", {
+        pin: { path: "/", style: "plain", scope: "independent", default_mode: "bar" },
+        launch_paths: [launchPathRecord({ id: "root", label: "Buddy", path: "/" })],
+      }),
+    ]);
+    const opensBefore = api.calls.filter((call) => call.startsWith("openWindow")).length;
+    await store.runLaunchRow("buddy", "root");
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toHaveLength(opensBefore);
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized).toBe(
+      false,
+    );
+    await store.runLaunchRow("buddy", "missing");
+    expect(last(notices)).toBe("Cannot open: buddy has no launch path missing");
+  });
+
+  it("a free-text row points this client's view of the app's independent pinned window at the text path", async () => {
+    const store = await storeWithPinnedBuddy();
+    socket.deliver().onAppsUpdated([
+      appRecord("buddy", {
+        pin: { path: "/", style: "plain", scope: "independent", default_mode: "bar" },
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    expect(await store.runFreeText("buddy", "new", "hello there")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
+      `reportWindowLocation:home:win-9:${CLIENT}:/new?message=hello+there:Buddy`,
+    );
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/new?message=hello+there" });
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized).toBe(
+      false,
+    );
+    // Empty text runs the launch path with no text param at all.
+    expect(await store.runFreeText("buddy", "new", "")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
+      `reportWindowLocation:home:win-9:${CLIENT}:/new:Buddy`,
+    );
+    // A text over the path bound is refused here, before the shell sees it.
+    expect(await store.runFreeText("buddy", "new", "x".repeat(2100))).toBe(false);
+    expect(last(notices)).toBe("Too long to send from here");
+  });
+
+  it("a free-text row opens a new window for an app with no independent pinned window here", async () => {
     const store = await startedStore();
-    await store.openLaunchPath("docs", "new", { message: "hello there" });
-    expect(api.calls).toContain("openWindow:home:docs:/new?message=hello+there:new:new");
+    socket.deliver().onAppsUpdated([
+      appRecord("docs", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+      appRecord("buddy", {
+        pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+    ]);
+    expect(await store.runFreeText("docs", "new", "hello")).toBe(true);
+    expect(api.calls).toContain("openWindow:home:docs:/new?message=hello:new:new");
+    // A linked pinned window is never navigated to a launch path (every client would run it): a window opens.
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "linked" })] }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    expect(await store.runFreeText("buddy", "new", "hi")).toBe(true);
+    expect(api.calls).toContain("openWindow:home:buddy:/new?message=hi:new:new");
+  });
+
+  it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
+    const store = await startedStore();
+    expect(await store.startWithText("hello")).toBe(false);
+    expect(last(notices)).toBe("No app on this machine can start a chat");
+    socket.deliver().onAppsUpdated([
+      appRecord("docs", { launcher_rank: 20 }),
+      appRecord("notes", {
+        launcher_rank: 10,
+        launch_paths: [
+          launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "send", path: "/send", params: ["message"], text_param: "message" }),
+        ],
+      }),
+    ]);
+    expect(await store.startWithText("hello")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("openWindow")))).toBe(
+      "openWindow:home:notes:/new?message=hello:new:new",
+    );
   });
 
   it("tells the user when the shell refuses, and about a launch path that does not exist", async () => {

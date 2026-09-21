@@ -6,7 +6,7 @@
 import "../testing/dom";
 import { mountView, unmountViews } from "../testing/mount";
 import m from "mithril";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
@@ -41,11 +41,6 @@ function pressEscape(): void {
 }
 
 beforeEach(async () => {
-  // The template catalog request the App fires on mount: a shell with no catalog configured.
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => ({ ok: true, json: async () => ({ catalog: null }) })),
-  );
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
@@ -67,7 +62,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   unmountViews();
-  vi.unstubAllGlobals();
   gestureListener = null;
 });
 

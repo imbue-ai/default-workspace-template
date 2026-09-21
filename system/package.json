@@ -6,7 +6,8 @@
   "workspaces": [
     "libs/workspace_ui",
     "apps/system_interface/frontend",
-    "apps/chat/frontend"
+    "apps/chat/frontend",
+    "apps/getting_started/frontend"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

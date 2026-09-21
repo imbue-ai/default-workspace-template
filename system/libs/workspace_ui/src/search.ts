@@ -1,6 +1,7 @@
 /**
- * The text match behind the launcher's field, shared by everything that field finds: the windows
- * across every desktop, the "Open new" launch paths, the "Start something" intents, and the templates.
+ * The one text match of the workspace's typeaheads: the desktop's launcher (its launch paths and
+ * windows), the Getting Started page's search (its intents and templates), and the chat's send
+ * picker (its chats) all narrow a list the same way.
  */
 
 /**

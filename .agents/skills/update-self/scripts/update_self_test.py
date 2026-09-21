@@ -5175,14 +5175,13 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     snapshots = update_environment.take_snapshots(plan, repo_root, runner, [])
 
     assert {record.name for record in snapshots} == {
-        "bundle",
-        "chat_bundle",
+        *(bundle.snapshot_name for bundle in update_layout.FRONTEND_BUNDLES),
         "node_modules",
         "venv",
     }
     # Destroy the originals, as the failed forward steps would.
-    shutil.rmtree(repo_root / update_layout.STATIC_DIR)
-    shutil.rmtree(repo_root / update_layout.CHAT_STATIC_DIR)
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        shutil.rmtree(repo_root / bundle.static_dir)
     (repo_root / ".venv" / "marker.txt").write_text("wrecked")
     shutil.rmtree(repo_root / update_layout.NPM_ROOT_DIR / "node_modules")
 

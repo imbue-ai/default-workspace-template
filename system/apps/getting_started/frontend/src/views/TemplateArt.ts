@@ -1,12 +1,12 @@
 /**
  * A template's drawing in the 3:2 frame every catalog surface shows it in (a card, the detail
- * dialog). The drawings are all 3:2, so the frame matches and nothing is cropped; a template with
+ * page). The drawings are all 3:2, so the frame matches and nothing is cropped; a template with
  * no drawing, or one whose drawing fails to load, gets a quiet glyph on the page tint rather than
  * a hole in the rail or the browser's broken-image icon.
  */
 
 import m from "mithril";
-import type { CatalogTemplate } from "../model/TemplateCatalog";
+import type { CatalogTemplate } from "../models/TemplateCatalog";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 export interface TemplateArtAttrs {
