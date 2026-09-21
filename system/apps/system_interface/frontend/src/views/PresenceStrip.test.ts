@@ -6,27 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { applyPresence, resetPresenceForTesting } from "../model/Presence";
-import type { PresentUser } from "../model/records";
+import { presentUserRecord } from "../testing/records";
 import { PresenceStrip, presenceInitial, presenceTitle } from "./PresenceStrip";
 
-const bob: PresentUser = {
-  user_id: "user-bob-4471",
-  email: "bob@example.com",
-  display_name: "Bob",
-  avatar_url: null,
-  owner: false,
-  session_count: 2,
-  first_seen: "2026-09-19T10:00:00.000000000Z",
-  last_seen: "2026-09-19T10:00:00.000000000Z",
-};
-const owner: PresentUser = {
-  ...bob,
-  user_id: "user-owner-9c21",
+const bob = presentUserRecord("user-bob-4471", { email: "bob@example.com", display_name: "Bob", session_count: 2 });
+const owner = presentUserRecord("user-owner-9c21", {
   email: "owner@example.com",
-  display_name: null,
   avatar_url: "https://accounts.example.com/users/user-owner-9c21/avatar/9a7b",
   owner: true,
-};
+  session_count: 2,
+});
 
 function render(): HTMLElement {
   const root = document.createElement("div");
