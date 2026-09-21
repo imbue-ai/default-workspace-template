@@ -42,3 +42,12 @@ params = [
 ]
 # The launcher's primary free-text row: what is typed into the desktop's field becomes the first message.
 text_param = "message"
+
+# The launcher's secondary free-text row (Ctrl+Enter): the root offers a picker over the chats and sends the text
+# to the one picked, through its ordinary send.
+[[launch_paths]]
+id = "send"
+label = "Send to chat..."
+path = "/send"
+params = [{name = "message", label = "Message to send", required = false}]
+text_param = "message"
