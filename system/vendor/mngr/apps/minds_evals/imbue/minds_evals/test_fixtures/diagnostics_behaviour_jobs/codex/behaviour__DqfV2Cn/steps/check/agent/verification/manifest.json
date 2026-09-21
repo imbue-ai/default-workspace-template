@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "case_id": "behaviour",
+  "base_sha": "d3e030a3fc4d0b9019141427de19025ffbbdb962",
+  "dwt_tip_sha": "d525d62ef9395dc4147dc736893be1d65481893a",
+  "preexisting_registrations": [
+    "browser",
+    "chat",
+    "files",
+    "owner-exec",
+    "system_interface",
+    "terminal"
+  ],
+  "is_registry_present": true,
+  "seeded_registrations": [],
+  "is_expectations_declared": false,
+  "is_evidence_complete": true,
+  "started_at": "2026-09-16T05:27:43.734457+00:00",
+  "phases": [
+    {
+      "name": "workspace_state",
+      "seconds": 13.37
+    },
+    {
+      "name": "common_transcript",
+      "seconds": 49.14
+    },
+    {
+      "name": "workers",
+      "seconds": 61.33
+    },
+    {
+      "name": "tickets",
+      "seconds": 11.77
+    },
+    {
+      "name": "diagnostic_probe",
+      "seconds": 21.63
+    },
+    {
+      "name": "file_inventory",
+      "seconds": 27.11
+    }
+  ],
+  "entries": [
+    {
+      "entry_id": "file_inventory",
+      "check_class": "files",
+      "status": "passed",
+      "env": "live",
+      "reason": "",
+      "detail": "16035 file(s) inventoried",
+      "evidence_path": "verification/file_inventory.jsonl",
+      "exit_code": null,
+      "status_code": null,
+      "matched_count": null,
+      "value": null
+    }
+  ]
+}

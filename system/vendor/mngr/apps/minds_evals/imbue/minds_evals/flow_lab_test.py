@@ -7,20 +7,26 @@ the renderer about a shape neither of them writes.
 """
 
 import os
-import threading
 from pathlib import Path
 
 import pytest
+from pydantic import Field
 
 from imbue.minds_evals import flow_lab
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals.resources.flow_step_protocol import StepReaction
-from imbue.mngr.utils.polling import wait_for
 
 
 def test_the_opening_record_renders_as_the_url_it_opened() -> None:
     record = ui_flows.flow_init_record(
-        "Add a task.", "the task is listed", "http://127.0.0.1:8000/?latency=300", "page ...", "step_000.png", "now"
+        "Add a task.",
+        "the task is listed",
+        "http://127.0.0.1:8000/?latency=300",
+        "page ...",
+        "step_000.png",
+        2048,
+        True,
+        "now",
     )
 
     assert flow_lab.describe_record(record) == "opened http://127.0.0.1:8000/?latency=300"
@@ -37,6 +43,8 @@ def test_an_action_record_renders_as_its_step_in_the_agents_history() -> None:
         StepReaction.SETTLED,
         "page ...",
         "step_003.png",
+        2048,
+        True,
         "",
         "now",
     )
@@ -57,6 +65,8 @@ def test_a_step_that_did_not_run_renders_with_its_error() -> None:
         StepReaction.UNOBSERVED,
         "page ...",
         "",
+        0,
+        False,
         "no such element",
         "now",
     )
@@ -94,7 +104,7 @@ def test_a_removal_that_falls_short_reports_the_entry_that_stopped_it_not_the_pa
     (profile_dir / "Default").mkdir(parents=True)
     (profile_dir / "Default" / "Preferences").write_text("{}")
     profile_dir.chmod(0o500)
-    removal = flow_lab._ProfileRemoval(directory=profile_dir)
+    removal = flow_lab.ProfileRemoval(directory=profile_dir)
     try:
         is_removed = removal.try_remove()
     finally:
@@ -106,34 +116,28 @@ def test_a_removal_that_falls_short_reports_the_entry_that_stopped_it_not_the_pa
     assert "Directory not empty" not in removal.cause
 
 
-@pytest.mark.skipif(
-    os.geteuid() == 0, reason="root removes a read-only directory's children, so no removal can fall short"
-)
-def test_fresh_profile_dir_retries_when_a_removal_leaves_the_tree_behind() -> None:
-    """Stands in for Chromium's helpers, which keep the first removal from taking the tree down.
+class _RemovalBeatenOnce(flow_lab.ProfileRemoval):
+    """Stands in for a tree Chromium's helpers refill behind the first removal: the first attempt
+    reports the tree still standing, and every attempt after it removes it for real."""
 
-    A read-only profile dir gives the first removal the same shape as a refilled Default/: it empties
-    Default/ but cannot remove it, so the tree is still there afterwards and cleanup has to try again.
-    """
-    is_tree_left_by_first_removal = threading.Event()
+    attempt_count: int = Field(default=0, description="How many attempts have been made")
 
-    def let_go_once_the_first_removal_has_run(profile_dir: Path, preferences: Path) -> None:
-        # Preferences vanishing is the first removal's trace: it is unlinked before the read-only parent stops the rmdir.
-        wait_for(lambda: not preferences.exists(), timeout=5.0)
-        if profile_dir.exists():
-            is_tree_left_by_first_removal.set()
-            profile_dir.chmod(0o700)
+    def try_remove(self) -> bool:
+        self.attempt_count += 1
+        if self.attempt_count == 1:
+            self.cause = "{}: [Errno 66] Directory not empty".format(self.directory)
+            return False
+        return super().try_remove()
 
-    with flow_lab.fresh_profile_dir() as profile_dir:
-        preferences = profile_dir / "Default" / "Preferences"
-        preferences.parent.mkdir()
-        preferences.write_text("{}")
-        profile_dir.chmod(0o500)
-        releaser = threading.Thread(
-            target=let_go_once_the_first_removal_has_run, args=(profile_dir, preferences), name="profile-releaser"
-        )
-        releaser.start()
-    releaser.join(timeout=5.0)
 
-    assert is_tree_left_by_first_removal.is_set()
-    assert not profile_dir.exists()
+def test_a_profile_tree_that_survives_its_first_removal_is_taken_down_by_a_later_one(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "profile"
+    (profile_dir / "Default").mkdir(parents=True)
+    (profile_dir / "Default" / "Preferences").write_text("{}")
+    removal = _RemovalBeatenOnce(directory=profile_dir)
+
+    flow_lab.remove_profile_tree(removal)
+
+    # Only a second attempt can have removed it, so a cleanup that stopped at the first would leave
+    # both the tree and the count behind.
+    assert (removal.attempt_count, profile_dir.exists()) == (2, False)

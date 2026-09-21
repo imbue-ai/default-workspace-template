@@ -1,0 +1,2 @@
+2026-09-16 05:23:41.345 | INFO     | imbue.minds_evals.driver:2417 - Placing the step's upload diagupload7f3a at /home/user/workspace/data/uploads/diagupload7f3a
+2026-09-16 05:29:36.530 | WARNING  | imbue.minds_evals.driver:3573 - Speed tier unobserved, so every request is priced at the standard rate. Minds runs fast mode by default and fast mode bills at twice that, so treat this cost as a floor; run with --ak proxy=true to price it exactly

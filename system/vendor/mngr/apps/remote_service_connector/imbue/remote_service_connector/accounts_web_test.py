@@ -1299,7 +1299,9 @@ def test_the_download_fallback_names_the_build_stable_declares() -> None:
     declared = tomllib.loads((repo_root / "apps/minds/release-channels.toml").read_text())["channels"]["stable"]
     fallback = unquote(accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM])
 
-    assert f"Minds {declared['version']} - Build {declared['build_id']}" in fallback, (
+    # The product name in the dmg filename is ToDesktop's (it changed from "Minds" to
+    # "Mind" in 0.6.2), so the pin is the version and build id, not the name.
+    assert f" {declared['version']} - Build {declared['build_id']}" in fallback, (
         "the connector's download fallback no longer names the build stable serves -- see the "
         "Release channels section of apps/minds/docs/deploy/ops/app-release.md"
     )

@@ -18,6 +18,7 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import ui_flows
@@ -64,6 +65,19 @@ class FlowRun(FrozenModel):
     reason: str = Field(description="Why the flow did not complete, empty when it did")
     detail: str = Field(description="Bounded prose about the outcome, for the manifest entry")
     records: tuple[str, ...] = Field(description="The flow's log.jsonl lines, in order")
+    # Counted per flow because a verification agent's own call list accumulates across every flow it
+    # drives.
+    verifier_call_count: int = Field(description="The calls this flow made to its verification agent")
+
+
+def choose_flow_agent(
+    check: UiFlowCheck, app_origin: str, model_agent: ui_flows.VerificationAgent | None
+) -> ui_flows.VerificationAgent | None:
+    """The agent that drives one flow: a scripted flow's own script, whatever else is configured, or
+    the configured model-driven agent, which is None when there is none to run it with."""
+    if check.script:
+        return ui_flows.ScriptVerificationAgent(script=check.script, app_origin=app_origin)
+    return model_agent
 
 
 @pure
@@ -96,6 +110,21 @@ async def run_flow(
     time, and reaching it is an ERROR; the flow deadline is about THIS app -- a page that never
     settles is the delivered thing being unusable -- so reaching it is a FAILURE charged to the app.
     """
+    call_count_before = len(agent.calls)
+    run = await _drive_flow(check, target_url, agent, executor, phase_deadline, flow_deadline)
+    return run.model_copy_update(to_update(run.field_ref().verifier_call_count, len(agent.calls) - call_count_before))
+
+
+async def _drive_flow(
+    check: UiFlowCheck,
+    target_url: str,
+    agent: ui_flows.VerificationAgent,
+    executor: FlowStepExecutor,
+    phase_deadline: float,
+    flow_deadline: float,
+) -> FlowRun:
+    """The loop `run_flow` counts calls around; every FlowRun it returns carries a zero call count,
+    which `run_flow` replaces with the flow's own."""
     records: list[str] = []
     history: list[str] = []
 
@@ -112,11 +141,19 @@ async def run_flow(
             reason=reason,
             detail=outcome.detail,
             records=(),
+            verifier_call_count=0,
         )
     state_text = outcome.state_text
     records.append(
         ui_flows.flow_init_record(
-            check.actions, check.expect, target_url, state_text, outcome.screenshot_name, ui_flows.utc_now_iso()
+            check.actions,
+            check.expect,
+            target_url,
+            state_text,
+            outcome.screenshot_name,
+            outcome.screenshot_byte_count,
+            outcome.is_screenshot_png,
+            ui_flows.utc_now_iso(),
         )
     )
 
@@ -128,6 +165,7 @@ async def run_flow(
                 reason=ui_flows.REASON_TIMEOUT,
                 detail="the collection budget ran out mid-flow",
                 records=tuple(records),
+                verifier_call_count=0,
             )
         if time.monotonic() >= flow_deadline:
             return FlowRun(
@@ -135,6 +173,7 @@ async def run_flow(
                 reason=ui_flows.REASON_FLOW_DEADLINE,
                 detail="the flow did not finish within its deadline",
                 records=tuple(records),
+                verifier_call_count=0,
             )
         action, call = agent.decide_next_action(check.actions, tuple(history), state_text)
         if action is None:
@@ -142,7 +181,7 @@ async def run_flow(
             # on and what the decision asked for; the reader otherwise sees a flow that stopped
             # after a step that worked, with the manifest naming only the layer.
             detail = "the verification agent returned no usable action: {}".format(
-                ui_flows.describe_unusable_action(call.tool_input)
+                ui_flows.describe_unusable_decision(call)
             )
             logger.warning("The verification agent's decision could not be acted on: {}", detail)
             payload = call.tool_input or {}
@@ -157,6 +196,8 @@ async def run_flow(
                     StepReaction.UNOBSERVED,
                     state_text,
                     "",
+                    0,
+                    False,
                     detail,
                     ui_flows.utc_now_iso(),
                 )
@@ -166,6 +207,7 @@ async def run_flow(
                 reason=ui_flows.REASON_VERIFIER_AGENT_FAILED,
                 detail=detail,
                 records=tuple(records),
+                verifier_call_count=0,
             )
         described = ui_flows.describe_action(action)
         if action.kind == ui_flows.FlowActionKind.DONE:
@@ -180,6 +222,8 @@ async def run_flow(
                     StepReaction.UNOBSERVED,
                     state_text,
                     "",
+                    0,
+                    False,
                     "",
                     ui_flows.utc_now_iso(),
                 )
@@ -199,12 +243,18 @@ async def run_flow(
                     StepReaction.UNOBSERVED,
                     state_text,
                     "",
+                    0,
+                    False,
                     outcome.reason,
                     ui_flows.utc_now_iso(),
                 )
             )
             return FlowRun(
-                status=CheckStatus.ERROR, reason=outcome.reason, detail=outcome.detail, records=tuple(records)
+                status=CheckStatus.ERROR,
+                reason=outcome.reason,
+                detail=outcome.detail,
+                records=tuple(records),
+                verifier_call_count=0,
             )
         step_error = ""
         if not outcome.is_ok:
@@ -231,6 +281,8 @@ async def run_flow(
                 # failed. Naming the file it would have written instead would put a screenshot that
                 # does not exist in front of the grade-time judge.
                 outcome.screenshot_name,
+                outcome.screenshot_byte_count,
+                outcome.is_screenshot_png,
                 step_error,
                 ui_flows.utc_now_iso(),
             )
@@ -253,4 +305,5 @@ async def run_flow(
             check.expect, observation or "(none recorded)"
         ),
         records=tuple(records),
+        verifier_call_count=0,
     )

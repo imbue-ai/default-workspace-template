@@ -28,7 +28,7 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
 # or with no manifest at all), and this suite runs there too.
-_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal")
+_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal", "terminal_pty")
 
 
 def _built_in_manifest_paths() -> list[Path]:
@@ -87,9 +87,10 @@ def _manifest_path_constant(module_file: Path) -> str | None:
 def _entry_point_manifest_paths(command: str) -> list[str]:
     """The manifest an app's own entry point registers with, when the program's command ends in one.
 
-    A Python app runs its tool's console script and registers from inside it (the terminal calls
-    the sidecar launcher with its manifest), so the manifest path is a constant the script's
-    module exports as ``MANIFEST_PATH`` rather than a flag on the command line.
+    A Python app runs its tool's console script and registers from inside it (the terminal's
+    entry point calls ``app_manifest.registry.register_app`` with its manifest), so the manifest
+    path is a constant the script's module exports as ``MANIFEST_PATH`` rather than a flag on the
+    command line.
     """
     script_name = command.split()[-1]
     manifest_paths: list[str] = []
@@ -226,24 +227,37 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
 
     assert by_name["system_interface"].internal is True
     assert by_name["system_interface"].critical is True
+    # The terminal's pty origin (desktop-interface contracts.md section 2): ttyd, framed by the
+    # terminal's wrapper page, never offered on its own.
+    assert by_name["terminal-pty"].internal is True
+    assert by_name["terminal-pty"].critical is True
+    assert by_name["terminal-pty"].program == "terminal-pty"
+    assert by_name["terminal-pty"].priority == "terminal"
+    assert by_name["terminal-pty"].launch_paths == ()
+    assert by_name["terminal-pty"].default_shortcut is None
     assert by_name["chat"].internal is False
     assert by_name["chat"].critical is True
     assert by_name["chat"].program == "chat"
     assert by_name["chat"].priority == "chat"
-    assert by_name["chat"].instances is True
-    assert by_name["chat"].instances_url is None
-    assert by_name["chat"].default_shortcut is not None
-    assert by_name["chat"].default_shortcut.action == "new"
-    assert by_name["chat"].default_shortcut.mode == "new"
-    assert [action.id for action in by_name["chat"].actions] == ["new", "subagent"]
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
-    for name in ("terminal", "files", "browser"):
-        assert by_name[name].instances is True
+    # Every seeded shortcut opens a new window of its app; the one browser is focused instead
+    # (docs/system/specs/window-bound-resources.md section 3.1).
+    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
         assert by_name[name].default_shortcut is not None
-        assert by_name[name].default_shortcut.action == "new"
-        assert [action.id for action in by_name[name].actions] == ["new"]
-    assert by_name["terminal"].instances_url == "http://127.0.0.1:7682"
-    assert by_name["files"].instances_url == "http://127.0.0.1:8301"
-    assert by_name["browser"].instances_url is None
+        assert by_name[name].default_shortcut.mode == mode, name
+    # The desktop interface's launch paths (desktop-interface contracts.md section 2).
+    assert by_name["system_interface"].launch_paths == ()
+    assert [(entry.id, entry.path) for entry in by_name["chat"].launch_paths] == [("root", "/"), ("new", "/new")]
+    assert by_name["chat"].default_shortcut is not None
+    assert by_name["chat"].default_shortcut.launch == "root"
+    for name, launch_path in (("terminal", "/new"), ("files", "/"), ("browser", "/new")):
+        assert [(entry.id, entry.path) for entry in by_name[name].launch_paths] == [("new", launch_path)], name
+        assert by_name[name].default_shortcut is not None
+        assert by_name[name].default_shortcut.launch == "new", name
+    assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["draft"]
+    assert [param.name for param in by_name["chat"].launch_paths[1].params] == ["account_id", "message"]
+    assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
+    assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
+    assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]

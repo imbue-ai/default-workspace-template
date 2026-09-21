@@ -60,6 +60,10 @@ const JANK_MS = parseInt(params.get("jank") || "0", 10) || 0;
 // way, so a navigation lands after the page has already been seen to react rather than instead of
 // reacting.
 const PENDING_MS = parseInt(params.get("pending") || "0", 10) || 0;
+// resave=1: with `pending`, leaving the page reloads the url the page is already on instead of
+// going to `./`. The shape of an app that saves and then shows itself again: a new document at the
+// same address, which nothing about the url can distinguish from the one being replaced.
+const RESAVE = params.get("resave") === "1";
 // unnamed=1: a task's checkbox gets no label association, so it has no accessible name and the
 // tree lists it as a bare `checkbox`. The shape of an app whose author skipped accessibility.
 const UNNAMED = params.get("unnamed") === "1";
@@ -209,7 +213,8 @@ document.getElementById("start-over").addEventListener("click", (event) => {
   event.preventDefault();
   statusEl.textContent = "Saving...";
   setTimeout(() => {
-    location.href = "./";
+    if (RESAVE) location.reload();
+    else location.href = "./";
   }, PENDING_MS);
 });
 

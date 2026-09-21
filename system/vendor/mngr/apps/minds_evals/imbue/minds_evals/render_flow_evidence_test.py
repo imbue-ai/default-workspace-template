@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.minds_evals.template_loading import load_template_module
 
 _RENDERER = load_template_module("tests/verifier/render_flow_evidence.py", "minds_evals_flow_evidence_renderer")
@@ -57,10 +59,13 @@ def _flow_entry(name: str, status: str, reason: str = "", detail: str = "") -> d
     }
 
 
-def _write_case(tmp_path: Path, checks: list[dict[str, Any]]) -> Path:
-    """The expanded case, which is where a flow's declared actions and its `expect` come from."""
+def _write_case(tmp_path: Path, checks: list[dict[str, Any]], max_judge_screenshots: int | None) -> Path:
+    """The expanded case, which is where a flow's declared actions, its `expect` and the case's own
+    screenshot ceiling come from."""
     case_path = tmp_path / "case.json"
-    case_path.write_text(json.dumps({"expectations": {"ui_flow_checks": checks}}))
+    case_path.write_text(
+        json.dumps({"expectations": {"ui_flow_checks": checks, "max_judge_screenshots": max_judge_screenshots}})
+    )
     return case_path
 
 
@@ -86,11 +91,16 @@ def test_a_case_generated_before_the_rename_still_shows_the_judge_what_the_flow_
     assert "declared actions: Add 'persist me'. Reload." in digest
 
 
-def _collect(tmp_path: Path, checks: list[dict[str, Any]] | None = None) -> tuple[str, list[str]]:
+def _collect(
+    tmp_path: Path, checks: list[dict[str, Any]] | None = None, max_judge_screenshots: int | None = None
+) -> tuple[str, list[str]]:
     digest_path = tmp_path / "judge_flows_digest.txt"
     screenshots_dir = tmp_path / "judge_screenshots"
     _RENDERER.collect_flow_evidence(
-        tmp_path / "verification", digest_path, screenshots_dir, _write_case(tmp_path, checks or [])
+        tmp_path / "verification",
+        digest_path,
+        screenshots_dir,
+        _write_case(tmp_path, checks or [], max_judge_screenshots),
     )
     return digest_path.read_text(), sorted(path.name for path in screenshots_dir.iterdir())
 
@@ -327,6 +337,49 @@ def test_renderer_says_so_when_the_attachment_ceiling_drops_frames(tmp_path: Pat
     )
     # The frames that survive are the LATER flows': the earliest give way first.
     assert not any(name.endswith("flow00_step_000.png") for name in screenshots)
+
+
+def test_renderer_attaches_every_flows_frames_under_the_ceiling_the_case_sets(tmp_path: Path) -> None:
+    # A case's flows are judged in one request, so a case whose flows ask for more frames than the
+    # default ceiling sets its own, and its earliest flow keeps its frames.
+    verification_dir = tmp_path / "verification"
+    flow_count = 1 + _RENDERER.MAX_SCREENSHOTS_TOTAL // _RENDERER.MAX_SCREENSHOTS_PER_FLOW
+    entries = []
+    for index in range(flow_count):
+        name = "flow{:02d}".format(index)
+        _write_flow(verification_dir, name, step_count=_RENDERER.MAX_SCREENSHOTS_PER_FLOW)
+        entries.append(_flow_entry(name, "passed"))
+    _write_manifest(verification_dir, entries)
+    frame_count = flow_count * _RENDERER.MAX_SCREENSHOTS_PER_FLOW
+
+    digest, screenshots = _collect(tmp_path, max_judge_screenshots=frame_count)
+
+    assert len(screenshots) == frame_count
+    assert screenshots[0] == "01_flow00_step_000.png"
+    assert "{} screenshot(s) from these flows are attached".format(frame_count) in digest
+
+
+@pytest.mark.parametrize(
+    ("expectations", "expected_total"),
+    [
+        pytest.param({"ui_flow_checks": []}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="not-set"),
+        pytest.param({"max_judge_screenshots": None}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="null"),
+        pytest.param({"max_judge_screenshots": 0}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="zero"),
+        pytest.param({"max_judge_screenshots": True}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="bool"),
+        pytest.param({"max_judge_screenshots": "32"}, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="string"),
+        pytest.param(None, _RENDERER.MAX_SCREENSHOTS_TOTAL, id="no-expectations"),
+        pytest.param({"max_judge_screenshots": 32}, 32, id="above-the-default"),
+        pytest.param({"max_judge_screenshots": 8}, 8, id="below-the-default"),
+    ],
+)
+def test_the_screenshot_ceiling_is_the_cases_own_only_when_it_sets_a_usable_one(
+    tmp_path: Path, expectations: object, expected_total: int
+) -> None:
+    # A regrade reads a dataset generated before cases could set a ceiling, which carries none.
+    case_path = tmp_path / "case.json"
+    case_path.write_text(json.dumps({"expectations": expectations}))
+
+    assert _RENDERER.max_screenshots_total(case_path) == expected_total
 
 
 def test_renderer_drops_a_screenshot_rewardkit_would_refuse(tmp_path: Path) -> None:

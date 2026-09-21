@@ -103,7 +103,7 @@ vi.mock("../models/Providers", () => ({
 const started: string[] = [];
 vi.mock("../shell", () => ({
   startChatOnAccount: (accountId: string) => started.push(accountId),
-  openSubagentTab: vi.fn(),
+  openSubagentView: vi.fn(),
 }));
 
 // A press on another account hands the chat to the switch dialog (or an immediate switch); the
