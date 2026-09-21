@@ -11,6 +11,8 @@ Internal documentation for the workspace machinery.
   `workspace-app-model/` plan it grew out of stays as history.
   The plan that separates chats from agents (so a chat can switch harness) is
   `blueprint/chat-agent-split/plan-chat-agent-split.md`.
+- `avatar-designs.md` - How to draw and register a desktop avatar design (the
+  drawing format the shell validates, and the registration helper).
 - `style_guide.md` - The code style guide (a symlink into the vendored mngr
   repo, which is its source of truth).
 
