@@ -1,10 +1,11 @@
 # workspace_ui
 
 The workspace frontends' shared JavaScript library: what the shell
-(`system/apps/system_interface/frontend`) and the chat page
-(`system/apps/chat/frontend`) have in common. Source only: there is no build
-here, each app's vite build compiles the modules it imports
-(`@imbue/workspace-ui/src/<module>`), and the three packages are one npm
+(`system/apps/system_interface/frontend`), the chat page
+(`system/apps/chat/frontend`), and the Getting Started page
+(`system/apps/getting_started/frontend`) have in common. Source only: there is
+no build here, each app's vite build compiles the modules it imports
+(`@imbue/workspace-ui/src/<module>`), and the four packages are one npm
 workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 
 - `src/base.css`: the design system's token layer (colour and type tokens, the
@@ -26,6 +27,13 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `src/embed-contract.d.ts`: the minds embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant
   the shell sends a framed page.
+- `src/search.ts`: `matchesQuery`, the one text match of the workspace's
+  typeaheads (every whitespace token of the query occurring in one of the given
+  texts, case-insensitively), which the desktop's launcher, the Getting Started
+  page's search, and the chat's send picker narrow their lists with.
+- `src/testing/`: what a Mithril view test needs beyond jsdom, imported by every
+  frontend's view tests: `dom.ts` (the `requestAnimationFrame` polyfill, imported
+  before mithril) and `mount.ts` (`mountView` and `unmountViews`).
 
 ```bash
 cd system && npm ci      # every frontend's dependencies
