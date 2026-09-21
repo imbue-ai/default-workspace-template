@@ -499,11 +499,40 @@ export class DesktopStore {
   async draftIntoPinnedWindow(text: string): Promise<boolean> {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
-    const title = effectiveWindowTitle(this.state, target.window, appByName(this.state, target.window.app));
     const path = launchPathWithParams(target.launchPath, { [DRAFT_PARAM]: text });
-    const isTaken = await this.reportLocation(target.window.id, path, title);
+    const isTaken = await this.navigateOwnWindow(target.window.id, path);
     this.restoreWindow(target.window.id);
     return isTaken;
+  }
+
+  /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is
+   *  written through the shell and the answer applied as a load rather than as the page's own report, so the
+   *  following step moves the page there (a page's own report is the one thing the following never bounces back,
+   *  and applying it that way would leave the page where it was). False when the shell refused. */
+  async navigateOwnWindow(windowId: string, path: string): Promise<boolean> {
+    const found = findWindow(this.state, windowId);
+    if (found === null) return false;
+    const title = effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
+    let reported: WindowRecord;
+    try {
+      reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
+    } catch (error) {
+      this.deps.notify(`Could not move the window: ${(error as Error).message}`);
+      return false;
+    }
+    if (found.window.scope === "independent") {
+      if (found.desktop.id !== this.state.activeDesktopId) return true;
+      this.layoutLoadsRevision += 1;
+      this.dispatch({
+        type: "window_paths_loaded",
+        desktopId: found.desktop.id,
+        windowPaths: { ...this.state.layout.window_paths, [windowId]: { path: reported.path, title: reported.title } },
+      });
+      return true;
+    }
+    this.desktopsRevision += 1;
+    this.dispatch({ type: "window_location_reported", desktopId: found.desktop.id, window: reported });
+    return true;
   }
 
   /** Choose the workspace's avatar design; every window (this one included) follows the shell's broadcast. */
