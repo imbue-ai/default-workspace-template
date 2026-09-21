@@ -206,14 +206,23 @@ def read_tail_lines_back_to_snapshot(path: Path) -> list[str]:
         position = stream.tell()
         chunks: list[bytes] = []
         is_whole = position == 0
+        # Whether a newer block's cut first line held the marker: that line starts in an older block, and the read
+        # ends at the first block that holds its start (a marker split across two blocks reads one block further).
+        is_marker_in_cut_line = False
         while position > 0:
             step = min(_TAIL_BLOCK_BYTES, position)
             position -= step
             stream.seek(position)
-            chunks.insert(0, stream.read(step))
+            chunk = stream.read(step)
+            chunks.insert(0, chunk)
             is_whole = position == 0
-            if marker in chunks[0]:
+            first_newline = chunk.find(b"\n")
+            if first_newline == -1:
+                is_marker_in_cut_line = is_marker_in_cut_line or marker in chunk
+                continue
+            if is_marker_in_cut_line or marker in chunk[first_newline + 1 :]:
                 break
+            is_marker_in_cut_line = marker in chunk[:first_newline]
     text = b"".join(chunks).decode("utf-8", errors="replace")
     lines = text.split("\n")
     # A read that stopped mid-file starts in the middle of a line, which is not this fold's to read.
