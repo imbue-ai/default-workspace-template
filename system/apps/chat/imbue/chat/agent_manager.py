@@ -449,7 +449,7 @@ def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
     Chat ``oom_score_adj`` is not shared state a second chat instance (a preview
     booted from a worktree) may contribute to: the two would fight over the same
     ``/proc`` entries, and this one's inputs are wrong anyway -- the presence it
-    sees is its own tab's, not the workspace's, which reads as every other chat
+    sees is its own windows', not the workspace's, which reads as every other chat
     closed. Withholding the capability rather than gating the call sites is
     deliberate: ``reapply`` is reached from the sweep, from the presence and send
     routes, and from every lifecycle event, so a new call site added later is

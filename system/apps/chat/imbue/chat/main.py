@@ -113,7 +113,7 @@ def build_production_state(
 
     Everything the chat keeps on disk lands under ``config.chat_data_dir``, so a secondary
     chat pointed at a scratch copy never writes the live chat's data. A secondary also
-    opens no tabs: the auto-open ledger and the shell it would drive belong to the live chat.
+    opens no windows: the auto-open ledger and the shell it would drive belong to the live chat.
     """
     broadcaster = WebSocketBroadcaster()
     data_dir = config.chat_data_dir

@@ -426,7 +426,7 @@ person closes (`shell/update_notice.py`):
 one top banner beside the staleness one, naming every app the record names (or
 the workspace, when it names none), saying they were updated a moment ago and
 offering "Roll back" and "Everything seems good". It is one banner rather than a
-note on each touched app's tabs because the record is one rollback point: a
+note on each touched app's windows because the record is one rollback point: a
 rollback takes everything it names back together. The shell watches the file and
 pushes every distinct reading over the socket as `update_notice_changed` (and
 seeds it on connect), so the banner appears, shows a rollback's progress and
