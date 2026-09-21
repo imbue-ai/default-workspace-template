@@ -8,6 +8,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.status import AvatarStatus
 from imbue.system_interface.avatar.status import AvatarStatusReader
@@ -139,6 +140,69 @@ def test_an_absent_file_reads_stale_and_idle(tmp_path: Path) -> None:
 def test_the_events_path_follows_the_host_directory_variable(tmp_path: Path) -> None:
     assert agent_events_path({"MNGR_HOST_DIR": str(tmp_path)}) == tmp_path / "events/mngr/agents/events.jsonl"
     assert agent_events_path({}) == Path.home() / ".mngr/events/mngr/agents/events.jsonl"
+
+
+def _live_event(agent_id: str, state: str) -> str:
+    """One agent state line stamped now, so the fold reads it as fresh."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return json.dumps({"timestamp": now, "type": "AGENT_STATE", "agent": _agent(agent_id, state)}) + "\n"
+
+
+def test_the_reader_refolds_a_write_through_the_file_watch(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(_live_event("a", "STOPPED"))
+    broadcaster = WebSocketBroadcaster()
+    window: queue.Queue[str | None] = broadcaster.register()
+    # The periodic re-check is far off: only the watch can wake the loop for the writes below.
+    reader = AvatarStatusReader(
+        events_path=path, broadcaster=broadcaster, debounce_seconds=0.02, stale_check_interval_seconds=60.0
+    )
+    reader.start()
+    try:
+        assert reader.current() == AvatarStatus(mood=AvatarMood.IDLE, is_stale=False)
+        with path.open("a") as stream:
+            stream.write(_live_event("a", "RUNNING"))
+        wait_for(
+            lambda: reader.current().mood is AvatarMood.WORKING,
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the watch never woke the reader for the write",
+        )
+        assert drain_messages(window) == [
+            {"type": "avatar_status", "mood": "idle", "is_stale": False},
+            {"type": "avatar_status", "mood": "working", "is_stale": False},
+        ]
+        with path.open("a") as stream:
+            stream.write(_live_event("a", "STOPPED"))
+        wait_for(
+            lambda: reader.current().mood is AvatarMood.IDLE,
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the watch never woke the reader for the second write",
+        )
+    finally:
+        reader.stop()
+
+
+def test_the_reader_starts_watching_once_the_events_directory_appears(tmp_path: Path) -> None:
+    path = tmp_path / "mngr" / "agents" / "events.jsonl"
+    reader = AvatarStatusReader(
+        events_path=path, broadcaster=WebSocketBroadcaster(), debounce_seconds=0.02, stale_check_interval_seconds=0.05
+    )
+    reader.start()
+    try:
+        assert reader.current() == AvatarStatus(mood=AvatarMood.IDLE, is_stale=True)
+        # The shell creates nothing under an mngr directory: the re-check finds the directory once mngr makes it.
+        path.parent.mkdir(parents=True)
+        path.write_text(_live_event("a", "RUNNING"))
+        wait_for(
+            lambda: reader.current() == AvatarStatus(mood=AvatarMood.WORKING, is_stale=False),
+            timeout=5.0,
+            poll_interval=0.02,
+            error_message="the reader never read the file that appeared after its start",
+        )
+    finally:
+        reader.stop()
 
 
 def test_the_reader_broadcasts_only_when_the_status_changes(tmp_path: Path) -> None:
