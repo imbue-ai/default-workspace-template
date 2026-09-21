@@ -150,7 +150,7 @@ def _running_e2e_server(
 
     ``is_stub_taking_message`` declares a ``message`` param on the stub's ``new`` launch path, which is what makes
     it the app the launcher's seeded prompts go to. With ``is_catalog_offered`` the shell has a template catalog.
-    With ``pin`` a third stub app is registered with that pin, so every desktop holds its pinned window.
+    With ``pin`` another stub app is registered with that pin, so every desktop holds its pinned window.
     """
     port = find_free_port()
     base_url = f"http://127.0.0.1:{port}"
