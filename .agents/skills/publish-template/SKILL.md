@@ -889,7 +889,8 @@ assembly -- happens IN `$WT`, never `/home/user/workspace`.
 ## 7. Ensure GitHub access (latchkey -- do NOT use the gh CLI)
 
 GitHub access goes through **latchkey's github permissioning**, exactly like
-every other connector in this template (see `.agents/skills/connect-external-service/references/latchkey.md`). If §0 already
+every other connector in this template (see
+`.agents/skills/connect-external-service/references/latchkey.md`). If §0 already
 asked the user to connect their account, the probes below simply find the grant
 in place and this section is a no-op -- it always probes before requesting, so
 running it after an early request never duplicates anything. Do NOT use

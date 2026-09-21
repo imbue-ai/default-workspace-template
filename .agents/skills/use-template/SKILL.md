@@ -97,8 +97,8 @@ If the repo is private, the anonymous fetch fails with an auth error. Route git
 through the latchkey gateway instead (it proxies GitHub's git endpoints with the
 credential injected server-side; needs the `github-git` / `github-git-read`
 permission -- initiate it yourself like any other latchkey permission request,
-see `.agents/skills/connect-external-service/references/latchkey.md`). Fetch the URL directly rather than persisting a
-gateway-URL remote:
+see `.agents/skills/connect-external-service/references/latchkey.md`). Fetch the
+URL directly rather than persisting a gateway-URL remote:
 
 ```bash
 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
@@ -230,9 +230,10 @@ or would you rather it read something else, like email?"
 conversation:**
 
 1. Initiate every activation requirement YOURSELF, now -- one latchkey
-   permission request per `requires_permission:` line (see `.agents/skills/connect-external-service/references/latchkey.md`: `latchkey curl -XPOST
-   http://latchkey-self.invalid/permission-requests`; the request opens the
-   approval/login flow in the minds app). Each request is its own tool call,
+   permission request per `requires_permission:` line (see
+   `.agents/skills/connect-external-service/references/latchkey.md`: `latchkey
+   curl -XPOST http://latchkey-self.invalid/permission-requests`; the request
+   opens the approval/login flow in the minds app). Each request is its own tool call,
    with nothing else in it; when a template needs several, file them one after
    another without waiting for verdicts in between. Do not merely tell the user a
    permission is needed — send the request so it appears for them to approve.
