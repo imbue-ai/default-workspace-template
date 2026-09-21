@@ -694,38 +694,46 @@ def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_roo
 def test_the_send_launch_path_offers_the_picker_and_sends_the_text_to_the_chat_picked(
     tmp_path: Path, page: Page
 ) -> None:
-    """The ``send`` launch path off a ``navigate`` (the desktop's Ctrl+Enter row): the picker opens over the chats,
-    picking one sends the text there through the ordinary send and selects it, and the window's stored path goes
-    back to the selection alone, so a reload of the window offers nothing again (launcher-and-getting-started plan
-    section 4.5)."""
+    """The ``send`` launch path off a ``navigate`` (the desktop's Ctrl+Enter row): the picker opens over the chats;
+    Escape drops it and the text with it, and picking a chat sends the text there through the ordinary send and
+    selects it. Either way the window's stored path goes back to the selection alone, so a reload of the window
+    offers nothing again (launcher-and-getting-started plan section 4.5)."""
     with _running_e2e_server(tmp_path) as server:
         _open_fixture_chat(page, server)
         expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
         client_id = _client_id(page)
         _wait_for_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
-
-        text = "Carry on with the seal"
-        navigated = _post_op(
-            server,
-            {
-                "op": "navigate",
-                "args": {
-                    "window": _the_chat_window(server)["id"],
-                    "path": "/send?" + urllib.parse.urlencode({"message": text}),
-                    "client": client_id,
-                },
-                "requester": None,
-            },
-        )
-        assert navigated == 200
-        root = _chat_root(page)
-        expect(root.locator("[data-send-picker]")).to_be_visible(timeout=15000)
-        expect(root.locator(".send-picker-text")).to_contain_text(text)
-        root.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]').click()
-
-        expect(root.locator("[data-send-picker]")).to_have_count(0)
         messenger = server.chat_state.agent_manager._messenger
         assert isinstance(messenger, RecordingMngrMessenger)
+        root = _chat_root(page)
+        text = "Carry on with the seal"
+
+        def _navigate_to_send() -> None:
+            navigated = _post_op(
+                server,
+                {
+                    "op": "navigate",
+                    "args": {
+                        "window": _the_chat_window(server)["id"],
+                        "path": "/send?" + urllib.parse.urlencode({"message": text}),
+                        "client": client_id,
+                    },
+                    "requester": None,
+                },
+            )
+            assert navigated == 200
+            expect(root.locator("[data-send-picker]")).to_be_visible(timeout=15000)
+            expect(root.locator(".send-picker-text")).to_contain_text(text)
+
+        _navigate_to_send()
+        root.locator("[data-send-picker-search]").press("Escape")
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        assert messenger.sent == []
+
+        _navigate_to_send()
+        root.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]').click()
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
         wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=10.0)
         _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
         # The recording messenger writes nothing into the fixture transcript, so the bubble is not looked for.
