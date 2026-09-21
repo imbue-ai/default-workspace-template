@@ -76,6 +76,8 @@ class WallpaperNotFoundError(ShellError, LookupError):
 
 class GridSearchExhaustedError(ShellError, AssertionError):
     """The unbounded nearest-free-cell search ran out of rings without finding a free cell, which cannot happen."""
+
+
 class UpdateNoticeRecordError(ShellError, ValueError):
     """The kept rollback point's file does not hold a record."""
 
