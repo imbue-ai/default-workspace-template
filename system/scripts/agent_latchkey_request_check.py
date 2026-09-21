@@ -149,16 +149,16 @@ def _request_count(segment: CommandSegment) -> int:
 
 
 def classify(cmd: str, is_backgrounded: bool = False) -> str | None:
-    """Return the violation reason if `cmd` files a permission request badly.
+    """Return the violation reason if `cmd` files a permission or secret request badly.
 
     ``is_backgrounded`` is whether the tool call runs `cmd` in the background
     (claude's Bash ``run_in_background``), which sends the output somewhere the
     result cannot carry it -- the one input here that the command text does not
     hold.
 
-    Returns None when the command is allowed: either it files no permission
-    request at all (including a GET of the queue, or a command that merely
-    mentions the host inside a quoted string), or it files exactly one as the
+    Returns None when the command is allowed: either it files no request at all
+    (including a GET of the queue, or a command that merely mentions the host or
+    the request script inside a quoted string), or it files exactly one as the
     whole tool call with its output untouched.
     """
     parsed = parse_command(cmd)
