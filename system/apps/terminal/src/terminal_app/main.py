@@ -6,6 +6,7 @@ from typing import Final
 import click
 from app_manifest.primitives import AppName, AppUrl
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH, register_app, registry_path
+from app_manifest.shell_windows import shell_base_url
 from flask import Flask
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
@@ -27,6 +28,7 @@ from terminal_app.serving import (
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.tmux import SubprocessTmux
+from terminal_app.window_sweep import WINDOW_SWEEP_INTERVAL_SECONDS, WindowSweeper
 from terminal_app.wiring import OOM_TAG_SCRIPT, STATE_DIR
 
 # The terminal's fixed wiring, all relative to the repo root every supervised program runs from.
@@ -81,10 +83,24 @@ def build_session_source(arguments: TerminalAppArguments, paths: TerminalPaths) 
     )
 
 
-def build_pages_app(source: TmuxSessionSource) -> Flask:
+def build_window_sweeper(source: TmuxSessionSource) -> WindowSweeper:
+    return WindowSweeper(
+        source=source,
+        shell_url=shell_base_url(),
+        app_name=APP_NAME,
+        interval_seconds=WINDOW_SWEEP_INTERVAL_SECONDS,
+    )
+
+
+def build_pages_app(source: TmuxSessionSource, sweeper: WindowSweeper) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.register_blueprint(
-        build_pages_blueprint(source=source, registry_path=registry_path(), contract_path=SHELL_APP_CONTRACT_PATH)
+        build_pages_blueprint(
+            source=source,
+            registry_path=registry_path(),
+            contract_path=SHELL_APP_CONTRACT_PATH,
+            on_window_closed=sweeper.request_sweep,
+        )
     )
     return app
 
@@ -93,8 +109,9 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     """Append the discovery event, recreate the remembered sessions, then serve the pages until stopped.
 
     In order: the pages start listening (so a window the shell opens right after the registration
-    finds them answering), the app is registered through ``forward_port.py --manifest``, and the
-    process waits for SIGTERM or SIGINT, returning the exit status for it.
+    finds them answering), the window sweep starts, the app is registered through
+    ``forward_port.py --manifest``, and the process waits for SIGTERM or SIGINT, returning the
+    exit status for it.
     """
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
     if arguments.agent_state_dir is not None:
@@ -103,10 +120,15 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     source = build_session_source(arguments, paths)
     with log_span("Recreating the remembered terminal sessions"):
         source.recreate_remembered_sessions()
-    with serve_in_background(PAGES_HOST, app_url_port(arguments.app_url), build_pages_app(source)):
-        with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
-            register_app(arguments.manifest_path, arguments.app_url)
-        return wait_for_shutdown_signal()
+    sweeper = build_window_sweeper(source)
+    with serve_in_background(PAGES_HOST, app_url_port(arguments.app_url), build_pages_app(source, sweeper)):
+        sweeper.start()
+        try:
+            with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
+                register_app(arguments.manifest_path, arguments.app_url)
+            return wait_for_shutdown_signal()
+        finally:
+            sweeper.stop()
 
 
 @click.command()
