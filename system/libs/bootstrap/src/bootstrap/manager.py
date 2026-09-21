@@ -426,40 +426,42 @@ def _set_container_timezone(
     localtime_path: Path = Path("/etc/localtime"),
     timezone_path: Path = Path("/etc/timezone"),
 ) -> None:
-    """Apply the fetched timezone, or the cached one when the fetch came back empty.
+    """Apply the fetched timezone, or the cached one when the fetched zone is
+    empty or cannot be applied.
 
-    A successfully applied zone is written to ``cache_path`` for the next boot.
-    Best-effort throughout: a missing or unwritable cache is logged, never raised.
+    A successfully applied fetched zone is written to ``cache_path`` for the
+    next boot. Best-effort throughout: a missing or unwritable cache is logged,
+    never raised.
     """
-    tz_name = fetched_tz_name
-    if not tz_name:
-        try:
-            tz_name = cache_path.read_text().strip()
-        except FileNotFoundError:
-            tz_name = ""
-        except OSError as e:
-            logger.warning(
-                "Could not read the cached timezone at {}: {}", cache_path, e
-            )
-            return
-        if not tz_name:
-            logger.info(
-                "No timezone fetched or cached; container keeps the image's zone"
-            )
-            return
-        logger.info("Falling back to the last applied timezone {}", tz_name)
-    if not _apply_container_timezone(
-        tz_name,
+    if fetched_tz_name and _apply_container_timezone(
+        fetched_tz_name,
         zoneinfo_dir=zoneinfo_dir,
         localtime_path=localtime_path,
         timezone_path=timezone_path,
     ):
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(fetched_tz_name + "\n")
+        except OSError as e:
+            logger.warning("Could not cache the timezone at {}: {}", cache_path, e)
         return
     try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(tz_name + "\n")
+        cached_tz_name = cache_path.read_text().strip()
+    except FileNotFoundError:
+        cached_tz_name = ""
     except OSError as e:
-        logger.warning("Could not cache the timezone at {}: {}", cache_path, e)
+        logger.warning("Could not read the cached timezone at {}: {}", cache_path, e)
+        return
+    if not cached_tz_name:
+        logger.info("No timezone applied or cached; container keeps the image's zone")
+        return
+    logger.info("Falling back to the last applied timezone {}", cached_tz_name)
+    _apply_container_timezone(
+        cached_tz_name,
+        zoneinfo_dir=zoneinfo_dir,
+        localtime_path=localtime_path,
+        timezone_path=timezone_path,
+    )
 
 
 def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
