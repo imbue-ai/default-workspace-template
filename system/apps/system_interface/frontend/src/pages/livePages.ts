@@ -41,6 +41,7 @@ import {
   effectiveWindowTitle,
   findWindow,
 } from "../reducers/desktopState";
+import type { DesktopState } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
 
@@ -148,7 +149,20 @@ export class LivePagesLayer implements PageDriver {
     const found = findWindow(state, page.windowId);
     const app = found === null ? undefined : appByName(state, found.window.app);
     if (found === null || app === undefined) return;
-    this.pointPageAt(page, app, effectiveWindow(state, found.window).path);
+    this.pointPageAt(page, app, this.pathSeen(page, found, state));
+  }
+
+  /** Whether the layout holds this client's own path for the window: an independent window's arrives with its
+   *  desktop's layout, so it is known only while that desktop is the active one and the layout has loaded. */
+  private isOwnPathKnown(found: { window: WindowRecord; desktop: Desktop }, state: DesktopState): boolean {
+    return found.desktop.id === state.activeDesktopId && state.isLayoutLoaded;
+  }
+
+  /** The path this client's page of the window is at: a linked window's shared record, an independent window's
+   *  own stored path when it is known, else where the layer last put or saw the page. */
+  private pathSeen(page: LivePage, found: { window: WindowRecord; desktop: Desktop }, state: DesktopState): string {
+    if (found.window.scope === "independent" && !this.isOwnPathKnown(found, state)) return page.lastReportedPath;
+    return effectiveWindow(state, found.window).path;
   }
 
   /** Point the frame at the app's page for ``path`` (cross-origin, so a reload is a ``src`` reassignment). */
@@ -241,15 +255,9 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       const found = windowsById.get(page.windowId);
       if (found === undefined) continue;
-      // This client's path for an independent window arrives with the active desktop's layout, so a hidden page
-      // of one on another desktop stays where it is until that desktop is shown again, and nothing moves one
-      // while the active desktop's layout is still being read.
-      if (
-        found.window.scope === "independent" &&
-        (found.desktop.id !== state.activeDesktopId || !state.isLayoutLoaded)
-      ) {
-        continue;
-      }
+      // A hidden page of an independent window on another desktop stays where it is until that desktop is
+      // shown again, and nothing moves one while the active desktop's layout is still being read.
+      if (found.window.scope === "independent" && !this.isOwnPathKnown(found, state)) continue;
       // The window as this client sees it: an independent window at this client's own stored path.
       const seen = effectiveWindow(state, found.window);
       // A stored record still naming the path a page reported leaving is a snapshot from before the shell
@@ -361,7 +369,7 @@ export class LivePagesLayer implements PageDriver {
     const state = this.store.getState();
     const found = findWindow(state, page.windowId);
     const desktopId = found?.desktop.id ?? state.activeDesktopId ?? "";
-    const path = found === null ? "" : effectiveWindow(state, found.window).path;
+    const path = found === null ? "" : this.pathSeen(page, found, state);
     sendToChildFrame(page.frame, SHELL_HANDSHAKE, {
       clientId: state.clientId,
       windowId: page.windowId,
