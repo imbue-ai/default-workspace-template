@@ -317,6 +317,7 @@ Data attributes, never classes, so restyling cannot break a test:
 |---|---|
 | `data-desktop-id` | the backdrop root |
 | `data-window-id`, `data-window-state`, `data-minimized` | each window's root |
+| `data-window-frame`, `data-window-content` | the window's clipping frame, and the content box its page is laid over |
 | `data-drag-handle`, `data-resize-edge="n\|s\|e\|w\|ne\|nw\|se\|sw"` | title bar, resize edges |
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |
