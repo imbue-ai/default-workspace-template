@@ -20,8 +20,9 @@ format. In brief:
   paths** (`new` at `/new`, say, with documented query params); an app that
   declares none offers `open` at its root.
 - A **desktop** is a named, shared collection of windows and shortcuts over a
-  wallpaper, with a colour, a glyph, and a sharing mode. Everyone sees the
-  same desktops and the same windows on them.
+  wallpaper, with a colour and a glyph. Everyone sees the same desktops and
+  the same windows on them; a signed-in visitor gets a desktop of their own,
+  seeded from the first one, the first time they arrive (see "Who is here").
 - A **window** is one page of one app on one desktop: the app, the path under
   its origin the page is at, and the title the page last reported. That is
   the whole of what the shell knows about what a window shows.
@@ -55,7 +56,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
   `/wallpapers/<kind>/<name>`), the per-app Stop and Start
-  (`/api/apps/<name>/stop|start`), clients (`/api/clients`), client activity
+  (`/api/apps/<name>/stop|start`), clients (`/api/clients`, and the arrival
+  `/api/clients/<client>/arrive` a page posts first), client activity
   (`/api/client-activity`), the inventory (`/api/inventory`), the templates
   catalog (`/api/templates-catalog`), and the loopback-only op route
   (`/api/layout/broadcast`).
@@ -68,7 +70,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
-`placements/<desktop>/<client>.json`, `clients.json`, and the client-activity
+`placements/<desktop>/<client>.json`, `clients.json`, `users.json` (the
+desktop made for each visiting user), and the client-activity
 event log (`events/client_activity/events.jsonl`, what `layout.py context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds). Presence
@@ -77,7 +80,7 @@ lives beside it under `data/.state/presence/` (`--presence-dir`).
 ### The desktop model
 
 - **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
-  sharing mode, wallpaper, shortcuts, windows), a `Window` (an app, a path
+  wallpaper, shortcuts, windows), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
   backdrop, state, minimized; the order is the stack).
@@ -166,6 +169,19 @@ avatar per user. Over a share that widget also links to the gateway's identity
 refresh, for a visitor who changed their name or avatar. A visitor granted a
 single app never loads the shell and so never appears: they are in one app,
 not in the workspace.
+
+The same header decides where a page lands. A shell page posts its arrival
+(`POST /api/clients/<client_id>/arrive`) before it reads the desktops. The
+owner, and any request without a user id, land on the client's recorded
+desktop, else the first. A signed-in visitor would otherwise land on the
+owner's desktop and open and close the owner's windows, so on their first
+arrival the shell makes them a desktop named after them (display name, else
+the email's local part, made unique), seeded from the first desktop: its
+shortcuts, its wallpaper, and a new window at the path of each window that
+is open there. It is remembered in `users.json`, every later client of that
+user lands on it, a returning client keeps the desktop it was on, and if it
+has been deleted the next arrival seeds another and says so. Every desktop
+stays shared and in everyone's switcher; there is no private mode.
 
 ### The desktop, the taskbar, and the launcher
 
