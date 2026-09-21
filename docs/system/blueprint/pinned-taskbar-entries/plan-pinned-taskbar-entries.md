@@ -313,7 +313,7 @@ A `WindowPathStore` owns the per-client files; `ClientStore` gains the entries; 
 
 ### 5.5 Agent ops
 
-- `close` on a pinned window is refused with "the window is pinned; minimize it instead".
+- `close` on a pinned window is refused with "window <id> is pinned and cannot be closed; minimize it instead".
 - `navigate` on an independent window writes the target client's stored path and announces it to that client; on a linked window it is unchanged.
 - `desktops` and `list` show `is_pinned` and `scope` on every window; an independent window's `path` is its home path, which the `manage-desktop` skill explains.
 - No op pins, unpins, or changes presentation; those are the manifest's and the user's.
