@@ -6,8 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { catalogTemplateRecord } from "../testing/records";
-import { TemplateDetailModal, templateRequirements } from "./TemplateDetailModal";
-import type { TemplateDetailModalAttrs } from "./TemplateDetailModal";
+import {
+  TemplateDetail,
+  adoptTemplateMessage,
+  createMachineFromTemplateMessage,
+  templateRequirements,
+} from "./TemplateDetail";
+import type { TemplateDetailAttrs } from "./TemplateDetail";
 
 describe("templateRequirements", () => {
   it("lists accounts by scope with their permissions joined, then the model, keys, and packages", () => {
@@ -36,7 +41,15 @@ describe("templateRequirements", () => {
   });
 });
 
-describe("TemplateDetailModal", () => {
+describe("the seeded messages", () => {
+  it("adopt with the skill's command, and create a machine with a plain request naming the repository", () => {
+    const template = catalogTemplateRecord("digest");
+    expect(adoptTemplateMessage(template)).toBe("/use-template https://github.com/someone/digest");
+    expect(createMachineFromTemplateMessage(template)).toContain("https://github.com/someone/digest");
+  });
+});
+
+describe("TemplateDetail", () => {
   let root: HTMLElement;
 
   beforeEach(() => {
@@ -49,18 +62,14 @@ describe("TemplateDetailModal", () => {
     root.remove();
   });
 
-  /** Mount the dialog over a plain template with every action live, ``overrides`` laid over that. */
-  function mountDetail(overrides: Partial<TemplateDetailModalAttrs>): TemplateDetailModalAttrs {
-    const attrs: TemplateDetailModalAttrs = {
+  function mountDetail(overrides: Partial<TemplateDetailAttrs>): TemplateDetailAttrs {
+    const attrs: TemplateDetailAttrs = {
       template: catalogTemplateRecord("plain"),
-      isStartDisabled: false,
-      startDisabledReason: null,
-      onClose: vi.fn(),
-      onAdopt: vi.fn(),
-      onCreateMachine: vi.fn(),
+      onBack: vi.fn(),
+      onStartWithText: vi.fn(),
       ...overrides,
     };
-    m.mount(root, { view: () => m(TemplateDetailModal, attrs) });
+    m.mount(root, { view: () => m(TemplateDetail, attrs) });
     return attrs;
   }
 
@@ -73,7 +82,9 @@ describe("TemplateDetailModal", () => {
       }),
     });
     const detail = root.querySelector<HTMLElement>(".new-tab-template-detail")!;
+    expect(detail.getAttribute("data-template")).toBe("digest");
     expect(Array.from(detail.querySelectorAll("p")).map((paragraph) => paragraph.textContent)).toEqual([
+      "by someone",
       "Reads your inbox every morning.",
       "Writes a digest.",
     ]);
@@ -85,7 +96,7 @@ describe("TemplateDetailModal", () => {
   });
 
   it("falls back to the description and omits Needs when the template has neither write-up nor requirements", () => {
-    mountDetail({ template: catalogTemplateRecord("plain", { description: "Just a thing." }) });
+    mountDetail({ template: catalogTemplateRecord("plain", { description: "Just a thing.", author: "" }) });
     const detail = root.querySelector<HTMLElement>(".new-tab-template-detail")!;
     expect(Array.from(detail.querySelectorAll("p")).map((paragraph) => paragraph.textContent)).toEqual([
       "Just a thing.",
@@ -93,18 +104,15 @@ describe("TemplateDetailModal", () => {
     expect(detail.querySelector("h4")).toBeNull();
   });
 
-  it("stands both actions down when told to, so neither callback fires", () => {
-    const attrs = mountDetail({
-      isStartDisabled: true,
-      startDisabledReason: "No app on this machine can start a chat",
-    });
-    const adopt = root.querySelector<HTMLElement>(".new-tab-template-adopt")!;
-    const createMachine = root.querySelector<HTMLElement>(".new-tab-template-create-machine")!;
-    expect(adopt.getAttribute("aria-disabled")).toBe("true");
-    expect(createMachine.getAttribute("aria-disabled")).toBe("true");
-    adopt.click();
-    createMachine.click();
-    expect(attrs.onAdopt).not.toHaveBeenCalled();
-    expect(attrs.onCreateMachine).not.toHaveBeenCalled();
+  it("starts a chat with the adopt or the create-machine message, and goes back on the back control", () => {
+    const attrs = mountDetail({});
+    root.querySelector<HTMLElement>(".new-tab-template-adopt")!.click();
+    expect(attrs.onStartWithText).toHaveBeenLastCalledWith("/use-template https://github.com/someone/plain");
+    root.querySelector<HTMLElement>(".new-tab-template-create-machine")!.click();
+    expect(attrs.onStartWithText).toHaveBeenLastCalledWith(
+      createMachineFromTemplateMessage(catalogTemplateRecord("plain")),
+    );
+    root.querySelector<HTMLElement>(".new-tab-template-back")!.click();
+    expect(attrs.onBack).toHaveBeenCalledTimes(1);
   });
 });

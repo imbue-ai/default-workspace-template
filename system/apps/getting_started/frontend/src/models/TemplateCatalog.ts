@@ -1,12 +1,12 @@
 /**
- * The template catalog behind the launcher's "Start from a template" section, as the shell
- * serves it at ``GET /api/templates-catalog`` (see ``imbue/system_interface/template_catalog.py``
- * and ``catalog/README.md`` for the document itself).
+ * The template catalog behind the page's "Start from a template" section, as the app serves it
+ * at ``GET /api/templates-catalog`` (see ``src/getting_started/template_catalog.py`` and
+ * ``catalog/README.md`` for the document itself).
  *
- * One fetch per page load, shared by every opening of the launcher: it shows "Loading templates..."
- * until the fetch answers, the shelves when it does, and "Failed to load templates." when the shell
- * has nothing to give (a failed fetch is retried the next time the desktop mounts). A shell with no
- * catalog URL configured answers a null catalog, and the launcher omits the section.
+ * One fetch per page load: the page shows "Loading templates..." until the fetch answers, the
+ * shelves when it does, and "Failed to load templates." when the app has nothing to give (a failed
+ * fetch is retried the next time the page mounts). An app with no catalog URL configured answers a
+ * null catalog, and the page omits the section.
  *
  * The pure helpers below (shelf resolution, the "All templates" row, the template search, the
  * write-up's paragraphs) are exported so they can be tested without a DOM or a socket.
@@ -14,7 +14,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { matchesQuery } from "./search";
+import { matchesQuery } from "@imbue/workspace-ui/src/search";
 
 export interface CatalogRequiredAccount {
   scope: string;
@@ -118,7 +118,7 @@ export function writeUpParagraphs(text: string): string[] {
     .filter((paragraph) => paragraph !== "");
 }
 
-// ---------- the fetch, shared by every launcher panel ----------
+// ---------- the fetch, one per page load ----------
 
 let state: TemplateCatalogState = { kind: "loading" };
 let isRequested = false;

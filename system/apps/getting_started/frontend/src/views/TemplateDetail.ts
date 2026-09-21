@@ -1,22 +1,22 @@
 /**
- * The detail view behind a template card: the drawing large, the full write-up (the card shows
+ * The detail page behind a template card: the drawing large, the full write-up (the card shows
  * none of it), what the template needs connected before it runs, a link to the repository it is
  * published from, and the two ways to take it on -- adopt it into this machine, or have a new
- * machine made from it. Both start a chat; the launcher owns what the chat is told.
+ * machine made from it. Both start a chat; the page owns what the chat is told. A back control
+ * returns to the tiles and shelves; there is no dialog, since the page has nothing under it to
+ * dim.
  */
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
-import { Modal, MODAL_TITLE_CLASS } from "@imbue/workspace-ui/src/components/Modal";
-import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import type { CatalogTemplate } from "../model/TemplateCatalog";
-import { writeUpParagraphs } from "../model/TemplateCatalog";
+import type { CatalogTemplate } from "../models/TemplateCatalog";
+import { writeUpParagraphs } from "../models/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
 
-const DETAIL_WIDTH_PX = 640;
 const ART_FALLBACK_GLYPH_SIZE = 32;
 const REQUIREMENT_GLYPH_SIZE = 14;
+const BACK_GLYPH_SIZE = 16;
 
 /** One line of the "Needs" list: what the adopter has to have in hand before the template runs. */
 export interface TemplateRequirement {
@@ -51,79 +51,51 @@ export function templateRequirements(template: CatalogTemplate): TemplateRequire
   return requirements;
 }
 
-export interface TemplateDetailModalAttrs {
-  template: CatalogTemplate;
-  /** Whether both actions stand down (no app takes a first message, or the pane is already
-   *  starting something): they render disabled and neither callback fires. */
-  isStartDisabled: boolean;
-  /** What a hover over a standing-down action says; null when there is nothing to explain. */
-  startDisabledReason: string | null;
-  onClose: () => void;
-  /** "Make it mine": adopt the template into this machine. */
-  onAdopt: (template: CatalogTemplate) => void;
-  /** "Create a new machine from this": have a fresh machine made from it. */
-  onCreateMachine: (template: CatalogTemplate) => void;
+/** Adopt a template into this machine: the first message of the chat "Make it mine" starts. */
+export function adoptTemplateMessage(template: CatalogTemplate): string {
+  return `/use-template ${template.repository_url}`;
 }
 
-export function TemplateDetailModal(): m.Component<TemplateDetailModalAttrs> {
+/** Have a new machine made from a template: the first message of the chat that action starts. */
+export function createMachineFromTemplateMessage(template: CatalogTemplate): string {
+  return (
+    `Please create a new Mind machine for me from the template at ${template.repository_url} ` +
+    "(the minds-api skill can create one). Walk me through anything it needs from me, like permissions " +
+    "or accounts, and tell me when it is ready."
+  );
+}
+
+export interface TemplateDetailAttrs {
+  template: CatalogTemplate;
+  /** Back to the tiles and shelves. */
+  onBack: () => void;
+  /** Start a chat whose first message is ``text``. */
+  onStartWithText: (text: string) => void;
+}
+
+export function TemplateDetail(): m.Component<TemplateDetailAttrs> {
   return {
     view(vnode) {
-      const { template, isStartDisabled, startDisabledReason, onClose, onAdopt, onCreateMachine } = vnode.attrs;
+      const { template, onBack, onStartWithText } = vnode.attrs;
       const paragraphs = writeUpParagraphs(template.what_it_is);
       const requirements = templateRequirements(template);
-      // The same stand-down as the prompt tiles: aria-disabled rather than disabled, so the
-      // element still takes the hover that explains why.
-      const startAttrs = {
-        "aria-disabled": isStartDisabled ? "true" : undefined,
-        ...hoverTooltipAttrs(isStartDisabled ? startDisabledReason : null),
-      };
-      return m(
-        Modal,
-        {
-          onDismiss: onClose,
-          onEscape: onClose,
-          width: DETAIL_WIDTH_PX,
-          // The marker rides the body wrapper below: the Modal drops a caller's ``class`` from the
-          // card, since a class there would replace the card's own recipe.
-          card: { role: "dialog", "aria-modal": "true", "aria-label": template.title, "data-template": template.slug },
-          header: [
-            m("div", { class: "min-w-0 flex-1" }, [
-              m("h3", { class: MODAL_TITLE_CLASS }, template.title),
-              template.author === ""
-                ? null
-                : m("p", { class: "type-helper m-0 text-secondary" }, `by ${template.author}`),
-            ]),
-            m(
-              Button,
-              { variant: "ghost", icon: true, sm: true, "aria-label": "Close", onclick: onClose },
-              m.trust(icon("close", { size: 16 })),
-            ),
-          ],
-          actions: [
-            m(
-              Button,
-              {
-                extra: "new-tab-template-create-machine",
-                onclick: isStartDisabled ? undefined : () => onCreateMachine(template),
-                ...startAttrs,
-              },
-              "Create a new machine from this",
-            ),
-            m(
-              Button,
-              {
-                variant: "primary",
-                extra: "new-tab-template-adopt",
-                onclick: isStartDisabled ? undefined : () => onAdopt(template),
-                ...startAttrs,
-              },
-              "Make it mine",
-            ),
-          ],
-        },
-        [
-          m("div", { class: "new-tab-template-detail max-h-[60vh] overflow-y-auto pr-1" }, [
+      return m("section", { class: "new-tab-template-detail", "data-template": template.slug }, [
+        m(
+          Button,
+          { variant: "ghost", sm: true, extra: "new-tab-template-back", "aria-label": "Back", onclick: onBack },
+          [m.trust(icon("chevron-left", { size: BACK_GLYPH_SIZE })), m("span", "Back")],
+        ),
+        m("div", { class: "mt-4 flex items-start gap-6 max-md:flex-col" }, [
+          m(
+            "div",
+            { class: "w-full shrink-0 md:w-80" },
             m(TemplateArt, { template, frameClass: "w-full rounded-lg", glyphSize: ART_FALLBACK_GLYPH_SIZE }),
+          ),
+          m("div", { class: "min-w-0 flex-1" }, [
+            m("h2", { class: "type-heading m-0 text-primary" }, template.title),
+            template.author === ""
+              ? null
+              : m("p", { class: "type-helper m-0 mt-1 text-secondary" }, `by ${template.author}`),
             (paragraphs.length > 0 ? paragraphs : [template.description]).map((paragraph) =>
               m("p", { class: "type-body mt-4 text-primary" }, paragraph),
             ),
@@ -157,9 +129,28 @@ export function TemplateDetailModal(): m.Component<TemplateDetailModalAttrs> {
               },
               [m("span", "View the repository"), m.trust(icon("external-link", { size: REQUIREMENT_GLYPH_SIZE }))],
             ),
+            m("div", { class: "mt-6 flex flex-wrap gap-2" }, [
+              m(
+                Button,
+                {
+                  variant: "primary",
+                  extra: "new-tab-template-adopt",
+                  onclick: () => onStartWithText(adoptTemplateMessage(template)),
+                },
+                "Make it mine",
+              ),
+              m(
+                Button,
+                {
+                  extra: "new-tab-template-create-machine",
+                  onclick: () => onStartWithText(createMachineFromTemplateMessage(template)),
+                },
+                "Create a new machine from this",
+              ),
+            ]),
           ]),
-        ],
-      );
+        ]),
+      ]);
     },
   };
 }

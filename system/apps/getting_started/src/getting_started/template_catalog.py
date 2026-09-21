@@ -1,8 +1,8 @@
-"""The template catalog behind the launcher's "Start from a template" section.
+"""The template catalog behind the Getting Started page's "Start from a template" section.
 
 The catalog is a JSON document at a fixed URL (``catalog/new-tab-templates.json`` in the
 template repository, by default), fetched on demand and reused for a few hours. The last
-copy that parsed is written under the shell's state directory, so a machine that cannot
+copy that parsed is written under the app's state directory, so a machine that cannot
 reach the URL keeps showing what it last saw; with no copy at all the page says the
 templates failed to load. The document is cross-version data -- an older workspace reads a
 newer catalog -- so every model ignores unknown fields, and only the format number and the
@@ -28,18 +28,19 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
 
+from getting_started.errors import StateFileError
+from getting_started.errors import TemplateCatalogFormatError
+from getting_started.state_files import read_json_object
+from getting_started.state_files import write_json_atomic
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.errors import ShellStateError
-from imbue.system_interface.shell.state_files import read_json_object
-from imbue.system_interface.shell.state_files import write_json_atomic
 
 # The one document format this reader understands; a catalog naming another is refused.
 _CATALOG_FORMAT: Final[int] = 1
 
-# The last good copy, under the shell's state directory.
+# The last good copy, under the app's state directory.
 CATALOG_CACHE_FILENAME: Final[str] = "template_catalog.json"
 
 # A fetched copy is reused this long before the next request refetches it.
@@ -51,14 +52,6 @@ _FETCH_SLOW_SECONDS: Final[float] = 3.0
 
 
 _EntryT = TypeVar("_EntryT", bound=FrozenModel)
-
-
-class TemplateCatalogError(Exception):
-    """Base error for the template catalog."""
-
-
-class TemplateCatalogFormatError(TemplateCatalogError, ValueError):
-    """The document is not a catalog this reader understands."""
 
 
 class RequiredAccount(FrozenModel):
@@ -318,14 +311,14 @@ class TemplateCatalogStore(MutableModel):
         # A copy that cannot be written costs the next process its fallback, not this one its answer.
         try:
             write_json_atomic(self.cache_path, catalog.model_dump(mode="json"))
-        except ShellStateError as e:
+        except StateFileError as e:
             logger.warning("Could not cache the template catalog at {}: {}", self.cache_path, e)
 
 
 def build_template_catalog_store(
     catalog_url: str, state_directory: Path, fetcher: TemplateCatalogFetcherInterface | None = None
 ) -> TemplateCatalogStore:
-    """The store over the shell's state directory, fetching over HTTP unless a fetcher is injected."""
+    """The store over the app's state directory, fetching over HTTP unless a fetcher is injected."""
     return TemplateCatalogStore(
         catalog_url=catalog_url,
         cache_path=state_directory / CATALOG_CACHE_FILENAME,

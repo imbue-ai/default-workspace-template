@@ -1,0 +1,109 @@
+[project]
+name = "getting-started"
+version = "0.1.0"
+description = "The Getting Started app: the ways into the workspace (intents and published templates), each starting a chat through the desktop's launcher"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-manifest",
+    "click>=8.1",
+    "flask>=3.0",
+    "httpx>=0.27",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.13.1",
+    "werkzeug>=3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=7.0.0",
+    "pytest-timeout>=2.3.0",
+    "coverage",
+    "inline-snapshot>=0.13",
+    "ruff~=0.12.8",
+    # Used by check_no_type_errors in test_ratchets.py. Pinned to the version the source was
+    # last verified clean against (see the system interface's pyproject).
+    "ty==0.0.24",
+]
+
+[project.scripts]
+getting-started = "getting_started.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+artifacts = [
+    "static/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/getting_started"]
+
+[tool.pytest.ini_options]
+timeout_func_only = true
+markers = [
+    "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
+    "release: marks tests as being required for release (but not for merging PRs)",
+    "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
+]
+junit_family = "xunit1"
+testpaths = ["."]
+addopts = [
+  "--cov=getting_started",
+  "--cov-report=term-missing",
+  "--cov-report=xml",
+  "--durations=20",
+  "--timeout=10",
+  "--timeout-method=signal",
+]
+
+[tool.coverage.run]
+parallel = true
+concurrency = ["multiprocessing", "thread"]
+omit = [
+  "*_test.py",
+  "test_*.py",
+  "*/conftest.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+
+[tool.inline-snapshot]
+default-flags=["report"]
+default-flags-tui=["report"]
+default-flags-ide=["report"]
+format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "B",
+    "I",
+    "UP006",
+    "UP007",
+]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = [
+    "getting_started",
+    "imbue",
+    "app_manifest",
+]

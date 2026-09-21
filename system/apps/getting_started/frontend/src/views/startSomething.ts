@@ -1,10 +1,10 @@
 /**
- * "Start something": the ways INTO the product the launcher offers as tiles, each a title, a
- * sentence, a glyph, and the first message of the chat it starts. Where "Open new" spins up an
- * empty object, these name an intent; the prompts are plain-language requests written so the
+ * "Start something": the ways INTO the product the page offers as tiles, each a title, a
+ * sentence, a glyph, and the first message of the chat it starts. Where the launcher's rows spin up
+ * an empty object, these name an intent; the prompts are plain-language requests written so the
  * mind's own skills match on them, and name no skill.
  *
- * One tile is the exception: "Start from a template" has its answer further down the same overlay,
+ * One tile is the exception: "Start from a template" has its answer further down the same page,
  * so it scrolls there instead of opening anything (``prompt`` is null).
  *
  * Each tile has a hue from the Mind brand palette (the sheet the workspace accents come from).
@@ -15,7 +15,7 @@
  * until every tile is shown. The paging arithmetic and the search match are pure and tested.
  */
 
-import { matchesQuery } from "../model/search";
+import { matchesQuery } from "@imbue/workspace-ui/src/search";
 
 export interface StartOption {
   /** Stable marker (``data-start``) and vnode key. */

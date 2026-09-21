@@ -1,17 +1,17 @@
 /**
- * The "Start from a template" cards and rails of the launcher: a card is a template's drawing
+ * The "Start from a template" cards and rails of the page: a card is a template's drawing
  * in a 3:2 frame with its title and byline under it; a shelf is a heading over a sideways rail of
  * cards that shows three and a half at a time, pages one visible width with an arrow in the gutter
  * at each end, and scrolls freely with the trackpad. The arrows sit outside the scrolling area, so
- * the cards run to the rail's edge with nothing over them. Picking a card is the launcher's
- * business (it opens the detail dialog), so both components only report the pick.
+ * the cards run to the rail's edge with nothing over them. Picking a card is the page's
+ * business (it shows the detail page), so both components only report the pick.
  *
  * The rail arithmetic (which arrows to show, where a page lands) is exported as pure functions so
  * it can be tested without a DOM.
  */
 
 import m from "mithril";
-import type { CatalogTemplate, ResolvedShelf } from "../model/TemplateCatalog";
+import type { CatalogTemplate, ResolvedShelf } from "../models/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
 import { HOVER_LIFT_GROUP } from "./hoverLift";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -256,7 +256,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
       m("h3", { class: "type-label px-2 text-primary" }, shelf.title),
       // The row hangs its slivers out past the page column so the arrows sit in the page's margin:
       // -mx-6 back, w-5 slivers and the scroller's px-3 forward leave the cards at the heading's
-      // own px-2. -mx-6 is the most the page can give, being exactly the launcher's padding; past
+      // own px-2. -mx-6 is the most the page can give, being exactly the page's padding; past
       // that the arrows fall outside the scroll box and raise a scrollbar.
       //
       // So sliver and scroller padding share a fixed 32px, and the scroller's share is what keeps

@@ -44,7 +44,17 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     ],
     isCompact: false,
     openEntryMenuWindowId: null,
-    launcher: { query: "", isOpen: false, isCompact: false, onOpen: vi.fn(), onClose: vi.fn(), onQuery: vi.fn() },
+    launcher: {
+      query: "",
+      isOpen: false,
+      isCompact: false,
+      onOpen: vi.fn(),
+      onClose: vi.fn(),
+      onQuery: vi.fn(),
+      onMoveHighlight: vi.fn(),
+      onRunHighlight: vi.fn(),
+      onRunSecondary: vi.fn(),
+    },
     tray: {
       desktops: [desktopRecord("home"), desktopRecord("work")],
       activeDesktopId: "home",
@@ -146,7 +156,17 @@ describe("Taskbar", () => {
     document.addEventListener("keydown", onDocumentKeyDown);
     try {
       const taskbar = render({
-        launcher: { query: "docs", isOpen: true, isCompact: false, onOpen: vi.fn(), onClose, onQuery },
+        launcher: {
+          query: "docs",
+          isOpen: true,
+          isCompact: false,
+          onOpen: vi.fn(),
+          onClose,
+          onQuery,
+          onMoveHighlight: vi.fn(),
+          onRunHighlight: vi.fn(),
+          onRunSecondary: vi.fn(),
+        },
       });
       const input = taskbar.querySelector("[data-launcher-field] input") as HTMLInputElement;
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

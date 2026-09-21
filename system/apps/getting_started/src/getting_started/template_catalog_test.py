@@ -6,16 +6,16 @@ from typing import Any
 
 import pytest
 
-from imbue.system_interface.template_catalog import CATALOG_CACHE_FILENAME
-from imbue.system_interface.template_catalog import TemplateCatalogAvailability
-from imbue.system_interface.template_catalog import TemplateCatalogFormatError
-from imbue.system_interface.template_catalog import TemplateCatalogStore
-from imbue.system_interface.template_catalog import catalog_wire_json
-from imbue.system_interface.template_catalog import parse_template_catalog
-from imbue.system_interface.template_catalog import resolve_thumbnail_url
-from imbue.system_interface.testing import FakeTemplateCatalogFetcher
-from imbue.system_interface.testing import catalog_document
-from imbue.system_interface.testing import catalog_template_document
+from getting_started.template_catalog import CATALOG_CACHE_FILENAME
+from getting_started.template_catalog import TemplateCatalogAvailability
+from getting_started.template_catalog import TemplateCatalogFormatError
+from getting_started.template_catalog import TemplateCatalogStore
+from getting_started.template_catalog import catalog_wire_json
+from getting_started.template_catalog import parse_template_catalog
+from getting_started.template_catalog import resolve_thumbnail_url
+from getting_started.testing import FakeTemplateCatalogFetcher
+from getting_started.testing import catalog_document
+from getting_started.testing import catalog_template_document
 
 _CATALOG_URL = "https://example.test/catalog/new-tab-templates.json"
 

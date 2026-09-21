@@ -109,6 +109,11 @@ CHAT_STATIC_DIR = f"{CHAT_DIR}/imbue/chat/static"
 
 CHAT_FRONTEND_BUILD_INDEX = f"{CHAT_STATIC_DIR}/chat.html"
 
+GETTING_STARTED_DIR = "system/apps/getting_started"
+GETTING_STARTED_FRONTEND_DIR = f"{GETTING_STARTED_DIR}/frontend"
+GETTING_STARTED_STATIC_DIR = f"{GETTING_STARTED_DIR}/src/getting_started/static"
+GETTING_STARTED_FRONTEND_BUILD_INDEX = f"{GETTING_STARTED_STATIC_DIR}/index.html"
+
 
 class FrontendBundle(NamedTuple):
     """One frontend's build: the app it belongs to, its sources, and the bundle its backend serves.
@@ -136,6 +141,13 @@ FRONTEND_BUNDLES = (
         CHAT_FRONTEND_DIR,
         CHAT_STATIC_DIR,
         CHAT_FRONTEND_BUILD_INDEX,
+    ),
+    FrontendBundle(
+        "getting_started",
+        "getting_started_bundle",
+        GETTING_STARTED_FRONTEND_DIR,
+        GETTING_STARTED_STATIC_DIR,
+        GETTING_STARTED_FRONTEND_BUILD_INDEX,
     ),
 )
 

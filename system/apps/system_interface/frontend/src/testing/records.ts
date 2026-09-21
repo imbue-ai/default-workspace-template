@@ -1,12 +1,10 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it, a desktop, a window, a
- * placement, a launch path, a client record, a layout, the avatar state, the theme metrics, and a
- * published template as the catalog lists it. Each takes overrides so a test spells only what it
- * is about.
+ * placement, a launch path, a client record, a layout, the avatar state, and the theme metrics. Each
+ * takes overrides so a test spells only what it is about.
  */
 
 import type { AppRecord, ClientRecord, Desktop, LaunchPath, Layout, Placement, WindowRecord } from "../model/records";
-import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
 import type { AvatarState } from "../reducers/desktopState";
@@ -17,7 +15,7 @@ function capitalized(name: string): string {
 
 /** A launch path ``new`` at ``/new`` with no params. */
 export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPath {
-  return { id: "new", label: "New", path: "/new", params: [], ...overrides };
+  return { id: "new", label: "New", path: "/new", params: [], text_param: null, ...overrides };
 }
 
 /** A running, non-critical, supervised app with one ``new`` launch path at ``/new``. */
@@ -105,27 +103,6 @@ export function layoutRecord(placements: readonly Placement[], updatedAt: string
 /** A shown, normal placement at the first cascade frame. */
 export function placementRecord(windowId: string, overrides: Partial<Placement> = {}): Placement {
   return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
-}
-
-/** A template titled after its slug, published by "someone" from a repository named after it, with a drawing and no requirements. */
-export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTemplate> = {}): CatalogTemplate {
-  return {
-    slug,
-    title: capitalized(slug),
-    description: `What ${slug} does.`,
-    what_it_is: "",
-    author: "someone",
-    repository_url: `https://github.com/someone/${slug}`,
-    thumbnail_url: `https://example.test/${slug}.svg`,
-    version: "v1",
-    updated_at: "",
-    required_accounts: [],
-    required_secrets: [],
-    needs_ai: false,
-    apt_packages: [],
-    choices: [],
-    ...overrides,
-  };
 }
 
 /** The theme metrics at the contract's default (non-compact) values. */
