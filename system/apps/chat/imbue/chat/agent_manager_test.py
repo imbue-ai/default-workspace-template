@@ -2067,12 +2067,15 @@ def test_observer_dying_mid_run_keeps_the_last_list_and_reports_degraded(
 
 
 def test_secondary_manager_never_writes_chat_memory_scores(broadcaster: WebSocketBroadcaster) -> None:
-    """A second chat beside the live one is handed no capability to re-tag chats' scores."""
-    manager = AgentManager.build(broadcaster, is_secondary=True)
+    """A second chat beside the live one gets a prioritizer with no writer, and the live one gets the real one."""
+    secondary = AgentManager.build(broadcaster, is_secondary=True)
+    live = AgentManager.build(broadcaster)
     try:
-        assert manager._oom_prioritizer._set_adj(os.getpid(), 0) is False
+        assert secondary._oom_prioritizer._set_adj is None
+        assert live._oom_prioritizer._set_adj is bands.set_oom_score_adj
     finally:
-        manager.stop()
+        secondary.stop()
+        live.stop()
 
 
 # Activity-state integration

@@ -449,21 +449,6 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
     ]
 
 
-def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
-    """The ``set_adj`` a secondary chat gets: never writes, always fails.
-
-    Chat ``oom_score_adj`` is not shared state a second chat instance (a preview
-    booted from a worktree) may contribute to: the two would fight over the same
-    ``/proc`` entries, and this one's inputs are wrong anyway -- the presence it
-    sees is its own windows', not the workspace's, which reads as every other chat
-    closed. Withholding the capability rather than gating the call sites is
-    deliberate: ``reapply`` is reached from the sweep, from the presence and send
-    routes, and from every lifecycle event, so a new call site added later is
-    inert here by construction.
-    """
-    return False
-
-
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
 # and resolves hosts by host_id + provider_name (see mngr's group_agents_by_host /
 # send_message_to_agents). So we don't track real host names: the cached match
@@ -972,7 +957,9 @@ class AgentManager:
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
             resolve_pid=lambda chat_id: manager._resolve_active_pid(chat_id),
-            set_adj=_refuse_to_set_oom_score_adj if is_secondary else set_oom_score_adj,
+            # A secondary's presence is its own windows', not the workspace's, and the scores it
+            # would write are the live chat's, so it keeps an inert prioritizer.
+            set_adj=None if is_secondary else set_oom_score_adj,
             resolve_process_started_at=lambda chat_id: manager._read_agent_process_started_at(
                 manager._active_agent_id_of_chat(chat_id)
             ),
