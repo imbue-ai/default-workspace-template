@@ -77,7 +77,9 @@ RESERVED_NAMES = frozenset(
 # both and the scaffold must too.
 RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
-_FORWARD_PORT_PATH = Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
+_FORWARD_PORT_PATH = (
+    Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
+)
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -164,7 +166,8 @@ def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     ports: set[int] = set()
     for path in _supervisord_conf_files(supervisord_conf):
         ports.update(
-            int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(path.read_text())
+            int(match.group(1))
+            for match in LOCALHOST_PORT_RE.finditer(path.read_text())
         )
     return ports
 
@@ -264,6 +267,7 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
+import os
 from pathlib import Path
 
 from flask import Flask, Response
@@ -291,7 +295,7 @@ app = Flask("{package}", static_folder=None)
 def index() -> Response:
     # The location beacon: post the path being viewed one hop up (to the
     # workspace shell embedding this page) on each page load, so the shell can
-    # reopen this app's tab at the same place. Keep the line on every page you
+    # reopen this app's window at the same place. Keep the line on every page you
     # serve; the shell validates the sender's origin and ignores the rest.
     return Response(
         "<!doctype html><html><body>"
@@ -414,7 +418,9 @@ def _display_name(description: str, explicit: str | None) -> str:
     candidate = explicit if explicit is not None else description
     candidate = candidate.strip()
     if not candidate:
-        sys.exit("error: the display name must not be empty (--display-name, or --description when it is omitted)")
+        sys.exit(
+            "error: the display name must not be empty (--display-name, or --description when it is omitted)"
+        )
     if len(candidate) > MAX_DISPLAY_NAME_LENGTH:
         sys.exit(
             f"error: the display name {candidate!r} is over {MAX_DISPLAY_NAME_LENGTH} characters; "
@@ -443,7 +449,11 @@ def _write_lib(
     (lib_dir / "pyproject.toml").write_text(
         _lib_pyproject(name, package, description, extras)
     )
-    (lib_dir / "app.toml").write_text(_MANIFEST_TEMPLATE.format(name=name, display_name=display_name))
+    (lib_dir / "app.toml").write_text(
+        _MANIFEST_TEMPLATE.format(
+            name=name, display_name=display_name, package_upper=package.upper()
+        )
+    )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
@@ -454,25 +464,41 @@ def _write_lib(
 
 # The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
 # ``priority = "user"`` is what puts a user-built app in the user band the
-# ``oom_tag_service.py user`` prefix below also names; ``instances = false``
-# makes it a single tab. No ``default_shortcut``: an app pins itself to a
-# project's rail only when the user asks.
+# ``oom_tag_service.py user`` prefix below also names. No launch paths: the
+# shell offers ``open`` at the app's root. No ``default_shortcut``: an app
+# pins itself to a desktop's backdrop only when the user asks. The ``[preview]``
+# table is the library's default for the name spelled out, so an edit to the
+# runner's env names has the table to keep in step beside it.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
-instances = false
 priority = "user"
 program = "{name}"
+
+# How update-app boots a throwaway preview of this app: on a free port, over a
+# scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).
+[preview]
+env = {{{package_upper}_PORT = "{{port:main}}", {package_upper}_HOST = "{{host}}", {package_upper}_DATA_DIR = "{{copy:data}}"}}
+copies = {{data = "data/.apps/{name}"}}
 """
 
+# ``startsecs``/``startretries`` bound a crash loop, and are why a user app's
+# block differs from a built-in service's (which retries forever, by design: the
+# workspace is unusable without them). An app that dies before it has been up
+# ``startsecs`` counts as a failed start, so supervisord backs off and gives up
+# in FATAL after ``startretries`` instead of restarting it at full speed for as
+# long as the workspace lives. Without this a broken app restarts a few times a
+# second forever, and every restart re-registers it (measured on a real
+# workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
 command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
-startretries=1000000
+startsecs=30
+startretries=5
 stopasgroup=true
 killasgroup=true
 stdout_logfile=/var/log/supervisor/{name}-stdout.log
@@ -588,7 +614,11 @@ def main() -> None:
         default=None,
         help="what users see for the app (the manifest's display_name, at most 64 characters); defaults to the description",
     )
-    parser.add_argument("--icon-file", required=True, help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)")
+    parser.add_argument(
+        "--icon-file",
+        required=True,
+        help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)",
+    )
     parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
     )
@@ -623,7 +653,13 @@ def main() -> None:
     display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
-        repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
+        repo_root,
+        args.name,
+        args.description,
+        display_name,
+        port,
+        list(args.extra_dep),
+        icon_markup,
     )
     _write_supervisord_program(program_path, args.name, package, port)
 
@@ -635,7 +671,7 @@ def main() -> None:
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
         f"(app `{args.name}` on port {port}, registered in "
-        f"{program_path.relative_to(repo_root)}; the tab renders at the service's "
+        f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."

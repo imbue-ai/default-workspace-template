@@ -77,7 +77,13 @@ import m from "mithril";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, getPendingPick, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { SwitchDialog, beginSwitchTo, closeSwitchDialog, openSwitchDialog } from "./SwitchDialog";
+import {
+  SwitchDialog,
+  beginSwitchTo,
+  beginSwitchToAccountId,
+  closeSwitchDialog,
+  openSwitchDialog,
+} from "./SwitchDialog";
 
 const OWN = { id: "acct-anthropic", harness: "claude", lane: "anthropic", label: "Anthropic (Claude Code)" };
 const CODEX = { id: "acct-openai", harness: "codex", lane: "openai", label: "OpenAI (Codex)" };
@@ -170,6 +176,30 @@ describe("the switch dialog", () => {
     expect(state.switches).toEqual([]);
     render();
     expect(ROOT().textContent).toContain("Switch to Codex?");
+  });
+
+  it("does nothing for the account the chat already runs on, fresh or not", async () => {
+    // A sign-in again from the chooser hands back the chat's own account.
+    state.events = [WELCOME];
+    beginSwitchTo("agent-1", OWN as ProviderAccount);
+    state.events = [WELCOME, TYPED];
+    beginSwitchTo("agent-1", OWN as ProviderAccount);
+    await flush();
+    render();
+    expect(ROOT().textContent).toBe("");
+    expect(state.switches).toEqual([]);
+    expect(getPendingAccountId("agent-1")).toBeNull();
+  });
+
+  it("begins the switch for an account id the page knows, and nothing for one it does not", () => {
+    // The provider chooser hands back an id, not an account.
+    beginSwitchToAccountId("agent-1", "acct-gone");
+    render();
+    expect(ROOT().textContent).toBe("");
+    expect(getPendingAccountId("agent-1")).toBeNull();
+
+    beginSwitchToAccountId("agent-1", OTHER_CLAUDE.id);
+    expect(getPendingAccountId("agent-1")).toBe(OTHER_CLAUDE.id);
   });
 
   it("reports a refused immediate switch through the composer's notice", async () => {
@@ -332,6 +362,21 @@ describe("the switch dialog", () => {
     pressButton("Switch this chat");
     expect(getPendingPick("agent-1")?.identity).toEqual({ model_id: "gpt-6-astra", effort: "high", fast: false });
     expect(state.switches).toEqual([]);
+  });
+
+  it("keeps a rebind's armed pick when its account is picked again from the chooser", async () => {
+    openSwitchDialog("agent-1", OTHER_CLAUDE as ProviderAccount);
+    render();
+    await flush();
+    render();
+    choose("switch-dialog-model", "gpt-6-astra");
+    pressButton("Switch this chat");
+    expect(getPendingPick("agent-1")?.identity.model_id).toBe("gpt-6-astra");
+
+    // The auth-error note's chooser hands back the same account.
+    beginSwitchToAccountId("agent-1", OTHER_CLAUDE.id);
+    expect(getPendingAccountId("agent-1")).toBe(OTHER_CLAUDE.id);
+    expect(getPendingPick("agent-1")?.identity.model_id).toBe("gpt-6-astra");
   });
 
   it("starts a rebind's new chat on the model this chat runs on when nothing new is picked", async () => {

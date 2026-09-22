@@ -3,6 +3,9 @@
 Watches data/.state/apps.toml for changes. On startup and on every change,
 writes service_registered / service_deregistered events to
 events/services/events.jsonl so the desktop client can discover available services.
+A registration event goes out only for an app whose registered fields changed --
+the whole file is rewritten whenever any app registers, so a write says nothing
+about which apps moved. The first pass remembers nothing and so announces them all.
 
 Uses both inotify (when available) and mtime polling (5-second fallback).
 """
@@ -13,6 +16,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 from uuid import uuid4
 
 from imbue.imbue_common.event_envelope import (
@@ -61,6 +65,14 @@ class ServiceDeregisteredEvent(EventEnvelope):
     service: str
 
 
+class _AppRow(NamedTuple):
+    """One app's registered fields: everything a registration event carries but its name."""
+
+    url: str
+    label: str
+    icon: str
+
+
 def _new_event_id() -> EventId:
     return EventId(f"evt-{uuid4().hex}")
 
@@ -88,39 +100,71 @@ def _load_apps() -> list[dict[str, object]]:
     return data.get("apps", [])
 
 
+def _registered_rows(current_apps: list[dict[str, object]]) -> dict[str, _AppRow]:
+    """The registry's registerable rows, keyed by service name.
+
+    An entry without a name or a URL is not registerable and is dropped here, so
+    it can neither be emitted nor counted as present.
+    """
+    rows: dict[str, _AppRow] = {}
+    for app in current_apps:
+        name = str(app.get("name", ""))
+        url = str(app.get("url", ""))
+        if not name or not url:
+            continue
+        rows[name] = _AppRow(
+            url=url, label=str(app.get("label", "")), icon=str(app.get("icon", ""))
+        )
+    return rows
+
+
+def _diff_rows(
+    current_rows: dict[str, _AppRow],
+    previous_rows: dict[str, _AppRow],
+) -> tuple[list[str], list[str]]:
+    """The names whose row changed and the names that left, in emission order.
+
+    Registrations keep the registry's own order; deregistrations are sorted.
+    """
+    changed = [
+        name for name, row in current_rows.items() if previous_rows.get(name) != row
+    ]
+    gone = sorted(set(previous_rows) - set(current_rows))
+    return changed, gone
+
+
 def _write_events(
     events_dir: Path,
-    current_apps: list[dict[str, object]],
-    previous_app_names: set[str],
+    current_rows: dict[str, _AppRow],
+    previous_rows: dict[str, _AppRow],
 ) -> None:
-    """Write service events for all current apps and deregistration events for removed ones."""
+    """Write a registration event per app whose row changed, and a deregistration per app that left.
+
+    Only *changed* rows are emitted. The registry file is rewritten in full every
+    time any app registers (``forward_port.py`` replaces it atomically), so a
+    write says nothing about which apps changed, and an app that restarts in a
+    loop would otherwise re-announce every app in the file on every restart.
+    """
     events_dir.mkdir(parents=True, exist_ok=True)
     events_path = events_dir / "events.jsonl"
-
-    current_names: set[str] = set()
+    changed, gone = _diff_rows(current_rows, previous_rows)
 
     with open(events_path, "a") as f:
-        for app in current_apps:
-            name = str(app.get("name", ""))
-            url = str(app.get("url", ""))
-            label = str(app.get("label", ""))
-            icon = str(app.get("icon", ""))
-            if not name or not url:
-                continue
-            current_names.add(name)
+        for name in changed:
+            row = current_rows[name]
             event = ServiceRegisteredEvent(
                 timestamp=_now_iso(),
                 type=_EVENT_TYPE_REGISTERED,
                 event_id=_new_event_id(),
                 source=_EVENT_SOURCE,
                 service=name,
-                url=url,
-                label=label,
-                icon=icon,
+                url=row.url,
+                label=row.label,
+                icon=row.icon,
             )
             f.write(event.model_dump_json() + "\n")
 
-        for name in sorted(previous_app_names - current_names):
+        for name in gone:
             event = ServiceDeregisteredEvent(
                 timestamp=_now_iso(),
                 type=_EVENT_TYPE_DEREGISTERED,
@@ -194,7 +238,7 @@ def main() -> None:
         )
 
     last_mtime: float = 0.0
-    previous_app_names: set[str] = set()
+    previous_rows: dict[str, _AppRow] = {}
 
     def _handle_signal(signum: int, frame: object) -> None:
         sys.exit(0)
@@ -212,20 +256,22 @@ def main() -> None:
 
         if new_mtime != last_mtime:
             last_mtime = new_mtime
-            apps = _load_apps()
+            current_rows = _registered_rows(_load_apps())
+            changed, gone = _diff_rows(current_rows, previous_rows)
 
-            print(
-                f"[app-watcher] Apps changed: {[a.get('name') for a in apps]}",
-                file=sys.stderr,
-                flush=True,
-            )
+            if changed or gone:
+                print(
+                    f"[app-watcher] Apps changed: registered={changed} deregistered={gone}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
             # Write service events
             if events_dir is not None:
-                _write_events(events_dir, apps, previous_app_names)
+                _write_events(events_dir, current_rows, previous_rows)
 
-            # Track current names for next diff
-            previous_app_names = {str(a.get("name", "")) for a in apps if a.get("name")}
+            # Track current rows for next diff
+            previous_rows = current_rows
 
         # Wait for changes
         if inotify_fd is not None:
