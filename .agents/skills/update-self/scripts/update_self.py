@@ -519,8 +519,8 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     if args.target_ref is not None and args.keep_rollback_point:
         raise SystemExit(
             "error: an update-self landing (--target-ref) cannot keep a rollback point: it must "
-            "fast-forward, and only an ordinary merge can be rolled back later. Keep --ff-only and "
-            "drop --keep-rollback-point; the apply still reverts itself on any failure."
+            "fast-forward, and only an ordinary merge can be rolled back later. Land it with --ff-only "
+            "and without --keep-rollback-point; the apply still reverts itself on any failure."
         )
     # The worker's `update-self:` merge is found by walking HEAD's first-parent
     # line; an ordinary merge puts it on a second parent, where that walk finds
