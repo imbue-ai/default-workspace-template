@@ -10,10 +10,11 @@ the agent something. Claude is the reference implementation; the logic lives onc
 
 ## What is in scope here, and what is not
 
-In scope: **anything that inspects or alters the command an agent is about to run**, and
-**anything that holds the agent to the `tk` step discipline the chat progress view is built
-from**. Those are the workspace's own rules, they are enforced identically everywhere, and
-they are ours to change without a mngr release.
+In scope: **anything that inspects or alters the command an agent is about to run**, **anything
+that holds the agent to the `tk` step discipline the chat progress view is built from**, and
+**anything a chat agent owes the user at the end of a turn**. Those are the workspace's own
+rules, they are enforced identically everywhere, and they are ours to change without a mngr
+release.
 
 Out of scope, deliberately -- these look adjacent and are not:
 
@@ -109,6 +110,25 @@ continue, replace or close them.
 before the next turn, at stop, or riding a tool result -- because harnesses differ in which of
 those can reach the model at all. The invariant is only that an agent with open steps is told
 about them before it does more work.
+
+### P8. A chat agent that did work tells the user it is finished
+`agent_notify_user_turn_start.sh`, `agent_notify_user_stop_nudge.sh` -- **soft reminder.**
+
+The user may have walked away the moment they sent the message, and nothing about a finished
+turn reaches them on its own. A chat agent that did work and sent no notification is reminded
+to send one (`.agents/skills/notify-user`), so the app's feed -- and its banner, when the user
+is looking elsewhere -- can bring them back to the chat.
+
+"Did work" is the step discipline's own line: a turn that created, started or closed a step
+record did work; a turn that touched none of them was chitchat, a clarifying question or a
+single quick read. The first script records the step records as the turn opens, the second
+compares them as it ends.
+
+**Chats only, and soft.** A worker's result reaches the user through the chat that launched
+it, and only chats appear in the feed, so the reminder gates on `MNGR_AGENT_ROLE=chat`. It is
+a reminder rather than a gate because whether a given turn is worth a notification is the
+agent's judgement; a reminder is spent on the work it fired for, so an agent that declines can
+stop.
 
 ## The rule that keeps this honest
 

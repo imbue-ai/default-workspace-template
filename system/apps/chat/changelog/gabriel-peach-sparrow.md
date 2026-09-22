@@ -1,0 +1,1 @@
+The tool-call policies contract gains P8: a chat agent that did work in a turn tells the user it is finished, through the notification feed. It is a soft reminder delivered at stop, live on claude and codex and `n/a` on pi and agy, whose stop channels reach no model. Documentation only.

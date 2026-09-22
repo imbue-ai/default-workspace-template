@@ -17,6 +17,7 @@ timeless; everything here is a snapshot.
 | P5 substantive work under a step | live | **partial** | live | **partial** |
 | P6 `tk start`/`close` stands alone | live | **partial** | live | live |
 | P7 open steps are reconciled | live | live | live | **live (turn-start only)** |
+| P8 a finished chat turn notifies | live | live | **n/a** | **n/a** |
 
 No harness is fully `n/a` any more, and three rows are `partial` for reasons that are
 structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1.
@@ -44,6 +45,12 @@ structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1
   `agent_open_tickets_stop_nudge.sh` says so itself ("mainly for orchestrator log / human
   visibility") and exits 0 unconditionally; on codex a sentinel written at Stop appears in no
   transcript item. The half that reaches the model is the turn-start reminder.
+- **P8 is the one stop-time rule that is not decorative, and it is claude + codex only.** It
+  exits 2 rather than 0, which claude hands back as a continuation and codex turns into a new
+  prompt -- the reminder reaches the model on both. pi's `agent_settled` and agy's `Stop` give
+  stderr and nothing else (see the tables below), so neither can carry it; both are `n/a` for
+  the same reason P7's stop half is decorative there. On those two the rule lives only in
+  `AGENTS.md`.
 
 ## Delivery channels, per harness
 
@@ -125,8 +132,8 @@ already sets. `MNGR_AGY_SHIM_OFF=1` disables it without a redeploy.
 **#5 is n/a on agy, not merely unwired.** Its skip list is keyed on claude TOOL NAMES; under
 the shim every call is `Bash`, so it would nudge agy's read-only shell work while never seeing
 agy's own edit tool -- wrong in both directions. That discipline lives in `AGENTS.md`.
-**#7 and #8 are n/a**: agy has no `UserPromptSubmit`, and its stderr goes to a tmux pane
-nobody reads -- the same conclusion pi reached for #8.
+**Both halves of P7 are n/a**: agy has no `UserPromptSubmit`, and its stderr goes to a tmux
+pane nobody reads -- the same conclusion pi reached for the stop half.
 **#3 is live, with a correction to an earlier claim.** This section previously said agy "sets
 `WaitMsBeforeAsync` on every `run_command` and runs the child synchronously, so there is no
 agent-controllable background flag". That is wrong. `WaitMsBeforeAsync` is a **required
@@ -249,10 +256,14 @@ When a rule changes, update every harness that carries it:
 - **Safety 1–2** (`agent_block_pipe_tail_head.sh`, `agent_prevent_commit_rewrite.sh`): the
   scripts (shared by claude **and** codex) and `commandBlockReason()` in mngr's
   `mngr_pi_lifecycle.ts` (pi) — these hold for any pi agent, so mngr still carries them.
-- **Workflow 5, 7–8** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
+- **Workflow 5 and 7** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
   `agent_open_tickets_stop_nudge.sh`): the scripts (claude **and** codex) and the matching
   handler in **this repo's** `.pi/extensions/tk_workflow.ts` (pi). The step discipline is
   this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it.
+- **Workflow 8** (`agent_notify_user_turn_start.sh`, `agent_notify_user_stop_nudge.sh`): the
+  scripts, claude and codex only. Neither pi nor agy has a stop channel that reaches the
+  model, so there is no third copy to keep in step — the rule itself is in `AGENTS.md`, which
+  every harness reads.
 - **Safety 3** (`agent_latchkey_request_check.py`) and **workflow 6**
   (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
   their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
