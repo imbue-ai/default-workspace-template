@@ -69,13 +69,17 @@ def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
 
 @pytest.mark.timeout(60, func_only=False)
 def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
-    """The chat reaches the shell's inventory as an app: running, with the ``new`` launch path of its manifest and
-    its default shortcut, and nothing about the chats inside it."""
+    """The chat reaches the shell's inventory as an app: running, with the ``new`` and ``send`` launch paths of its
+    manifest and its default shortcut, and nothing about the chats inside it."""
     with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         listed = _wait_for_the_chat_app(workspace.shell_url)
         assert listed["display_name"] == "Chat"
         assert listed["critical"] is True
-        assert [(launch["id"], launch["path"]) for launch in listed["launch_paths"]] == [("new", "/new")]
+        assert [(launch["id"], launch["path"]) for launch in listed["launch_paths"]] == [
+            ("new", "/new"),
+            ("send", "/send"),
+        ]
+        assert [launch["text_param"] for launch in listed["launch_paths"]] == ["message", "message"]
         assert listed["default_shortcut"]["launch"] == "new"
         assert listed["default_shortcut"]["mode"] == "new"
 
