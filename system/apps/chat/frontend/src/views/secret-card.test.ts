@@ -75,13 +75,22 @@ function renderToDom(
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  // Spies outlive the test that made one, so a later vi.spyOn on the same method hands
+  // back the first one, call history included.
+  vi.restoreAllMocks();
 });
 
-/** Let the fire-and-forget fetch chain inside SecretStatusCache.known settle. */
-async function flushFetches(): Promise<void> {
-  for (let hop = 0; hop < 6; hop += 1) {
-    await Promise.resolve();
+/** Wait for the fire-and-forget fetch chain inside SecretStatusCache.known to settle,
+ *  by watching the signal the cache itself ends on: it stores the entry and then asks
+ *  for a redraw. Yields whole scheduler turns rather than a set number of microtask
+ *  hops, because reading a fetch Response's body takes a different number of turns on
+ *  different platforms. */
+async function settleHydrations(redraw: { mock: { calls: unknown[] } }, expected: number): Promise<void> {
+  for (let turn = 0; turn < 100; turn += 1) {
+    if (redraw.mock.calls.length >= expected) return;
+    await new Promise((resolve) => setImmediate(resolve));
   }
+  throw new Error(`hydration never settled: ${redraw.mock.calls.length} redraws, expected ${expected}`);
 }
 
 describe("parseSecretRequest", () => {
@@ -220,23 +229,27 @@ describe("status hydration", () => {
   it("does not refetch a failed lookup on the next render, only once the retry delay passes", async () => {
     // The failure's own redraw is the next render: without a delay the card would
     // fetch back to back for as long as the chat app answers 5xx.
-    vi.useFakeTimers();
+    // Only the retry clock is faked. vi.useFakeTimers() also replaces setImmediate,
+    // which strands any turn of the Response body read that goes through a scheduler.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response("", { status: 502 }))
       .mockResolvedValue(new Response(JSON.stringify({ status: "stored" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    const redraw = vi.spyOn(m, "redraw").mockImplementation(() => undefined);
     const cache = new SecretStatusCache();
 
     expect(cache.known("secret-3")).toBeNull();
-    await flushFetches();
+    await settleHydrations(redraw, 1);
     expect(cache.known("secret-3")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
+    // Advancing fires the retry wake this failure scheduled, which is the second redraw;
+    // the refetch below ends on the third.
     vi.advanceTimersByTime(SECRET_STATUS_RETRY_DELAY_MS);
     expect(cache.known("secret-3")).toBeNull();
-    await flushFetches();
+    await settleHydrations(redraw, 3);
     expect(cache.known("secret-3")).toBe("stored");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
