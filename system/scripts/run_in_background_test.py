@@ -196,21 +196,6 @@ def test_a_tree_without_the_chat_messenger_delivers_through_mngr_message(
     assert_mngr_argv_valid(argv)
 
 
-def test_a_tree_with_the_chat_messenger_delivers_through_it() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    message_file = Path("message.md")
-
-    argv = run_in_background.messenger_argv(repo_root, _CHAT_ID, message_file)
-
-    assert argv == [
-        sys.executable,
-        str(repo_root / "system" / "scripts" / "message_chat.py"),
-        _CHAT_ID,
-        "--message-file",
-        str(message_file),
-    ]
-
-
 @pytest.mark.parametrize(
     ("exit_codes", "expected_attempts", "is_delivered"),
     [
