@@ -1,8 +1,0 @@
-# Evidence's mandated data-source config (YAML because Evidence requires it).
-# The duckdb file is produced by ../../extract_box_metrics.py and gitignored;
-# it lives under data/ (not in this directory) so Evidence does not try to
-# treat the database file itself as a query.
-name: boxes
-type: duckdb
-options:
-  filename: ../../data/box_metrics.duckdb
