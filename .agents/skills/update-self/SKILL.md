@@ -256,12 +256,11 @@ BODY_EOF
 
 Clear the previous pass's worker, which Step 6 leaves *stopped* (its transcript
 stays reachable for bug reports). A worker of that name in state `STOPPED` or
-`DONE` is destroyed (its `mngr/update-self` branch survives); one in any other
-state is still running -- a genuine conflict, resolved per the lease check in
-Step 1, never forced past. Plain `mngr` commands on purpose: this prose runs
-from the target's copy but launches with the workspace's own, possibly older,
-`create_worker.py` (`scripts/launcher_contract_test.py` pins what it may ask
-of it):
+`DONE` is destroyed; one in any other state is still running -- a genuine
+conflict, resolved per the lease check in Step 1, never forced past. Plain
+`mngr` and `git` commands on purpose: this prose runs from the target's copy
+but launches with the workspace's own, possibly older, `create_worker.py`
+(`scripts/launcher_contract_test.py` pins what it may ask of it):
 
 ```bash
 mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
@@ -269,6 +268,25 @@ mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
 
 ```bash
 mngr destroy update-self --force
+```
+
+Then clear the previous pass's `mngr/update-self` branch, whether or not a
+worker was listed: destroying a worker leaves its branch behind, and the launch
+below cannot create the worker while a branch of that name exists. After a
+landed pass the branch is part of `HEAD` (a rollback is a revert commit on top
+of the merge), so `-d` deletes it; no such branch means there is nothing to
+clear:
+
+```bash
+git branch -d mngr/update-self
+```
+
+If git refuses because the branch is not fully merged, it holds commits `HEAD`
+does not have. Keep them under an archive name instead, and carry the name
+into the results message as a caveat:
+
+```bash
+git branch -m mngr/update-self "archive/update-self-$(date +%Y%m%d-%H%M%S)"
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
