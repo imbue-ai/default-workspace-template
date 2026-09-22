@@ -26,7 +26,7 @@ def _make_finished_process(
 
 
 def test_default_check_concurrency() -> None:
-    compactor = ChatAutoCompactor.build(list_running_chat_agent_names=lambda: [])
+    compactor = ChatAutoCompactor.build(list_compactable_chat_agent_names=lambda: [])
     assert compactor._max_concurrency == _DEFAULT_CHECK_CONCURRENCY
     assert _DEFAULT_CHECK_CONCURRENCY == 4
 
@@ -38,12 +38,10 @@ def test_check_agent_success() -> None:
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
         recorded_commands.append(list(command))
         recorded_kwargs.update(kwargs)
-        return _make_finished_process(
-            command=command, returncode=0, stdout="No agents require compaction."
-        )
+        return _make_finished_process(command=command, returncode=0, stdout="No agents require compaction.")
 
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: ["chat-1"],
+        list_compactable_chat_agent_names=lambda: ["chat-1"],
         runner=fake_runner,
         mngr_binary="mngr-custom",
     )
@@ -56,9 +54,7 @@ def test_check_agent_success() -> None:
 
 
 def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> None:
-    def fake_runner(
-        command: Sequence[str], is_checked: bool = False, **kwargs: object
-    ) -> FinishedProcess:
+    def fake_runner(command: Sequence[str], is_checked: bool = False, **kwargs: object) -> FinishedProcess:
         return _make_finished_process(
             command=command,
             returncode=1,
@@ -66,7 +62,7 @@ def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> N
         )
 
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: ["chat-1"],
+        list_compactable_chat_agent_names=lambda: ["chat-1"],
         runner=fake_runner,
     )
     result = compactor.check_agent("chat-1")
@@ -80,9 +76,7 @@ def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> N
 
 
 def test_check_agent_other_nonzero_exit_logged_as_warning(loguru_records: list[str]) -> None:
-    def fake_runner(
-        command: Sequence[str], is_checked: bool = False, **kwargs: object
-    ) -> FinishedProcess:
+    def fake_runner(command: Sequence[str], is_checked: bool = False, **kwargs: object) -> FinishedProcess:
         return _make_finished_process(
             command=command,
             returncode=2,
@@ -90,7 +84,7 @@ def test_check_agent_other_nonzero_exit_logged_as_warning(loguru_records: list[s
         )
 
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: ["chat-1"],
+        list_compactable_chat_agent_names=lambda: ["chat-1"],
         runner=fake_runner,
     )
     result = compactor.check_agent("chat-1")
@@ -111,7 +105,7 @@ def test_check_agent_process_setup_error_handled_gracefully(loguru_records: list
         )
 
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: ["chat-1"],
+        list_compactable_chat_agent_names=lambda: ["chat-1"],
         runner=fake_runner,
     )
     result = compactor.check_agent("chat-1")
@@ -132,7 +126,7 @@ def test_sweep_checks_all_running_chat_agents() -> None:
 
     running_chats = ["chat-alpha", "chat-beta", "chat-gamma"]
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: running_chats,
+        list_compactable_chat_agent_names=lambda: running_chats,
         runner=fake_runner,
         mngr_binary="mngr",
     )
@@ -154,7 +148,7 @@ def test_sweep_runs_concurrently() -> None:
         return _make_finished_process(command=command, returncode=0)
 
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: ["chat-1", "chat-2", "chat-3"],
+        list_compactable_chat_agent_names=lambda: ["chat-1", "chat-2", "chat-3"],
         runner=fake_runner,
         max_concurrency=3,
     )
@@ -174,7 +168,7 @@ def test_sweep_stops_early_if_stop_event_set() -> None:
 
     running_chats = ["chat-1", "chat-2", "chat-3"]
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: running_chats,
+        list_compactable_chat_agent_names=lambda: running_chats,
         runner=fake_runner,
         max_concurrency=1,
     )
@@ -192,7 +186,7 @@ def test_start_and_stop_lifecycle() -> None:
         return _make_finished_process(command=command, returncode=0)
 
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: ["test-chat"],
+        list_compactable_chat_agent_names=lambda: ["test-chat"],
         runner=fake_runner,
         interval_seconds=0.01,
     )
