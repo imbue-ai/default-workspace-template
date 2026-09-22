@@ -30,6 +30,20 @@ def _runner_argv(description: str, *command: str) -> list[str]:
     return [sys.executable, str(_SCRIPT), "--description", description, "--", *command]
 
 
+def _start_runner(
+    cwd: Path, env: dict[str, str], description: str, *command: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the script as an agent's tool call does; it returns once the command is detached."""
+    return subprocess.run(
+        _runner_argv(description, *command),
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def _python_command(source: str) -> list[str]:
     return [sys.executable, "-c", source]
 
@@ -68,13 +82,8 @@ def test_the_command_runs_detached_and_its_result_is_posted_to_the_callers_chat(
         "print('a note', file=sys.stderr); sys.exit(3)"
     )
 
-    started = subprocess.run(
-        _runner_argv("Wait for the worker", *command),
-        cwd=tmp_path,
-        env=_agent_env(MNGR_AGENT_ID=_CHAT_ID),
-        capture_output=True,
-        text=True,
-        check=False,
+    started = _start_runner(
+        tmp_path, _agent_env(MNGR_AGENT_ID=_CHAT_ID), "Wait for the worker", *command
     )
 
     # The caller gets its turn back while the command is still running.
@@ -99,13 +108,11 @@ def test_the_chat_app_stamped_chat_id_wins_over_the_agent_id(
 ) -> None:
     chat_id = "agent-fedcba9876543210fedcba9876543210"
 
-    started = subprocess.run(
-        _runner_argv("Say hello", *_python_command("print('hello')")),
-        cwd=tmp_path,
-        env=_agent_env(MINDS_CHAT_ID=chat_id, MNGR_AGENT_ID=_CHAT_ID),
-        capture_output=True,
-        text=True,
-        check=False,
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MINDS_CHAT_ID=chat_id, MNGR_AGENT_ID=_CHAT_ID),
+        "Say hello",
+        *_python_command("print('hello')"),
     )
 
     assert started.returncode == 0, started.stderr
@@ -145,13 +152,8 @@ def test_the_report_still_arrives_after_the_callers_whole_process_group_is_kille
 def test_a_caller_that_is_not_an_agent_is_refused_before_anything_starts(
     tmp_path: Path,
 ) -> None:
-    started = subprocess.run(
-        _runner_argv("Say hello", *_python_command("print('hello')")),
-        cwd=tmp_path,
-        env=_agent_env(),
-        capture_output=True,
-        text=True,
-        check=False,
+    started = _start_runner(
+        tmp_path, _agent_env(), "Say hello", *_python_command("print('hello')")
     )
 
     assert started.returncode == 2
