@@ -783,6 +783,55 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_the_launcher_field_grows_upward_out_of_its_row_and_lifts_the_menu(e2e_server: E2EServer, page: Page) -> None:
+    """The field is one row in the taskbar until its text has lines (plan section 4.1): then it grows upward out of
+    its one-row footprint over the backdrop, the taskbar and its entries hold their places, and the menu's foot
+    rises with the field (section 4.2); a cleared field is one row again and the menu comes back down."""
+    _land(page, e2e_server)
+    menu = _open_launcher(page)
+    taskbar_box = _box(page.locator("[data-taskbar]"))
+    entries_box = _box(page.locator("[data-taskbar-entries]"))
+    field = page.locator("[data-launcher-field]")
+    one_row_box = _box(field)
+    _assert_same_box(one_row_box, _box(page.locator(".launcher-field-slot")), "the one-row field in its slot")
+    menu_box = _box(menu)
+    _assert_close(menu_box["y"] + menu_box["height"], taskbar_box["y"], "the menu's foot over a one-row field")
+
+    page.locator("[data-launcher-field] textarea").fill("one\ntwo\nthree\nfour")
+    wait_for(
+        lambda: _box(field)["y"] < taskbar_box["y"],
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the field never grew above the taskbar",
+    )
+    grown_box = _box(field)
+    rise = grown_box["height"] - one_row_box["height"]
+    assert rise > 0, (grown_box, one_row_box)
+    # Grown upward out of its footprint: the foot holds, the top rises over the backdrop, and the taskbar and its
+    # entries stay where they were.
+    _assert_close(
+        grown_box["y"] + grown_box["height"], one_row_box["y"] + one_row_box["height"], "the grown field's foot"
+    )
+    _assert_same_box(_box(page.locator("[data-taskbar]")), taskbar_box, "the taskbar under a grown field")
+    _assert_same_box(_box(page.locator("[data-taskbar-entries]")), entries_box, "the entries beside a grown field")
+    menu_box = _box(menu)
+    _assert_close(menu_box["y"] + menu_box["height"], taskbar_box["y"] - rise, "the menu's foot over a grown field")
+
+    # Escape clears the text: one row again, and the menu comes back down.
+    page.keyboard.press("Escape")
+    expect(page.locator("[data-launcher-field] textarea")).to_have_value("")
+    wait_for(
+        lambda: abs(_box(field)["height"] - one_row_box["height"]) <= _GEOMETRY_TOLERANCE_PX,
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the field never shrank back to one row",
+    )
+    _assert_same_box(_box(field), one_row_box, "the field cleared")
+    menu_box = _box(menu)
+    _assert_close(menu_box["y"] + menu_box["height"], taskbar_box["y"], "the menu's foot over a cleared field")
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_page_shell_open_opens_a_sibling_window_of_its_app(e2e_server: E2EServer, page: Page) -> None:
     """A page's ``shell:open`` opens another window of its own app at the path it names; with ``focus`` a window
     already at that path is raised instead."""
