@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -324,6 +325,28 @@ def test_command_result_envelopes_preserve_task_titles_and_raw_detail(wrapped: b
     }
     event = parse_lines(line, {"c1": "exec"})[0]
     assert event["tk_stamp"] == "".join(outputs).rstrip()
+    assert event["output_chars"] == len(raw)
+    assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_command_result_envelopes_preserve_the_filed_permission_request(wrapped: bool) -> None:
+    echoed_request = {
+        "request_id": uuid4().hex,
+        "type": "file-sharing",
+        "payload": {"path": "/Users/someone/.paseo", "access": "read"},
+        "status": "pending",
+    }
+    stdout = "  % Total    % Received % Xferd  Average Speed\n" + json.dumps(echoed_request, indent=2) + "\n"
+    text = json.dumps({"chunk_id": "0", "output": stdout}) if wrapped else stdout
+    raw = "Script completed\nWall time 0.4 seconds\nOutput:\n" + text
+    line = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
+    }
+    event = parse_lines(line, {"c1": "exec"})[0]
+    assert event["permission_request"] == echoed_request
     assert event["output_chars"] == len(raw)
     assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
 
