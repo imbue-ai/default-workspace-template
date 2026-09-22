@@ -97,11 +97,14 @@ an encrypted restic repo on cheaper object storage.
 - A hard `minimum_backup_gap_seconds` (default 60) gap is enforced between
   successive backup attempts, so a config that's being mutated constantly
   cannot spam restic / the error log.
-- Stale-lock recovery: a `restic backup` blocked by an existing repository
-  lock (e.g. an exclusive lock left by a dead PID from a prior container
-  incarnation) triggers `restic unlock` -- which removes only *stale* locks,
-  never one a live process holds -- and one retry. Without this, a single
-  stale lock would fail every tick indefinitely.
+- Stale-lock recovery: a `restic backup`, `forget` (retention or restore-marker
+  age-out) or `prune` blocked by an existing repository lock triggers
+  `restic unlock` -- which removes only *stale* locks, never one a live process
+  holds -- and one retry. `forget` and `prune` need an exclusive lock, which
+  restic refuses while any other lock exists, so the non-exclusive lock a
+  backup killed with its container leaves behind blocks them while new backups
+  still succeed. Without this, a single stale lock would fail every tick
+  indefinitely.
 - Repeated-failure escalation: consecutive failed ticks are counted (reset on
   any success). Once the count reaches a threshold (3), each failing tick also
   emits a `backup_repeatedly_failing` event and logs at error level, so a
