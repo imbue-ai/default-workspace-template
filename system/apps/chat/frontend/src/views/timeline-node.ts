@@ -21,7 +21,7 @@ export type TimelineTone = "done" | "current" | "upcoming";
  * The live bullet: the shared ring spinner in the accent, sized to the 16px
  * bullet grid the drawn status badges use (see statusDoneIcon and friends).
  * `[--spinner-width:1.5px]` runs it a half-step lighter than the spinner's own
- * default so it carries the same weight as the still badges beside it.
+ * default so it carries the same weight as the static badges beside it.
  */
 export function timelineSpinnerBullet(): m.Vnode {
   return m(

@@ -134,7 +134,7 @@ describe("the tool chip row", () => {
       action_target: "timeline-node.ts",
     };
     mount([chip(edit)]);
-    // The row truncates a long target, and the chip no longer names its tool
+    // The row truncates a long target, and the chip does not name its tool
     // anywhere -- the title is where both are recoverable.
     expect(chipButtons()[0].title).toBe("edited timeline-node.ts\nEdit");
   });
