@@ -301,8 +301,9 @@ python3 data/.tasks/update-self/run_in_background.py --description "Wait for the
 
 Once the poll is armed, **end your turn**; its message wakes you with the
 report. Re-arm with the same `data/.tasks/update-self/run_in_background.py`
-command; the staged copy stays for the pass, so do not stage it again. Never wait on the worker any other way -- no `sleep`, no polling its
-reports directory or its pane -- see "Never sleep on a worker" in
+command; the staged copy stays for the pass, so do not stage it again. Never
+wait on the worker any other way -- no `sleep`, no polling its reports
+directory or its pane -- see "Never sleep on a worker" in
 `.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
