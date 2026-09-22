@@ -46,7 +46,7 @@ params = [
 # with the conversation the user is in selected ({key} is a chat id).
 [preview]
 command = ["chat-app", "--secondary"]
-env = {CHAT_PORT = "{port:main}", CHAT_HOST = "{host}", CHAT_DATA_DIR = "{copy:data}"}
+env = {CHAT_PORT = "{port:main}", CHAT_HOST = "{host}", CHAT_DATA_DIR = "{copy:data}", MINDS_APPS_FILE = "{registry}"}
 copies = {data = "data/.apps/chat"}
 health_path = "/api/health"
 open_path = "/?chat={key}"

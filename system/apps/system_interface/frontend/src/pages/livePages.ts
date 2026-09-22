@@ -452,6 +452,7 @@ export class LivePagesLayer implements PageDriver {
       return;
     }
     const ifPresent = payload.ifPresent === "new" ? "new" : "focus";
-    void this.store.openPathFromWindow(page.windowId, path, ifPresent);
+    if (payload.app !== undefined && typeof payload.app !== "string") return;
+    void this.store.openPathFromWindow(page.windowId, path, ifPresent, payload.app);
   }
 }

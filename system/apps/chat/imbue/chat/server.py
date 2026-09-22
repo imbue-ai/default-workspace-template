@@ -51,9 +51,11 @@ from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag
 from imbue.chat.documents import inject_chat_identity_meta_tags
 from imbue.chat.documents import inject_hostname_meta_tag
+from imbue.chat.documents import inject_meta_tag
 from imbue.chat.documents import inject_plugin_script_tags
 from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
+from imbue.chat.documents import inject_workspace_roots_meta_tag
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.file_serving import try_serve_file
@@ -1485,7 +1487,9 @@ def _inject_workspace_meta_tags(html_content: str, root_path: str) -> str:
     with_base_path = inject_base_path_meta_tag(html_content, root_path)
     with_hostname = inject_hostname_meta_tag(with_base_path)
     with_primary_agent = inject_primary_agent_id_meta_tag(with_hostname)
-    return inject_terminal_label_meta_tag(with_primary_agent, _terminal_origin_label())
+    with_roots = inject_workspace_roots_meta_tag(with_primary_agent)
+    with_files = inject_meta_tag(with_roots, "chat-files-label", read_origin_label(registry_path(), AppName("files")))
+    return inject_terminal_label_meta_tag(with_files, _terminal_origin_label())
 
 
 def _root_document() -> Response:

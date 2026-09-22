@@ -2,6 +2,7 @@ import m from "mithril";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
 import { openImageLightbox } from "./lightbox";
+import { prepareFileLinks, handleFileLinkClick } from "./file-links";
 import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
 
 const marked = new Marked({
@@ -125,13 +126,16 @@ function handleMarkdownImageClick(event: MouseEvent): void {
   if (target instanceof HTMLImageElement) {
     event.preventDefault();
     openImageLightbox(target.src, target.alt);
+    return;
   }
+  handleFileLinkClick(event);
 }
 
 export const MarkdownContent: m.Component<{ content: string; requestedAt?: string; expansionKeyPrefix?: string }> = {
   oncreate(vnode) {
     const element = vnode.dom as HTMLElement;
     element.innerHTML = renderMarkdown(vnode.attrs.content);
+    prepareFileLinks(element);
     wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
     if (vnode.attrs.requestedAt) {
       appendRequestedAt(element, vnode.attrs.requestedAt);
@@ -156,6 +160,7 @@ export const MarkdownContent: m.Component<{ content: string; requestedAt?: strin
     const element = vnode.dom as HTMLElement;
     const expanded = saveExpandedState(element);
     element.innerHTML = renderMarkdown(vnode.attrs.content);
+    prepareFileLinks(element);
     wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
     if (vnode.attrs.requestedAt) {
       appendRequestedAt(element, vnode.attrs.requestedAt);

@@ -323,3 +323,10 @@ per-thread arena they came from, so a long-lived chat app's RSS tracks the
 high-water mark of every arena at once rather than what it holds. The program's
 supervisord entry caps the arena count with `MALLOC_ARENA_MAX` so that
 high-water mark is summed over fewer arenas.
+
+## Message links
+
+Message links never replace the conversation. Workspace file links open the File
+Viewer in a separate workspace window; web links open a separate browser tab.
+The file viewer covers the workspace root, including `data/`, docs, app code,
+and skills. Image clicks retain their existing lightbox.

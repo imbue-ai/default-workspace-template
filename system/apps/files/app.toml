@@ -14,3 +14,9 @@ id = "new"
 label = "New File Viewer"
 path = "/"
 params = [{name = "path", label = "Path", required = false}]
+
+# A preview is read-only, rooted at its isolated workspace.
+[preview]
+command = ["dufs", "--bind", "{host}", "--port", "{port:main}", "--allow-search", "--assets", "system/apps/files/assets", "."]
+health_path = "/"
+open_path = "/"

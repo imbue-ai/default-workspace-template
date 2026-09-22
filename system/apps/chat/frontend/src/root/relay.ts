@@ -44,8 +44,9 @@ export type RootOpenDecision =
  */
 export function rootOpenDecision(data: unknown): RootOpenDecision {
   if (data === null || typeof data !== "object") return { kind: "not-an-open" };
-  const message = data as { type?: unknown; path?: unknown };
+  const message = data as { type?: unknown; path?: unknown; app?: unknown };
   if (message.type !== SHELL_OPEN) return { kind: "not-an-open" };
+  if (message.app !== undefined) return { kind: "forward" };
   if (typeof message.path !== "string") return { kind: "forward" };
   const target = new URL(message.path, "http://root.invalid");
   if (target.pathname !== "/") return { kind: "forward" };
