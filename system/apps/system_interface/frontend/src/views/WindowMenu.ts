@@ -7,10 +7,9 @@
  * section 4.4). Defined once so both menus render the identical list off the identical rule.
  */
 
+import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import type { AppRecord, EntryMode, PinStyle } from "../model/records";
 import type { EntryLook } from "../reducers/desktopState";
-import type { MenuEntry } from "./Menu";
-import { MENU_DIVIDER } from "./Menu";
 
 export interface WindowMenuActions {
   readonly refresh: () => void;
@@ -23,23 +22,35 @@ export interface WindowMenuActions {
 }
 
 /** The window menu's rows, in display order. */
-export function windowMenuEntries(app: AppRecord | undefined, actions: WindowMenuActions): MenuEntry[] {
-  const entries: MenuEntry[] = [{ key: "refresh", label: "Refresh", iconName: "refresh", run: actions.refresh }];
+export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuActions): MenuRow[] {
+  const rows: MenuRow[] = [
+    { kind: "action", key: "refresh", label: "Refresh", icon: "refresh", onSelect: actions.refresh },
+  ];
   if (actions.share !== null && app !== undefined) {
-    entries.push({ key: "share", label: `Share ${app.display_name}`, iconName: "user-plus", run: actions.share });
+    rows.push({
+      kind: "action",
+      key: "share",
+      label: `Share ${app.display_name}`,
+      icon: "user-plus",
+      onSelect: actions.share,
+    });
   }
   if (actions.setAppLifecycle !== null && app !== undefined) {
     const action = app.is_running ? "stop" : "start";
     const setAppLifecycle = actions.setAppLifecycle;
-    entries.push({
+    rows.push({
+      kind: "action",
       key: action,
       label: `${action === "stop" ? "Stop" : "Start"} ${app.display_name}`,
-      iconName: "power",
-      run: () => setAppLifecycle(action),
+      icon: "power",
+      onSelect: () => setAppLifecycle(action),
     });
   }
-  entries.push(MENU_DIVIDER, { key: "close", label: "Close", iconName: "close", run: actions.close });
-  return entries;
+  rows.push(
+    { kind: "divider" },
+    { kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close },
+  );
+  return rows;
 }
 
 /** The presentation verbs of a pinned entry's menu (pinned-taskbar-entries plan section 4.4). */
@@ -77,37 +88,52 @@ function styleLabel(style: PinStyle): string {
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size, then for a pinned entry Float
  *  or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and the
  *  avatar chooser while it shows the avatar, then Close. */
-export function taskbarEntryMenuEntries(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuEntry[] {
-  const entries: MenuEntry[] = [
+export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
+  const rows: MenuRow[] = [
     actions.isMinimized
-      ? { key: "restore", label: "Restore", run: actions.restore }
-      : { key: "minimize", label: "Minimize", run: actions.minimize },
+      ? { kind: "action", key: "restore", label: "Restore", onSelect: actions.restore }
+      : { kind: "action", key: "minimize", label: "Minimize", onSelect: actions.minimize },
   ];
   if (!isCompact) {
-    entries.push(
+    rows.push(
       actions.isMaximized
-        ? { key: "unmaximize", label: "Restore size", run: actions.unmaximize }
-        : { key: "maximize", label: "Maximize", run: actions.maximize },
+        ? { kind: "action", key: "unmaximize", label: "Restore size", onSelect: actions.unmaximize }
+        : { kind: "action", key: "maximize", label: "Maximize", onSelect: actions.maximize },
     );
   }
   const presentation = actions.presentation;
   if (presentation !== null) {
     const { look, setMode, setStyle, changeAvatar } = presentation;
-    const rows: MenuEntry[] = [];
+    const presentationRows: MenuRow[] = [];
     if (!isCompact) {
-      rows.push(
+      presentationRows.push(
         look.mode === "floating"
-          ? { key: "move-to-taskbar", label: "Move to taskbar", run: () => setMode("bar") }
-          : { key: "float", label: "Float", run: () => setMode("floating") },
+          ? { kind: "action", key: "move-to-taskbar", label: "Move to taskbar", onSelect: () => setMode("bar") }
+          : { kind: "action", key: "float", label: "Float", onSelect: () => setMode("floating") },
       );
     }
     if (look.declaredStyle !== "plain") {
       const other: PinStyle = look.style === "plain" ? look.declaredStyle : "plain";
-      rows.push({ key: `style-${other}`, label: styleLabel(other), run: () => setStyle(other) });
+      presentationRows.push({
+        kind: "action",
+        key: `style-${other}`,
+        label: styleLabel(other),
+        onSelect: () => setStyle(other),
+      });
     }
-    if (look.style === "avatar") rows.push({ key: "change-avatar", label: "Change avatar...", run: changeAvatar });
-    if (rows.length > 0) entries.push(MENU_DIVIDER, ...rows);
+    if (look.style === "avatar") {
+      presentationRows.push({
+        kind: "action",
+        key: "change-avatar",
+        label: "Change avatar...",
+        onSelect: changeAvatar,
+      });
+    }
+    if (presentationRows.length > 0) rows.push({ kind: "divider" }, ...presentationRows);
   }
-  entries.push(MENU_DIVIDER, { key: "close", label: "Close", iconName: "close", run: actions.close });
-  return entries;
+  rows.push(
+    { kind: "divider" },
+    { kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close },
+  );
+  return rows;
 }

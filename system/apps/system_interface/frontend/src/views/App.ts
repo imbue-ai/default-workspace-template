@@ -8,6 +8,10 @@
  */
 
 import m from "mithril";
+import { createMenu } from "@imbue/workspace-ui/src/components/menu";
+import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
+import type { MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { fetchWallpapers } from "../model/api";
 import { launchPathOf } from "../model/launch";
@@ -47,22 +51,25 @@ import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
 import type { LauncherWindowRow } from "./LauncherOverlay";
-import { Menu, anchorForEvent, anchorForPoint } from "./Menu";
-import type { MenuAnchor, MenuEntry } from "./Menu";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
-import { taskbarEntryMenuEntries, windowMenuEntries } from "./WindowMenu";
+import { taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
 
+/** Which menu is open and what it was opened for. Where it sits, and everything about taking it
+ *  down, belongs to the menu component itself. */
 type OpenMenu =
-  | { readonly kind: "window"; readonly windowId: string; readonly anchor: MenuAnchor }
-  | { readonly kind: "entry"; readonly windowId: string; readonly anchor: MenuAnchor }
-  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly anchor: MenuAnchor }
-  | { readonly kind: "desktops"; readonly anchor: MenuAnchor }
-  | { readonly kind: "desktop"; readonly desktopId: string; readonly anchor: MenuAnchor };
+  | { readonly kind: "window"; readonly windowId: string }
+  | { readonly kind: "entry"; readonly windowId: string }
+  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut }
+  | { readonly kind: "desktops" }
+  | { readonly kind: "desktop"; readonly desktopId: string };
+
+/** The width the desktop's menus never go under, so a menu of two-word verbs is still a card. */
+const MENU_MIN_WIDTH = 176;
 
 interface SettingsDialogState {
   readonly desktopId: string;
@@ -96,8 +103,27 @@ export function App(): m.Component<AppAttrs> {
   let detachGestures: (() => void) | null = null;
   let store: DesktopStore | null = null;
 
-  function closeMenu(): void {
-    openMenu = null;
+  // The one menu the desktop ever has open. Which menu it is and what it was opened for is
+  // ``openMenu``; opening, placing, dismissing and closing are the component's, and its
+  // ``onClose`` is what keeps the two from drifting apart.
+  const menu = createMenu({
+    placement: "below",
+    role: "menu",
+    minWidth: MENU_MIN_WIDTH,
+    // The marker class each menu is known by. Read off the open menu on every render, so one
+    // component can wear all five names.
+    get extraClass(): string | undefined {
+      return openMenu === null ? undefined : `${openMenu.kind}-menu`;
+    },
+    onClose: () => {
+      openMenu = null;
+    },
+  });
+
+  /** Show ``next``'s menu against ``anchor``. */
+  function openMenuAt(next: OpenMenu, anchor: MenuAnchor): void {
+    openMenu = next;
+    menu.open(anchor);
   }
 
   function closeLauncher(): void {
@@ -107,8 +133,8 @@ export function App(): m.Component<AppAttrs> {
   const onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
     // One layer per Escape: a dialog up over the launcher (the template detail) takes it through the
-    // Modal's own listener, a floating menu through the FloatingCard's, and the layer under it stays.
-    if (document.querySelector(".modal-overlay, [data-floating]") !== null) return;
+    // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
+    if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
     if (store?.isLauncherOpen() === true) {
       closeLauncher();
       m.redraw();
@@ -263,21 +289,21 @@ export function App(): m.Component<AppAttrs> {
         switch (binding.kind) {
           case "window-move":
           case "window-resize":
-            openMenu = { kind: "window", windowId: binding.windowId, anchor };
+            openMenuAt({ kind: "window", windowId: binding.windowId }, anchor);
             break;
           case "shortcut": {
             const shortcut = activeDesktop(current.getState())?.shortcuts.find(
               (candidate) => candidate.target.app === binding.app && candidate.target.launch === binding.launch,
             );
-            if (shortcut !== undefined) openMenu = { kind: "shortcut", shortcut, anchor };
+            if (shortcut !== undefined) openMenuAt({ kind: "shortcut", shortcut }, anchor);
             break;
           }
           case "taskbar-entry":
-            openMenu = { kind: "entry", windowId: binding.windowId, anchor };
+            openMenuAt({ kind: "entry", windowId: binding.windowId }, anchor);
             break;
           case "floating-entry": {
             const windowId = pinnedWindowIdOf(binding.app);
-            if (windowId !== null) openMenu = { kind: "entry", windowId, anchor };
+            if (windowId !== null) openMenuAt({ kind: "entry", windowId }, anchor);
             break;
           }
         }
@@ -286,12 +312,12 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  function windowMenu(current: DesktopStore, windowId: string, anchor: MenuAnchor): m.Children {
+  function rowsOfWindowMenu(current: DesktopStore, windowId: string): MenuRow[] | null {
     const state = current.getState();
     const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) return null;
     const app = appByName(state, window.app);
-    const entries = windowMenuEntries(app, {
+    return windowMenuRows(app, {
       refresh: () => current.refreshWindow(windowId),
       share:
         app === undefined || app.critical
@@ -303,28 +329,15 @@ export function App(): m.Component<AppAttrs> {
           : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });
-    return m(Menu, {
-      anchor,
-      placement: "below",
-      marker: "window-menu",
-      entries,
-      onClose: closeMenu,
-      isInsideTrigger: isWindowMenuButton,
-    });
   }
 
-  /** The kebab that opened the window menu: its press must not close the card before its click toggles it. */
-  function isWindowMenuButton(target: Node): boolean {
-    return target instanceof Element && target.closest('[data-window-control="menu"]') !== null;
-  }
-
-  function entryMenu(current: DesktopStore, windowId: string, anchor: MenuAnchor): m.Children {
+  function rowsOfEntryMenu(current: DesktopStore, windowId: string): MenuRow[] | null {
     const state = current.getState();
     const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) return null;
     const placement = placementOf(state.layout, windowId);
     const look = entryLook(state, window, appByName(state, window.app));
-    const entries = taskbarEntryMenuEntries(
+    return taskbarEntryMenuRows(
       {
         isMinimized: placement.is_minimized,
         isMaximized: placement.state === "MAXIMIZED",
@@ -345,10 +358,9 @@ export function App(): m.Component<AppAttrs> {
       },
       state.modes.isCompact,
     );
-    return m(Menu, { anchor, placement: "below", marker: "entry-menu", entries, onClose: closeMenu });
   }
 
-  function shortcutMenu(current: DesktopStore, opened: DesktopShortcut, anchor: MenuAnchor): m.Children {
+  function rowsOfShortcutMenu(current: DesktopStore, opened: DesktopShortcut): MenuRow[] | null {
     const state = current.getState();
     const desktop = activeDesktop(state);
     // The record as it is now (its mode may have flipped elsewhere), and nothing once it is removed.
@@ -360,49 +372,56 @@ export function App(): m.Component<AppAttrs> {
     const launchPath = app === undefined ? null : launchPathOf(app, shortcut.target.launch);
     const recent = app === undefined ? null : mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     const otherMode = shortcut.mode === "focus" ? "new" : "focus";
-    const entries: MenuEntry[] = [{ key: "open", label: "Open", run: () => void current.runShortcut(shortcut) }];
+    const rows: MenuRow[] = [
+      { kind: "action", key: "open", label: "Open", onSelect: () => void current.runShortcut(shortcut) },
+    ];
     if (shortcut.mode === "focus" && launchPath !== null) {
-      entries.push({
+      rows.push({
+        kind: "action",
         key: "open-new",
         label: launchPath.label,
-        run: () => void current.runLaunch(shortcut.target.app, shortcut.target.launch, "new"),
+        onSelect: () => void current.runLaunch(shortcut.target.app, shortcut.target.launch, "new"),
       });
     } else if (shortcut.mode === "new" && app !== undefined) {
-      entries.push({
+      rows.push({
+        kind: "action",
         key: "focus-last",
         label: `Focus last ${app.display_name}`,
         isDisabled: recent === null,
-        run: () => {
+        onSelect: () => {
           if (recent !== null) current.raiseWindow(recent.id);
         },
       });
     }
-    entries.push(
+    rows.push(
       {
+        kind: "action",
         key: "change-mode",
         label: otherMode === "new" ? "Always open a new window" : "Focus the last window instead",
-        run: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
+        onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
-      "divider",
+      { kind: "divider" },
       {
+        kind: "action",
         key: "remove",
         label: "Remove",
-        iconName: "trash",
-        isDestructive: true,
-        run: () => void current.removeShortcut(shortcut.target.app, shortcut.target.launch),
+        icon: "trash",
+        tone: "danger",
+        onSelect: () => void current.removeShortcut(shortcut.target.app, shortcut.target.launch),
       },
     );
-    return m(Menu, { anchor, placement: "below", marker: "shortcut-menu", entries, onClose: closeMenu });
+    return rows;
   }
 
-  function desktopsMenu(current: DesktopStore, anchor: MenuAnchor): m.Children {
+  function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
     const state = current.getState();
     const active = state.activeDesktopId;
-    const entries: MenuEntry[] = [
+    return [
       {
+        kind: "action",
         key: "new-desktop",
         label: "New desktop",
-        run: () => {
+        onSelect: () => {
           const glyphIndex = nextGlyphIndex(
             state.desktops.map((desktop) => desktop.glyph),
             SQUIGGLE_GLYPHS.length,
@@ -410,43 +429,59 @@ export function App(): m.Component<AppAttrs> {
           void current.createDesktop(nextDesktopName(state.desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
         },
       },
-      "divider",
+      { kind: "divider" },
       {
+        kind: "action",
         key: "settings",
         label: "Desktop settings...",
         isDisabled: active === null,
-        run: () => openSettings(active, false),
+        onSelect: () => openSettings(active, false),
       },
       {
+        kind: "action",
         key: "delete",
         label: "Delete desktop...",
-        isDestructive: true,
+        tone: "danger",
         isDisabled: active === null,
-        run: () => openSettings(active, true),
+        onSelect: () => openSettings(active, true),
       },
     ];
-    return m(Menu, {
-      anchor,
-      placement: "below",
-      marker: "desktops-menu",
-      entries,
-      onClose: closeMenu,
-      isInsideTrigger: isDesktopsMenuButton,
-    });
   }
 
-  function desktopMenu(current: DesktopStore, desktopId: string, anchor: MenuAnchor): m.Children {
-    const entries: MenuEntry[] = [
-      { key: "switch", label: "Switch to this desktop", run: () => void current.switchDesktop(desktopId) },
-      { key: "settings", label: "Settings...", run: () => openSettings(desktopId, false) },
-      "divider",
-      { key: "delete", label: "Delete...", isDestructive: true, run: () => openSettings(desktopId, true) },
+  function rowsOfDesktopMenu(current: DesktopStore, desktopId: string): MenuRow[] {
+    return [
+      {
+        kind: "action",
+        key: "switch",
+        label: "Switch to this desktop",
+        onSelect: () => void current.switchDesktop(desktopId),
+      },
+      { kind: "action", key: "settings", label: "Settings...", onSelect: () => openSettings(desktopId, false) },
+      { kind: "divider" },
+      {
+        kind: "action",
+        key: "delete",
+        label: "Delete...",
+        tone: "danger",
+        onSelect: () => openSettings(desktopId, true),
+      },
     ];
-    return m(Menu, { anchor, placement: "below", marker: "desktop-menu", entries, onClose: closeMenu });
   }
 
-  function isDesktopsMenuButton(target: Node): boolean {
-    return target instanceof Element && target.closest("[data-desktops-menu]") !== null;
+  /** The rows of whichever menu is open, or null once what it was opened for has gone. */
+  function rowsOfOpenMenu(current: DesktopStore, open: OpenMenu): MenuRow[] | null {
+    switch (open.kind) {
+      case "window":
+        return rowsOfWindowMenu(current, open.windowId);
+      case "entry":
+        return rowsOfEntryMenu(current, open.windowId);
+      case "shortcut":
+        return rowsOfShortcutMenu(current, open.shortcut);
+      case "desktops":
+        return rowsOfDesktopsMenu(current);
+      case "desktop":
+        return rowsOfDesktopMenu(current, open.desktopId);
+    }
   }
 
   function openSettings(desktopId: string | null, isDeleting: boolean): void {
@@ -574,10 +609,11 @@ export function App(): m.Component<AppAttrs> {
         void current.closeOrMinimizeWindow(windowId);
         return;
       case "menu":
-        openMenu =
-          openMenu?.kind === "window" && openMenu.windowId === windowId
-            ? null
-            : { kind: "window", windowId, anchor: anchorForEvent(event) };
+        // A press while this menu is up lands on the menu's own sheet and closes it there, so the
+        // click that reaches the kebab is almost always the opening one; the toggle stands for the
+        // keyboard, which has no press to swallow.
+        if (openMenu?.kind === "window" && openMenu.windowId === windowId) menu.close();
+        else openMenuAt({ kind: "window", windowId }, anchorForEvent(event));
         return;
     }
   }
@@ -597,6 +633,8 @@ export function App(): m.Component<AppAttrs> {
     onremove() {
       document.removeEventListener("keydown", onDocumentKeyDown);
       document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+      // A menu still open here would keep its own window listeners for good.
+      menu.dispose();
       detachGestures?.();
       resizeObserver?.disconnect();
     },
@@ -611,8 +649,9 @@ export function App(): m.Component<AppAttrs> {
       // A pinned entry answers the same way in the bar and afloat.
       const onEntryClick = (windowId: string): void => current.toggleTaskbarEntry(windowId);
       const onEntryContextMenu = (windowId: string, x: number, y: number): void => {
-        openMenu = { kind: "entry", windowId, anchor: anchorForPoint(x, y) };
+        openMenuAt({ kind: "entry", windowId }, anchorForPoint(x, y));
       };
+      const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
       return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
         m(UpdateStalenessBanner),
         m(
@@ -655,7 +694,7 @@ export function App(): m.Component<AppAttrs> {
                   },
                   onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
                   onShortcutContextMenu: (shortcut, point) => {
-                    openMenu = { kind: "shortcut", shortcut, anchor: anchorForPoint(point.x, point.y) };
+                    openMenuAt({ kind: "shortcut", shortcut }, anchorForPoint(point.x, point.y));
                   },
                   onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
                   onPagesHostCreated: (host) => {
@@ -704,20 +743,17 @@ export function App(): m.Component<AppAttrs> {
             isDesktopsMenuOpen: openMenu?.kind === "desktops",
             onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
             onOpenDesktopsMenu: (event) => {
-              openMenu = openMenu?.kind === "desktops" ? null : { kind: "desktops", anchor: anchorForEvent(event) };
+              if (openMenu?.kind === "desktops") menu.close();
+              else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
             },
             onDesktopContextMenu: (desktopId, x, y) => {
-              openMenu = { kind: "desktop", desktopId, anchor: anchorForPoint(x, y) };
+              openMenuAt({ kind: "desktop", desktopId }, anchorForPoint(x, y));
             },
           },
           onEntryClick,
           onEntryContextMenu,
         }),
-        openMenu?.kind === "window" ? windowMenu(current, openMenu.windowId, openMenu.anchor) : null,
-        openMenu?.kind === "entry" ? entryMenu(current, openMenu.windowId, openMenu.anchor) : null,
-        openMenu?.kind === "shortcut" ? shortcutMenu(current, openMenu.shortcut, openMenu.anchor) : null,
-        openMenu?.kind === "desktops" ? desktopsMenu(current, openMenu.anchor) : null,
-        openMenu?.kind === "desktop" ? desktopMenu(current, openMenu.desktopId, openMenu.anchor) : null,
+        menuRows === null ? null : menu.view(menuRows),
         settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
         avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
       ]);

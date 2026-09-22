@@ -552,13 +552,13 @@ def _open_launcher(page: Page) -> Locator:
 
 def _open_desktops_menu(page: Page) -> None:
     page.locator("[data-desktops-menu]").click()
-    expect(page.locator('[data-floating="desktops-menu"]')).to_be_visible(timeout=5000)
+    expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
 
 
 def _open_entry_menu(page: Page, entry: Locator) -> Locator:
     """Right-click a taskbar or floating entry, answering its open menu."""
     entry.click(button="right")
-    menu = page.locator('[data-floating="entry-menu"]')
+    menu = page.locator(".entry-menu")
     expect(menu).to_be_visible(timeout=5000)
     return menu
 
@@ -662,8 +662,8 @@ def test_focus_shortcut_raises_the_existing_window_and_its_menu_opens_another(
     _assert_no_further_window(page, e2e_server, [first])
 
     page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
-    expect(page.locator('[data-floating="shortcut-menu"]')).to_be_visible(timeout=5000)
-    page.locator('[data-menu-item="open-new"]').click()
+    expect(page.locator(".shortcut-menu")).to_be_visible(timeout=5000)
+    page.locator('[data-menu-row="open-new"]').click()
     windows = _wait_for_window_count(e2e_server.base_url, 2)
     assert {window["path"] for window in windows} == {_STUB_LAUNCH_PATH}
     expect(_shown_windows(page)).to_have_count(2, timeout=15000)
@@ -943,7 +943,7 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     first = _open_via_shortcut(page, e2e_server)
     _move_window_off_the_shortcuts(page, first)
     page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
-    page.locator('[data-menu-item="open-new"]').click()
+    page.locator('[data-menu-row="open-new"]').click()
     windows = _wait_for_window_count(e2e_server.base_url, 2)
     (second,) = [window["id"] for window in windows if window["id"] != first]
     expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
@@ -1088,7 +1088,7 @@ def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Pag
     _land(page, e2e_server)
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
     shortcut.click(button="right")
-    page.locator('[data-menu-item="change-mode"]').click()
+    page.locator('[data-menu-row="change-mode"]').click()
     wait_for(
         lambda: _desktop(e2e_server.base_url)["shortcuts"][0]["mode"] == "new",
         timeout=10.0,
@@ -1098,7 +1098,7 @@ def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Pag
     expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
 
     shortcut.click(button="right")
-    page.locator('[data-menu-item="remove"]').click()
+    page.locator('[data-menu-row="remove"]').click()
     expect(shortcut).to_have_count(0, timeout=10000)
     wait_for(
         lambda: _desktop(e2e_server.base_url)["shortcuts"] == [],
@@ -1117,7 +1117,7 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     home_window = _open_via_shortcut(page, e2e_server)
 
     _open_desktops_menu(page)
-    page.locator('[data-menu-item="new-desktop"]').click()
+    page.locator('[data-menu-row="new-desktop"]').click()
     wait_for(
         lambda: len(_desktops(e2e_server.base_url)) == 2,
         timeout=10.0,
@@ -1131,7 +1131,7 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     expect(_taskbar_entry(page, home_window)).to_have_count(0)
 
     _open_desktops_menu(page)
-    page.locator('[data-menu-item="settings"]').click()
+    page.locator('[data-menu-row="settings"]').click()
     dialog = page.locator(f'[data-desktop-settings="{created["id"]}"]')
     expect(dialog).to_be_visible(timeout=5000)
     dialog.locator('input[placeholder="desktop name"]').fill("Research")
@@ -1151,7 +1151,7 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     expect(_taskbar_entry(page, home_window)).to_have_count(0, timeout=15000)
 
     _open_desktops_menu(page)
-    page.locator('[data-menu-item="delete"]').click()
+    page.locator('[data-menu-row="delete"]').click()
     expect(dialog).to_be_visible(timeout=5000)
     dialog.locator(".desktop-settings-confirm-delete").click()
     wait_for(
@@ -1217,12 +1217,12 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         entry.click()
         expect(window).to_be_visible(timeout=15000)
         window.locator('[data-window-control="menu"]').click()
-        expect(page.locator('[data-floating="window-menu"]')).to_be_visible(timeout=5000)
-        page.locator('[data-floating="window-menu"] [data-menu-item="close"]').click()
+        expect(page.locator(".window-menu")).to_be_visible(timeout=5000)
+        page.locator('.window-menu [data-menu-row="close"]').click()
         expect(_shown_windows(page)).to_have_count(0)
         entry.click()
         expect(window).to_be_visible(timeout=15000)
-        _open_entry_menu(page, entry).locator('[data-menu-item="close"]').click()
+        _open_entry_menu(page, entry).locator('[data-menu-row="close"]').click()
         expect(_shown_windows(page)).to_have_count(0)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
         entry.click()
@@ -1254,7 +1254,7 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
 
         # A new desktop is born with its own pinned window, and an open at the home path finds it.
         _open_desktops_menu(page)
-        page.locator('[data-menu-item="new-desktop"]').click()
+        page.locator('[data-menu-row="new-desktop"]').click()
         wait_for(
             lambda: len(_desktops(server.base_url)) == 2,
             timeout=10.0,
@@ -1412,8 +1412,8 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
 
         menu = _open_entry_menu(page, _pinned_entry(page))
-        expect(menu.locator('[data-menu-item="close"]')).to_have_count(1)
-        menu.locator('[data-menu-item="move-to-taskbar"]').click()
+        expect(menu.locator('[data-menu-row="close"]')).to_have_count(1)
+        menu.locator('[data-menu-row="move-to-taskbar"]').click()
         expect(_taskbar_entry(page, pinned["id"])).to_be_visible(timeout=10000)
         expect(_taskbar_entry(page, pinned["id"])).to_have_attribute("data-entry-mode", "bar")
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(0)
@@ -1423,7 +1423,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
             lambda entry: entry.get("mode") == "bar",
             "the mode never reached the client record",
         )
-        _open_entry_menu(page, _taskbar_entry(page, pinned["id"])).locator('[data-menu-item="float"]').click()
+        _open_entry_menu(page, _taskbar_entry(page, pinned["id"])).locator('[data-menu-row="float"]').click()
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
         _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
@@ -1474,7 +1474,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         expect(entry).to_have_attribute("data-mood", "idle", timeout=15000)
 
         # The plain style shows the app's icon in place of the avatar; the pin's style brings the image back.
-        _open_entry_menu(page, entry).locator('[data-menu-item="style-plain"]').click()
+        _open_entry_menu(page, entry).locator('[data-menu-row="style-plain"]').click()
         expect(entry).to_have_attribute("data-entry-style", "plain", timeout=10000)
         expect(entry.locator("svg")).to_have_count(1)
         expect(entry.locator("img")).to_have_count(0)
@@ -1484,7 +1484,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             lambda entry: entry.get("style") == "plain",
             "the style never reached the client record",
         )
-        _open_entry_menu(page, entry).locator('[data-menu-item="style-avatar"]').click()
+        _open_entry_menu(page, entry).locator('[data-menu-row="style-avatar"]').click()
         expect(entry).to_have_attribute("data-entry-style", "avatar", timeout=10000)
         expect(entry.locator("img")).to_have_count(1)
 
@@ -1495,7 +1495,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             # create at the draft path: the case a user with the chat open is in.
             entry.click()
             expect(_window(page, _pinned_window(server.base_url)["id"])).to_be_visible(timeout=15000)
-            _open_entry_menu(page, entry).locator('[data-menu-item="change-avatar"]').click()
+            _open_entry_menu(page, entry).locator('[data-menu-row="change-avatar"]').click()
             chooser = page.locator("[data-avatar-chooser]")
             expect(chooser).to_be_visible(timeout=5000)
             expect(chooser.locator('[data-avatar-design="gummy-seal"]')).to_have_attribute("aria-pressed", "true")
@@ -1551,7 +1551,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
                 poll_interval=0.1,
                 error_message="the page's own report never replaced the draft path",
             )
-            _open_entry_menu(page, entry).locator('[data-menu-item="change-avatar"]').click()
+            _open_entry_menu(page, entry).locator('[data-menu-row="change-avatar"]').click()
             expect(chooser).to_be_visible(timeout=5000)
             chooser.locator(".avatar-design-own").click()
             wait_for(
@@ -1586,9 +1586,9 @@ def test_a_phone_shows_a_floating_entry_in_the_bar_without_rewriting_its_mode(tm
             phone_entry.dispatch_event(
                 "pointerdown", {"pointerType": "touch", "button": 0, "buttons": 1, "pointerId": 3, "bubbles": True}
             )
-            expect(phone_page.locator('[data-floating="entry-menu"]')).to_be_visible(timeout=5000)
-            expect(phone_page.locator('[data-floating="entry-menu"] [data-menu-item="float"]')).to_have_count(0)
-            expect(phone_page.locator('[data-floating="entry-menu"] [data-menu-item="close"]')).to_have_count(1)
+            expect(phone_page.locator(".entry-menu")).to_be_visible(timeout=5000)
+            expect(phone_page.locator('.entry-menu [data-menu-row="float"]')).to_have_count(0)
+            expect(phone_page.locator('.entry-menu [data-menu-row="close"]')).to_have_count(1)
             phone_page.keyboard.press("Escape")
             assert _client_entries(server.base_url, _client_id(phone_page)) == {}
         expect(_pinned_entry(page)).to_have_attribute("data-entry-mode", "floating")

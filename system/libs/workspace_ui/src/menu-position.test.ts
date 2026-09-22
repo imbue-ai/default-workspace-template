@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isInSafeTriangle, placeMenu, placeSubmenu } from "./menu-position";
+import { anchorForPoint, isInSafeTriangle, placeMenu, placeSubmenu } from "./menu-position";
 
 const VIEWPORT = { width: 1000, height: 800 };
 const SIZE = { width: 200, height: 100 };
@@ -146,5 +146,13 @@ describe("isInSafeTriangle", () => {
   it("holds nothing off the line when the submenu has no height to aim at", () => {
     const flat = { edgeX: 700, top: 500, bottom: 500 };
     expect(isInSafeTriangle({ x: 600, y: 520 }, { x: 500, y: 550 }, flat)).toBe(false);
+  });
+});
+
+describe("anchorForPoint", () => {
+  it("stands a menu on a bare point, with no width to align to", () => {
+    expect(anchorForPoint(120, 80)).toEqual({ left: 120, right: 120, top: 80, bottom: 80, width: 0 });
+    // A context menu hangs under the point it was opened at, its left edge on it.
+    expect(placeMenu(anchorForPoint(120, 80), SIZE, VIEWPORT, "below")).toEqual({ left: 120, top: 84 });
   });
 });

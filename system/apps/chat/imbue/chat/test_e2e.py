@@ -635,8 +635,8 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         home_window = _the_chat_window(server)["id"]
 
         page.locator("[data-desktops-menu]").click()
-        expect(page.locator('[data-floating="desktops-menu"]')).to_be_visible(timeout=5000)
-        page.locator('[data-menu-item="new-desktop"]').click()
+        expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
+        page.locator('[data-menu-row="new-desktop"]').click()
         wait_for(lambda: len(_desktops(server)) == 2, timeout=10.0, poll_interval=0.1)
         (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != _HOME_DESKTOP_ID]
         expect(page.locator(f'[data-desktop-id="{created}"]')).to_be_visible(timeout=15000)
