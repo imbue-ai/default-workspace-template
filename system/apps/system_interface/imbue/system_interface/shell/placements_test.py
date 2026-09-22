@@ -77,11 +77,7 @@ def test_layouts_are_deleted_per_desktop_and_per_client(tmp_path: Path) -> None:
     for desktop_id in ("home", "alpha"):
         for client_id in ("c1", "c2"):
             store.edit_layout(
-                desktop_id,
-                client_id,
-                _LIVE,
-                lambda layout: with_window_placed_on_open(layout, _WIN_1, False),
-                TEST_NOW,
+                desktop_id, client_id, _LIVE, lambda layout: with_window_placed_on_open(layout, _WIN_1, False), TEST_NOW
             )
     assert [str(stored.client_id) for stored in store.layouts_of_desktop("home")] == ["c1", "c2"]
     store.delete_desktop_layouts("home")
