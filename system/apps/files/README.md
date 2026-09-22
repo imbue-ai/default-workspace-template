@@ -15,8 +15,8 @@ for every other registered app.
 
 ## Opening a folder
 
-The manifest's one launch path is `/` with an optional `path` param, so the shell
-opens a file viewer window at `/?path=<workspace-relative-folder>` (`layout.py open files --path
+The manifest's one launch path is `/data/` with an optional `path` param, so the shell
+opens a file viewer window at `/data/?path=<workspace-relative-folder>` (`layout.py open files --path
 /data/notes/` is the same thing). dufs ignores the query; the vendored frontend
 takes the frame to the folder itself (see below) and then reports that folder as
 its location, so the window's stored path follows and a reload reopens the
@@ -59,3 +59,5 @@ changes, patch or re-vendor alike.
 `system/test_supervisord_layout.py` the program block.
 
 Chat file links open a separate File Viewer window at the file's workspace-relative path with `?view`, leaving the conversation in place. Absolute workspace paths and relative links are supported. Files outside the workspace keep the chat's existing download behavior in a separate tab.
+
+Home and new File Viewer windows open `data/`, the original user-files folder. The Workspace shortcut opens the broader workspace root; file links may open either area directly.
