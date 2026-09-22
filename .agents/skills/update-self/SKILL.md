@@ -410,7 +410,7 @@ npm files count as both `system_interface` and `chat`). Take them all or none,
 as that reference says: check each one in `tk ready`, take them in name order
 (`tk create "editing critical app <name>" -t chore`, then `tk start` it, each
 as its own command), and if any is held by another agent, release the ones you
-took before surfacing it. Release them afterwards.
+took and surface it instead of proceeding. Release them afterwards.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
