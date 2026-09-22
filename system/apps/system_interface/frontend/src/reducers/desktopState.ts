@@ -365,7 +365,9 @@ export function windowShowingChat(
   }
   for (const desktop of state.desktops) {
     if (desktop.id === state.activeDesktopId) continue;
-    const window = desktop.windows.find((candidate) => candidate.app === app && isPathShowingChat(candidate.path, chatId));
+    const window = desktop.windows.find(
+      (candidate) => candidate.app === app && isPathShowingChat(candidate.path, chatId),
+    );
     if (window !== undefined) return { desktop, window };
   }
   return null;
@@ -378,8 +380,7 @@ export function chatRootWindowOf(state: DesktopState, app: string): WindowRecord
   if (desktop === null) return null;
   const placements = activePlacements(state);
   const onScreen = frontToBackWindowsOf(state, desktop, app).find(
-    (window) =>
-      !isWindowMinimized(placements, window.id) && isChatRootPath(effectiveWindow(state, window).path),
+    (window) => !isWindowMinimized(placements, window.id) && isChatRootPath(effectiveWindow(state, window).path),
   );
   return onScreen ?? pinnedWindowOf(state, app);
 }

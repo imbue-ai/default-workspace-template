@@ -1104,7 +1104,11 @@ describe("focus-chat", () => {
     ];
     api.writeLayout("home", CLIENT, {
       updated_at: null,
-      placements: [placementRecord("win-9", { is_minimized: true }), placementRecord("win-5"), placementRecord("win-6")],
+      placements: [
+        placementRecord("win-9", { is_minimized: true }),
+        placementRecord("win-5"),
+        placementRecord("win-6"),
+      ],
     });
     const store = await chatStore();
     expect(await store.focusChat("chat-7")).toBe(true);
