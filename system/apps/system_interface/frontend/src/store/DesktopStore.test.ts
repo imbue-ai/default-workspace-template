@@ -1071,10 +1071,11 @@ describe("focus-chat", () => {
     expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
   });
 
-  it("reads a chat root window with the chat selected as showing it, and no other app's window", async () => {
+  it("reads a chat root window with the chat selected as showing it, frontmost first, and no other app's window", async () => {
     api.desktops = [
       desktopRecord("home", {
         windows: [
+          windowRecord("win-4", "buddy", "/chat-7"),
           windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
           windowRecord("win-5", "buddy", "/?chat=chat-7"),
           windowRecord("win-1", "docs", "/?chat=chat-7"),
@@ -1083,7 +1084,12 @@ describe("focus-chat", () => {
     ];
     api.writeLayout("home", CLIENT, {
       updated_at: null,
-      placements: [placementRecord("win-9"), placementRecord("win-5"), placementRecord("win-1")],
+      placements: [
+        placementRecord("win-4"),
+        placementRecord("win-9"),
+        placementRecord("win-5"),
+        placementRecord("win-1"),
+      ],
     });
     const store = await chatStore();
     expect(await store.focusChat("chat-7")).toBe(true);
