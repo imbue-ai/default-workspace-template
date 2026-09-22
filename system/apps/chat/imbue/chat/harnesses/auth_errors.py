@@ -18,8 +18,9 @@ filled in as `False` with a comment saying the shape was unknown:
   auth error code: invalid_api_key`.
 * pi writes an assistant message with `stopReason: "error"` and `errorMessage` holding the
   provider's raw body: `401 {"type":"error","error":{"type":"authentication_error", ...}}`.
-* agy prints `Please sign in to view available models.` from its own commands, and surfaces a
-  provider 401 in its error steps.
+* agy prints `Please sign in to view available models.` from its own commands, surfaces a
+  provider 401 in its error steps, and reports a spent subscription as `Individual quota
+  reached. Please upgrade your subscription to increase your limits. Resets in <duration>.`
 
 The patterns are deliberately broad on the http status and the provider's own error type,
 because those are the parts that do not change when a provider rewords its prose.
@@ -61,6 +62,16 @@ _SOURCES: Final[tuple[str, ...]] = (
     r"credit balance is too low",
     r"usage_limit_exceeded",
     r"exceeded your current quota",
+    # agy's wording for a spent subscription entitlement, served by its backend rather than
+    # built into the CLI: "Individual quota reached. Please upgrade your subscription to
+    # increase your limits. Resets in 57h47m8s." It carries neither an HTTP status nor a
+    # structured error type, so without these two it matched nothing here OR in
+    # `error_patterns`, and a quota-exhausted agy chat rendered as ordinary assistant prose
+    # with no re-auth offered. "quota reached" rather than the broader "quota exceeded":
+    # Google also says "exceeded" for a per-MINUTE limit, which clears on its own and is a
+    # rate limit, not a dead end.
+    r"\bquota reached\b",
+    r"upgrade your (?:subscription|plan)\b",
     # LiteLLM proxy rejections. The Imbue sign-in mode routes claude through a proxy with a
     # per-key rolling budget; exhausting it is the same dead end.
     r"budget has been exceeded",

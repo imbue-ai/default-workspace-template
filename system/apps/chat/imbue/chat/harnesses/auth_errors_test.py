@@ -43,6 +43,10 @@ def test_a_credential_failure_is_recognised(text: str) -> None:
     [
         pytest.param("", id="empty"),
         pytest.param("rate limit exceeded, please try again in 30s", id="rate-limit"),
+        pytest.param(
+            "Quota exceeded for quota metric 'requests' and limit 'requests per minute'",
+            id="per-minute-quota",
+        ),
         pytest.param("Connection reset by peer", id="network"),
         pytest.param("500 Internal Server Error", id="server-fault"),
         pytest.param("I cannot help with that request.", id="model-refusal"),
@@ -65,6 +69,11 @@ def test_an_error_signing_in_cannot_fix_is_not_flagged(text: str) -> None:
         pytest.param("ExceededBudget", id="litellm-budget-code"),
         pytest.param("Authentication Error, Invalid proxy server token passed", id="litellm-proxy-token"),
         pytest.param("usage_limit_exceeded", id="codex-quota"),
+        pytest.param(
+            "Individual quota reached. Please upgrade your subscription to increase your limits. "
+            "Resets in 57h47m8s.",
+            id="agy-quota-reached",
+        ),
     ],
 )
 def test_folded_claude_and_quota_patterns(text: str) -> None:

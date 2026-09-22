@@ -48,6 +48,29 @@ _HUMAN_SOURCE: Final[str] = "USER_EXPLICIT"
 # ``<ADDITIONAL_METADATA>`` / ``<USER_SETTINGS_CHANGE>`` trailers we strip.
 _USER_REQUEST_RE: Final[re.Pattern[str]] = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.DOTALL)
 
+# agy's own auto-continue nudge -- a string constant compiled into the agy binary, found at
+# byte offset 93974880 of agy 1.1.20: "The stream was interrupted. Please continue the task
+# you were working on." When a model stream dies mid-turn agy re-prompts ITSELF with it and
+# retries. That is framework bookkeeping, not something the model or the user said, so it gets
+# the same treatment claude's sentinels get (``claude/session_parser.INTERRUPT_SENTINEL_TEXT``).
+#
+# Load-bearing rather than cosmetic: when the stream keeps dying for a PERSISTENT reason -- a
+# spent usage quota, which does not clear for hours -- agy retries indefinitely and each retry
+# writes another step, so the transcript fills with identical lines and buries the one message
+# that explains the stall. Suppressing them leaves exactly the quota error, which the shared
+# auth vocabulary now recognises and renders with a re-auth action.
+#
+# Anchored on the opening sentence, not the whole string: agy rewords freely across its ~weekly
+# releases, and no message but the nudge opens with it. Checked on user, assistant AND error
+# text because which step type carries the nudge has only been seen rendered, never decoded
+# from a store -- keying on one shape would break the moment agy chose another.
+_RETRY_NOTICE_PREFIX: Final[str] = "The stream was interrupted."
+
+
+def is_stream_retry_notice(text: str) -> bool:
+    """True iff ``text`` is agy's auto-continue nudge for a broken model stream."""
+    return text.strip().startswith(_RETRY_NOTICE_PREFIX)
+
 
 def _clean_user_text(raw: str) -> str:
     match = _USER_REQUEST_RE.search(raw)
@@ -60,7 +83,7 @@ def _event_id(step: DecodedStep, suffix: str) -> str:
 
 def _user_message(step: DecodedStep) -> list[dict[str, Any]]:
     text = _clean_user_text(step.user_text or "")
-    if not text:
+    if not text or is_stream_retry_notice(text):
         return []
     event_id = _event_id(step, "user")
     event = {
@@ -176,6 +199,9 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
     else (history, system, conversation summary) yields none. The watcher dedups by
     ``event_id`` across polls, so re-decoding a RUNNING row that later settles adds only the
     result.
+
+    A step carrying agy's own auto-continue nudge yields none either, whichever role it
+    arrives in -- see :func:`is_stream_retry_notice`.
     """
     if step.tool_call is not None:
         return _tool_events(step)
@@ -190,9 +216,13 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
         text = step.assistant_text or ""
         if not text and not step.thinking:
             return []
+        if is_stream_retry_notice(text):
+            return []
         return [_assistant_message(step, text=text, tool_calls=[], suffix="assistant")]
     if step.step_type_name == "ERROR_MESSAGE":
         if not step.is_terminal or not step.error_text:
+            return []
+        if is_stream_retry_notice(step.error_text):
             return []
         event = _assistant_message(step, text=step.error_text, tool_calls=[], suffix="error")
         event["is_api_error"] = True
