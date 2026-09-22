@@ -13,7 +13,9 @@ not have it).
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,7 @@ from host_backup.restic import (
 from host_backup.restic import (
     extract_snapshot_id_from_backup_output,
     init_repo,
+    is_repo_locked_error,
     is_repo_missing_error,
     probe_repo,
     run_restic,
@@ -35,7 +38,7 @@ from host_backup.restic import (
 from host_backup.restic import (
     prune as restic_prune,
 )
-from host_backup.runner import _age_out_restore_markers, _LoopState
+from host_backup.runner import _age_out_restore_markers, _LoopState, _run_forget
 
 
 def _restic_available() -> bool:
@@ -325,3 +328,87 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
     assert ordinary_id in surviving, (
         "ordinary backups are never touched by the marker age-out"
     )
+
+
+def _leave_a_dead_backups_lock(tmp_path: Path, env: dict[str, str]) -> None:
+    """Leave the non-exclusive lock of a `restic backup` that was killed mid-run.
+
+    restic takes the backup's lock before it starts the `--stdin-from-command`
+    child, so the child writing to `locked` means the lock is on disk; the child
+    then blocks on `hold` until it is released.
+    """
+    locked = tmp_path / "locked.fifo"
+    hold = tmp_path / "hold.fifo"
+    os.mkfifo(locked)
+    os.mkfifo(hold)
+    backup = subprocess.Popen(
+        [
+            "restic",
+            "backup",
+            "--stdin-from-command",
+            "--",
+            "sh",
+            "-c",
+            'echo locked > "$1"; cat "$2"',
+            "sh",
+            str(locked),
+            str(hold),
+        ],
+        env={**os.environ, **env},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    assert locked.read_text().strip() == "locked"
+    backup.kill()
+    # Reaped, so restic sees the lock's PID as gone rather than a zombie.
+    backup.wait()
+    # Opening and closing the write end gives the orphaned `cat` its EOF.
+    hold.write_text("")
+
+
+def test_forget_clears_a_dead_backups_lock_and_applies_retention(
+    tmp_path: Path,
+) -> None:
+    """A killed backup's lock blocks forget until `_run_forget` unlocks and retries.
+
+    forget needs an exclusive lock, which restic refuses while any other lock
+    exists, stale or not; a new backup (non-exclusive) never trips over it, so
+    nothing but forget's own retry clears it.
+    """
+    repo_dir = tmp_path / "repo"
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "f.txt").write_text("data")
+    env = _env_for_local_repo(repo_dir)
+    assert init_repo(env).returncode == 0
+    assert (
+        restic_backup(
+            source_path=source_dir, excludes=(), tag="t", env_overrides=env
+        ).returncode
+        == 0
+    )
+
+    _leave_a_dead_backups_lock(tmp_path, env)
+    assert list((repo_dir / "locks").iterdir()), "the killed backup left no lock"
+    blocked = restic_forget(
+        keep_hourly=1, keep_daily=1, keep_weekly=1, keep_monthly=1, env_overrides=env
+    )
+    assert blocked.returncode != 0
+    assert is_repo_locked_error(blocked.stderr), blocked.stderr
+
+    state = _LoopState(BackupCapabilities(method=SnapshotMethod.DIRECT))
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-integration"
+    _run_forget(
+        state=state,
+        config=BackupConfig(),
+        env_overrides=env,
+    )
+
+    forget_events = [
+        json.loads(line)
+        for line in (state.events_dir / "events.jsonl").read_text().splitlines()
+        if json.loads(line)["type"] == "FORGET_COMPLETED"
+    ]
+    assert [e["exit_code"] for e in forget_events] == [0], forget_events
+    assert list((repo_dir / "locks").iterdir()) == []

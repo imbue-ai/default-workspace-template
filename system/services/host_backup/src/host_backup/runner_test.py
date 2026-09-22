@@ -22,8 +22,10 @@ from host_backup.runner import (
     _emit_tick_error,
     _load_config_if_changed,
     _LoopState,
+    _maybe_run_prune,
     _parse_restic_timestamp,
     _refresh_environment_record,
+    _run_forget,
     _run_restic_backup,
     _should_tick_now,
     _take_snapshot,
@@ -534,6 +536,167 @@ def test_run_restic_backup_no_alarm_below_threshold(tmp_path: Path) -> None:
         if e["type"] == "BACKUP_REPEATEDLY_FAILING"
     ]
     assert alarms == []
+
+
+# ---------------------------------------------------------------------------
+# forget / prune under a stale lock
+# ---------------------------------------------------------------------------
+
+# What restic 0.18 prints when an exclusive lock (forget, prune) meets the
+# non-exclusive lock a dead container left behind; exit code 11.
+_NON_EXCLUSIVE_LOCK_STDERR = (
+    "unable to create lock in backend: repository is already locked by "
+    "PID 1928420 on efa2d6b8510d by root (UID 0, GID 0)"
+)
+
+
+class _ScriptedRestic:
+    """A restic call that returns scripted results in order and counts its calls."""
+
+    def __init__(self, results: list[subprocess.CompletedProcess[str]]) -> None:
+        self._results = results
+        self.calls = 0
+
+    def __call__(self, *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        result = self._results[self.calls]
+        self.calls += 1
+        return result
+
+
+def _retention_state(tmp_path: Path) -> _LoopState:
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-retention"
+    return state
+
+
+def _forget_exit_codes(state: _LoopState) -> list[object]:
+    return [
+        e["exit_code"]
+        for e in _events_in(state.events_dir)
+        if e["type"] == "FORGET_COMPLETED"
+    ]
+
+
+def test_run_forget_unlocks_and_retries_once_on_a_stale_lock(tmp_path: Path) -> None:
+    """A lock-blocked forget runs `restic unlock` and retries; the retry's result is recorded."""
+    forget = _ScriptedRestic(
+        [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
+    )
+    unlock = _ScriptedRestic([_completed(0)])
+    state = _retention_state(tmp_path)
+
+    _run_forget(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        forget_fn=forget,
+        unlock_fn=unlock,
+    )
+
+    assert forget.calls == 2
+    assert unlock.calls == 1
+    assert _forget_exit_codes(state) == [0]
+
+
+def test_run_forget_retries_only_once_when_the_lock_is_still_held(
+    tmp_path: Path,
+) -> None:
+    """A lock `restic unlock` leaves in place (a live one) gets one retry, then the failure is recorded."""
+    forget = _ScriptedRestic(
+        [
+            _completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR),
+            _completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR),
+        ]
+    )
+    unlock = _ScriptedRestic([_completed(0)])
+    state = _retention_state(tmp_path)
+
+    _run_forget(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        forget_fn=forget,
+        unlock_fn=unlock,
+    )
+
+    assert forget.calls == 2
+    assert unlock.calls == 1
+    assert _forget_exit_codes(state) == [11]
+
+
+def test_run_forget_does_not_unlock_on_unrelated_failure(tmp_path: Path) -> None:
+    forget = _ScriptedRestic([_completed(1, stderr="network unreachable")])
+    unlock = _ScriptedRestic([])
+    state = _retention_state(tmp_path)
+
+    _run_forget(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        forget_fn=forget,
+        unlock_fn=unlock,
+    )
+
+    assert forget.calls == 1
+    assert unlock.calls == 0
+    assert _forget_exit_codes(state) == [1]
+
+
+def test_prune_unlocks_and_retries_on_a_stale_lock_and_records_the_prune(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The prune gate file lives under the relative data/.state/.
+    monkeypatch.chdir(tmp_path)
+    prune = _ScriptedRestic(
+        [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
+    )
+    unlock = _ScriptedRestic([_completed(0)])
+    state = _retention_state(tmp_path)
+
+    _maybe_run_prune(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        prune_fn=prune,
+        unlock_fn=unlock,
+    )
+
+    assert prune.calls == 2
+    assert unlock.calls == 1
+    assert (tmp_path / "data/.state/last-restic-prune").exists()
+
+
+def test_age_out_restore_markers_unlocks_and_retries_on_a_stale_lock(
+    tmp_path: Path,
+) -> None:
+    listed = _snapshots_result(
+        [{"id": "old-marker", "time": "2026-07-10T00:00:00Z", "tags": ["restored"]}]
+    )
+    forget_ids = _ScriptedRestic(
+        [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
+    )
+    unlock = _ScriptedRestic([_completed(0)])
+    state = _age_out_state(tmp_path)
+
+    _age_out_restore_markers(
+        state=state,
+        config=_age_out_config(7.0),
+        env_overrides={},
+        list_fn=lambda _tags, _env: listed,
+        forget_ids_fn=forget_ids,
+        unlock_fn=unlock,
+        now_fn=lambda: _FIXED_NOW,
+    )
+
+    assert forget_ids.calls == 2
+    assert unlock.calls == 1
+    forgotten = [
+        e
+        for e in _events_in(state.events_dir)
+        if e["type"] == "RESTORE_MARKERS_FORGOTTEN"
+    ]
+    assert [e["exit_code"] for e in forgotten] == [0]
 
 
 def test_load_config_if_changed_caches_until_mtime_moves(tmp_path: Path) -> None:
