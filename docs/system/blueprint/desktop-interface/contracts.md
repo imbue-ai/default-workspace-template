@@ -208,7 +208,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 `POST /api/embedder-messages` takes `{"type", "client_id", "payload"}`: a message the minds chrome sent a client's shell page, its type, that client, and the message's other fields.
 The shell page posts every message the chrome sends it, once, when some app's `message_handlers` names its type, and posts nothing otherwise; it still rebroadcasts every such message to its child frames unchanged (the workspace app model's contracts section 11).
 The shell posts `{"type", "client_id", ...payload}` (the message itself, with the client added) to the `url` plus `path` of every registered app whose row names the type, in registry order, with a 10 second timeout, and reads no payload.
-It answers `200 {"type", "deliveries": [{"app", "status", "detail"}, ...]}` when every app answered 2xx (`detail` empty); `502` with the same body and a `detail` naming each app that answered otherwise or could not be reached (its `status` then `null`); `404` when no app handles the type; `400` for a type off the manifest rule, a bad client id, or a payload carrying `type` or `client_id`.
+It answers `200 {"type", "deliveries": [{"app", "status", "detail"}, ...]}` when every app answered 2xx (`detail` empty); `502` with the same body and a `detail` naming each app that answered otherwise or could not be reached (its `status` then `null`); `404` when no app handles the type; `400` for a type off the manifest rule, a bad client id, or a payload carrying `type` or `client_id`; and a preview shell `403`, its page posting nothing (the workspace app model's contracts section 6).
 
 ## 6. The WebSocket
 

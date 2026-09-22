@@ -109,8 +109,8 @@ def _shell() -> ShellState:
 
 
 # What a preview shell answers to a verb whose effect lands outside its own copy of the state: an
-# app's stop and start reach supervisord, and the update notice's verbs act on the live apply's
-# rollback point. Everything else a preview offers (opening, placing, and closing windows, a
+# app's stop and start reach supervisord, the update notice's verbs act on the live apply's
+# rollback point, and the embedder-message relay posts to live apps. Everything else a preview offers (opening, placing, and closing windows, a
 # refresh, the interface reload, the avatar) edits the preview's own state or reaches only the
 # preview's own windows, so it stays live for the person judging the change.
 PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
@@ -249,7 +249,11 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
 def relay_embedder_message() -> ResponseReturnValue:
     """Post a message the minds chrome sent this client's page to every app registered for its type; 200 when
     every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no app
-    handles the type."""
+    handles the type. Refused in a preview, whose copied registry names the live app of every sibling not
+    previewed."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     relayed = parse_request_body(EmbedderMessageRelayRequest)
     forwarded = forwarded_messages([entry.row for entry in _shell().inventory.entries()], relayed)
     if not forwarded:

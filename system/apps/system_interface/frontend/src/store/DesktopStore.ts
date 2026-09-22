@@ -534,9 +534,10 @@ export class DesktopStore {
 
   /** A message from the minds chrome: when an app registered for its type, the shell is asked, once, to post it
    *  there with this client's id (contracts.md section 5.6); the app decides what it means. False when no app
-   *  registered for the type or the shell could not pass it on. */
+   *  registered for the type, the shell could not pass it on, or this is a preview shell (whose backend refuses
+   *  the relay: the apps it names are the live ones). */
   async relayEmbedderMessage(message: EmbedderMessage): Promise<boolean> {
-    if (!isEmbedderMessageHandled(this.state, message.type)) return false;
+    if (isPreviewShell() || !isEmbedderMessageHandled(this.state, message.type)) return false;
     const { type, ...payload } = message;
     try {
       await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload);

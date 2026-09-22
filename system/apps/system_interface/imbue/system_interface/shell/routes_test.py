@@ -21,6 +21,7 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
@@ -29,6 +30,7 @@ from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.testing import FakeSupervisorServer
+from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
@@ -121,19 +123,36 @@ def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
     broadcaster: WebSocketBroadcaster,
     fake_supervisor: FakeSupervisorServer,
 ) -> None:
-    """Stop and start act on supervisord, which a preview shares with the live shell, so a preview refuses them
-    with a detail naming itself and touches no program. Opening a window edits the preview's own state copy, so
-    it goes through, and the document says which kind of shell answered."""
+    """Stop and start act on supervisord, which a preview shares with the live shell, and the copied registry
+    names the live app of every sibling not previewed, so a preview refuses them and the embedder-message relay
+    with a detail naming itself, touching no program and posting to no app. Opening a window edits the preview's
+    own state copy, so it goes through, and the document says which kind of shell answered."""
     fake_supervisor.statename_by_program["files"] = "RUNNING"
-    registry_path = write_two_app_registry(tmp_path, registry_row_toml("plain", "http://localhost:1", program="plain"))
-    inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
-    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
-    client = application.test_client()
+    received: list[dict[str, Any]] = []
+    with serve_app(message_handling_app(received, "/api/focus-chat", 200)) as handling_app:
+        registry_path = write_two_app_registry(
+            tmp_path,
+            registry_row_toml("plain", "http://localhost:1", program="plain"),
+            registry_row_toml(
+                "buddy", handling_app.http_url, message_handlers=[("minds:focus-chat", "/api/focus-chat")]
+            ),
+        )
+        inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
+        application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+        client = application.test_client()
 
-    refusals = [client.post("/api/apps/plain/stop"), client.post("/api/apps/plain/start")]
-    assert [refusal.status_code for refusal in refusals] == [403, 403]
+        refusals = [
+            client.post("/api/apps/plain/stop"),
+            client.post("/api/apps/plain/start"),
+            client.post(
+                "/api/embedder-messages",
+                json={"type": "minds:focus-chat", "client_id": "c1", "payload": {"chatId": "agent-1"}},
+            ),
+        ]
+    assert [refusal.status_code for refusal in refusals] == [403, 403, 403]
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
     assert fake_supervisor.statename_by_program.get("plain") is None
+    assert received == []
     _register_client(application, "c1", "home")
     assert _open_window(client, "terminal", "/new").status_code == 201
     assert client.get("/api/inventory").get_json()["is_preview"] is True
