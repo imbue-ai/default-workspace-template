@@ -516,6 +516,19 @@ def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
+    if args.target_ref is not None and args.keep_rollback_point:
+        raise SystemExit(
+            "error: an update-self landing (--target-ref) cannot keep a rollback point: it must "
+            "fast-forward, and only an ordinary merge can be rolled back later. Keep --ff-only and "
+            "drop --keep-rollback-point; the apply still reverts itself on any failure."
+        )
+    # Every reader of the worker's `update-self:` merge walks HEAD's first-parent
+    # line (the app's version read, resolve_template_base.py); an ordinary merge
+    # puts it on a second parent, where they find the previous update's instead.
+    if args.target_ref is not None and not args.ff_only:
+        raise SystemExit(
+            "error: an update-self landing (--target-ref) must fast-forward; pass --ff-only."
+        )
     if args.ff_only and args.keep_rollback_point:
         # rollback-last reverts the kept point with `git revert -m 1`, which only a merge
         # commit takes; a fast-forward lands none, so the point could never be taken back.
@@ -805,8 +818,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     apply_parser.add_argument(
         "--target-ref",
         default=None,
-        help="The release this update lands (update-self mode): enables the "
-        "VERSION_HISTORY.md ledger entry and the post-success "
+        help="The release this update lands (update-self mode, which requires "
+        "--ff-only): enables the VERSION_HISTORY.md ledger entry and the post-success "
         "`env-converge upgrade`, and refuses a merge ref that re-merges this "
         "target after a rollback of it without reverting the rollback first.",
     )
