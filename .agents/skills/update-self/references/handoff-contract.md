@@ -23,10 +23,11 @@ target release's own copy (or the local one, when the ref predates the skill).
 - **`/tmp/update-self-target.json` is written by the local copy and read by the
   target's prose**, so its writer can be several releases older or newer than
   its reader. Only `ref` is guaranteed; a version predating the file does not
-  write it at all. Any other field a future prose reads must be gated on its
-  presence ("if and only if X is true"), never interpolated -- that is what let
-  `latest_available` and `held_back_by_ceiling` be dropped without breaking the
-  releases that still read them.
+  write it at all. Every other field a prose reads must be gated on its presence
+  ("if and only if X is true"), never interpolated -- which is what lets a field
+  be dropped without breaking the releases that still read it, and what keeps a
+  field's *name* fixed once any release reads it (`exceeds_ceiling` is read by
+  every release from minds-v0.3.10 on).
 - **The staging path** must stay
   `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, for the
   same reason.
