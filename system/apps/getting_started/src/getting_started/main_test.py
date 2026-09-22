@@ -13,6 +13,7 @@ from getting_started.config import Config
 from getting_started.first_window import LEDGER_FILENAME
 from getting_started.first_window import OPENER_THREAD_NAME
 from getting_started.main import APP_NAME
+from getting_started.main import GettingStartedArguments
 from getting_started.main import MANIFEST_PATH
 from getting_started.main import arguments_from_config
 from getting_started.main import build_first_window_opener
@@ -26,27 +27,27 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def test_arguments_come_from_the_config_and_the_flags(tmp_path: Path) -> None:
-    config = Config(getting_started_port=8123, system_interface_template_catalog_url="")
-    arguments = arguments_from_config(
-        config, MANIFEST_PATH, tmp_path / "state", tmp_path / "static", is_registered=True
+def _arguments(tmp_path: Path, *, port: int, is_registered: bool) -> GettingStartedArguments:
+    """The arguments a config with no catalog yields, over state and static directories under ``tmp_path``."""
+    config = Config(getting_started_port=port, system_interface_template_catalog_url="")
+    return arguments_from_config(
+        config, MANIFEST_PATH, tmp_path / "state", tmp_path / "static", is_registered=is_registered
     )
+
+
+def test_arguments_come_from_the_config_and_the_flags(tmp_path: Path) -> None:
+    arguments = _arguments(tmp_path, port=8123, is_registered=True)
 
     assert arguments.app_url == "http://localhost:8123"
     assert arguments.host == "127.0.0.1"
     assert arguments.catalog_url == ""
     assert arguments.state_dir == tmp_path / "state"
     assert arguments.is_registered is True
-    assert (
-        arguments_from_config(config, MANIFEST_PATH, tmp_path / "state", tmp_path / "static", is_registered=False)
-    ).is_registered is False
+    assert _arguments(tmp_path, port=8123, is_registered=False).is_registered is False
 
 
 def test_the_page_app_serves_the_health_probe_and_the_opener_is_wired_to_the_state_directory(tmp_path: Path) -> None:
-    config = Config(system_interface_template_catalog_url="")
-    arguments = arguments_from_config(
-        config, MANIFEST_PATH, tmp_path / "state", tmp_path / "static", is_registered=True
-    )
+    arguments = _arguments(tmp_path, port=8123, is_registered=True)
 
     app = build_pages_app(arguments)
     assert app.test_client().get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
@@ -54,7 +55,7 @@ def test_the_page_app_serves_the_health_probe_and_the_opener_is_wired_to_the_sta
 
     opener = build_first_window_opener(arguments)
     assert opener.app == APP_NAME
-    assert opener.ledger.path == tmp_path / "state" / "first_window.json"
+    assert opener.ledger.path == tmp_path / "state" / LEDGER_FILENAME
 
 
 def test_an_unregistered_run_serves_the_page_but_neither_registers_nor_opens_the_first_window(
@@ -65,10 +66,7 @@ def test_an_unregistered_run_serves_the_page_but_neither_registers_nor_opens_the
     registry_path = tmp_path / "apps.toml"
     monkeypatch.setenv(ENV_APPS_FILE, str(registry_path))
     port = _free_port()
-    config = Config(getting_started_port=port, system_interface_template_catalog_url="")
-    arguments = arguments_from_config(
-        config, MANIFEST_PATH, tmp_path / "state", tmp_path / "static", is_registered=False
-    )
+    arguments = _arguments(tmp_path, port=port, is_registered=False)
     seen: dict[str, object] = {}
 
     def observe_and_stop() -> int:
