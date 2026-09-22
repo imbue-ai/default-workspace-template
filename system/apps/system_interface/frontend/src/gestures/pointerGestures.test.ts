@@ -6,11 +6,15 @@ import { PointerGestureSource, bindingForTarget } from "./pointerGestures";
 let root: HTMLElement;
 let detach: (() => void) | null = null;
 let events: string[];
+/** The press notifications, kept apart from ``events`` so a test names only what it is about. */
+let presses: string[];
 
 function listener(isDraggable: boolean = true): GestureListener {
   return {
     thresholdPx: () => 4,
     isDraggable: () => isDraggable,
+    onPressStart: (binding) => void presses.push(`press:${describe_(binding)}`),
+    onPressEnd: (binding) => void presses.push(`release:${describe_(binding)}`),
     onBegin: (binding, point) => void events.push(`begin:${describe_(binding)}:${point.x},${point.y}`),
     onMove: (binding, point, delta) =>
       void events.push(`move:${describe_(binding)}:${point.x},${point.y}:${delta.x},${delta.y}`),
@@ -54,6 +58,7 @@ function pointer(type: string, target: Element, x: number, y: number, extra: Poi
 
 beforeEach(() => {
   events = [];
+  presses = [];
   root = document.createElement("div");
   root.innerHTML =
     '<div data-window-id="win-1"><div data-drag-handle><span id="title">T</span><button data-no-drag id="menu">m</button></div>' +
@@ -228,6 +233,33 @@ describe("PointerGestureSource", () => {
       "move:move(win-1):140,50:40,0",
       "end:move(win-1):140,50:40,0",
     ]);
+  });
+
+  it("a press on a handle makes the pages inert at once, and gives them back however it ends", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    // A press that is only a click: the pages are inert for its length alone.
+    pointer("pointerdown", title, 110, 70);
+    expect(presses).toEqual(["press:move(win-1)"]);
+    expect(events).toEqual([]);
+    pointer("pointerup", title, 111, 70);
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
+    // A press that becomes a drag: still one press, released when the drag ends.
+    presses = [];
+    pointer("pointerdown", title, 200, 70);
+    pointer("pointermove", title, 240, 70);
+    expect(presses).toEqual(["press:move(win-1)"]);
+    pointer("pointerup", title, 240, 70);
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
+  });
+
+  it("a press the listener refuses to drag gives the pages back rather than holding them", () => {
+    detach = new PointerGestureSource().attach(root, listener(false));
+    const title = root.querySelector("#title") as Element;
+    pointer("pointerdown", title, 110, 70);
+    pointer("pointermove", title, 150, 70);
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
+    expect(events).toEqual([]);
   });
 
   it("a resize whose release the root never saw ends at the edge's last point", () => {

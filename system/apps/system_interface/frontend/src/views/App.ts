@@ -205,8 +205,16 @@ export function App(): m.Component<AppAttrs> {
         if (binding.kind === "taskbar-entry") return false;
         return !current.getState().modes.isCompact;
       },
-      onBegin: (binding, rootPoint, rootPress) => {
+      // The pages are inert for the whole press, not just the drag: the pixels before the threshold
+      // are spent beside the handle, often over a neighbouring page, and a move the root cannot see
+      // is a move the threshold never counts.
+      onPressStart: () => {
         pages?.setGestureActive(true);
+      },
+      onPressEnd: () => {
+        pages?.setGestureActive(false);
+      },
+      onBegin: (binding, rootPoint, rootPress) => {
         const point = toBackdrop(rootPoint);
         switch (binding.kind) {
           case "window-move":
@@ -277,13 +285,11 @@ export function App(): m.Component<AppAttrs> {
           case "taskbar-entry":
             break;
         }
-        pages?.setGestureActive(false);
       },
       onCancel: (binding) => {
         current.cancelGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);
-        pages?.setGestureActive(false);
       },
       onLongPress: (binding, client) => {
         const anchor = anchorForPoint(client.x, client.y);
