@@ -913,17 +913,15 @@ def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
     """An update chat whose create failed on the claude pin is retried from the page with the same
     waiver and labels, or the retry fails the same way; the record carries them like the message."""
     (signed_in,) = read_index().accounts
-    with agent_manager._lock:
-        agent_manager._provisional_chats[ChatId("failed-2")] = ProvisionalChat(
-            chat_id=ChatId("failed-2"),
-            name="update-self-1a2b3c",
-            account_id=signed_in.id,
-            message="/update-self",
-            labels={"auto_open": "true"},
-            is_installation_check_skipped=True,
-            phase=ProvisionalChatPhase.FAILED,
-            error="mngr create exited with code 1",
-        )
+    seed_failed_chat(
+        agent_manager,
+        ChatId("failed-2"),
+        "update-self-1a2b3c",
+        account_id=signed_in.id,
+        message="/update-self",
+        labels={"auto_open": "true"},
+        is_installation_check_skipped=True,
+    )
     q = broadcaster.register()
 
     agent_manager.create_chat("", chat_id="failed-2", account_id=signed_in.id)
@@ -948,14 +946,7 @@ def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentMan
 
 def test_create_chat_refuses_labels_and_the_waiver_beside_a_minted_id(agent_manager: AgentManager) -> None:
     (signed_in,) = read_index().accounts
-    with agent_manager._lock:
-        agent_manager._provisional_chats[ChatId("failed-3")] = ProvisionalChat(
-            chat_id=ChatId("failed-3"),
-            name="Chat 1",
-            account_id=signed_in.id,
-            phase=ProvisionalChatPhase.FAILED,
-            error="mngr create exited with code 1",
-        )
+    seed_failed_chat(agent_manager, ChatId("failed-3"), "Chat 1", account_id=signed_in.id)
     with pytest.raises(AgentCreationError, match="relabel"):
         agent_manager.create_chat("", chat_id="failed-3", labels={"auto_open": "true"})
     with pytest.raises(AgentCreationError, match="relabel"):
