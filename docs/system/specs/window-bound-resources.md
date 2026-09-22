@@ -75,7 +75,7 @@ The browser's launch path was relabelled "Open Browser" because it no longer alw
 ### 3.2 What a run does
 
 `resolveLaunchRun` is unchanged.
-A `new` shortcut opens a window at the launch path with `if_present: new`, so every double click on Chat opens another list window and every double click on New Terminal allocates another session.
+A `new` shortcut opens a window at the launch path with `if_present: new`, so every double click on Chat opens another list window and every double click on Terminal allocates another session.
 The `focus` browser shortcut raises this client's most recent browser window on this desktop and opens `/new` only when there is none.
 
 `layout.py open <app>` with no `--path` or `--launch` follows `default_shortcut.launch`, so an agent asked to "show the chat" opens the list.

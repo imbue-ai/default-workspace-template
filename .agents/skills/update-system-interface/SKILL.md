@@ -183,7 +183,7 @@ default. If a real conversation motivated the change:
 
 - Open the **motivating** conversation in the preview's inner app with Playwright
   (`--no-sandbox`): type the chat's title into the taskbar's launcher field
-  (`[data-launcher-field] input`) and pick its row, or land on the preview with the
+  (`[data-launcher-field] textarea`) and pick its row, or land on the preview with the
   deep link `?open=chat:/?chat=<chat-id>`.
 - Look at it and **confirm the change actually fixed the real case**, comparing
   it against what looked wrong in the original complaint. A worker reporting
