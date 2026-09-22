@@ -6,6 +6,7 @@ A recording runner stands in for the shared ``serve_isolated_instance.py``: it r
 each invocation and files the instance state the real script would, so the resolution
 of a manifest's preview table, the registry copy, the one-pass guard, and the sibling
 order are all asserted on the exact commands the script produces.
+``test_preview_app_lifecycle.py`` runs the real shared script instead.
 """
 
 from __future__ import annotations
