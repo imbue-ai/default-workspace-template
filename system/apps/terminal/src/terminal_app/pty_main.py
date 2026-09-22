@@ -24,16 +24,14 @@ from terminal_app.dispatch import (
     build_ttyd_argv,
     install_dispatch_scripts,
     install_ttyd_web_client,
+    load_ttyd_web_client,
     warn_if_oom_tag_script_is_missing,
 )
 from terminal_app.errors import TtydStartError
 from terminal_app.serving import app_url_port
-from terminal_app.wiring import (
-    OOM_TAG_SCRIPT,
-    STATE_DIR,
-    TTYD_EXECUTABLE,
-    TTYD_WEB_CLIENT_ARCHIVE,
-)
+from terminal_app.wiring import OOM_TAG_SCRIPT
+from terminal_app.wiring import STATE_DIR
+from terminal_app.wiring import TTYD_EXECUTABLE
 
 # The pty's fixed wiring, relative to the repo root every supervised program runs from. The
 # state directory is the terminal's: the dispatch scripts ttyd runs and the session id files the
@@ -48,8 +46,8 @@ class TerminalPtyArguments(FrozenModel):
     manifest_path: Path = Field(description="The app.toml to register")
     app_url: AppUrl = Field(description="Where ttyd serves the terminal pages")
     state_dir: Path = Field(description="The terminal's state directory")
-    ttyd_web_client_archive: Path = Field(
-        description="The vendored, gzip-compressed OSC 52-capable ttyd web client"
+    ttyd_web_client_archive: Path | None = Field(
+        description="A gzip-compressed ttyd web client to serve instead of the packaged one"
     )
     ttyd_executable: str = Field(description="The ttyd binary to run")
     oom_tag_script: Path = Field(
@@ -68,8 +66,9 @@ def prepare_ttyd(arguments: TerminalPtyArguments) -> list[str]:
     warn_if_oom_tag_script_is_missing(oom_tag_script)
     with log_span("Installing the ttyd dispatch scripts under {}", paths.commands_dir):
         install_dispatch_scripts(paths, oom_tag_script)
-    is_client_installed = install_ttyd_web_client(
-        arguments.ttyd_web_client_archive, paths.ttyd_index_path
+    compressed_client = load_ttyd_web_client(arguments.ttyd_web_client_archive)
+    is_client_installed = compressed_client is not None and install_ttyd_web_client(
+        compressed_client, paths.ttyd_index_path
     )
     if arguments.is_registered:
         manifest = load_manifest(arguments.manifest_path)
@@ -119,9 +118,8 @@ def run_terminal_pty(arguments: TerminalPtyArguments) -> NoReturn:
     "--ttyd-web-client",
     "ttyd_web_client_archive",
     type=click.Path(path_type=Path),
-    default=TTYD_WEB_CLIENT_ARCHIVE,
-    show_default=True,
-    help="The gzip-compressed OSC 52-capable ttyd web client to serve",
+    default=None,
+    help="A gzip-compressed ttyd web client to serve instead of the one the imbue-mngr-ttyd package ships",
 )
 @click.option(
     "--ttyd",
@@ -149,7 +147,7 @@ def main(
     manifest_path: Path,
     app_url: str,
     state_dir: Path,
-    ttyd_web_client_archive: Path,
+    ttyd_web_client_archive: Path | None,
     ttyd_executable: str,
     oom_tag_script: Path,
     is_unregistered: bool,

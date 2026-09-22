@@ -39,8 +39,11 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 import argparse
 import importlib.util
 import re
+import socket
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
 from typing import Iterable
 
@@ -186,18 +189,29 @@ def _apps_toml_ports(apps_toml: Path) -> set[int]:
     return ports
 
 
+def _is_port_bound(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
         repo_root / "system/supervisord.conf"
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
+    # Reserve known internal ports that may not have supervisor entries
+    in_use.add(8083)  # browser CDP proxy
     if requested is not None:
-        if requested in in_use:
+        if requested in in_use or _is_port_bound(requested):
             sys.exit(
                 f"error: --port {requested} is already in use by another app or service"
             )
         return requested
     port = LOWEST_AUTO_PORT
-    while port in in_use:
+    while port in in_use or _is_port_bound(port):
         port += 1
     return port
 
@@ -593,6 +607,35 @@ def _run_uv_sync(repo_root: Path) -> None:
     _run_checked(["uv", "sync", "--all-packages"], repo_root, "uv sync --all-packages")
 
 
+def _start_and_wait(
+    repo_root: Path, name: str, port: int, timeout: float = 10.0
+) -> None:
+    # Reload supervisord to pick up the new program block
+    _run_checked(["supervisorctl", "reread"], repo_root, "supervisorctl reread")
+    _run_checked(["supervisorctl", "update"], repo_root, "supervisorctl update")
+
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.time() + timeout
+    last_err = None
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "scaffold-check"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return
+        except Exception as e:
+            last_err = e
+            time.sleep(0.05)
+
+    status_res = subprocess.run(
+        ["supervisorctl", "status", name], cwd=repo_root, capture_output=True, text=True
+    )
+    sys.exit(
+        f"error: service {name} failed to become healthy at {url} within {timeout}s (last error: {last_err})\n"
+        f"status: {status_res.stdout.strip()}"
+    )
+
+
 def _find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
@@ -606,7 +649,7 @@ def _find_repo_root(start: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
     parser.add_argument(
@@ -638,6 +681,11 @@ def main() -> None:
         action="store_true",
         help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
     )
+    parser.add_argument(
+        "--start",
+        action="store_true",
+        help="register with supervisord (reread + update) and wait for health endpoint",
+    )
     args = parser.parse_args()
 
     _validate_name(args.name)
@@ -668,13 +716,21 @@ def main() -> None:
         _install_app_tool(repo_root, package)
         _run_uv_sync(repo_root)
 
+    if args.start:
+        _start_and_wait(repo_root, args.name, port)
+
+    start_msg = (
+        f"Service `{args.name}` started and healthy on http://127.0.0.1:{port}/.\n"
+        if args.start
+        else ""
+    )
     print(
-        f"Created lib at {lib_dir.relative_to(repo_root)} "
+        f"{start_msg}Created lib at {lib_dir.relative_to(repo_root)} "
         f"(app `{args.name}` on port {port}, registered in "
         f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."
+        f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 
