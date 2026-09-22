@@ -815,6 +815,24 @@ def _settled_chat_snapshot(server: RunningWorkspace) -> ChatSnapshot:
     return snapshot
 
 
+def _rebound_chat_snapshot(server: RunningWorkspace, account_id: str) -> ChatSnapshot:
+    """The chat's snapshot once its rebind has landed: the same agent, now running on ``account_id``.
+
+    A rebind leaves the record like any other switch, so the account has to be waited on too: the
+    record clears the moment the agent is back, whichever account it came back on.
+    """
+    manager = server.chat_state.agent_manager
+
+    def _rebound() -> bool:
+        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        return snapshot is not None and snapshot.handoff is None and snapshot.active_agent.account_id == account_id
+
+    wait_for(_rebound, timeout=30.0, poll_interval=0.1, error_message="the rebind never reached the chosen account")
+    snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+    assert snapshot is not None
+    return snapshot
+
+
 def _switched_workspace(
     tmp_path: Path,
     messenger: MngrMessenger | None = None,
@@ -946,8 +964,8 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
 @pytest.mark.timeout(90, func_only=False)
 def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Page) -> None:
     """The rebind through the browser: a second account on the chat's own lane is a switch too, armed at once
-    with no dialog, and the chat comes back on the same agent with its transcript, now read from the new
-    account's folder."""
+    with no dialog; the strip's Change opens the dialog, where a model is picked for the agent; and the chat
+    comes back on the same agent, on that model, with its transcript now read from the new account's folder."""
     with _switched_workspace(tmp_path, additional_accounts=(("anthropic", "Anthropic"),)) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
@@ -956,10 +974,21 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         _open_provider_menu(chat)
         chat.locator('[data-model-popover="flyout"] button', has_text="Anthropic 2").first.click()
         # A rebind keeps the agent and its conversation, so nothing asks: the press arms the switch at
-        # once, and the strip offers no dialog to change it from.
+        # once. The strip's Change opens the dialog, whose picker starts from the model the agent keeps.
         expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
         expect(chat.locator(".modal-card")).to_have_count(0)
-        expect(chat.locator(".message-input-switch-change")).to_have_count(0)
+        chat.locator(".message-input-switch-change").click()
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Switch to Anthropic 2 (Claude Code)?")
+        model = dialog.locator("select.switch-dialog-model")
+        expect(model).to_have_value("")
+        expect(model.locator("option").first).to_have_text("Keep the current model")
+        model.select_option("haiku")
+        dialog.locator("select.switch-dialog-effort").select_option("high")
+        dialog.get_by_role("button", name="Switch this chat").click()
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"
+        )
 
         chat.locator(".message-input-textbox").fill("Carry on on the other account")
         switch_button = chat.locator(".message-input-send-button--switch")
@@ -967,26 +996,22 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         switch_button.click()
 
         # The rebind runs against the fake mngr and lands the same agent on the second account.
-        manager = server.chat_state.agent_manager
         second_account = server.account_ids[1]
-
-        def is_rebound() -> bool:
-            snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-            return (
-                snapshot is not None
-                and snapshot.handoff is None
-                and snapshot.active_agent.account_id == second_account
-            )
-
-        wait_for(is_rebound, timeout=30.0)
-        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-        assert snapshot is not None and snapshot.agent_ids == (FIXTURE_AGENT_ID,)
+        snapshot = _rebound_chat_snapshot(server, second_account)
+        assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
         # The session file followed the agent into the new account's folder, and the confirming
         # message went through the ordinary send path once the agent was back.
         assert list((account_dir(second_account) / "projects").rglob(f"{FIXTURE_SESSION_ID}.jsonl"))
-        messenger = manager._messenger
+        messenger = server.chat_state.agent_manager._messenger
         assert isinstance(messenger, RecordingMngrMessenger)
         wait_for(lambda: (FIXTURE_AGENT_ID, "Carry on on the other account") in messenger.sent, timeout=10.0)
+        # The pick reached the agent through the model bar's own commands before the message did.
+        assert messenger.sent[-4:] == [
+            (FIXTURE_AGENT_ID, "/model haiku"),
+            (FIXTURE_AGENT_ID, "/effort high"),
+            (FIXTURE_AGENT_ID, "/fast off"),
+            (FIXTURE_AGENT_ID, "Carry on on the other account"),
+        ]
         # The page keeps the transcript, no handoff node remains (the agent did not change), the held
         # bubble is gone, and the provider row names the new account with the choice spent.
         expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
@@ -997,6 +1022,92 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         provider_row = chat.locator('[data-card-row="providers"]')
         expect(provider_row).to_contain_text("Anthropic 2")
         expect(provider_row).not_to_contain_text("after your next message")
+
+
+# A turn that failed on the chat's own credential: Claude Code's stamped login notice.
+_AUTH_FAILED_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Hello agent!"},
+    },
+    {
+        "type": "assistant",
+        "uuid": "uuid-2",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "isApiErrorMessage": True,
+        "error": "authentication_failed",
+        "message": {
+            "role": "assistant",
+            "model": "<synthetic>",
+            "content": [{"type": "text", "text": "Login expired · Please run /login"}],
+            "stop_reason": "stop_sequence",
+            "usage": {},
+        },
+    },
+]
+
+
+def _pick_from_auth_error_note(chat: FrameLocator, server: RunningWorkspace, account_id: str) -> None:
+    """Follow "switch to another provider" under the failed turn and pick ``account_id`` in the chooser.
+
+    The chat's own account is listed as not working and cannot be picked.
+    """
+    expect(chat.locator(".message-list")).to_contain_text("Login expired", timeout=15000)
+    chat.get_by_role("button", name="switch to another provider").click()
+    own = chat.locator(f'[data-e2e="pick-account-{server.account_ids[0]}"]')
+    expect(own).to_be_disabled()
+    expect(own.locator("xpath=..")).to_contain_text("Not working")
+    chat.locator(f'[data-e2e="pick-account-{account_id}"]').click()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_whose_turn_failed_on_its_login_hands_off_from_the_error_note(tmp_path: Path, page: Page) -> None:
+    """Picking another harness's account from the auth-error note moves this chat there through the handoff,
+    rather than opening a new chat."""
+    with _switched_workspace(
+        tmp_path, messenger=SummaryWritingMngrMessenger(), session_events=_AUTH_FAILED_SESSION_EVENTS
+    ) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        _pick_from_auth_error_note(chat, server, server.account_ids[1])
+
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Switch to Codex?")
+        dialog.get_by_role("button", name="Switch this chat").click()
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to OpenAI (Codex)"
+        )
+        _switch_and_send(chat, "Carry on in Codex")
+
+        expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
+            "Handed off from Claude Code to Codex", timeout=30000
+        )
+        snapshot = _settled_chat_snapshot(server)
+        assert snapshot.active_agent.account_id == server.account_ids[1]
+        assert len(snapshot.agent_ids) == 2
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_path: Path, page: Page) -> None:
+    """Picking another account on the chat's own harness and lane from the auth-error note arms a rebind of
+    this chat, with no dialog."""
+    with _switched_workspace(
+        tmp_path, additional_accounts=(("anthropic", "Anthropic"),), session_events=_AUTH_FAILED_SESSION_EVENTS
+    ) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        _pick_from_auth_error_note(chat, server, server.account_ids[1])
+
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to Anthropic 2 (Claude Code)"
+        )
+        expect(chat.locator(".modal-card")).to_have_count(0)
+        _switch_and_send(chat, "Carry on on the other account")
+
+        snapshot = _rebound_chat_snapshot(server, server.account_ids[1])
+        assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
 
 
 @pytest.mark.timeout(90, func_only=False)

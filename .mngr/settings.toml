@@ -270,6 +270,10 @@ command = "sleep infinity"
 # --dangerously-skip-permissions -- so codex's nested sandbox is both redundant and
 # broken here. Turning it off lets exec actually run.
 [agent_types.codex]
+# Extra provisioning runs after mngr writes this agent's isolated Codex config,
+# before startup. Applies to chats and workers; reviewer settings still decide
+# which gates run. Do not install into the shared account/auth CODEX_HOME.
+extra_provision_command__extend = ["bash system/scripts/codex_update_plugin.sh"]
 # Launch through the OOM band wrapper, exactly as claude does above -- without it an
 # agent runs unbanded and earlyoom sheds it by kernel score instead of by our tiering.
 # The wrapper execs `codex` in place, so process detection still matches `codex`.
@@ -310,7 +314,12 @@ check_installation = false
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
 #   so they never appear in the transcript.
-config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
+config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }
+config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
+# Keep source and enablement through mngr's config rewrite. Codex refuses to
+# re-add a cached Git marketplace if its source declaration has disappeared.
+config_overrides.marketplaces.imbue-code-guardian = { source_type = "git", source = "https://github.com/imbue-ai/code-guardian.git", ref = "main" }
+config_overrides.plugins."imbue-code-guardian@imbue-code-guardian" = { enabled = true }
 # Codex-only instructions, appended to every codex agent's system prompt.
 # The `/welcome` entry is what claude gets from its slash-command expansion: codex does not
 # expand `/welcome` into the skill, so it is told to follow it.
