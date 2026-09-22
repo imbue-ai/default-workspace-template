@@ -6,8 +6,9 @@ somewhere a file written there can be run.
 Many of the workspace's suites stand a stub in for a real tool (`tmux`, `mngr`,
 `latchkey`, ...) by writing an executable under `tmp_path` and putting it first
 on `PATH`. A workspace container mounts `/tmp` as a tmpfs, and Docker mounts a
-bare `--tmpfs` `noexec`. There the stub cannot run, so `PATH` lookup skips it
-and the *real* tool runs instead. For the terminal app's tests that means the
+bare `--tmpfs` `noexec`. New containers mount it `exec`, but one created before
+that change still has `noexec`. There the stub cannot run, so `PATH` lookup
+skips it and the *real* tool runs instead. For the terminal app's tests that means the
 user's live tmux server, whose sessions the tests then kill. CI cannot see this:
 its runners have an executable `/tmp`.
 
