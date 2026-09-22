@@ -5,7 +5,8 @@ import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/sr
 let connection: ShellConnection | null = null;
 
 export function workspaceFilePath(href: string, roots: readonly string[]): string | null {
-  if (!href || href.startsWith("#") || href.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(href)) return null;
+  href = href.trim();
+  if (!href || /^[?#]/.test(href) || href.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(href)) return null;
   let path: string;
   try {
     path = decodeURIComponent(href.split(/[?#]/, 1)[0]);
@@ -15,7 +16,7 @@ export function workspaceFilePath(href: string, roots: readonly string[]): strin
   path = path.replace(/:\d+(?::\d+)?$/, "");
   const root = roots.find((candidate) => path === candidate || path.startsWith(candidate + "/"));
   if (root !== undefined) path = path.slice(root.length);
-  else if (path.startsWith("/") && !/^\/(?:data|docs|system|apps|skills|\.agents)\//.test(path)) return null;
+  else if (path.startsWith("/") && !/^\/(?:data|docs|system|apps|skills|\.agents)(?:\/|$)/.test(path)) return null;
   const normalized = new URL(
     path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/"),
     "https://workspace.invalid/",
@@ -31,6 +32,8 @@ export function prepareFileLinks(container: HTMLElement): void {
   for (const anchor of container.querySelectorAll<HTMLAnchorElement>("a[href]")) {
     anchor.target = "_blank";
     anchor.rel = "noopener noreferrer";
+    // Raw markdown HTML may carry data attributes; only a resolved href can opt into Files.
+    delete anchor.dataset.workspaceFile;
     const path = workspaceFilePath(anchor.getAttribute("href") ?? "", roots);
     if (path !== null) {
       anchor.dataset.workspaceFile = path;

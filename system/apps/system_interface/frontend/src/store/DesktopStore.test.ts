@@ -383,6 +383,13 @@ describe("opening", () => {
     expect(api.calls).toContain("openWindow:home:docs:/README.md?view:focus:-");
   });
 
+  it("does not open an internal app from another app's page", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes", { internal: true })]);
+    await store.openPathFromWindow("win-1", "/hidden", "focus", "notes");
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+  });
+
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
     const store = await startedStore();
     await store.switchDesktop("work");

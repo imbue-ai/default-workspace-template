@@ -1,0 +1,20 @@
+{
+  "href": "/",
+  "kind": "Index",
+  "uri_prefix": "/",
+  "allow_upload": false,
+  "allow_delete": false,
+  "allow_search": true,
+  "allow_archive": false,
+  "dir_exists": true,
+  "auth": false,
+  "user": null,
+  "paths": [
+    {
+      "path_type": "Dir",
+      "name": "data",
+      "mtime": 0,
+      "size": 1
+    }
+  ]
+}

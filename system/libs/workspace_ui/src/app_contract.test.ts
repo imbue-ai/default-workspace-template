@@ -136,12 +136,14 @@ describe("connectToShell", () => {
     connection.location("/docs", "Docs");
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
+    connection.openAppPath("files", "/docs/guide.md?view", "focus");
 
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
       [{ type: SHELL_LOCATION, path: "/docs", title: "Docs" }, "*"],
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
+      [{ type: SHELL_OPEN, app: "files", path: "/docs/guide.md?view", ifPresent: "focus" }, "*"],
     ]);
   });
 

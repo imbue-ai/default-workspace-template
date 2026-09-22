@@ -275,7 +275,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [(entry.id, entry.path) for entry in by_name["chat"].launch_paths] == [("root", "/"), ("new", "/new")]
     assert by_name["chat"].default_shortcut is not None
     assert by_name["chat"].default_shortcut.launch == "root"
-    for name, launch_path in (("terminal", "/new"), ("files", "/"), ("browser", "/new")):
+    for name, launch_path in (("terminal", "/new"), ("files", "/data/"), ("browser", "/new")):
         assert [(entry.id, entry.path) for entry in by_name[name].launch_paths] == [("new", launch_path)], name
         assert by_name[name].default_shortcut is not None
         assert by_name[name].default_shortcut.launch == "new", name
@@ -284,3 +284,12 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
     assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
     assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]
+
+
+def test_files_serves_the_workspace_without_allowing_symlinks_outside_it() -> None:
+    command = _command_by_program()["files"]
+    assert command.endswith('--assets system/apps/files/assets ."')
+    assert "--allow-all" not in command
+    assert "--allow-symlink" not in command
+    for permission in ("upload", "delete", "search", "archive", "hash"):
+        assert f"--allow-{permission}" in command
