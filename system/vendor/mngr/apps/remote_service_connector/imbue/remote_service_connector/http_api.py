@@ -49,6 +49,7 @@ from imbue.remote_service_connector.errors import R2StorageResultTruncatedError
 from imbue.remote_service_connector.errors import RelayNotFoundError
 from imbue.remote_service_connector.errors import ShareNotFoundError
 from imbue.remote_service_connector.errors import ShareQuotaExceededError
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 from imbue.remote_service_connector.errors import WorkspaceRecordLeaseActiveError
 from imbue.remote_service_connector.ssh_certs import SshCertificateBundleMissingError
 
@@ -67,6 +68,12 @@ def raise_as_http(exc: Exception) -> NoReturn:
         logger.error("Management SSH certificate unavailable: %s", exc)
         raise HTTPException(
             status_code=503, detail={"code": "management_certificate_unavailable", "message": str(exc)}
+        ) from exc
+    if isinstance(exc, SuperTokensCoreUnavailableError):
+        # A transient upstream failure already counted by the
+        # supertokens_core_unavailable metric; the client retries on its own.
+        raise HTTPException(
+            status_code=503, detail={"code": "auth_upstream_unavailable", "message": str(exc)}
         ) from exc
     if isinstance(exc, PoolHostCleanupError):
         # A release that could not finish its teardown -- surface as a server

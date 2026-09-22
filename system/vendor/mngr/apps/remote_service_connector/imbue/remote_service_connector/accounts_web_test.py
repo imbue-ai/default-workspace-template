@@ -45,6 +45,7 @@ from imbue.remote_service_connector.testing import _make_accounts_web_test_clien
 from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import encode_attribution_cookie
 from imbue.remote_service_connector.testing import hold_stable_download_link
+from imbue.remote_service_connector.testing import make_supertokens_core_status_exception
 
 
 def _sign_in_browser(
@@ -183,6 +184,21 @@ def test_me_reports_signed_out_then_identity(monkeypatch: pytest.MonkeyPatch) ->
     }
 
 
+def test_me_answers_503_instead_of_signed_out_when_the_core_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A core outage during browser-session resolution must not read as "signed out" (a bounce to /login)."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _sign_in_browser(client, st_backend, verified=True)
+    st_backend.raise_on(
+        "sdk_get_browser_session",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/verify", status_code=502),
+    )
+
+    resp = client.get("/accounts/api/me")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "auth_upstream_unavailable"
+
+
 def test_me_rejects_and_revokes_a_session_past_the_max_age(monkeypatch: pytest.MonkeyPatch) -> None:
     client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
     _sign_in_browser(client, st_backend, verified=True)
@@ -198,6 +214,28 @@ def test_me_rejects_and_revokes_a_session_past_the_max_age(monkeypatch: pytest.M
     expired = client.get("/accounts/api/me")
     assert expired.status_code == 401
     assert session.access_token not in st_backend.sessions_by_access_token
+
+
+def test_me_still_rejects_an_over_max_age_session_when_the_core_fails_the_revoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A core 5xx on the revoke is a 401 like any other over-max-age session, not a 500; the next resolution re-revokes."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _sign_in_browser(client, st_backend, verified=True)
+    session = st_backend.last_browser_session
+    assert session is not None
+    session.access_token_payload[accounts_web_module._BROWSER_SESSION_STARTED_AT_CLAIM] = (
+        datetime.now(timezone.utc) - timedelta(days=31)
+    ).timestamp()
+    st_backend.raise_on(
+        "revoke_session",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/remove", status_code=502),
+    )
+
+    expired = client.get("/accounts/api/me")
+
+    assert expired.status_code == 401
+    assert session.access_token in st_backend.sessions_by_access_token
 
 
 def test_me_rejects_a_session_with_no_started_at_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,6 +372,22 @@ def test_browser_signout_answers_401_when_the_access_token_needs_a_refresh(
 
     assert resp.status_code == 401
     # Nothing was revoked: the session is still alive server-side.
+    assert st_backend.sessions_by_access_token
+
+
+def test_browser_signout_answers_503_when_the_core_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A core 5xx on the sign-out's session verify is the retryable 503, not a 500 (and not a false OK)."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _sign_in_browser(client, st_backend)
+    st_backend.raise_on(
+        "sdk_get_browser_session",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/verify", status_code=502),
+    )
+
+    resp = client.post("/accounts/api/signout")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "auth_upstream_unavailable"
     assert st_backend.sessions_by_access_token
 
 

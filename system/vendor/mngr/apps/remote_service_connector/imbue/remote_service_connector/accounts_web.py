@@ -116,6 +116,7 @@ from imbue.remote_service_connector.entitlements import SIGNUP_SELECTABLE_PLAN_N
 from imbue.remote_service_connector.entitlements import create_entitlements_row_from_plan
 from imbue.remote_service_connector.errors import DownloadLinkError
 from imbue.remote_service_connector.errors import MissingShareConfigError
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
@@ -434,12 +435,17 @@ def _resolve_browser_identity(request: Request) -> tuple[str, str, bool] | None:
     """Return ``(user_id, email, is_email_verified)`` for the browser session, or None.
 
     Shared with the share broker's ``/share/authorize`` so the app-login and
-    share-visit flows resolve the exact same session.
+    share-visit flows resolve the exact same session. A core outage raises
+    ``SuperTokensCoreUnavailableError`` (a retryable 503) rather than reading
+    as "signed out": a false 401 would be indistinguishable from a real
+    sign-out for every client, whereas the 503 tells them to retry.
     """
     if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
         return None
     try:
-        session = _sdk_get_browser_session(request)
+        session = auth_module.call_supertokens_core(
+            lambda: _sdk_get_browser_session(request), caller="browser_session"
+        )
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         logger.debug("Browser session resolution failed: %s", exc)
         return None
@@ -450,8 +456,10 @@ def _resolve_browser_identity(request: Request) -> tuple[str, str, bool] | None:
         # revocation must not turn the caller's request into a 500 (the next
         # resolution attempt re-revokes).
         try:
-            revoke_session(session.get_handle())
-        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+            auth_module.call_supertokens_core(
+                lambda: revoke_session(session.get_handle()), caller="browser_session_revoke"
+            )
+        except (SuperTokensSessionError, SuperTokensGeneralError, SuperTokensCoreUnavailableError) as exc:
             logger.warning("Could not revoke an over-max-age browser session", exc_info=exc)
         return None
     user_id = session.get_user_id()
@@ -1061,7 +1069,9 @@ def accounts_signout(request: Request) -> dict[str, object]:
         require_supertokens_configured()
         _reject_cross_site_post(request)
         try:
-            session = _sdk_get_browser_session(request)
+            session = auth_module.call_supertokens_core(
+                lambda: _sdk_get_browser_session(request), caller="browser_session"
+            )
         except TryRefreshTokenError as exc:
             # An expired-but-refreshable access token is NOT "already signed
             # out": answering OK would leave the refresh token alive. A 401

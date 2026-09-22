@@ -17,6 +17,7 @@ from imbue.remote_service_connector.auth_proxy import require_verified_email_for
 from imbue.remote_service_connector.errors import EmailNotVerifiedError
 from imbue.remote_service_connector.testing import _make_pool_quota_web_test_client
 from imbue.remote_service_connector.testing import _sign_in_browser_user
+from imbue.remote_service_connector.testing import make_supertokens_core_status_exception
 
 _UNVERIFIED_EMAIL = "unverified-creator@example.com"
 
@@ -68,6 +69,26 @@ def test_lease_retry_within_the_cooldown_reports_the_send_as_suppressed(
     # The cooldown suppressed the second send but the message still points at the inbox.
     assert len(st_backend.sent_verification_emails) == 1
     assert "spam" in second_detail["message"]
+
+
+def test_lease_refusal_survives_a_core_outage_on_the_verification_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The send is best-effort: a core 5xx while sending keeps the structured 403 (with sent=False), not a 500."""
+    client, backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)
+    _sign_in_browser_user(client, st_backend, _UNVERIFIED_EMAIL)
+    backend.add_available_host(host_id=UUID("00000000-0000-0000-0000-00000000dd03"), version="v0.1.0")
+    st_backend.raise_on(
+        "send_email_verification_email",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/user/email/verify/token", status_code=502),
+    )
+
+    resp = client.post("/hosts/lease", json=_lease_body())
+
+    assert resp.status_code == 403
+    detail = resp.json()["detail"]
+    assert detail["code"] == "email_not_verified"
+    assert detail["sent"] is False
+    assert st_backend.sent_verification_emails == []
+    assert backend.pool_rows[0].status == "available"
 
 
 def test_lease_succeeds_once_the_email_is_verified(monkeypatch: pytest.MonkeyPatch) -> None:

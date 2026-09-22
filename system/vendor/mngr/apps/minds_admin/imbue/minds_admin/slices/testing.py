@@ -41,15 +41,22 @@ class RecordingCursor:
 
     ``error_by_param`` scripts a failure: a statement whose bind parameters contain
     one of its keys raises the mapped error instead of being recorded (e.g. a
-    unique-index violation for one row's service name).
+    unique-index violation for one row's service name). ``rows_by_sql`` scripts
+    per-statement results: a fetch after one of its statements returns that
+    statement's rows instead of ``rows``.
     """
 
     def __init__(
-        self, rows: list[tuple[Any, ...]], rowcount: int, error_by_param: Mapping[Any, Exception] | None = None
+        self,
+        rows: list[tuple[Any, ...]],
+        rowcount: int,
+        error_by_param: Mapping[Any, Exception] | None = None,
+        rows_by_sql: Mapping[str, list[tuple[Any, ...]]] | None = None,
     ) -> None:
         self._rows = rows
         self.rowcount = rowcount
         self._error_by_param = dict(error_by_param) if error_by_param else {}
+        self._rows_by_sql = dict(rows_by_sql) if rows_by_sql else {}
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
     def __enter__(self) -> "RecordingCursor":
@@ -65,10 +72,11 @@ class RecordingCursor:
         self.executed.append((sql, params))
 
     def fetchall(self) -> list[tuple[Any, ...]]:
-        return self._rows
+        return self._rows_by_sql.get(self.executed[-1][0], self._rows) if self.executed else self._rows
 
     def fetchone(self) -> tuple[Any, ...] | None:
-        return self._rows[0] if self._rows else None
+        rows = self.fetchall()
+        return rows[0] if rows else None
 
     @property
     def executed_params(self) -> tuple[Any, ...] | None:
@@ -80,11 +88,26 @@ class RecordingConnection:
     """A psycopg2 connection stand-in yielding one ``RecordingCursor`` and counting commits and rollbacks (no real DB)."""
 
     def __init__(
-        self, rows: list[tuple[Any, ...]], rowcount: int, error_by_param: Mapping[Any, Exception] | None = None
+        self,
+        rows: list[tuple[Any, ...]],
+        rowcount: int,
+        error_by_param: Mapping[Any, Exception] | None = None,
+        rows_by_sql: Mapping[str, list[tuple[Any, ...]]] | None = None,
     ) -> None:
-        self.recording_cursor = RecordingCursor(rows, rowcount, error_by_param)
+        self.recording_cursor = RecordingCursor(rows, rowcount, error_by_param, rows_by_sql)
         self.commit_count = 0
         self.rollback_count = 0
+
+    def __enter__(self) -> "RecordingConnection":
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, *_exc: object) -> None:
+        # psycopg2's transaction context manager: commit on a clean exit, roll
+        # back on an exception (which keeps propagating).
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
 
     def cursor(self) -> RecordingCursor:
         return self.recording_cursor

@@ -293,6 +293,26 @@ deploy was deliberately not done.
   staging's deploy `20260915T021647Z` verified `us-west-2` for both the
   connector and the proxy containers. Production gets it with its next deploy.
 
+- [ ] **Run `minds-admin workspaces repair-record-ids` on staging and
+  production** (imbue-ai/mngr-internal#1159) once the release carrying the
+  imbue_cloud plugin's pinned-id slow path is deployed to the tier. Activate
+  the env, run it dry (the default) and read the plan -- every `repoints`
+  entry names the pool row, the baked id it carried, the record's id it moves
+  to, and that record's state; `skipped` lists the record-less rows (the
+  retired cutover leftovers show here with reason `no_record`, and leave with
+  their releases) and, resolved by hand, any host with several candidate
+  records (`ambiguous`) or whose only other records have the stub shape too
+  (`unconfirmed_record`: a client record pushed without a master password and
+  without a backup bucket looks like a stub) -- then re-run with `--execute`.
+  It is a pool-DB repair
+  (no connector deploy needed) and safe to re-run: a desktop older than that
+  release still creates the mismatch on every slow-path create, so run it
+  again on both tiers whenever the hourly sweep's `no_record` warning or a
+  duplicate list entry reappears.
+  `CLEANUP: after a final run once no client older than that release appears
+  in the connector access log's imbue_client field, delete the command,
+  slices/record_id_repair.py, and their tests`.
+
 ## Should land soon
 
 - [ ] **`env deploy` ships the working tree, with no ref guard.**

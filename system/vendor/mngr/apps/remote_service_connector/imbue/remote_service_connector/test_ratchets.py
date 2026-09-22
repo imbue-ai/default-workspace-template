@@ -58,13 +58,15 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # Three deliberate boundaries: ``handle_endpoint_errors`` (every endpoint's
+    # Four deliberate boundaries: ``handle_endpoint_errors`` (every endpoint's
     # domain-error-to-HTTP conversion), ``complete_oauth_code_exchange``'s
     # wrap of the SuperTokens provider layer, which raises plain ``Exception``
-    # for its most common failure (a consumed/expired authorization code), and
+    # for its most common failure (a consumed/expired authorization code),
     # ``decide_frps_ping``'s fail-open (frp fails closed on any plugin error, so
-    # the heartbeat must not depend on the failure's type).
-    rc.check_broad_exception_catch(_DIR, snapshot(3))
+    # the heartbeat must not depend on the failure's type), and
+    # ``auth.call_supertokens_core``, which recognizes the SDK querier's plain
+    # ``Exception`` for a core 5xx by its message and re-raises everything else.
+    rc.check_broad_exception_catch(_DIR, snapshot(4))
 
 
 def test_prevent_base_exception_catch() -> None:

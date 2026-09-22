@@ -63,6 +63,7 @@ from imbue.minds_admin.cli.server import estimate_gen2_machine_capacity
 from imbue.minds_admin.cli.server import run_outcome_workers_in_bounded_threads
 from imbue.minds_admin.cli.server import run_root_script_over_ssh
 from imbue.minds_admin.cli.server import setup_server_to_ready
+from imbue.minds_admin.primitives import derive_user_id_prefix
 from imbue.minds_admin.slices.bare_metal_db import destroy_eligible_pool_host_statuses
 from imbue.minds_admin.slices.bare_metal_db import fetch_server_by_id
 from imbue.minds_admin.slices.bare_metal_db import update_server
@@ -2700,7 +2701,7 @@ def _resolve_user_id_prefix(ctx: CutoverContext, email: str) -> str:
     """The 16-hex lease-namespace prefix of an account, resolved through the admin accounts API."""
     client, admin_key = admin_client(ctx)
     account = client.admin_get_account(admin_key, email)
-    return str(account.user_id).replace("-", "")[:16]
+    return derive_user_id_prefix(str(account.user_id))
 
 
 class ParkedSweepRows(FrozenModel):

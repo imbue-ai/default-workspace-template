@@ -8,9 +8,9 @@ import pytest
 from imbue.minds_admin.envs.r2_cleanup import R2Bucket
 from imbue.minds_admin.envs.r2_cleanup import R2CleanupError
 from imbue.minds_admin.envs.r2_cleanup import _core_user_email_or_none
-from imbue.minds_admin.envs.r2_cleanup import bucket_owner_prefix_for_user
 from imbue.minds_admin.envs.r2_cleanup import find_sweepable_buckets
 from imbue.minds_admin.envs.r2_cleanup import iter_app_users
+from imbue.minds_admin.primitives import derive_user_id_prefix
 
 _NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
 # A developer's user id, as SuperTokens reports it, and the bucket prefix the
@@ -23,13 +23,8 @@ def _bucket(name: str, *, age_hours: float = 48.0) -> R2Bucket:
     return R2Bucket(name=name, created_at=_NOW - timedelta(hours=age_hours))
 
 
-def test_owner_prefix_matches_the_connector_derivation() -> None:
-    # The connector strips hyphens and takes the first 16 characters.
-    assert bucket_owner_prefix_for_user(_DEV_USER_ID) == "4caec486a38b46f0"
-
-
 def test_a_live_users_buckets_are_never_swept() -> None:
-    live_prefix = bucket_owner_prefix_for_user(_DEV_USER_ID)
+    live_prefix = derive_user_id_prefix(_DEV_USER_ID)
     buckets = [_bucket(f"{live_prefix}--host-abc"), _bucket("deadbeefdeadbeef--host-def")]
 
     sweepable = find_sweepable_buckets(buckets, frozenset({live_prefix}), now=_NOW)

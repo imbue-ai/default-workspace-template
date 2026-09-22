@@ -816,6 +816,7 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> bool:
         del user_context
+        self._raise_if_configured("revoke_session")
         # The fake's session handle IS the access token (see
         # ``FakeSessionContainer.get_handle``).
         session = self.sessions_by_access_token.pop(session_handle, None)
@@ -845,6 +846,7 @@ class FakeSuperTokensBackend:
         # removed from it, so both stateless and check_database verification
         # collapse to the same lookup here.
         del anti_csrf_check, session_required, check_database, override_global_claim_validators, user_context
+        self._raise_if_configured("get_session")
         return self.sessions_by_access_token.get(access_token)
 
     def list_users_by_account_info(
@@ -1099,6 +1101,19 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     backend.fake_client_ip = "203.0.113.77"
     backend.suspended_user_ids = set()
     return backend
+
+
+def make_supertokens_core_status_exception(method: str, path: str, status_code: int) -> Exception:
+    """The bare ``Exception`` the SuperTokens SDK's querier raises when the core answers a non-2xx status.
+
+    Feed it to ``FakeSuperTokensBackend.raise_on`` (or raise it from an
+    injected getter) to simulate a core outage; ``auth.call_supertokens_core``
+    recognizes it by this exact message shape.
+    """
+    return Exception(
+        f"SuperTokens core threw an error for a {method} request to path: '{path}' "
+        f"with status code: {status_code} and message: <html>upstream answered {status_code}</html>"
+    )
 
 
 # Host pool fakes

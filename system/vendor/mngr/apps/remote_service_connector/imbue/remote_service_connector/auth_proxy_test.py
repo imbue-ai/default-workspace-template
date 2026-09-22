@@ -19,6 +19,7 @@ from imbue.remote_service_connector.testing import FakePoolBackend
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import make_fake_pool_backend
 from imbue.remote_service_connector.testing import make_fake_supertokens_backend
+from imbue.remote_service_connector.testing import make_supertokens_core_status_exception
 from imbue.remote_service_connector.web import web_app
 
 
@@ -538,6 +539,26 @@ def test_auth_session_revoke_current_rejects_stale_token(monkeypatch: pytest.Mon
     assert resp.status_code == 401
 
 
+def test_auth_session_revoke_current_answers_503_when_the_core_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A core 502 on the session verify is a retryable 503 with the structured code, not a 500 (and not a 401)."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    signup = client.post("/auth/signup", json={"email": "down@e.com", "password": "password123"}).json()
+    backend.raise_on(
+        "get_session",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/verify", status_code=502),
+    )
+
+    resp = client.post(
+        "/auth/session/revoke-current",
+        headers={"Authorization": f"Bearer {signup['tokens']['access_token']}"},
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "auth_upstream_unavailable"
+    assert signup["tokens"]["access_token"] in backend.sessions_by_access_token
+
+
 def test_admin_test_signup_requires_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """/admin/test-signup rejects callers without the operator admin key."""
     _install_fake_supertokens(monkeypatch)
@@ -643,6 +664,29 @@ def test_auth_send_verification_email_failed_send_does_not_consume_cooldown(
     assert retried.status_code == 200
     assert retried.json() == {"status": "OK", "sent": True}
     assert len(backend.sent_verification_emails) == before + 1
+
+
+def test_auth_send_verification_email_answers_503_when_the_core_fails_the_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A core 5xx on the send itself is the retryable 503, not a 500, and leaves the cooldown free for the retry."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    signup = client.post("/auth/signup", json={"email": "core-down@e.com", "password": "password123"}).json()
+    auth_headers = {"Authorization": f"Bearer {signup['tokens']['access_token']}"}
+    auth_proxy_mod._verification_email_sent_at_monotonic_by_user_id.clear()
+    backend.raise_on(
+        "send_email_verification_email",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/user/email/verify/token", status_code=502),
+    )
+
+    failed = client.post("/auth/email/send-verification", headers=auth_headers, json={"email": "core-down@e.com"})
+
+    assert failed.status_code == 503
+    assert failed.json()["detail"]["code"] == "auth_upstream_unavailable"
+    del backend.sdk_errors_by_method["send_email_verification_email"]
+    retried = client.post("/auth/email/send-verification", headers=auth_headers, json={"email": "core-down@e.com"})
+    assert retried.json() == {"status": "OK", "sent": True}
 
 
 def test_auth_send_verification_email_requires_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:
