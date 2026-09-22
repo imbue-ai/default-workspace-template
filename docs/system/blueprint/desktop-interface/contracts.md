@@ -356,6 +356,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-launcher-window="<window-id>"`, `data-minimized="true" \| "false"` | each window row, and whether its window is minimized for this client |
 | `data-text-action="primary" \| "secondary"` | the first two free-text rows |
 | `data-highlighted="true" \| "false"`, `data-disabled="true"` | each row's highlight; a disabled free-text row |
+| `data-key="enter"` | the `Enter` caption on the highlighted row |
 | `data-pinned="true\|false"` | each window's root and each taskbar entry |
 | `data-pinned-entry="<app>"`, `data-entry-mode="bar\|floating"`, `data-entry-style="plain\|avatar"` | each pinned entry, in the bar or floating |
 | `data-floating-entries` | the floating layer |
