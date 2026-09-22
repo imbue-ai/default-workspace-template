@@ -79,6 +79,11 @@ describe("the launcher menu", () => {
     const noMatch = render(launcherRowsOf(stateWithWindows(), "zzzz"));
     expect(noMatch.root.querySelector(".launcher-no-matches")!.textContent).toBe("No apps or windows match");
     expect(noMatch.root.querySelector('[data-text-action="primary"]')!.getAttribute("data-highlighted")).toBe("true");
+    // The note stands in for the empty sections, so it opens the card and the divider sits between it and the rows.
+    const textSection = noMatch.root.querySelector('[data-section="text"]')!;
+    expect(textSection.children[0].className).toContain("launcher-no-matches");
+    expect(textSection.children[1].className).toContain("border-t");
+    expect(textSection.children[2].getAttribute("data-text-action")).toBe("primary");
   });
 
   it("a click runs an enabled row and a hover moves the highlight; a disabled row runs nothing and takes no hover", () => {

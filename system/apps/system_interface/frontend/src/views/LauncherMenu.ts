@@ -161,8 +161,8 @@ export function LauncherMenu(): m.Component<LauncherMenuAttrs> {
           textRows.length === 0
             ? null
             : m("div", { "data-section": "text" }, [
-                textFrom === 0 && !isNoMatch ? null : m("div", { class: menuDividerClass() }),
                 isNoMatch ? m("p", { class: NO_MATCH_CLASS }, NO_MATCH_MESSAGE) : null,
+                textFrom === 0 && !isNoMatch ? null : m("div", { class: menuDividerClass() }),
                 textRows.map((row, index) => rowView(row, textFrom + index, attrs)),
               ]),
           rows.length === 0
