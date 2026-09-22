@@ -163,6 +163,13 @@ def test_exclude_pattern_actually_skips_files(tmp_path: Path) -> None:
     assert ".venv" not in listing.stdout
 
 
+def _state_recording_events(tmp_path: Path) -> _LoopState:
+    state = _LoopState(BackupCapabilities(method=SnapshotMethod.DIRECT))
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-integration"
+    return state
+
+
 def _snapshot_ids(env: dict[str, str]) -> set[str]:
     """Return the full ids of all snapshots currently in the repo."""
     result = run_restic(("snapshots", "--json"), env_overrides=env)
@@ -309,9 +316,7 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
         ).stdout
     )
 
-    state = _LoopState(BackupCapabilities(method=SnapshotMethod.DIRECT))
-    state.events_dir = tmp_path / "events"
-    state.current_tick_id = "tick-integration"
+    state = _state_recording_events(tmp_path)
     _age_out_restore_markers(
         state=state,
         config=BackupConfig(
@@ -407,9 +412,7 @@ def test_forget_clears_a_dead_backups_lock_and_applies_retention(
     assert blocked.returncode != 0
     assert is_repo_locked_error(blocked.stderr), blocked.stderr
 
-    state = _LoopState(BackupCapabilities(method=SnapshotMethod.DIRECT))
-    state.events_dir = tmp_path / "events"
-    state.current_tick_id = "tick-integration"
+    state = _state_recording_events(tmp_path)
     _run_forget(
         state=state,
         config=BackupConfig(
