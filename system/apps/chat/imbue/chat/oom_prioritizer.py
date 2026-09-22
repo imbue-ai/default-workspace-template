@@ -74,7 +74,8 @@ class ChatOomPrioritizer:
     pid, or None when it has no running process.
     ``set_adj`` writes ``oom_score_adj`` for a pid (best-effort; its return value
     is ignored); None makes an inert prioritizer that still accepts every report but
-    computes nothing, writes nothing, and runs no sweep. ``resolve_process_started_at`` returns the epoch time at which a
+    computes nothing, writes nothing, and runs no sweep.
+    ``resolve_process_started_at`` returns the epoch time at which a
     chat's claude process last started, or None when unknown; it floors the
     engagement clock so a revived chat is never treated as stale. ``clock``
     supplies wall-clock epoch seconds -- absolute, not monotonic, because idle
