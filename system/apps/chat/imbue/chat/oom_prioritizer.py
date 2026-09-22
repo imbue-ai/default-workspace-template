@@ -118,7 +118,7 @@ class ChatOomPrioritizer:
 
         Separate from construction so tests (and any caller that only wants the
         event-driven behaviour) can drive ``record_*``/``reapply`` directly
-        without a background thread.
+        without a background thread. Does nothing without a ``set_adj``.
         """
         if self._set_adj is None:
             return
@@ -212,6 +212,7 @@ class ChatOomPrioritizer:
         lock, so a write (or a call into the agent manager / pid registry) never
         blocks a concurrent activity report. Chats with no live process are
         skipped. Idempotent: concurrent reapplies converge on the same result.
+        Does nothing without a ``set_adj``.
         """
         set_adj = self._set_adj
         if set_adj is None:
