@@ -39,7 +39,8 @@ services = [
 # this every request after ~60s idle pays a cold boot. Hold containers for
 # ~10 minutes after the last request so a dev session stays hot. The ci tier
 # deliberately omits this block (0 = Modal default) so test containers tear
-# down promptly; staging/production also omit it and rely on min_containers=1.
+# down promptly; staging/production set the same window so burst-added
+# containers are not retired mid-request.
 [scaledown_window]
 connector = 600
 litellm_proxy = 600
@@ -95,6 +96,11 @@ address = "10.112.0.2"
 name = "hynek"
 public_key = "kourKwkC4VkX9RS0nuPeJHo9hUGQTV7lpzAGyXtbrSQ="
 address = "10.112.0.3"
+
+[[management_plane.wireguard.operators]]
+name = "gabriel"
+public_key = "Ux1S91tQAYjU5lMVdc7ab7dGFebbziqFwiCvvfQfvCw=="
+address = "10.112.0.4"
 
 # The tier's Modal Proxy: created once in the minds-dev Modal workspace,
 # named here with its static egress IPs. Proxy lookup is Modal-environment

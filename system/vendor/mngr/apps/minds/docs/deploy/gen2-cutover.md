@@ -17,7 +17,7 @@ Four commands, run with the tier's env activated (`minds-admin env activate
 minds-admin cutover preflight [--server-id ID ...] [--json-out PATH]
 minds-admin cutover migrate   --yes-i-mean-<tier> --target-server-id ID \
                               [--workspace ID ...] [--user EMAIL] [--source-server-id ID] \
-                              [--keep-origin-vm] [--publish-image-tars] [--dry-run]
+                              [--keep-origin-vm] [--publish-image-tars] [--shrink-oversized-disks] [--dry-run]
 minds-admin cutover rollback  --yes-i-mean-<tier> --workspace ID
 minds-admin cutover repave    --yes-i-mean-<tier> --server-id ID [--server-id ID ...] [--dry-run]
 ```
@@ -139,7 +139,16 @@ stop kinds (migration 042).
   A floating tag whose snapshot has no recorded base is refused before
   anything is carved: add the entry and re-run. A gen-1 row that was stopped on
   no box when migration 039 ran carries `disk_gb = 44` (039's fallback); the
-  migrate restamps it from the measured disk at the harvest.
+  migrate restamps it from the measured disk at the harvest. A gen-1 box
+  that carved big slices (an 8 TB box gives each of its 29 slices a 216 GiB
+  data disk, a 232 GiB row) would charge the target's disk budget for
+  capacity the workspace never used: `--shrink-oversized-disks` transplants
+  such a disk into the default-size gen-2 disk for the machine's units (44
+  GiB at 8 units) and restamps the row's `disk_gb` at the harvest, provided
+  the disk's used bytes fit beside the base and the system reserve (refused
+  before the stop otherwise, with the workspace still running); a rollback
+  stamps the original `disk_gb` back. Disks at or below the default size
+  keep their own.
 - Migration announcement (per cohort, not per tier): the workspace stops,
   moves, and comes back at a new address on its own; expect minutes to tens of
   minutes of downtime depending on data size; afterwards the container runs

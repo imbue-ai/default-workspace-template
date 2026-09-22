@@ -950,11 +950,18 @@ def test_frps_auth_rejects_ping_after_unshare(monkeypatch: pytest.MonkeyPatch) -
     assert rejected.json()["reject"] is True
 
 
-def test_decide_frps_ping_fails_open_on_lookup_error() -> None:
-    """A connector-internal failure must not kill every live tunnel (frp fails closed on errors)."""
+@pytest.mark.parametrize(
+    "lookup_error",
+    [
+        pytest.param(psycopg2.OperationalError("simulated db outage 71634"), id="db_outage"),
+        pytest.param(RuntimeError("simulated connector bug 40185"), id="connector_bug"),
+    ],
+)
+def test_decide_frps_ping_fails_open_on_lookup_error(lookup_error: Exception) -> None:
+    """A connector-internal failure must not kill every live tunnel (frp fails closed on errors), whatever its type."""
 
     def _broken_lookup(token_hash: str) -> dict[str, Any] | None:
-        raise psycopg2.OperationalError("simulated db outage 71634")
+        raise lookup_error
 
     decision = decide_frps_ping(_broken_lookup, "some-relay-token")
 

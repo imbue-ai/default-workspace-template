@@ -9,9 +9,9 @@ observes that, so it has to reach the network.
 
 import pytest
 
-from imbue.remote_service_connector.accounts_web import _DEFAULT_TARGET_BY_PLATFORM
 from imbue.remote_service_connector.accounts_web import _MAC_ARM64_PLATFORM
-from imbue.remote_service_connector.accounts_web import stable_mac_arm64_url
+from imbue.remote_service_connector.accounts_web import _RELEASE_CHANNEL_PLATFORMS
+from imbue.remote_service_connector.accounts_web import stable_artifact_url
 from imbue.remote_service_connector.testing import _make_accounts_web_test_client
 from imbue.remote_service_connector.testing import clear_stable_download_link
 from imbue.remote_service_connector.testing import read_stable_download_link
@@ -21,9 +21,9 @@ from imbue.remote_service_connector.testing import read_stable_download_link
 def test_the_live_stable_feed_resolves_to_a_real_arm64_dmg() -> None:
     # The autouse fixture holds "could not be read" so the unit tests stay off
     # the feed; this one is here to reach it.
-    clear_stable_download_link()
+    clear_stable_download_link(_MAC_ARM64_PLATFORM)
 
-    resolved = stable_mac_arm64_url()
+    resolved = stable_artifact_url(_MAC_ARM64_PLATFORM)
 
     assert resolved is not None, (
         "the stable channel manifest could not be read -- if this is a 403, the request is "
@@ -40,12 +40,12 @@ def test_the_pinned_fallback_is_the_url_the_live_feed_names() -> None:
     the app id, the version, the build id. Only the feed can say the build was
     really published under the name they agree on.
     """
-    clear_stable_download_link()
+    clear_stable_download_link(_MAC_ARM64_PLATFORM)
 
-    resolved = stable_mac_arm64_url()
+    resolved = stable_artifact_url(_MAC_ARM64_PLATFORM)
 
     assert resolved is not None, "the stable channel manifest could not be read, so this says nothing about the pin"
-    assert resolved == _DEFAULT_TARGET_BY_PLATFORM[_MAC_ARM64_PLATFORM], (
+    assert resolved == _RELEASE_CHANNEL_PLATFORMS[_MAC_ARM64_PLATFORM].fallback_url, (
         "the pinned download fallback is not the url stable serves -- bump it per the Release "
         "channels section of apps/minds/docs/deploy/ops/app-release.md, or wait for CI to publish the "
         "manifest if the promotion only just merged"
@@ -62,7 +62,7 @@ def test_the_route_itself_serves_stable_rather_than_the_fallback(monkeypatch: py
     here: aliasing, the resolver, the fetch, the parse.
     """
     client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
-    clear_stable_download_link()
+    clear_stable_download_link(_MAC_ARM64_PLATFORM)
 
     response = client.get("/download?platform=mac", follow_redirects=False)
 
@@ -72,6 +72,6 @@ def test_the_route_itself_serves_stable_rather_than_the_fallback(monkeypatch: py
     # The fallback names the same build as stable, so comparing urls cannot tell
     # a resolved redirect from a fallback one. What the request left in the cache
     # can: nothing held means the route never asked the resolver.
-    resolved = read_stable_download_link()
+    resolved = read_stable_download_link(_MAC_ARM64_PLATFORM)
     assert resolved is not None, "the route served the fallback -- resolution is not reaching the redirect"
     assert location == resolved

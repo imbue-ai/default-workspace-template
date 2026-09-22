@@ -76,19 +76,58 @@ _PLAIN_ROOT_MOUNTINFO = (
     "1290 1234 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n"
     "1291 1290 0:61 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"
 )
+# What a gVisor container's pid (the runsc sandbox process) sees as its root.
+_RUNSC_SANDBOX_MOUNTINFO = (
+    "394 433 0:69 / / ro,relatime - tmpfs runsc-root rw,inode64\n"
+    "395 394 0:61 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"
+)
+_VM_ROOTFS_MOUNTS = "/mnt/mngr-data/docker/rootfs/overlayfs"
+
+
+def _vm_rootfs_mountinfo_line(container_id: str, snapshot_index: int) -> str:
+    return (
+        f"314 68 0:52 / {_VM_ROOTFS_MOUNTS}/{container_id} rw,relatime shared:186 - overlay overlay "
+        f"rw,lowerdir=48/fs:47/fs,upperdir={_CONTAINERD_SNAPSHOTS}/{snapshot_index}/fs,"
+        f"workdir={_CONTAINERD_SNAPSHOTS}/{snapshot_index}/work\n"
+    )
 
 
 def test_container_layer_command_reads_the_root_mounts_upperdir_from_the_pids_mountinfo(tmp_path: Path) -> None:
-    mountinfo = tmp_path / "proc" / "4242" / "mountinfo"
-    mountinfo.parent.mkdir(parents=True)
+    pid_mountinfo = tmp_path / "proc" / "4242" / "mountinfo"
+    vm_mountinfo = tmp_path / "proc" / "self" / "mountinfo"
+    pid_mountinfo.parent.mkdir(parents=True)
+    vm_mountinfo.parent.mkdir(parents=True)
     command = build_container_layer_path_command("c1").replace(" /proc/", f" {tmp_path}/proc/")
     assert command != build_container_layer_path_command("c1")
-    mountinfo.write_text(_OVERLAY_ROOT_MOUNTINFO)
+    # The docker stub answers 4242 to both lookups: the pid and the full container id.
+    vm_mountinfo.write_text(_PLAIN_ROOT_MOUNTINFO)
+    pid_mountinfo.write_text(_OVERLAY_ROOT_MOUNTINFO)
     result = _run_with_stub(tmp_path, command, "docker", "echo 4242")
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"{_CONTAINERD_SNAPSHOTS}/13/fs\n"
     # A root that is not an overlay has no upper dir: the command prints nothing, and the driver reports it.
-    mountinfo.write_text(_PLAIN_ROOT_MOUNTINFO)
+    pid_mountinfo.write_text(_PLAIN_ROOT_MOUNTINFO)
+    result = _run_with_stub(tmp_path, command, "docker", "echo 4242")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+def test_container_layer_command_falls_back_to_the_vms_rootfs_mount_for_a_runsc_container(tmp_path: Path) -> None:
+    pid_mountinfo = tmp_path / "proc" / "4242" / "mountinfo"
+    vm_mountinfo = tmp_path / "proc" / "self" / "mountinfo"
+    pid_mountinfo.parent.mkdir(parents=True)
+    vm_mountinfo.parent.mkdir(parents=True)
+    command = build_container_layer_path_command("c1").replace(" /proc/", f" {tmp_path}/proc/")
+    pid_mountinfo.write_text(_RUNSC_SANDBOX_MOUNTINFO)
+    # Another container's rootfs mount must not be taken for this one's: the match is anchored on the full id.
+    vm_mountinfo.write_text(
+        _PLAIN_ROOT_MOUNTINFO + _vm_rootfs_mountinfo_line("94242", 7) + _vm_rootfs_mountinfo_line("4242", 49)
+    )
+    result = _run_with_stub(tmp_path, command, "docker", "echo 4242")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{_CONTAINERD_SNAPSHOTS}/49/fs\n"
+    # No rootfs mount for this container anywhere: nothing is printed, and the driver reports it.
+    vm_mountinfo.write_text(_PLAIN_ROOT_MOUNTINFO + _vm_rootfs_mountinfo_line("94242", 7))
     result = _run_with_stub(tmp_path, command, "docker", "echo 4242")
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
@@ -96,7 +135,7 @@ def test_container_layer_command_reads_the_root_mounts_upperdir_from_the_pids_mo
 
 def test_docker_lookups_are_quoted_for_the_vm_shell() -> None:
     assert build_container_layer_path_command("abc 123") == snapshot(
-        "pid=$(docker inspect --format '{{.State.Pid}}' 'abc 123') && awk '$5 == \"/\" { n = split($NF, options, \",\"); for (i = 1; i <= n; i++) if (options[i] ~ /^upperdir=/) { print substr(options[i], 10); exit } }' /proc/$pid/mountinfo"
+        "cid=$(docker inspect --format '{{.Id}}' 'abc 123') && pid=$(docker inspect --format '{{.State.Pid}}' 'abc 123') && awk -v cid=\"$cid\" '($5 == \"/\" || $5 ~ (\"/rootfs/overlayfs/\" cid \"$\")) { n = split($NF, options, \",\"); for (i = 1; i <= n; i++) if (options[i] ~ /^upperdir=/) { print substr(options[i], 10); exit } }' /proc/$pid/mountinfo /proc/self/mountinfo"
     )
     assert build_volume_device_path_command("mngr-host-vol-ff") == snapshot(
         "docker volume inspect --format '{{index .Options \"device\"}}' mngr-host-vol-ff"

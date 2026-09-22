@@ -65,6 +65,7 @@ beforeEach(() => {
     onClientEntriesChanged: vi.fn(),
     onAvatarStatus: vi.fn(),
     onAvatarSelectionChanged: vi.fn(),
+    onUpdateNoticeChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onConnected: vi.fn(),
   };
@@ -121,6 +122,29 @@ describe("ShellSocket", () => {
     // A selection naming no design is refused like any other malformed message, not dropped in silence.
     expect(() => current().receive({ type: "avatar_selection_changed", design: 7 })).toThrow(WireShapeError);
     expect(handlers.onAvatarSelectionChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers the update notice as the shell holds it, and null once the record is cleared", () => {
+    current().open();
+    const notice = {
+      merge_sha: "abc1234",
+      applied_at: 1_780_000_000,
+      driven_by: "mngr/update-widgets",
+      apps: ["chat"],
+      programs: ["chat"],
+      needs_system_services_restart: false,
+      progress: null,
+      outcome: "Rolled back to the previous version.",
+    };
+    current().receive({ type: "update_notice_changed", notice });
+    expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledWith(notice);
+    current().receive({ type: "update_notice_changed", notice: null });
+    expect(handlers.onUpdateNoticeChanged).toHaveBeenLastCalledWith(null);
+    // A record missing what the banner reads is refused rather than shown half-empty.
+    expect(() => current().receive({ type: "update_notice_changed", notice: { apps: ["chat"] } })).toThrow(
+      WireShapeError,
+    );
+    expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledTimes(2);
   });
 
   it("delivers a layout op for this client or for everyone, and drops another client's or an unknown op", () => {

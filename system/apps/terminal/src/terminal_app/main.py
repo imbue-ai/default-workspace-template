@@ -66,6 +66,10 @@ class TerminalAppArguments(FrozenModel):
     agent_session_prefix: str = Field(
         description="The prefix of mngr agents' tmux sessions, which are never terminals"
     )
+    is_registered: bool = Field(
+        description="Whether this boot is the workspace's terminal: it writes the discovery event, registers the "
+        "manifest, and sweeps the terminals no window shows. A preview boots unregistered and does none of them."
+    )
 
 
 def build_session_source(arguments: TerminalAppArguments, paths: TerminalPaths) -> TmuxSessionSource:
@@ -112,9 +116,14 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     finds them answering), the window sweep starts, the app is registered through
     ``forward_port.py --manifest``, and the process waits for SIGTERM or SIGINT, returning the
     exit status for it.
+
+    An unregistered boot (a preview beside the live terminal) skips the discovery event, the
+    registration, and the sweep: the sweep is grounded in the windows the shell shows of the
+    registered app, and a preview's windows are another app's, so a sweep would collect exactly
+    the terminals only the preview shows.
     """
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
-    if arguments.agent_state_dir is not None:
+    if arguments.is_registered and arguments.agent_state_dir is not None:
         with log_span("Writing the discovery event for {}", arguments.app_url):
             write_server_registered_event(arguments.agent_state_dir, APP_NAME, arguments.app_url)
     source = build_session_source(arguments, paths)
@@ -122,10 +131,12 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
         source.recreate_remembered_sessions()
     sweeper = build_window_sweeper(source)
     with serve_in_background(PAGES_HOST, app_url_port(arguments.app_url), build_pages_app(source, sweeper)):
-        sweeper.start()
+        if arguments.is_registered:
+            sweeper.start()
         try:
-            with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
-                register_app(arguments.manifest_path, arguments.app_url)
+            if arguments.is_registered:
+                with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
+                    register_app(arguments.manifest_path, arguments.app_url)
             return wait_for_shutdown_signal()
         finally:
             sweeper.stop()
@@ -169,12 +180,21 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     show_default=True,
     help="The memory-shedding tag wrapper a terminal session runs its shell through",
 )
+@click.option(
+    "--no-register",
+    "is_unregistered",
+    is_flag=True,
+    default=False,
+    help="Skip the registration (the registry row and the discovery event) and the window sweep: a throwaway "
+    "boot, such as a preview, that must not re-point the live terminal row or collect its terminals",
+)
 def main(
     manifest_path: Path,
     app_url: str,
     state_dir: Path,
     store_path: Path,
     oom_tag_script: Path,
+    is_unregistered: bool,
 ) -> None:
     """Run the workspace terminal: the wrapper pages over the workspace's tmux sessions."""
     agent_state_dir = os.environ.get(ENV_AGENT_STATE_DIR, "")
@@ -186,6 +206,7 @@ def main(
         oom_tag_script=oom_tag_script,
         agent_state_dir=Path(agent_state_dir) if agent_state_dir else None,
         agent_session_prefix=os.environ.get(ENV_AGENT_SESSION_PREFIX, DEFAULT_AGENT_SESSION_PREFIX),
+        is_registered=not is_unregistered,
     )
     sys.exit(run_terminal_app(arguments))
 

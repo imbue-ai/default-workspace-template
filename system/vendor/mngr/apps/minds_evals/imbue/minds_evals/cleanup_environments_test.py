@@ -22,8 +22,10 @@ from imbue.minds_evals.testing import CI_SWEEP_PREFIX
 from imbue.minds_evals.testing import DEVELOPER_ENVIRONMENT_NAME
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import STAGING_MNGR_PREFIX
+from imbue.minds_evals.testing import StepFixture
 from imbue.minds_evals.testing import expected_modal_environment_name
 from imbue.minds_evals.testing import read_scheduled_workflow_text
+from imbue.minds_evals.testing import write_stepped_trial_dir
 from imbue.minds_evals.testing import write_trial_dir
 
 # The two tests below are what hold testing.CI_SWEEP_PREFIX to the workflow's CI_ENVIRONMENT_PREFIX:
@@ -183,17 +185,52 @@ def test_read_job_environment_names_takes_exactly_what_the_jobs_own_trials_recor
     )
 
 
-def test_read_job_environment_names_reaches_a_stepped_trials_archived_state(tmp_path: Path) -> None:
-    """Harbor moves each step's `agent/` under `steps/<name>/` as the step ends, so a finished stepped
-    trial has no state at its root. Reading only the root would leak every environment a stepped case
-    ever made, and the age-based sweep is no backstop for the run that just made them."""
-    job_dir = tmp_path / "diagnose-fixture"
-    trial_dir = write_trial_dir(job_dir, "instrument__aaaaaaa", case_id="instrument")
-    archived = trial_dir / "steps" / "instrument"
-    archived.mkdir(parents=True)
-    (trial_dir / "agent").rename(archived / "agent")
+def test_read_job_environment_names_finds_a_stepped_trials_environment(tmp_path: Path) -> None:
+    """A stepped trial keeps its state file under the last step that wrote one, so a pass that looked
+    only at the trial root would find nothing to delete and say so in a line nobody reads -- leaving a
+    live environment up, which the age-based sweep cannot reach for hours."""
+    job_dir = tmp_path / "nightly-run"
+    write_stepped_trial_dir(
+        job_dir,
+        "todo-app__aaaaaaa",
+        (StepFixture(name="triage"), StepFixture(name="build"), StepFixture(name="amend")),
+    )
+    write_trial_dir(job_dir, "greeting__bbbbbbb", case_id="greeting")
 
-    assert read_job_environment_names(job_dir) == (expected_modal_environment_name("instrument__aaaaaaa"),)
+    assert read_job_environment_names(job_dir) == (
+        expected_modal_environment_name("greeting__bbbbbbb"),
+        expected_modal_environment_name("todo-app__aaaaaaa"),
+    )
+
+
+def test_read_job_environment_names_finds_a_stepped_trials_environment_with_no_readable_result(
+    tmp_path: Path,
+) -> None:
+    """A trial killed on Modal has no result.json, which is also the only record of the order its
+    steps ran in. The gate refuses the job over that file; cleanup must not, or the crash being
+    cleaned up after takes the environment with it."""
+    job_dir = tmp_path / "died-hard"
+    trial_dir = write_stepped_trial_dir(
+        job_dir, "todo-app__aaaaaaa", (StepFixture(name="triage"), StepFixture(name="build"))
+    )
+    (trial_dir / "result.json").write_text('{"trial_name": "todo-app__aaa')
+
+    assert read_job_environment_names(job_dir) == (expected_modal_environment_name("todo-app__aaaaaaa"),)
+
+
+def test_read_job_environment_names_falls_back_to_a_step_whose_state_survived(tmp_path: Path) -> None:
+    """The copy a crash truncated is the newest one, which is also the copy that resolves as the
+    trial's. Every step records the same environment, so an earlier step's intact copy still names
+    what is left running -- and refusing the trial over the truncated copy would leak it."""
+    job_dir = tmp_path / "died-hard"
+    trial_dir = write_stepped_trial_dir(
+        job_dir,
+        "todo-app__aaaaaaa",
+        (StepFixture(name="triage"), StepFixture(name="build", is_archived=False)),
+    )
+    (trial_dir / "agent" / "state.json").write_text('{"modal_environment_name": "ci-2026')
+
+    assert read_job_environment_names(job_dir) == (expected_modal_environment_name("todo-app__aaaaaaa"),)
 
 
 def test_read_job_environment_names_yields_nothing_for_a_job_that_never_got_a_trial(tmp_path: Path) -> None:

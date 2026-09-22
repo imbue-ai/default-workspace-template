@@ -53,6 +53,7 @@ import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
+import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import { taskbarEntryMenuEntries, windowMenuEntries } from "./WindowMenu";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
@@ -615,6 +616,7 @@ export function App(): m.Component<AppAttrs> {
       };
       return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
         m(UpdateStalenessBanner),
+        m(UpdateNoticeBanner, { store: current }),
         m(
           "div",
           {

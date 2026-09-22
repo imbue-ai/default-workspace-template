@@ -241,6 +241,16 @@ def preflight(server_ids: tuple[str, ...], json_out: Path | None, database_url: 
     default=False,
     help="Pre-publish the selected workspaces' image tars before migrating (the lazy per-workspace publish remains).",
 )
+@click.option(
+    "--shrink-oversized-disks",
+    "is_shrink_oversized_disks",
+    is_flag=True,
+    default=False,
+    help=(
+        "Transplant a data disk larger than the default gen-2 size into a default-size one (restamping the "
+        "row's disk_gb; a rollback puts it back) when its contents fit; refused before the stop otherwise."
+    ),
+)
 @click.option("--dry-run", "is_dry_run", is_flag=True, default=False, help="Print the plan; touch nothing.")
 @click.option("--database-url", default=None, help=DATABASE_URL_HELP)
 @tier_confirmation_options
@@ -250,6 +260,7 @@ def migrate(
     user_email: str | None,
     source_server_id: str | None,
     is_keep_origin_vm: bool,
+    is_shrink_oversized_disks: bool,
     is_publish_image_tars: bool,
     is_dry_run: bool,
     database_url: str | None,
@@ -283,6 +294,7 @@ def migrate(
                 user_email=user_email,
                 source_server_id=source_server_id,
                 is_keep_origin_vm=is_keep_origin_vm,
+                is_shrink_oversized_disks=is_shrink_oversized_disks,
                 is_publish_image_tars=is_publish_image_tars,
                 is_dry_run=is_dry_run,
             ),
