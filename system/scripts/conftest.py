@@ -18,21 +18,6 @@ import tomlkit
 from layout_testing import desktop_answer
 
 
-@pytest.fixture(autouse=True)
-def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hide the ambient agent identity from every test for these scripts.
-
-    ``layout.py`` resolves ``self`` and every op's ``requester`` from
-    ``MINDS_CHAT_ID``, falling back to ``MNGR_AGENT_ID``, so a test asserting on
-    an address it derives is reading its own inputs only if BOTH halves are
-    cleared -- clearing the chat id alone leaves the fallback steered by
-    whatever agent is running the suite. Cleared here rather than per test, so a
-    test that needs an identity has to say so explicitly.
-    """
-    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
-    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
-
-
 def _load_script_module(module_name: str, filename: str) -> Any:
     """Import one of the scripts beside this file under ``module_name`` (they are not a package)."""
     spec = importlib.util.spec_from_file_location(
@@ -77,6 +62,21 @@ def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
         apps.append(entry)
     doc["apps"] = apps
     path.write_text(tomlkit.dumps(doc))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the ambient agent identity from every test for these scripts.
+
+    ``layout.py`` resolves ``self`` and every op's ``requester`` from
+    ``MINDS_CHAT_ID``, falling back to ``MNGR_AGENT_ID``, so a test asserting on
+    an address it derives is reading its own inputs only if BOTH halves are
+    cleared -- clearing the chat id alone leaves the fallback steered by
+    whatever agent is running the suite. Cleared here rather than per test, so a
+    test that needs an identity has to say so explicitly.
+    """
+    monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
+    monkeypatch.delenv(layout.ENV_MNGR_AGENT_ID, raising=False)
 
 
 @pytest.fixture
