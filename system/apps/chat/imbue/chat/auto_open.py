@@ -38,6 +38,7 @@ from pydantic import PrivateAttr
 
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
+from imbue.chat.shell_client import LAYOUT_OP_ROUTE
 from imbue.chat.shell_client import SHELL_POST_TIMEOUT_SECONDS
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -253,9 +254,7 @@ class ShellLayoutClient(FrozenModel):
     def _post_op(self, body: Mapping[str, Any], described: str) -> httpx.Response | None:
         """Post one op; None when the shell could not be reached, the answer (refusals included) otherwise."""
         try:
-            response = httpx.post(
-                f"{self.shell_url}/api/layout/broadcast", json=body, timeout=SHELL_POST_TIMEOUT_SECONDS
-            )
+            response = httpx.post(f"{self.shell_url}{LAYOUT_OP_ROUTE}", json=body, timeout=SHELL_POST_TIMEOUT_SECONDS)
         except httpx.HTTPError as e:
             logger.debug("Could not ask the shell at {} to {}: {}", self.shell_url, described, e)
             return None
