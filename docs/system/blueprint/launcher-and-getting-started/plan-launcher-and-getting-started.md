@@ -304,6 +304,7 @@ Data attributes, never classes (contracts section 12):
 | `data-text-action="primary" \| "secondary"` | the first two free-text rows |
 | `data-highlighted="true" \| "false"` | each row |
 | `data-disabled="true"` | a disabled free-text row |
+| `data-key="enter"` | the `Enter` caption on the highlighted row |
 
 The `.launcher-tile` class goes with the tiles.
 
