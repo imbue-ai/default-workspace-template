@@ -12,6 +12,7 @@ from pydantic import PrivateAttr
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
@@ -55,6 +56,14 @@ class ChatAppState(MutableModel):
     include_filters: tuple[str, ...]
     exclude_filters: tuple[str, ...]
     agent_manager: AgentManager
+    is_secondary: bool = Field(
+        default=False,
+        description="A second chat beside the live one (a preview): it reports no client activity to the shell, "
+        "whose activity log is the live chat's",
+    )
+    # The workspace-wide chat settings the settings routes read and write; the manager reads
+    # the same store at create. In memory unless the composition root points it at the file.
+    chat_settings: ChatSettingsStore = Field(default_factory=lambda: ChatSettingsStore(path=None))
     event_queues: AgentEventQueues
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService

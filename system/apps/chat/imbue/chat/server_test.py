@@ -48,13 +48,13 @@ from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
-from imbue.chat.server import _build_fast_mode_answered_label_command
 from imbue.chat.server import _revive_and_retry_send
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
@@ -69,6 +69,7 @@ from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -104,8 +105,10 @@ def signed_in_account() -> str:
 
 
 @pytest.fixture
-def app(config: Config, signed_in_account: str) -> Flask:
-    state = build_test_state(config=config)
+def app(config: Config, signed_in_account: str, tmp_path: Path) -> Flask:
+    # A create writes the chat's fast mode under this root; the default is this package's own data/.
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    state = build_test_state(config=config, agent_manager=manager)
     state.agent_manager.note_agent_list_known()
     return create_application(state)
 
@@ -134,6 +137,17 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert len(data["agents"]) == 1
     assert data["agents"][0]["name"] == "test-agent"
     assert data["agents"][0]["state"] == "RUNNING"
+
+
+def test_health_reports_whether_lifecycle_events_are_arriving(client: FlaskClient) -> None:
+    """``/api/health`` stays ``ok`` for the pre-flight probe but says the stream is not feeding this instance."""
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["status"] == "ok"
+    assert data["agent_events"]["is_stream_healthy"] is False
+    assert "not been started" in data["agent_events"]["detail"]
 
 
 def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
@@ -1171,20 +1185,6 @@ def test_model_options_returns_null_models_for_claude(client: FlaskClient, tmp_p
     assert data["options"] is None
 
 
-def test_fast_mode_answered_label_argv_accepted_by_live_cli() -> None:
-    """The latch endpoint shells `mngr label`; the argv must resolve against the
-    live CLI so a label-command rename fails here rather than at runtime."""
-    argv = _build_fast_mode_answered_label_command("my-agent")
-    assert_mngr_argv_valid(argv)
-    assert "fast_mode_prompt_answered=true" in argv
-
-
-def test_fast_mode_answered_returns_404_for_unknown_agent() -> None:
-    client = create_application(build_test_state()).test_client()
-    response = client.post("/api/chats/agent-doesnotexist/fast-mode-answered")
-    assert response.status_code == 404
-
-
 def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dict[str, int]) -> AgentManager:
     """An AgentManager whose OOM prioritizer captures its band writes.
 
@@ -2143,44 +2143,117 @@ def test_create_chat_mints_a_numbered_display_name_server_side(
     assert body["chat_id"]
 
 
-def test_create_chat_launches_a_reserved_chat_under_its_id(
+def test_create_chat_refuses_a_message_beside_a_minted_id(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A chat minted while nothing was signed in is launched by naming its id: the tab the
-    shell docked for it keeps its id and name, and only the phase changes."""
+    """A chat minted earlier is launched with the first message it was minted with; a launch that
+    names another is refused (400) rather than sent with a message the window never asked for."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat()
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", message="Teach me about Mind")
 
-    response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id})
-
-    assert response.status_code == 201
-    assert response.get_json() == {
-        "chat_id": reserved.chat_id,
-        "name": reserved.name,
-        "display_name": reserved.display_name,
-    }
-
-
-def test_create_chat_refuses_a_message_beside_a_reserved_id(
-    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A reserved chat is launched with the first message it was minted with; a launch that
-    names another is refused (400) rather than sent with a message the tab never asked for."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    _register_agent(app, "agent-123", "primary", "RUNNING")
-    agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat(message="Teach me about Mind")
-
-    response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id, "message": "other"})
+    response = client.post("/api/chats/create", json={"chat_id": failed.chat_id, "message": "other"})
 
     assert response.status_code == 400
     assert "first message" in response.get_json()["detail"]
-    reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
-    assert reserved_proto is not None and reserved_proto.message == "Teach me about Mind"
+    failed_proto = agent_manager.get_provisional_chat(failed.chat_id)
+    assert failed_proto is not None and failed_proto.message == "Teach me about Mind"
+
+
+def _seed_body() -> dict[str, Any]:
+    return {
+        "title": "Getting started",
+        "turns": [
+            {"role": "user", "text": "Wait.. what is honest software?"},
+            {"role": "assistant", "text": "Software that works for you."},
+        ],
+    }
+
+
+def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_transcript(tmp_path: Path) -> None:
+    """The Mind app's onboarding conversation arrives whole: the chat is created (201) as a
+    provisional chat awaiting the user, and its events route reads the seeded turns."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    response = client.post("/api/chats/seed", json=_seed_body())
+
+    assert response.status_code == 201
+    created = response.get_json()
+    assert created["display_name"] == "Getting started"
+    provisional = agent_manager.get_provisional_chat(created["chat_id"])
+    assert provisional is not None
+    assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    events = client.get(f"/api/chats/{created['chat_id']}/events").get_json()
+    assert events["total"] == 2
+    assert [(event["type"], event["source"]) for event in events["events"]] == [
+        ("user_message", "seed"),
+        ("assistant_message", "seed"),
+    ]
+    assert events["events"][0]["content"] == "Wait.. what is honest software?"
+
+
+def test_seeding_a_chat_refuses_a_title_with_no_usable_characters(client: FlaskClient) -> None:
+    response = client.post("/api/chats/seed", json={**_seed_body(), "title": "!!!"})
+    assert response.status_code == 400
+    assert "no usable characters" in response.get_json()["detail"]
+
+
+def test_seeding_a_chat_refuses_a_body_without_turns(client: FlaskClient) -> None:
+    response = client.post("/api/chats/seed", json={"title": "Empty", "turns": []})
+    assert response.status_code == 400
+
+
+def test_seeding_a_chat_is_refused_until_the_agent_list_is_known() -> None:
+    client = create_application(build_test_state()).test_client()
+    response = client.post("/api/chats/seed", json=_seed_body())
+    assert response.status_code == 503
+
+
+def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
+    assert client.get("/api/settings").get_json() == {
+        "settings": {"fast_mode_default": "auto", "fast_mode_turn_limit": 5, "is_fast_mode_notice_shown": False}
+    }
+
+    response = client.put(
+        "/api/settings",
+        json={"fast_mode_default": "on", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": True},
+    )
+
+    assert response.status_code == 200
+    assert client.get("/api/settings").get_json() == {
+        "settings": {"fast_mode_default": "on", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": True}
+    }
+
+
+def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(client: FlaskClient) -> None:
+    assert client.put("/api/settings", json={"fast_mode_turn_limit": 0}).status_code == 400
+    assert client.put("/api/settings", json={"fast_mode_default": "sometimes"}).status_code == 400
+    assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 5
+
+
+def test_a_chats_fast_mode_defaults_to_the_workspaces_and_is_replaced_whole(tmp_path: Path) -> None:
+    """A chat with no mode of its own reads as a new chat would start; a write is the chat's from then on."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    app = create_application(build_test_state(agent_manager=agent_manager))
+    client = app.test_client()
+    _register_agent(app, "agent-fast", "Chat-1", "RUNNING")
+
+    assert client.get("/api/chats/agent-fast/fast-mode").get_json() == {
+        "state": {"mode": "auto", "is_switched": False}
+    }
+
+    response = client.put("/api/chats/agent-fast/fast-mode", json={"mode": "auto", "is_switched": True})
+
+    assert response.status_code == 200
+    assert client.get("/api/chats/agent-fast/fast-mode").get_json() == {"state": {"mode": "auto", "is_switched": True}}
+    assert client.put("/api/chats/agent-fast/fast-mode", json={"mode": "faster"}).status_code == 400
+    assert client.get("/api/chats/agent-unknown/fast-mode").status_code == 404
+    assert client.put("/api/chats/agent-unknown/fast-mode", json={"mode": "on"}).status_code == 404
 
 
 def test_create_chat_relaunches_a_failed_chat_under_its_id(
@@ -2192,11 +2265,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    failed = agent_manager.reserve_chat()
-    with agent_manager._lock:
-        agent_manager._mark_creation_failed_locked(failed.chat_id, "mngr create exited with code 1")
-    failed_record = agent_manager.get_provisional_chat(failed.chat_id)
-    assert failed_record is not None and failed_record.phase is ProvisionalChatPhase.FAILED
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
     pushes = agent_manager.broadcaster.register()
 
     response = client.post("/api/chats/create", json={"chat_id": failed.chat_id})
@@ -2204,7 +2273,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     assert response.status_code == 201
     body = response.get_json()
     assert body["chat_id"] == failed.chat_id
-    assert body["display_name"] == failed.display_name
+    assert body["display_name"] == failed.name
     # The relaunch is pushed to every page before the creation thread can settle it, so the
     # push is what says the record went back to the creating phase.
     pushed = []
@@ -2220,17 +2289,17 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     )
 
 
-def test_create_chat_refuses_an_id_that_was_never_reserved(
+def test_create_chat_refuses_an_id_it_never_minted(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
 
-    response = client.post("/api/chats/create", json={"chat_id": "never-reserved"})
+    response = client.post("/api/chats/create", json={"chat_id": "never-minted"})
 
     assert response.status_code == 400
-    assert "never-reserved" in response.get_json()["detail"]
+    assert "never-minted" in response.get_json()["detail"]
 
 
 def test_create_chat_rejects_a_conflicting_explicit_name_with_a_409(
@@ -2446,7 +2515,7 @@ def test_start_failure_returns_500(client: FlaskClient, app: Flask) -> None:
 
 def test_destroy_argv_accepted_by_live_cli() -> None:
     """Confront the ``mngr destroy`` argv with the live ``imbue.mngr.main.cli``
-    tree, so a system/vendor/mngr rename of that subcommand/flag fails here at merge
+    tree, so a rename of that subcommand/flag in a new mngr fails here at merge
     time rather than only surfacing at runtime."""
     assert_mngr_argv_valid(_build_chat_destroy_command("mngr", ("agent-demo1", "agent-demo2")))
 
@@ -2487,7 +2556,7 @@ def test_stop_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
     assert services_agent.id in agent_manager._agents
 
 
-# -- Agent file serving (markdown images + download links) --------------------
+# Agent file serving (markdown images + download links)
 #
 # An agent writes a file and references its absolute on-disk path in markdown;
 # the catch-all serves that file -- images inline so they render, any other file
@@ -2752,7 +2821,7 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
-    reserved = state_of(app).agent_manager.reserve_chat()
+    failed = seed_failed_chat(state_of(app).agent_manager, ChatId("failed-1"), "Chat 1")
 
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
@@ -2763,12 +2832,12 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
             close_ws(ws)
 
     assert first["type"] == "provisional_chat_created"
-    assert first["chat_id"] == reserved.chat_id
-    assert first["phase"] == ProvisionalChatPhase.AWAITING_ACCOUNT.value
+    assert first["chat_id"] == failed.chat_id
+    assert first["phase"] == ProvisionalChatPhase.FAILED.value
     assert second["type"] == "chats_updated"
 
 
-# --- A chat that has run on two agents: one transcript, read across both segments ---
+# A chat that has run on two agents: one transcript, read across both segments
 
 
 def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:
@@ -2893,7 +2962,9 @@ def _recording_app(tmp_path: Path) -> tuple[Flask, Path]:
     return create_application(state), log_path
 
 
-def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> tuple[str, str]:
+def _converging_claude_chat(
+    app: Flask, tmp_path: Path, phase: HandoffPhase, model_pick: ModelPick | None = None
+) -> tuple[str, str]:
     """A running claude chat of one agent whose record carries a handoff in ``phase``; returns the two agent ids."""
     first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
     state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
@@ -2906,11 +2977,30 @@ def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> 
         ChatRecord(
             chat_id=ChatId(first),
             agents=(make_chat_agent_entry(1, first, is_archived=False),),
-            handoff=make_chat_handoff_record(retiring_seq=1, next_agent_id=successor, phase=phase),
+            handoff=make_chat_handoff_record(
+                retiring_seq=1, next_agent_id=successor, phase=phase, model_pick=model_pick
+            ),
         )
     )
     manager.refresh_chat_records()
     return first, successor
+
+
+def test_a_converging_chat_carries_the_model_it_was_switched_to(tmp_path: Path) -> None:
+    # The model bar reads the pick off the chat while the switch runs: the pushed live choice is the
+    # agent the chat is leaving until the harness on the far side has taken the pick, so a page with
+    # no armed switch of its own to name it -- one reloaded mid-switch -- has only this.
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    pick = ModelPick(model_id="gpt-6-astra", effort="high", fast=False)
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING, model_pick=pick)
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert listed[0]["handoff"]["model_pick"] == {"model_id": "gpt-6-astra", "effort": "high", "fast": False}
+
+    # A switch that picked no model leaves the bar on the live choice.
+    other, _ = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [chat["handoff"]["model_pick"] for chat in listed if chat["chat_id"] == other] == [None]
 
 
 def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
@@ -2941,8 +3031,6 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
         {"message_id": "trigger-1", "text": "Carry on in Codex"},
         {"message_id": "m-2", "text": "and this"},
     ]
-    instances = client.get("/_instances").get_json()
-    assert [(record["key"], record["status"]) for record in instances["instances"]] == [(first, "working")]
     # The chat still reads from the agent it is leaving.
     assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
 
@@ -2979,15 +3067,6 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
     assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
-    # A rebind keeps the agent's model settings, so a pick beside it is refused rather than dropped.
-    second, _ = mint_account_dir()
-    commit_account(second, "anthropic", "Anthropic")
-    with_pick = client.post(
-        f"/api/chats/{first}/handoff",
-        json={"account_id": second, "message": "x", "model": {"model_id": "opus", "effort": "high"}},
-    )
-    assert with_pick.status_code == 400
-    assert "keeps its model settings" in with_pick.get_json()["detail"]
 
 
 def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -> None:
@@ -3076,6 +3155,8 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
 
 
 def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path: Path, signed_in_account: str) -> None:
+    """The rebind through the route, with a model picked for it: the pick reaches the agent once it is back on the
+    new account, ahead of the message the user switched with."""
     app, log_path = _recording_app(tmp_path)
     client = app.test_client()
     first = f"agent-{uuid4().hex}"
@@ -3090,7 +3171,13 @@ def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path:
     commit_account(second, "anthropic", "Anthropic")
 
     switched = client.post(
-        f"/api/chats/{first}/handoff", json={"account_id": second, "message": "Carry on here", "message_id": "m-1"}
+        f"/api/chats/{first}/handoff",
+        json={
+            "account_id": second,
+            "message": "Carry on here",
+            "message_id": "m-1",
+            "model": {"model_id": "sonnet[1m]", "effort": "medium", "fast": False},
+        },
     )
     assert switched.status_code == 202
     assert switched.get_json() == {
@@ -3113,6 +3200,12 @@ def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path:
     messenger = manager._messenger
     assert isinstance(messenger, RecordingMngrMessenger)
     wait_for(lambda: (first, "Carry on here") in messenger.sent, timeout=5.0)
+    assert messenger.sent == [
+        (first, "/model sonnet[1m]"),
+        (first, "/effort medium"),
+        (first, "/fast off"),
+        (first, "Carry on here"),
+    ]
     # The chat still reads its transcript, now from the new account's folder.
     assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
 

@@ -1,7 +1,14 @@
 import subprocess
+import threading
 from collections.abc import Sequence
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Final
+
+from imbue.imbue_common.mutable_model import MutableModel
+from pydantic import Field
+from pydantic import PrivateAttr
 
 APP_ICON_MARKUP: Final[str] = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
@@ -99,3 +106,57 @@ def build_news_workspace(repo_root: Path) -> Path:
     write_repo_file(repo_root, "system/scripts/run_news.sh", "#!/bin/sh\nexit 0\n")
     write_supervisord_conf(repo_root, ("program:news", "program:news-fetcher", "program:files"))
     return manifest_path
+
+
+class ShellStub(MutableModel):
+    """A loopback stand-in for the shell that answers every GET with one configured status and body."""
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    status: int = Field(default=200, description="The status every request is answered with")
+    body: str = Field(default="{}", description="The body every request is answered with")
+    _server: ThreadingHTTPServer | None = PrivateAttr(default=None)
+    _thread: threading.Thread | None = PrivateAttr(default=None)
+
+    def start(self) -> None:
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                encoded = stub.body.encode("utf-8")
+                self.send_response(stub.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self._server = server
+        self._thread = thread
+
+    @property
+    def url(self) -> str:
+        if self._server is None:
+            raise RuntimeError("the shell stub is not serving")
+        host, port = self._server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def answer(self, status: int, body: str) -> None:
+        self.status = status
+        self.body = body
+
+    def close(self) -> None:
+        """Stop serving; the URL then refuses connections, as a shell that is down does."""
+        if self._server is None:
+            return
+        self._server.shutdown()
+        self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self._server = None
+        self._thread = None

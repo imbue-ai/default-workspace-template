@@ -22,9 +22,9 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// A named import of an export the vendored embed_contract snapshot lacks fails
+// A named import of an export the embed_contract snapshot lacks fails
 // the rollup build (this repo does not edit system/vendor by hand; the snapshot
-// moves with the mngr release sync), so these probe the namespace and fall
+// moves with mngr), so these probe the namespace and fall
 // back to the literal. A snapshot without the export drops the type it does
 // not know at its validator.
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
@@ -33,6 +33,16 @@ export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
 // Payload: { serviceName }.
 export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
   "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
+// Embedder -> workspace: the user opened a chat's notification in the minds
+// shell; show that chat. Payload: { chatId } (the chat's id, which is its
+// first agent's id).
+export const FOCUS_CHAT: "minds:focus-chat" =
+  "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
+// Workspace -> embedder: this page's endpoint is listening. Payload: {}. The
+// embedder holds a focus-chat ask until it arrives, rather than guessing when
+// a freshly-mounted frame's page is live.
+export const WORKSPACE_READY: "minds:workspace-ready" =
+  "WORKSPACE_READY" in embedContract ? embedContract.WORKSPACE_READY : "minds:workspace-ready";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -59,6 +69,7 @@ function getEndpoint(): ContractEndpoint {
         [CLOSE_ACTIVE_TAB]: (message) => handlerByType[CLOSE_ACTIVE_TAB]?.(message),
         [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
         [PERMISSION_RESOLUTIONS]: (message) => handlerByType[PERMISSION_RESOLUTIONS]?.(message),
+        [FOCUS_CHAT]: (message) => handlerByType[FOCUS_CHAT]?.(message),
       },
     });
   }
@@ -74,6 +85,12 @@ export function sendToEmbedder(type: string, payload?: Record<string, unknown>):
 export function setEmbedderMessageHandler(type: string, handler: EmbedderMessageHandler): void {
   getEndpoint();
   handlerByType[type] = handler;
+}
+
+/** Tell the embedder this page is listening, so it can send what it held.
+ * Called once per load, after the handlers that the held messages need. */
+export function announceReadyToEmbedder(): void {
+  sendToEmbedder(WORKSPACE_READY);
 }
 
 /** Clear the handler for one embedder->workspace type. */

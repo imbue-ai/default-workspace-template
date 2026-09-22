@@ -43,6 +43,7 @@ from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
+from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.chat_transcript import agent_switch_event
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -124,8 +125,8 @@ class SuccessorUntrackedError(HandoffStepError):
 def converging_detail(phase: HandoffPhase, target_label: str) -> str:
     """What a verb refused while the chat converges tells the user (the 409's ``detail``, shown as is).
 
-    Names the destination and the phase in plain words rather than the chat's id: the shell's
-    tab menu and the chat page both put this text in front of the user. The destination is the
+    Names the destination and the phase in plain words rather than the chat's id: the chat
+    rail and the chat page both put this text in front of the user. The destination is the
     harness for a handoff and the account for a rebind (``HandoffState.target_label``).
     """
     match phase:
@@ -606,10 +607,13 @@ class HandoffRunner:
                 raise HandoffStepError(f"the handoff of chat {record.chat_id} is a fresh start and takes no prompt")
             case _ as unreachable:
                 assert_never(unreachable)
+        # A seeded chat's seed segment is no agent mngr knows (``chat_seed.py``): it has no state
+        # dir and no transcript ``mngr transcript`` could read, so it is not a predecessor here.
         predecessors = "\n".join(
             f"- seq {entry.seq}: {_predecessor_archival_name(entry, handoff.chat_name)}, id "
             f"{entry.agent_id}, harness {entry.harness.value}, state dir {agent_state_dir(self._deps.host_dir, entry.agent_id)}"
             for entry in record.agents
+            if not is_seed_entry(entry)
         )
         try:
             return template.substitute(

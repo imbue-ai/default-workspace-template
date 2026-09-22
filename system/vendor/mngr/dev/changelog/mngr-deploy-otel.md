@@ -1,7 +1,0 @@
-Deployment pass for the observability bring-up: this branch carries `mngr/log-and-telemetry-aggregation` (the OpenObserve telemetry spec, `scripts/provision_observability_config.py`, `.minds/template/observability.sh`, and the `provision-observability` family of `private.just` recipes) and is the working branch for the per-tier bring-up, starting with the shared dev instance.
-
-Deploy-driven corrections to the provisioning scripts or recipes land here as their own commits.
-
-Dev-tier finding: the credentials section of `specs/minds-openobserve-telemetry.md` now records the role vocabulary and password policy validated on the dev instance (v0.92.2) -- sender users are minted as `service_account` (the OSS release accepts only `admin` and `service_account`), and minted passwords satisfy the enforced complexity policy (at least one lowercase letter, uppercase letter, digit, and special character).
-
-CI fix: the three repo-wide meta ratchets that scan every class definition (`test_event_envelope_subclasses_never_re_forbid_extra`, `test_wire_model_subclasses_never_re_forbid_extra`, `test_wire_types_files_contain_only_wire_models_and_wire_enums`) no longer each re-parse every `.py` file in the repo -- the shared collection is cached, the wire_types test enumerates via the gitignore-pruned git-ls-files walk instead of a raw rglob (which descended into node_modules/.git/.venv), and all three carry an explicit 60s timeout plus a flaky marker so a loaded offload sandbox cannot fail them on the default 10s pytest timeout (observed live on this PR's CI).

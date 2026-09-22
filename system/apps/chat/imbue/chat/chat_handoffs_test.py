@@ -361,7 +361,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
 
 
 def test_the_archival_rename_argv_is_accepted_by_the_live_cli() -> None:
-    """The archive is one rename carrying every label, checked against the vendored mngr like the manager's argvs."""
+    """The archive is one rename carrying every label, checked against mngr like the manager's argvs."""
     argv = archive_rename_command(
         "mngr",
         "agent-123",
@@ -633,6 +633,60 @@ def test_the_prompt_names_an_earlier_predecessor_by_the_archival_name_it_was_giv
     assert f"- seq 1: {archived_agent_name(1, 'Old-Name', first)}, id {first}" in prompt
     assert f"- seq 2: {archived_agent_name(2, 'Chat-1', second)}, id {second}" in prompt
     assert archived_agent_name(1, "Chat-1", first) not in prompt
+    assert successor in workspace.agents
+
+
+def test_the_prompt_leaves_out_a_seeded_chats_seed_segment(tmp_path: Path) -> None:
+    """A seeded chat's first member is the seed the Mind app wrote, not an agent mngr knows: it has no
+    state dir and no transcript to read, so the predecessors the successor is pointed at start with the
+    chat's first real agent."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    second = f"agent-{uuid4().hex}"
+    workspace.agents[second] = workspace.agents[first].model_copy_update(
+        to_update(workspace.agents[first].field_ref().id, second)
+    )
+    workspace.events_by_agent[second] = workspace.events_by_agent[first]
+    record = workspace.record()
+    assert record.handoff is not None
+    seed = ChatAgentEntry(
+        seq=1,
+        agent_id=first,
+        lane="",
+        account_id="",
+        harness=HarnessType.SEED,
+        started_at=_NOW,
+        ended_at=_NOW,
+        final_event_count=2,
+    )
+    live_second = ChatAgentEntry(
+        seq=2,
+        agent_id=second,
+        lane="anthropic",
+        account_id="acct-anthropic",
+        harness=HarnessType.CLAUDE,
+        started_at=_NOW,
+    )
+    workspace.store.write(
+        record.model_copy_update(
+            to_update(record.field_ref().agents, (seed, live_second)),
+            to_update(record.field_ref().seed_title, "Chat 1"),
+            to_update(
+                record.field_ref().handoff,
+                record.handoff.model_copy_update(
+                    to_update(record.handoff.field_ref().retiring_seq, 2),
+                    to_update(record.handoff.field_ref().next_seq, 3),
+                ),
+            ),
+        )
+    )
+
+    _runner(workspace).run(workspace.chat_id, "h-1")
+
+    assert workspace.record().handoff is None
+    prompt = workspace.delivered_prompt()
+    assert f"- seq 2: {archived_agent_name(2, 'Chat-1', second)}, id {second}" in prompt
+    # The chat id (the seed's pseudo-agent id) is still named as the chat, never as a predecessor.
+    assert "- seq 1:" not in prompt and "harness seed" not in prompt and f", id {first}," not in prompt
     assert successor in workspace.agents
 
 

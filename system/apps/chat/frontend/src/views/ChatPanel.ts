@@ -6,7 +6,10 @@
  * account, it offers the provider chooser; being created, it shows the composer over an
  * empty transcript (a message typed now is held until the agent lands); failed, it shows the
  * reason and a way to try again over the composer, so a message held through the failure is
- * back in it where it can be seen. The transcript takes over when creation completes.
+ * back in it where it can be seen. The transcript takes over when creation completes. A
+ * seeded chat (the Mind app's onboarding conversation, continued here) has a transcript from
+ * the start, so it renders as one through its wait for the first send and its create; only a
+ * failed create shows the provisional screen.
  */
 
 import m from "mithril";
@@ -25,6 +28,7 @@ import {
   getRenderVersion,
   getTotalEventCount,
   isConversationNotFound,
+  noteLoadedArrivals,
   removeMessageSentListener,
 } from "../models/Response";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
@@ -39,14 +43,14 @@ import {
   removeChatsUpdatedListener,
 } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
-import { areAccountsLoaded, closeProviderChooser, getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
-import { maybePromptForFastMode } from "./fast-mode-prompt";
+import { maybeApplyFastModeLimit } from "./fast-mode-limit";
+import { FastModeNotice } from "./FastModeNotice";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { ModelBar } from "./ModelBar";
+import { ModelProviderMenu } from "./ModelProviderMenu";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
@@ -98,19 +102,17 @@ function provisionalRecord(chatId: string): ProvisionalChat | null {
   return provisional !== undefined && getChatById(chatId) === undefined ? provisional : null;
 }
 
-/** Whether the page has a composer: for a chat the app lists, one whose create is in flight (a
- *  message typed now is held until it lands), or one whose create failed (the held message is
- *  returned to the composer with the reason, and a send there is refused with it). Only a chat
- *  still waiting for an account has nothing to type into. */
-function hasComposer(chatId: string): boolean {
-  const provisional = provisionalRecord(chatId);
-  return provisional === null || provisional.phase !== "awaiting_account";
+/** Whether a provisional chat's page is its transcript rather than a provisional screen: a seeded
+ *  chat has one to show from the start, and keeps showing it through its create; a failed create
+ *  shows its reason instead, like any other. */
+export function isSeededTranscriptShown(provisional: ProvisionalChat | null): boolean {
+  return provisional !== null && provisional.is_seeded && provisional.phase !== "failed";
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }> {
   let currentChatId: string | null = null;
 
-  // Whether the page's frame is on screen. The shell keeps a hidden tab's frame mounted
+  // Whether the page's frame is on screen. The shell keeps a minimized window's frame mounted
   // and mithril redraws globally, so the component keeps running while hidden against an
   // element collapsed to zero size; running scroll work then would corrupt the retained
   // scroll position. The page feeds the shell's authoritative visibility in via the
@@ -246,16 +248,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   // unbounded request loop rather than the one-shot capture the view wants.
   let screenAttemptedChatId: string | null = null;
 
-  // A launch of this provisional chat (the chooser's sign-in, or Try again) in flight, and
-  // how the last one was refused.
+  // A launch of this provisional chat (the page's Try again) in flight, and how the last one
+  // was refused.
   let launchInFlight = false;
   let launchError: string | null = null;
-  // The chat the chooser was opened for on its own, so a chooser the user dismissed is not
-  // reopened on every redraw.
-  let chooserOfferedFor: string | null = null;
-  // The chat this page last launched (through the chooser, a retry, or on its own): a launch
-  // the page starts on its own initiative is never repeated for it.
-  let launchedFor: string | null = null;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -283,7 +279,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
 
   function launch(chatId: string, accountId: string): void {
     if (launchInFlight) return;
-    launchedFor = chatId;
     launchInFlight = true;
     launchError = null;
     launchChat(chatId, accountId)
@@ -294,10 +289,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
         launchInFlight = false;
         m.redraw();
       });
-  }
-
-  function offerProviderChooser(chatId: string): void {
-    openProviderChooser({ onSignedIn: (accountId) => launch(chatId, accountId) });
   }
 
   /** The page of a chat whose create is running: an empty transcript with the composer's held
@@ -318,77 +309,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   /** The page of a chat that is not an agent yet, by its phase. */
   function renderProvisional(chatId: string, provisional: ProvisionalChat): m.Vnode {
     if (provisional.phase === "creating") {
-      // The create is running, whoever started it: a refusal this page recorded while the
-      // chat waited (another page's launch won the race) is over, and must not be shown
-      // under a later failure's own reason.
+      // The create is running, whoever started it: a refusal this page recorded from an earlier
+      // attempt (another page's Try again won the race) is over, and must not be shown under a
+      // later failure's own reason.
       launchError = null;
       return renderStarting(chatId);
-    }
-    if (provisional.phase === "awaiting_account") {
-      // The account list decides between launching and offering the chooser, so neither
-      // happens before it has loaded: a record replayed ahead of the accounts response would
-      // otherwise open the chooser only to close it a redraw later.
-      if (!areAccountsLoaded()) {
-        return m(
-          "div",
-          { class: "message-list-awaiting-account flex flex-col items-center justify-center h-full p-8" },
-          m("p", { class: "text-secondary" }, "Checking which providers are signed in..."),
-        );
-      }
-      // Minted with nothing signed in. An account that exists by the time this page looks (a
-      // sign-in finished in another tab, a reload after one) launches the chat at once, as
-      // ``new`` would have with one signed in, rather than making the user pick it out of the
-      // chooser.
-      const account = getSelectedAccount();
-      // A launch this page started (on the selected account, or through the chooser) that is
-      // in flight or waiting for the push that moves the record to the creating phase: the
-      // page is starting the chat, not asking for a sign-in.
-      const isLaunching = launchInFlight || (launchedFor === chatId && launchError === null);
-      if (account !== null && !isLaunching && launchError === null) {
-        closeProviderChooser();
-        launch(chatId, account.id);
-        return renderStarting(chatId);
-      }
-      if (isLaunching) {
-        return renderStarting(chatId);
-      }
-      if (account === null && chooserOfferedFor !== chatId) {
-        // Offered once per chat, on the page's first render of this phase: the user may
-        // dismiss it and come back through the button. With an account signed in the page
-        // launched on it instead, and a refusal is shown here with a retry on that account
-        // rather than a chooser over it.
-        chooserOfferedFor = chatId;
-        offerProviderChooser(chatId);
-      }
-      return m(
-        "div",
-        { class: "message-list-awaiting-account flex flex-col items-center justify-center h-full gap-4 p-8" },
-        [
-          m("p", { class: "type-heading text-primary" }, "Sign in to a provider to start this chat"),
-          launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
-          m("div", { class: "flex gap-2" }, [
-            account !== null && launchError !== null
-              ? m(
-                  Button,
-                  {
-                    variant: "primary",
-                    extra: "message-list-launch-retry",
-                    onclick: () => launch(chatId, account.id),
-                  },
-                  "Try again",
-                )
-              : null,
-            m(
-              Button,
-              {
-                variant: account !== null && launchError !== null ? "secondary" : "primary",
-                onclick: () => offerProviderChooser(chatId),
-              },
-              "Choose a provider",
-            ),
-          ]),
-        ],
-      );
     }
     return m(
       "div",
@@ -413,11 +338,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     );
   }
 
-  async function loadChat(chatId: string): Promise<void> {
+  /** Load the chat's transcript: the snapshot with the live stream, or the snapshot alone for a
+   *  seeded chat that has no agent yet (the stream follows the chat's active agent, and its seed
+   *  never changes; the reload once the first agent lands brings the stream). */
+  async function loadChat(chatId: string, isStreamed = true): Promise<void> {
     try {
-      // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
-      // snapshot replace in fetchEvents cannot drop a live event on first load.
-      await loadSnapshotWithStream(chatId);
+      if (isStreamed) {
+        // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
+        // snapshot replace in fetchEvents cannot drop a live event on first load.
+        await loadSnapshotWithStream(chatId);
+      } else {
+        await fetchEvents(chatId);
+      }
     } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
@@ -437,7 +369,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   /**
    * Re-run the load that the panel is currently reporting a failure for.
    *
-   * Identical to what the tab menu's Refresh does, offered where the user is
+   * Identical to what the window menu's Refresh does, offered where the user is
    * already looking: an error screen whose only remedy lives behind a menu they
    * have no particular reason to open reads as a dead end. Redraws on settle
    * because a *failed* reload writes only the load state, which no redraw
@@ -462,7 +394,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     }
   }
 
-  function ensureChatLoaded(chatId: string): void {
+  function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
       return;
     }
@@ -471,11 +403,28 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // Resets all scroll state and loads this chat's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
     engine.setChat(chatId);
-    loadChat(chatId);
+    loadChat(chatId, isStreamed);
   }
 
   // A retry of the snapshot that 404'd is outstanding; only one at a time.
   let notFoundRetryInFlight = false;
+  // A seeded chat this page showed as provisional: once the chat list names it (its first agent
+  // landed), the transcript is reloaded so the window covers the new segment, and that load
+  // connects the stream, which had no agent to follow while the chat was provisional.
+  let seededChatAwaitingReload: string | null = null;
+
+  function reloadSeededChatOnceRegistered(): void {
+    const chatId = seededChatAwaitingReload;
+    if (chatId === null || getChatById(chatId) === undefined) {
+      return;
+    }
+    seededChatAwaitingReload = null;
+    // The first send rode the agent's create and landed before this page had a stream to see
+    // it arrive on, so the placed snapshot is what stands its "Sending…" bubble down.
+    loadChat(chatId)
+      .then(() => noteLoadedArrivals(chatId))
+      .finally(() => m.redraw());
+  }
 
   /**
    * Re-load a panel whose first events fetch 404'd, once the backend knows the
@@ -514,14 +463,21 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   function renderMessages(chatId: string): m.Vnode {
     // A provisional record short-circuits the load: there is no agent to read yet. A load that
     // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
-    // not-found until the agent registers, which retries it (retryAfterChatResolved).
+    // not-found until the agent registers, which retries it (retryAfterChatResolved). A seeded
+    // chat is the exception: its seed segment reads like any transcript, so the page loads it.
     const provisional = provisionalRecord(chatId);
-    if (provisional !== null) {
+    if (provisional !== null && !isSeededTranscriptShown(provisional)) {
       return renderProvisional(chatId, provisional);
     }
-
-    ensureChatLoaded(chatId);
-    manageStreamConnection(chatId);
+    if (provisional !== null) {
+      // The seed is read once and never changes, and the stream needs an active agent, which
+      // the chat has none of until its first send launches one: no stream until then.
+      seededChatAwaitingReload = chatId;
+      ensureChatLoaded(chatId, false);
+    } else {
+      ensureChatLoaded(chatId, true);
+      manageStreamConnection(chatId);
+    }
 
     if (isConversationNotFound(chatId)) {
       fetchScreenCapture(chatId);
@@ -556,7 +512,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
 
     // Read per-render rather than latched at load time, so the panel leaves the
-    // error state as soon as any reload succeeds -- the tab's Refresh or the
+    // error state as soon as any reload succeeds -- the window menu's Refresh or the
     // stream's background reconnect, neither of which goes through loadChat.
     // The phase, not just the error: a load that is in flight -- including a retry -- must not
     // fall through to "No events yet for this agent.", which claims an answer it does not have.
@@ -619,16 +575,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     const chat = getChatById(chatId);
     const agentIsIdle = chat?.active_agent.activity_state === "IDLE";
 
-    // The first chat starts on fast mode; once it has run its grace period, ask
-    // the user whether to keep it. Checked here because this is where the loaded
-    // transcript and the idle flag meet. Re-running it per render is fine:
-    // raising the prompt is idempotent, and the cheap gates (harness declared no
-    // prompt, not the first chat, already answered, agent mid-reply, fast mode
-    // already off) short-circuit ahead of the one gate that is not cheap -- the
-    // turn count, which walks the held transcript. Which agents owe the prompt
-    // at all is the harness's declaration (the fast_mode_prompt popup on its
-    // catalog), not a harness-name check here.
-    maybePromptForFastMode(chat, events, agentIsIdle);
+    // A new chat starts on fast mode; once it has run the workspace's turn limit,
+    // switch it to standard speed. Checked here because this is where the loaded
+    // transcript and the idle flag meet.
+    maybeApplyFastModeLimit(chat, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
@@ -679,7 +629,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     ]);
   }
 
-  const handleChatsUpdated = (): void => retryAfterChatResolved();
+  const handleChatsUpdated = (): void => {
+    retryAfterChatResolved();
+    reloadSeededChatOnceRegistered();
+  };
 
   const handleMessageSent = (chatId: string): void => {
     if (chatId === currentChatId) {
@@ -712,7 +665,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
 
       const content = isSlotClaimed("conversation-content") ? null : renderMessages(chatId);
 
-      const acceptsFileDrops = hasComposer(chatId) && !isConversationNotFound(chatId);
+      const acceptsFileDrops = !isConversationNotFound(chatId);
 
       // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
       // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
@@ -799,76 +752,73 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
                     )
                   : null,
               ]),
-              // Present while there is an agent to reach, a create in flight included: a message
-              // typed while the chat is being created is held and delivered when it lands.
-              !hasComposer(chatId)
-                ? null
-                : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
-                    m(EmptySlot, { name: "conversation-before-input" }),
-                    // The switch dialog a provider choice opens (spec 5.1), and why a switch
-                    // failed, with a retry on any account (spec 5.10).
-                    m(SwitchDialog, { chatId }),
-                    m(HandoffFailedNotice, { chatId }),
-                    isConversationNotFound(chatId)
-                      ? null
-                      : m(ActivityIndicator, {
-                          chatId,
-                          events: getEventsForChat(chatId),
-                        }),
-                    m(MessageInput, { chatId }),
-                    // The under-bar is a sibling of the whole flip card, not part of this face: on
-                    // a face it would rotate away with the face its own switch turns, and the flip
-                    // would be one-way.
-                  ]),
+              // Present for every chat, a create in flight included: a message typed while the
+              // chat is being created is held and delivered when it lands.
+              m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
+                m(EmptySlot, { name: "conversation-before-input" }),
+                // The switch dialog a provider choice opens (spec 5.1), and why a switch
+                // failed, with a retry on any account (spec 5.10).
+                m(SwitchDialog, { chatId }),
+                m(HandoffFailedNotice, { chatId }),
+                isConversationNotFound(chatId)
+                  ? null
+                  : m(ActivityIndicator, {
+                      chatId,
+                      events: getEventsForChat(chatId),
+                    }),
+                m(MessageInput, { chatId }),
+                // The under-bar is a sibling of the whole flip card, not part of this face: on
+                // a face it would rotate away with the face its own switch turns, and the flip
+                // would be one-way.
+              ]),
             ],
           }),
           // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
           // the flip would be one-way. Everything here describes the conversation rather than
           // either rendering of it, which is the same reason it belongs to neither face.
-          // Carries the bottom gutter the footer used to supply, so the 24px sits under the
-          // under-bar rather than between the composer and it.
-          !hasComposer(chatId)
-            ? null
-            : m(
-                "div",
-                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
-                m(
-                  "div",
-                  {
-                    // Same max-width as the composer card above it; relative as
-                    // the containing block for centered overlays.
-                    class:
-                      "composer-under-bar relative mx-auto mt-1 flex w-full " +
-                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
-                  },
-                  [
-                    m(ModelBar, { chatId }),
-                    // The terminal back face attaches to the agent's own tmux session, which
-                    // a chat still being created does not have: without a name the terminal
-                    // dispatch attaches to whatever session it finds, so the flip waits for
-                    // the agent to register.
-                    getChatById(chatId) === undefined
-                      ? null
-                      : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
-                          m(TerminalViewToggle, {
-                            on: isFlipped,
-                            onToggle: (event: Event) => {
-                              isFlipped = !isFlipped;
-                              // Turning the card over is the user navigating TO the terminal,
-                              // so the host grants it focus -- the embedded ttyd client never
-                              // takes focus on its own (see terminalFocus.ts). Redraw first so
-                              // a first flip has mounted the back face before the ask.
-                              if (isFlipped) {
-                                const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
-                                m.redraw.sync();
-                                requestFrameFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
-                              }
-                            },
-                          }),
-                        ]),
-                  ],
-                ),
-              ),
+          // An 8px band under the under-bar, matching the 8px above it: the row is a caption
+          // on the composer and sits evenly in its own band.
+          m(
+            "div",
+            { class: "chat-under-bar shrink-0 bg-chat px-8 pb-2" },
+            m(
+              "div",
+              {
+                // Same max-width as the composer card above it; relative as
+                // the containing block for centered overlays.
+                class:
+                  "composer-under-bar relative mx-auto mt-2 flex w-full " +
+                  "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
+              },
+              [
+                m(ModelProviderMenu, { chatId }),
+                m(FastModeNotice, { chatId }),
+                // The terminal back face attaches to the agent's own tmux session, which
+                // a chat still being created does not have: without a name the terminal
+                // dispatch attaches to whatever session it finds, so the flip waits for
+                // the agent to register.
+                getChatById(chatId) === undefined
+                  ? null
+                  : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
+                      m(TerminalViewToggle, {
+                        on: isFlipped,
+                        onToggle: (event: Event) => {
+                          isFlipped = !isFlipped;
+                          // Turning the card over is the user navigating TO the terminal,
+                          // so the host grants it focus -- the embedded ttyd client never
+                          // takes focus on its own (see terminalFocus.ts). Redraw first so
+                          // a first flip has mounted the back face before the ask.
+                          if (isFlipped) {
+                            const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
+                            m.redraw.sync();
+                            requestFrameFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
+                          }
+                        },
+                      }),
+                    ]),
+              ],
+            ),
+          ),
         ],
       );
     },

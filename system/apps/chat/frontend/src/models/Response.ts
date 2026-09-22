@@ -5,7 +5,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
@@ -34,6 +34,17 @@ export interface ToolCall {
   // only for events parsed before the labels existed.
   header_label?: string;
   caption_label?: string;
+  // What the call DID, for the transcript's tool chips -- past tense, and in two
+  // halves because the chip sets them in different type: `action_verb` is prose
+  // ("ran", "read"), `action_target` is the machine's own text (a path, a pattern,
+  // a command) and may be absent when the call acted on nothing nameable.
+  action_verb?: string;
+  action_target?: string;
+  // The agent's OWN words for why it made this call, present only where the tool
+  // records them (claude's shell and delegation tools ask for a description; no
+  // other tool takes one). Never inferred, so an absent note means the chip says
+  // what the call did instead of why.
+  action_note?: string;
   // For Agent tool calls: the description and subagent_type from the tool input, present
   // as soon as the call appears so the rich card can render before the subagent session is
   // linked. subagent_metadata (with the session_id for the click-through) is filled in once
@@ -82,7 +93,7 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // harness's parser off the shared detector table): how this message renders.
   // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
   // sentinel tags) never reach the wire -- the decision does.
-  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "status";
+  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "status" | "notice";
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
 
   display_label?: string;
@@ -185,6 +196,13 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
   type: "special";
   kind: SpecialEventKind;
 }
+
+/** The ``source`` of the events of a seeded chat's seed segment (the backend's ``SEED_SOURCE``):
+ *  the turns the Mind app wrote before the workspace had any agent. */
+export const SEED_SOURCE = "seed";
+
+/** The pseudo-harness a seed segment reads as (the backend's ``HarnessType.SEED``). */
+export const SEED_HARNESS = "seed";
 
 /**
  * The chat moved from one agent to the next (a handoff between harnesses): the chat-level
@@ -535,7 +553,7 @@ const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
 
 // Where each chat's snapshot load stands. It lives here rather than in the
 // panel because every path that reloads a transcript -- the panel's own load,
-// the tab's Refresh, and the stream's background reconnect -- goes through
+// the window menu's Refresh, and the stream's background reconnect -- goes through
 // `fetchEvents`, and only one of those is the panel. A panel holding its own
 // copy could not be cleared by the other two, so a recovered transcript stayed
 // hidden behind a stale error until the page was reloaded. Holding the whole
@@ -661,6 +679,15 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
   return changed;
 }
 
+/** The user turns among `events` that stand a page's "Sending…" bubble down: what a user sent.
+ *  Not a successor's handoff prompt (the chat app's own message; the message it folds in is the
+ *  switch marker's to show), and not a seed segment's turns (written before any page existed). */
+function arrivedUserEventIds(events: readonly TranscriptEvent[]): string[] {
+  return events
+    .filter((event) => event.type === "user_message" && event.source !== SEED_SOURCE && !isHandoffPromptChip(event))
+    .map((event) => event.event_id);
+}
+
 export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(chatId).append(newEvents)) {
     m.redraw();
@@ -670,11 +697,7 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   // (no overlap). Deduped by event_id in noteBackendArrivals, so a re-streamed
   // event is harmless. Only the live tail feeds this -- paging/backfill of old
   // history goes through the other append paths and must not drop live bubbles.
-  // A successor's handoff prompt is the chat app's own message, not the real form of
-  // anything the page sent: the message it folds in is the switch marker's to show.
-  const userEventIds = newEvents
-    .filter((event) => event.type === "user_message" && !isHandoffPromptChip(event))
-    .map((event) => event.event_id);
+  const userEventIds = arrivedUserEventIds(newEvents);
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
@@ -686,6 +709,19 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
     event.type === "agent_switch" && event.message_id !== null ? [event.message_id] : [],
   );
   dropOutgoingByMessageId(chatId, carriedMessageIds);
+}
+
+/**
+ * Route the user turns of the chat's loaded window through the optimistic-send layer, for a
+ * message that landed before this page had a stream to see it arrive on: a seeded chat's first
+ * send rides its agent's create, and the reload once the agent lands places it as a snapshot,
+ * not a delta. Deduped by event_id like the live path, so a turn the stream did carry counts once.
+ */
+export function noteLoadedArrivals(chatId: string): void {
+  const userEventIds = arrivedUserEventIds(getEventsForChat(chatId));
+  if (userEventIds.length > 0) {
+    noteBackendArrivals(chatId, userEventIds);
+  }
 }
 
 export function prependEvents(chatId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {
@@ -985,8 +1021,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
       message: trimmed,
       message_id: id,
       client_id: getClientId(),
-      active_layout: getActiveProjectId(),
-      device_kind: getDeviceKind(),
+      desktop_id: getActiveDesktopId(),
     },
   });
   return id;

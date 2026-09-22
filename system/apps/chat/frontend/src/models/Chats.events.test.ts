@@ -48,7 +48,7 @@ function open(): void {
 const chat = chatSnapshotFixture;
 
 function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | null = null): ProvisionalChat {
-  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error };
+  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error, is_seeded: false };
 }
 
 /** Whether a promise has settled yet, without waiting on it: the hold must be observable. A
@@ -79,8 +79,8 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("stores a pushed record and replaces it when the same chat is pushed in a new phase", () => {
-    push({ type: "provisional_chat_created", ...proto("agent-1", "awaiting_account") });
-    expect(manager.getProvisionalChat("agent-1")?.phase).toBe("awaiting_account");
+    push({ type: "provisional_chat_created", ...proto("agent-1", "awaiting_first_send") });
+    expect(manager.getProvisionalChat("agent-1")?.phase).toBe("awaiting_first_send");
 
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("creating");

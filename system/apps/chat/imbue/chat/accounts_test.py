@@ -16,7 +16,6 @@ from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import REAUTH_BACKUP_DIRNAME
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import accounts_root
-from imbue.chat.accounts import claim_first_chat
 from imbue.chat.accounts import clear_reauth_backup
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
@@ -306,28 +305,6 @@ def test_the_lock_file_is_not_mistaken_for_an_account(tmp_path: Path) -> None:
 
     assert removed == () and dropped == ()
     assert (accounts_root(tmp_path) / "index.lock").exists()
-
-
-def test_the_first_chat_is_claimed_exactly_once(tmp_path: Path) -> None:
-    """It is what stacks the `first` template, and therefore what delivers `/welcome`.
-
-    Claimed on demand rather than at boot, because a chat needs a provider account and a fresh
-    workspace has none until someone signs in.
-    """
-    assert claim_first_chat(tmp_path) is True
-    assert claim_first_chat(tmp_path) is False
-    assert claim_first_chat(tmp_path) is False
-
-
-def test_the_first_chat_marker_survives_deleting_every_account(tmp_path: Path) -> None:
-    """Signing out of everything does not make the next chat a first chat again -- the user
-    has already been welcomed, and being welcomed twice reads as the workspace forgetting."""
-    account_id, _ = mint_account_dir(tmp_path)
-    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
-    assert claim_first_chat(tmp_path) is True
-    delete_account(account_id, tmp_path)
-
-    assert claim_first_chat(tmp_path) is False
 
 
 def test_a_rename_changes_the_name_and_nothing_else(tmp_path: Path) -> None:

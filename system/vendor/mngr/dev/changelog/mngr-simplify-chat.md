@@ -1,1 +1,0 @@
-CI's Docker acceptance job now runs with a 900s suite budget (matching the release workflow's budget for the same marker set) instead of 600s: the suite legitimately takes ~600s and a run failed at 607.64s with every test passing. Per-test hang protection (--timeout 300) is unchanged.

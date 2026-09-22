@@ -31,13 +31,13 @@ export interface CatalogModelOption {
 
 // A popup the harness declared for the chat UI (see HarnessSpec.popups on the
 // backend). `composer_command` popups match a typed message's first token against
-// `commands` at send time; the `turn_check` popup is the fast-mode grace-period
+// `commands` at send time; the `turn_check` popup is the fast-mode turn-limit
 // check ChatPanel runs per render. The frontend acts on whatever the agent's
 // harness declared -- it never branches on the harness name.
 export interface HarnessPopup {
   trigger: "composer_command" | "turn_check";
   commands: string[];
-  action: "notice" | "open_auth" | "fast_mode_prompt";
+  action: "notice" | "open_auth" | "fast_mode_limit";
   /** `notice` only: replaces the notice's default body. Absent for most declines,
    *  which are declined for the same reason (the command takes over the terminal);
    *  present where the harness has a more specific thing to say. */
@@ -60,9 +60,8 @@ export interface HarnessCatalog {
   // to the restart-based flush.
   native_atomic_shoulder_tap_possible: boolean;
   // The harness's declared popups plus its agent-auth surface, merged into the
-  // payload from the backend HarnessSpec. Optional so a stale backend without
-  // them degrades to "no popups" rather than a parse failure.
-  popups?: HarnessPopup[];
+  // payload from the backend HarnessSpec.
+  popups: HarnessPopup[];
 }
 
 const catalogByHarness = new Map<string, HarnessCatalog>();
@@ -125,9 +124,9 @@ export function findComposerPopup(
   return null;
 }
 
-/** Whether `harness` declared the fast-mode grace-period prompt. */
-export function hasFastModePrompt(harness: string | undefined): boolean {
+/** Whether `harness` declared the fast-mode turn limit: it can launch fast, and the limit applies. */
+export function hasFastModeLimit(harness: string | undefined): boolean {
   return (getHarnessCatalog(harness)?.popups ?? []).some(
-    (popup) => popup.trigger === "turn_check" && popup.action === "fast_mode_prompt",
+    (popup) => popup.trigger === "turn_check" && popup.action === "fast_mode_limit",
   );
 }

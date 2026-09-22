@@ -62,11 +62,6 @@ _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
 
-# Marks that this workspace has had its first chat. Beside the accounts root rather than in
-# bootstrap's state dir: "has anyone chatted here yet" is workspace state, and the chat that
-# answers it is created on demand rather than at boot.
-_FIRST_CHAT_FILENAME: Final = "first_chat_started"
-
 _INDEX_THREAD_LOCK = threading.Lock()
 _LOCK_FILENAME: Final = "index.lock"
 
@@ -151,37 +146,6 @@ def accounts_root(home: Path | None = None) -> Path:
 
 def account_dir(account_id: str, home: Path | None = None) -> Path:
     return accounts_root(home) / account_id
-
-
-def claim_first_chat(home: Path | None = None) -> bool:
-    """True exactly once per workspace, for the first chat anyone starts.
-
-    The caller stacks the `first` create template on that chat -- which is what delivers
-    `/welcome`. It is claimed here rather than by bootstrap because a chat needs a provider
-    account, and a fresh workspace has none until someone signs in.
-
-    Claim-and-mark in one call so two creates racing cannot both be first.
-    """
-    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
-    with _index_lock(home):
-        if marker.exists():
-            return False
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.touch()
-        return True
-
-
-def release_first_chat(home: Path | None = None) -> None:
-    """Give the claim back, for a create that claimed it and then failed.
-
-    There is exactly one `/welcome` per workspace and no way to ask for another, so a claim
-    spent on a create that died -- a rejected credential, an OOM, a container restart -- would
-    cost the user their first-run experience permanently. Only the claimant calls this, and
-    only on a failure path, so it cannot race a second create into being first as well.
-    """
-    marker = accounts_root(home).parent / _FIRST_CHAT_FILENAME
-    with _index_lock(home):
-        marker.unlink(missing_ok=True)
 
 
 def index_path(home: Path | None = None) -> Path:

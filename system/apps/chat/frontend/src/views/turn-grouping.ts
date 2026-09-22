@@ -75,12 +75,14 @@ import type {
   ToolCall,
 } from "../models/Response";
 import type { HandoffState } from "../models/Chats";
+import { SEED_HARNESS } from "../models/Response";
 import { isHandoffPromptChip } from "../models/handoffPrompt";
 import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import {
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
+  isNoticeUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
@@ -155,7 +157,7 @@ export type TimelineItem =
       event: AssistantMessageEvent;
       resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
     }
-  /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
+  /** A non-boundary user message shown inline: a stop-hook chip, a background-task notice. */
   | { kind: "chip"; event: UserMessageEvent }
   /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
    *  request in the window, at the switch itself, when its prompt reached it). */
@@ -519,6 +521,13 @@ export function buildSections(
   // setup sends before the prompt (a model pick's slash commands) leave it armed.
   let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
+    if (e.type === "agent_switch" && e.from_harness === SEED_HARNESS) {
+      // The chat's first agent taking over from the seed segment the Mind app wrote: nothing
+      // was handed off, so no node marks it; the agent's first turn simply opens a section.
+      if (current !== null) carryover = openStepsAtEnd(current);
+      current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
+      continue;
+    }
     if (e.type === "agent_switch") {
       // The chat moved to another agent. The switch closes the handoff node the summary
       // request opened (the node stays where the request was, at the end of the retiring
@@ -588,7 +597,7 @@ export function buildSections(
         // which is which; nothing is re-derived here. A chip goes into the skeleton
         // so it both renders at its chronological spot and marks the turn end that
         // ends a step's stint (see collectEjectedProse).
-        if (isSystemChipUserMessage(e)) {
+        if (isSystemChipUserMessage(e) || isNoticeUserMessage(e)) {
           if (current === null) current = ensureSection(null, "section-pre");
           current.entries.push({ kind: "chip", event: e });
         }

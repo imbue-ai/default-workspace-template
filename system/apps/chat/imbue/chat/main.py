@@ -7,11 +7,8 @@ from types import FrameType
 from typing import Final
 
 import httpx
-from app_instances.nudge import ShellNudger
-from app_instances.nudge import ThreadedNudger
-from app_instances.nudge import shell_base_url
-from app_instances.sidecar import register_app
 from app_manifest.primitives import AppUrl
+from app_manifest.registry import register_app
 from flask import Flask
 from loguru import logger as _loguru_logger
 
@@ -21,20 +18,22 @@ from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
-from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
+from imbue.chat.auto_open import LEDGER_FILENAME
 from imbue.chat.auto_open import ShellLayoutClient
-from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
+from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
 from imbue.chat.chat_records import FileChatRecordStore
+from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.chat_settings import SETTINGS_FILENAME
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
-from imbue.chat.instances import CHAT_APP_NAME
-from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.server import create_application
+from imbue.chat.shell_client import shell_base_url
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -79,8 +78,19 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Boot without side effects, for the update apply's pre-flight check: no account "
-            "reconciliation (it reaps sign-in processes), no agent manager (no mngr observe, "
-            "no sweep, no memory prioritizer, no nudges to the shell), and no registration"
+            "reconciliation (it reaps sign-in processes), no agent manager (no follower of the "
+            "agent observer, no sweep, no memory prioritizer), and no registration"
+        ),
+    )
+    parser.add_argument(
+        "--secondary",
+        action="store_true",
+        help=(
+            "Boot as a second chat beside the live one (a preview): follows the same agent "
+            "observer and reads the live accounts, but reconciles no accounts, writes no memory "
+            "scores, runs no automatic compaction, starts or resumes no switch, opens no windows, "
+            "reports no client activity to the shell, and registers nothing; point CHAT_DATA_DIR "
+            "at a scratch copy so its writes never land in the live data"
         ),
     )
     return parser.parse_args(argv)
@@ -91,26 +101,39 @@ def build_production_state(
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
+    is_secondary: bool = False,
 ) -> ChatAppState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together.
     It builds but does not start the agent manager (``main`` starts it once the
-    app is assembled), so it spawns no ``mngr observe`` pipeline by itself.
-    Tests do not use this; they build a ``ChatAppState`` with fakes via
-    ``testing.build_test_state``.
+    app is assembled), so it follows no event stream by itself. Tests build a
+    ``ChatAppState`` with fakes via ``testing.build_test_state`` instead, except where
+    what is under test is this wiring itself (where the chat's data directory lands).
+
+    Everything the chat keeps on disk lands under ``config.chat_data_dir``, so a secondary
+    chat pointed at a scratch copy never writes the live chat's data. A secondary also
+    opens no windows: the auto-open ledger and the shell it would drive belong to the live chat.
     """
     broadcaster = WebSocketBroadcaster()
+    data_dir = config.chat_data_dir
+    chat_settings = ChatSettingsStore(path=data_dir / SETTINGS_FILENAME)
+    chat_records_root = data_dir / CHAT_RECORDS_DIRNAME
     agent_manager = AgentManager.build(
         broadcaster,
-        message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH),
-        # The tab of a chat the Mind app starts is opened through the shell, and which chats
+        message_stamps=MessageStampStore(path=data_dir / STAMPS_FILENAME),
+        # The window of a chat the Mind app starts is opened through the shell, and which chats
         # have had theirs is remembered beside the stamps so a restart never re-pops one.
-        auto_open=AutoOpenReactor(
-            ledger=AutoOpenLedger(path=DEFAULT_LEDGER_PATH), shell=ShellLayoutClient(shell_url=shell_base_url())
+        auto_open=None
+        if is_secondary
+        else AutoOpenReactor(
+            ledger=AutoOpenLedger(path=data_dir / LEDGER_FILENAME), shell=ShellLayoutClient(shell_url=shell_base_url())
         ),
         # Which agents each chat has run on, for the chats that have had a handoff.
-        chat_record_store=FileChatRecordStore(root=DEFAULT_CHAT_RECORDS_ROOT),
+        chat_record_store=FileChatRecordStore(root=chat_records_root),
+        chat_files_root=chat_records_root,
+        chat_settings=chat_settings,
+        is_secondary=is_secondary,
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
@@ -123,6 +146,8 @@ def build_production_state(
         include_filters=include_filters,
         exclude_filters=exclude_filters,
         agent_manager=agent_manager,
+        is_secondary=is_secondary,
+        chat_settings=chat_settings,
         event_queues=event_queues,
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
         # start call and the polls that advance it. A successful re-auth restarts the agents
@@ -147,14 +172,14 @@ def build_application(config: Config, args: argparse.Namespace) -> Flask:
     """Build the Flask app from parsed CLI args, threading the agent filters through.
 
     Wires the production object graph and assembles the app, but does not start
-    the agent manager's ``mngr observe`` pipeline -- ``main`` does that once the
-    app is built.
+    the agent manager's follower -- ``main`` does that once the app is built.
     """
     state = build_production_state(
         config,
         provider_names=tuple(args.provider) if args.provider else None,
         include_filters=tuple(args.include),
         exclude_filters=tuple(args.exclude),
+        is_secondary=args.secondary,
     )
     return create_application(state)
 
@@ -195,33 +220,36 @@ def _reconcile_account_store() -> None:
 
 
 def main() -> None:
-    """Run the chat app: register with the shell, start ``mngr observe``, and serve.
+    """Run the chat app: register with the shell, follow the agent observer, and serve.
 
     Under ``--preflight`` the app only imports, builds, and serves: the update apply boots
     the merged chat this way on a throwaway port to learn whether it can start at all
     (mngr and the harness plugins import here, so a broken plugin table or a missing
     dependency surfaces here first) without touching the live workspace.
+
+    Under ``--secondary`` the app is a second chat beside the live one: it follows the
+    same observer and tracks the same agents, but withholds the writes a second instance
+    must not make (the account reconcile, the memory scores, the registration, the
+    automatic compaction, the switches, the window auto-opening, the client-activity
+    reports to the shell).
     """
     args = _parse_args(None)
     config = load_config()
     if args.preflight:
         logger.info("Booting in pre-flight mode: no account reconciliation, no agent manager, no registration")
+    elif args.secondary:
+        logger.info(
+            "Booting as a secondary chat: no account reconciliation, memory scores, compaction, or registration"
+        )
     else:
         _reconcile_account_store()
     application = build_application(config, args)
     state = state_of(application)
 
     if not args.preflight:
-        # The chat app tells the shell when its instance list changes (contracts.md section
-        # 5). Installed here, at the process entry point, so a manager a test builds nudges
-        # nobody; on a thread of its own, so an agent event never waits on the shell.
-        state.agent_manager.set_nudger(
-            ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=shell_base_url()))
-        )
-
-        # Start the ``mngr observe`` pipeline now that the app is assembled. This is
-        # the one place observe is started; ``build_application`` only constructs, so
-        # tests that build an app never spawn it.
+        # Follow the agent observer's event stream now that the app is assembled. This is
+        # the one place the follower is started; ``build_application`` only constructs, so
+        # tests that build an app never follow anything.
         state.agent_manager.start()
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
@@ -238,10 +266,9 @@ def main() -> None:
     # SSE streaming.
     server = make_threaded_server(config.chat_host, config.chat_port, application)
 
-    # Registered once the socket is bound and just before serving, so the shell's first
-    # fetch after the registration finds the app answering (a 503 until the agent list is
-    # known, never a refused connection).
-    if not (args.no_register or args.preflight):
+    # Registered once the socket is bound and just before serving, so a window the shell opens
+    # on the chat right after the registration finds the app answering.
+    if not (args.no_register or args.preflight or args.secondary):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
     server.serve_forever()
 
