@@ -822,8 +822,9 @@ def running_workspace(
             is_critical=True,
             default_shortcut=("new", "new"),
             display_name="Chat",
-            launch_paths=(("new", "New Chat", "/new"),),
-            launch_params={"new": ("account_id", "message")},
+            launch_paths=(("new", "New Chat", "/new"), ("send", "Send to chat...", "/send")),
+            launch_params={"new": ("account_id", "message"), "send": ("message",)},
+            launch_text_params={"new": "message", "send": "message"},
         )
     ]
     write_registry(registry_path, *rows)

@@ -34,6 +34,7 @@
   --desk-resize-corner: 16px;
   --desk-resize-overhang: 3px;
   --desk-resize-edge-inset: calc(var(--desk-resize-corner) - var(--desk-resize-overhang));
+  --desk-launcher-menu-width: 22rem;
 }
 
 [data-compact] {
@@ -43,6 +44,8 @@
   --desk-grid-inset: 8px;
   --desk-window-radius: 0px;
   --desk-icon-size: 40px;
+  /* The menu spans the taskbar less its padding, since the field it hangs over spans it too. */
+  --desk-launcher-menu-width: calc(100% - var(--spacing) * 4);
 }
 
 [data-touch] {
