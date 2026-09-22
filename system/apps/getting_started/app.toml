@@ -13,3 +13,11 @@ launcher_rank = 5
 [default_shortcut]
 launch = "open"
 mode = "focus"
+
+# A Getting Started preview serves its page on a free port, unregistered, over a scratch state
+# directory: it neither re-points the live row nor opens the first-visit window, and its catalog
+# cache is its own. The app keeps nothing under data/.apps/, so there is nothing to copy.
+[preview]
+command = ["getting-started", "--no-register", "--state-dir", "{scratch}/state"]
+env = {GETTING_STARTED_PORT = "{port:main}", GETTING_STARTED_HOST = "{host}"}
+health_path = "/api/health"

@@ -33,7 +33,10 @@ does not say the window was delivered, it polls the shell's client list and, for
 connected client, posts an `open` of `/` on the first desktop and a `place` at the left
 complement of the pinned chat's frame through the loopback op route, then records the
 delivery. The shell seeds nothing for it; this is the same shape the chat app's auto-open
-takes for the welcome chat.
+takes for the welcome chat. A boot with `--no-register` does neither, since both would reach
+the live workspace: that is how its `[preview]` table boots it (`getting-started --no-register
+--state-dir {scratch}/state` on a free port, what `update-app`'s `preview_app.py` runs), with
+the catalog cache in the scratch state directory.
 
 The frontend (`frontend/`) is a member of the npm workspace at `system/package.json`, built
 into `src/getting_started/static/` by `npm run build`; its tests run with `vitest run`.
