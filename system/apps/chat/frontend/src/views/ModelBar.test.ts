@@ -120,7 +120,7 @@ import m from "mithril";
 import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 
 import type { ChatSnapshot } from "../models/Chats";
-import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, setPendingAccount, setPendingSwitch } from "../models/PendingLane";
 import { ModelBar } from "./ModelBar";
 
@@ -510,6 +510,7 @@ describe("the combo card", () => {
     setPendingSwitch("a1", "acct-2", {
       identity: { model_id: "gemini", effort: "high", fast: false },
       label: "Gemini · High",
+      option: { ...OPUS, id: "gemini", label: "Gemini" },
     });
     render();
     // The chip states the pick with a "next" mark rather than the current agent's model.
@@ -528,16 +529,77 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
   });
 
-  it("offers no Model row while a rebind is armed: the agent keeps its model", () => {
+  it("reads an armed rebind as the agent's own model, with a Model row that opens the dialog to pick another", () => {
     const other = { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" };
     providerState.accounts = [ACCOUNT, other];
     setPendingAccount("a1", "acct-2");
     render();
+    // Nothing picked: the agent keeps its model, so that is what the next message runs on.
+    expect(ROOT().textContent).toContain("Opus");
     expect(ROOT().textContent).toContain("next");
     click(".model-selector-trigger");
     expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
-    expect(document.querySelector('[data-card-row="model"]')).toBeNull();
-    expect(reopened).toEqual([]);
+    expect(document.querySelector('[data-card-row="model"]')?.textContent).toContain("Opus");
+    click('[data-card-row="model"]');
+    expect(reopened).toEqual(["acct-2"]);
+
+    setPendingSwitch("a1", "acct-2", {
+      identity: { model_id: "haiku", effort: "low", fast: false },
+      label: "Haiku 4.5 · Low",
+      option: { ...OPUS, id: "haiku", label: "Haiku 4.5" },
+    });
+    render();
+    expect(ROOT().textContent).toContain("Haiku 4.5 · Low");
+    expect(ROOT().textContent).not.toContain("Opus");
+  });
+
+  it("reads the switch a reloaded page finds under way, which its own lane cannot name", () => {
+    // A page reloaded mid-switch has no armed lane: the chat carries the pick, and the live choice
+    // will not name it until the harness has taken it, so the chip reads the chat.
+    agentState.agent = chatSnapshotFixture("a1", {
+      active_agent: { harness: "claude", account_id: "acct-1" },
+      handoff: rebindStateFixture({ model_pick: { model_id: "opus", effort: "high", fast: false } }),
+    });
+    render();
+    expect(ROOT().textContent).toContain("Opus · High");
+    expect(ROOT().textContent).toContain("next");
+  });
+
+  it("drops a failed switch's pick, which the chat keeps for the retry but never applied", () => {
+    // The failed switch still carries its pick, for the retry; the agent never took it.
+    agentState.agent = chatSnapshotFixture("a1", {
+      active_agent: { harness: "claude", account_id: "acct-1" },
+      handoff: rebindStateFixture({
+        phase: "failed",
+        failed_step: "model",
+        error: "Unknown model",
+        model_pick: { model_id: "opus", effort: "high", fast: false },
+      }),
+    });
+    render();
+    expect(ROOT().textContent).toContain("Opus");
+    expect(ROOT().textContent).not.toContain("High");
+    expect(ROOT().textContent).not.toContain("next");
+  });
+
+  it("names a reloaded switch's pick by its id for a harness whose models no catalog holds", () => {
+    // codex's option set is per agent, so a pick of one is named by the id it was made under.
+    agentState.agent = chatSnapshotFixture("a1", {
+      active_agent: { harness: "claude", account_id: "acct-1" },
+      handoff: handoffStateFixture({ model_pick: { model_id: "gpt-6-astra", effort: null, fast: false } }),
+    });
+    render();
+    expect(ROOT().textContent).toContain("gpt-6-astra");
+  });
+
+  it("leaves the chip on the live choice for a switch that picked no model", () => {
+    agentState.agent = chatSnapshotFixture("a1", {
+      active_agent: { harness: "claude", account_id: "acct-1" },
+      handoff: rebindStateFixture(),
+    });
+    render();
+    expect(ROOT().textContent).toContain("Opus");
+    expect(ROOT().textContent).not.toContain("next");
   });
 
   it("stars the default account and pins another on a press of its star", () => {
