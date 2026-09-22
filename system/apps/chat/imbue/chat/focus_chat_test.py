@@ -21,6 +21,15 @@ def _focus_chat(body: dict[str, Any], is_secondary: bool = False) -> Any:
     return client.post("/api/focus-chat", json=body)
 
 
+def _focus_chat_against(
+    monkeypatch: pytest.MonkeyPatch, shell: RecordingLayoutOpShell, body: dict[str, Any], is_secondary: bool = False
+) -> Any:
+    """Post ``body`` to ``/api/focus-chat`` with ``shell`` served as the shell the chat app reaches."""
+    with serve_app(shell.application) as served:
+        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
+        return _focus_chat(body, is_secondary=is_secondary)
+
+
 def _forwarded(chat_id: str = _CHAT_ID) -> dict[str, str]:
     """The body the shell posts for ``minds:focus-chat``: the message's own fields and the client."""
     return {"type": "minds:focus-chat", "client_id": "client-1", "chatId": chat_id}
@@ -30,9 +39,8 @@ def test_a_focus_chat_asks_the_shell_to_show_the_chat_root_on_the_chat_counting_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     shell = RecordingLayoutOpShell(200, json.dumps(_SHOWN_ANSWER))
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        answered = _focus_chat(_forwarded())
+
+    answered = _focus_chat_against(monkeypatch, shell, _forwarded())
 
     assert answered.status_code == 200
     assert answered.get_json() == {"shown": "navigated", "window_id": "win-0123456789abcdef"}
@@ -55,9 +63,8 @@ def test_a_focus_chat_for_something_that_is_not_a_chat_id_is_a_400_and_asks_the_
     monkeypatch: pytest.MonkeyPatch, chat_id: str
 ) -> None:
     shell = RecordingLayoutOpShell(200, json.dumps(_SHOWN_ANSWER))
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        answered = _focus_chat(_forwarded(chat_id))
+
+    answered = _focus_chat_against(monkeypatch, shell, _forwarded(chat_id))
 
     assert answered.status_code == 400
     assert shell.received == []
@@ -65,9 +72,8 @@ def test_a_focus_chat_for_something_that_is_not_a_chat_id_is_a_400_and_asks_the_
 
 def test_a_shell_that_refuses_the_show_is_a_502_quoting_the_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     shell = RecordingLayoutOpShell(404, json.dumps({"detail": "No client 'client-1'"}))
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        answered = _focus_chat(_forwarded())
+
+    answered = _focus_chat_against(monkeypatch, shell, _forwarded())
 
     assert answered.status_code == 502
     assert "404" in answered.get_json()["detail"] and "No client" in answered.get_json()["detail"]
@@ -85,9 +91,8 @@ def test_a_shell_that_cannot_be_reached_is_a_502(monkeypatch: pytest.MonkeyPatch
 
 def test_a_secondary_chat_refuses_to_open_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
     shell = RecordingLayoutOpShell(200, json.dumps(_SHOWN_ANSWER))
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        answered = _focus_chat(_forwarded(), is_secondary=True)
+
+    answered = _focus_chat_against(monkeypatch, shell, _forwarded(), is_secondary=True)
 
     assert answered.status_code == 403
     assert shell.received == []
@@ -95,9 +100,8 @@ def test_a_secondary_chat_refuses_to_open_a_window(monkeypatch: pytest.MonkeyPat
 
 def test_a_shown_the_chat_app_does_not_know_is_passed_through(monkeypatch: pytest.MonkeyPatch) -> None:
     shell = RecordingLayoutOpShell(200, json.dumps({**_SHOWN_ANSWER, "shown": "tiled"}))
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        answered = _focus_chat(_forwarded())
+
+    answered = _focus_chat_against(monkeypatch, shell, _forwarded())
 
     assert answered.status_code == 200
     assert answered.get_json() == {"shown": "tiled", "window_id": "win-0123456789abcdef"}
@@ -105,10 +109,7 @@ def test_a_shown_the_chat_app_does_not_know_is_passed_through(monkeypatch: pytes
 
 @pytest.mark.parametrize("body", ["not json", "[]"])
 def test_a_2xx_from_the_shell_that_is_not_an_object_is_a_502(monkeypatch: pytest.MonkeyPatch, body: str) -> None:
-    shell = RecordingLayoutOpShell(200, body)
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        answered = _focus_chat(_forwarded())
+    answered = _focus_chat_against(monkeypatch, RecordingLayoutOpShell(200, body), _forwarded())
 
     assert answered.status_code == 502
     assert "not an object" in answered.get_json()["detail"]
