@@ -7081,7 +7081,7 @@ def test_an_update_self_landing_must_fast_forward(apply_repo: Path) -> None:
 
 def test_an_update_self_landing_cannot_keep_a_rollback_point(apply_repo: Path) -> None:
     """Refused as the rollback point's problem, not --ff-only's: dropping --ff-only is the one wrong fix."""
-    with pytest.raises(SystemExit, match="drop --keep-rollback-point"):
+    with pytest.raises(SystemExit, match="with --ff-only and without --keep-rollback-point"):
         update_self.main(
             [
                 "apply",
