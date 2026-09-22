@@ -87,8 +87,8 @@ afterEach(() => {
  *  different platforms. */
 async function settleHydrations(redraw: { mock: { calls: unknown[] } }, expected: number): Promise<void> {
   for (let turn = 0; turn < 100; turn += 1) {
-    if (redraw.mock.calls.length >= expected) return;
     await new Promise((resolve) => setImmediate(resolve));
+    if (redraw.mock.calls.length >= expected) return;
   }
   throw new Error(`hydration never settled: ${redraw.mock.calls.length} redraws, expected ${expected}`);
 }
