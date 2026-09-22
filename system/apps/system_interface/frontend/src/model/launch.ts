@@ -56,10 +56,24 @@ export function chatPath(chatId: string): string {
   return `/${chatId}`;
 }
 
-/** Whether ``path`` is showing the chat ``chatId``: the chat's own page, or one of its subagent
- *  views (``/<chat-id>.<agent-id>.<session-id>``). Any query string is ignored. */
+// The query parameter the chat app's root selects a chat with.
+const CHAT_ROOT_SELECTION_PARAM = "chat";
+
+/** The path of the chat app's root (the chat list beside the selected chat) with ``chatId`` selected. */
+export function chatRootPath(chatId: string): string {
+  return `/?${new URLSearchParams({ [CHAT_ROOT_SELECTION_PARAM]: chatId }).toString()}`;
+}
+
+/** Whether ``path`` is the chat app's root, whatever it has selected. */
+export function isChatRootPath(path: string): boolean {
+  return path.split("?")[0] === "/";
+}
+
+/** Whether ``path`` is showing the chat ``chatId``: the chat's own page, one of its subagent
+ *  views (``/<chat-id>.<agent-id>.<session-id>``), or the root with the chat selected. */
 export function isPathShowingChat(path: string, chatId: string): boolean {
-  const withoutQuery = path.split("?")[0];
+  const [withoutQuery, query = ""] = path.split("?");
+  if (withoutQuery === "/") return new URLSearchParams(query).get(CHAT_ROOT_SELECTION_PARAM) === chatId;
   return withoutQuery === chatPath(chatId) || withoutQuery.startsWith(`${chatPath(chatId)}.`);
 }
 

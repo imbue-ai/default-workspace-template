@@ -9,7 +9,7 @@
 
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
-import { DRAFT_PARAM, chatPath, launchPathOf, launchPathWithParams } from "../model/launch";
+import { DRAFT_PARAM, chatRootPath, launchPathOf, launchPathWithParams } from "../model/launch";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -57,6 +57,7 @@ import {
   activeFocusedWindowId,
   appByName,
   chatApp,
+  chatRootWindowOf,
   draftTargetOf,
   effectiveWindow,
   effectiveWindowTitle,
@@ -529,24 +530,24 @@ export class DesktopStore {
     return isTaken;
   }
 
-  /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window already showing it is
-   *  switched to and raised, wherever it is; otherwise this client's view of the chat app's pinned
-   *  window is pointed at the chat, as a draft is, so the chat lands where this viewer reads chats;
-   *  with no pinned window to take it, the chat opens in a window of its own. False when nothing
-   *  showed it -- this machine has no app that holds chats, or the shell refused the ask. */
+  /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window of the chat app already showing
+   *  it is switched to and raised, wherever it is; otherwise the chat is selected in the chat root window on
+   *  this desktop the viewer is looking at (the frontmost one on screen, else the pinned one), as a draft is
+   *  handed over; with no root window to take it, the chat opens in a root window of its own. False when
+   *  nothing showed it -- this machine has no app that holds chats, or the shell refused the ask. */
   async focusChat(chatId: string): Promise<boolean> {
-    const shown = windowShowingChat(this.state, chatId);
+    const app = chatApp(this.state);
+    if (app === null) return false;
+    const shown = windowShowingChat(this.state, app.name, chatId);
     if (shown !== null) {
       if (shown.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(shown.desktop.id);
       this.restoreWindow(shown.window.id);
       return true;
     }
-    const app = chatApp(this.state);
-    if (app === null) return false;
-    const pinned = pinnedWindowOf(this.state, app.name);
-    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), null, "focus")) !== null;
-    const isTaken = await this.navigateOwnWindow(pinned.id, chatPath(chatId));
-    this.restoreWindow(pinned.id);
+    const root = chatRootWindowOf(this.state, app.name);
+    if (root === null) return (await this.openWindowAt(app.name, chatRootPath(chatId), null, "focus")) !== null;
+    const isTaken = await this.navigateOwnWindow(root.id, chatRootPath(chatId));
+    this.restoreWindow(root.id);
     return isTaken;
   }
 

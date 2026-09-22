@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chatPath,
+  chatRootPath,
   isPathShowingChat,
   launchPathOf,
   launchPathWithParams,
@@ -59,8 +60,12 @@ describe("the path a chat is shown at", () => {
     expect(isPathShowingChat("/chat-7", "chat-7")).toBe(true);
     expect(isPathShowingChat("/chat-7.agent-2.sess-3", "chat-7")).toBe(true);
     expect(isPathShowingChat("/chat-7?draft=hi", "chat-7")).toBe(true);
-    // The chat list, another chat, and a chat whose id merely starts with this one are not it.
+    // The chat root with the chat selected, as the root reports itself, shows it too.
+    expect(isPathShowingChat(chatRootPath("chat-7"), "chat-7")).toBe(true);
+    // The chat list with nothing or another chat selected, another chat, and a chat whose id merely starts
+    // with this one are not it.
     expect(isPathShowingChat("/", "chat-7")).toBe(false);
+    expect(isPathShowingChat("/?chat=chat-8", "chat-7")).toBe(false);
     expect(isPathShowingChat("/chat-8", "chat-7")).toBe(false);
     expect(isPathShowingChat("/chat-70", "chat-7")).toBe(false);
   });
