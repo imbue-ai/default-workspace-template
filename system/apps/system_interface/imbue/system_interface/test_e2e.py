@@ -43,6 +43,8 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import write_rollback_point
+from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import catalog_document
@@ -125,6 +127,7 @@ class E2EServer(FrozenModel):
 
     base_url: str = Field(description="The shell's loopback URL")
     state_dir: Path = Field(description="The shell's state directory")
+    repo_root: Path = Field(description="The workspace root the update notice reads its record under")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
     pinned_url: str = Field(default="", description="The pinned stub app's loopback URL; empty when none is offered")
     agent_events_path: Path = Field(
@@ -203,6 +206,7 @@ def _running_e2e_server(
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         state_dir = tmp_path / "shell-state"
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
+        repo_root = tmp_path / "repo"
         catalog_fetcher: FakeTemplateCatalogFetcher | None = None
         if is_catalog_offered:
             catalog_fetcher = FakeTemplateCatalogFetcher()
@@ -213,6 +217,7 @@ def _running_e2e_server(
             config=config,
             shell_state_directory=state_dir,
             template_catalog_fetcher=catalog_fetcher,
+            repo_root=repo_root,
             agent_events_path=agent_events_path,
         )
         app = create_application(state)
@@ -234,6 +239,7 @@ def _running_e2e_server(
                 yield E2EServer(
                     base_url=base_url,
                     state_dir=state_dir,
+                    repo_root=repo_root,
                     stub_url=stub_url,
                     pinned_url=pinned_served.http_url if pinned_served is not None else "",
                     agent_events_path=agent_events_path,
@@ -1669,3 +1675,33 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
         expect(_window(phone_page, phone_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
         expect(_taskbar_entry(page, phone_window)).to_have_attribute("data-minimized", "true", timeout=15000)
         expect(_window(page, laptop_window)).to_have_attribute("data-focused", "true")
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_seems_good_clears_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """The record an apply kept names the apps it touched; the shell carries one banner naming them all (a
+    rollback takes them back together) and no window carries a notice of its own, "Everything seems good" runs
+    the script's confirm, and the cleared record reaches every window through the watch, so the banner goes
+    without a reload."""
+    write_stub_update_self_script(e2e_server.repo_root)
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    frame = _page_frame(page, window_id)
+    expect(page.locator(".update-notice-banner")).to_have_count(0)
+
+    write_rollback_point(e2e_server.repo_root, apps=[_STUB_APP_NAME, "system_interface"])
+
+    banner = page.locator(".update-notice-banner")
+    expect(banner).to_be_visible(timeout=15000)
+    expect(banner).to_contain_text(f"{_STUB_APP_DISPLAY_NAME} and the workspace interface were updated a moment ago")
+    expect(page.locator(".update-notice-rollback")).to_have_count(1)
+    # The window of a touched app is still the same page: the notice's arrival reloaded nothing.
+    assert frame.evaluate("() => window.__handshake") is not None
+    expect(_window(page, window_id).locator(".update-notice-banner")).to_have_count(0)
+
+    banner.locator(".update-notice-confirm").click()
+
+    expect(page.locator(".update-notice-banner")).to_have_count(0, timeout=15000)
+    assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None

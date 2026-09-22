@@ -35,7 +35,10 @@ vi.mock("../models/ModelSettings", () => ({
 }));
 
 const providerState: { accounts: unknown[] } = { accounts: [] };
-const chooserOpens: number[] = [];
+const chooserOpens: {
+  unpickable?: { accountId: string; reason: string };
+  onSignedIn?: (accountId: string) => void;
+}[] = [];
 const deleted: string[] = [];
 const renamed: [string, string][] = [];
 vi.mock("../models/Providers", () => ({
@@ -44,7 +47,7 @@ vi.mock("../models/Providers", () => ({
   setDefaultAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
-  openProviderChooser: () => chooserOpens.push(1),
+  openProviderChooser: (intent: (typeof chooserOpens)[number] = {}) => chooserOpens.push(intent),
   deleteAccount: (id: string) => {
     deleted.push(id);
     return Promise.resolve();
@@ -57,8 +60,10 @@ vi.mock("../models/Providers", () => ({
 
 vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentView: vi.fn() }));
 const begun: string[] = [];
+const begunByAccountId: [string, string][] = [];
 vi.mock("./SwitchDialog", () => ({
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
+  beginSwitchToAccountId: (chatId: string, accountId: string) => begunByAccountId.push([chatId, accountId]),
   openSwitchDialog: vi.fn(),
 }));
 
@@ -119,6 +124,8 @@ beforeEach(() => {
   if (previous !== null) m.mount(previous, null);
   document.body.innerHTML = '<div id="root"></div>';
   chooserOpens.length = 0;
+  begun.length = 0;
+  begunByAccountId.length = 0;
   deleted.length = 0;
   renamed.length = 0;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
@@ -303,9 +310,18 @@ describe("the card without a hand-cranked redraw", () => {
     add.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(chooserOpens).toEqual([1]);
+    // The chooser lists signed-in accounts to pick from, so the one this chat already runs on is
+    // refused there: picking it would be a switch to nowhere.
+    expect(chooserOpens).toEqual([
+      expect.objectContaining({ unpickable: { accountId: ACCOUNT.id, reason: "current" } }),
+    ]);
     expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+
+    // Whatever the chooser ends up handing back -- a fresh sign-in or a pick -- this chat switches
+    // to it, rather than the account being added and left aside.
+    chooserOpens[0].onSignedIn?.("acct-2");
+    expect(begunByAccountId).toEqual([["a1", "acct-2"]]);
   });
 
   it("hands a press on another harness's account to the switch dialog and closes the whole stack", async () => {

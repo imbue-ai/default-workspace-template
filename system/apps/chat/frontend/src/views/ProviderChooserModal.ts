@@ -39,16 +39,16 @@ import { Dropdown } from "@imbue/workspace-ui/src/components/dropdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import * as css from "./providerSignInStyles";
-import type { Lane, LaneMethod } from "../models/Providers";
+import type { Lane, LaneMethod, UnpickableReason } from "../models/Providers";
 import {
   abortFlow,
   areLanesLoaded,
   clearFlow,
   deleteAccount,
   getAccounts,
-  getBrokenAccountId,
   getFlow,
   getLanes,
+  getUnpickableAccount,
   isPickingAccount,
   loadAccounts,
   pickAccount,
@@ -68,6 +68,13 @@ type Mode = "chooser" | "menu" | "steps" | "apiKey";
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
  *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
 let savedScroll = 0;
+
+/** The word beside an account the chooser refuses, and the style it reads in: only the one the
+ *  caller is leaving because it failed is bad news. */
+const UNPICKABLE_NOTES: Record<UnpickableReason, { text: string; class: string }> = {
+  failing: { text: "Not working", class: css.ACCOUNT_FAILING_NOTE },
+  current: { text: "Current", class: css.ACCOUNT_NEUTRAL_NOTE },
+};
 
 export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let mode: Mode = "chooser";
@@ -249,8 +256,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
-  // chooser
-
   /** IntroChooserModal's ChooserRow. */
   function laneRow(candidate: Lane): m.Vnode {
     return m(
@@ -323,23 +328,24 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
   /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed
    *  fact with two explicit actions beside it. When the chooser was opened to pick an account,
-   *  the row itself also picks it; the account the caller is leaving is listed but not
-   *  pickable. Re-auth stays reachable because an expired credential is otherwise a
-   *  dead end: without it the only way back is to delete the account, which orphans every chat
-   *  bound to it rather than reviving them. */
+   *  the row itself also picks it; an account the caller refuses is listed but not
+   *  pickable, with the word for why beside it. Re-auth stays reachable because an expired
+   *  credential is otherwise a dead end: without it the only way back is to delete the account,
+   *  which orphans every chat bound to it rather than reviving them. */
   function renderAccounts(): m.Children {
     const signedIn = getAccounts();
     if (signedIn.length === 0) return null;
     const confirming = signedIn.find((account) => account.id === confirmingDelete) ?? null;
     const picking = isPickingAccount();
-    const brokenAccountId = getBrokenAccountId();
+    const unpickable = getUnpickableAccount();
     return m("div", [
       m("div", { class: css.SECTION_LABEL }, "Signed in"),
       m(
         "div",
         { class: css.ROW_STACK },
         signedIn.map((account) => {
-          const isBroken = account.id === brokenAccountId;
+          const unpickableNote =
+            unpickable !== null && account.id === unpickable.accountId ? UNPICKABLE_NOTES[unpickable.reason] : null;
           const identity = [
             m(
               "span",
@@ -355,14 +361,16 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                   {
                     type: "button",
                     class: css.ACCOUNT_PICK,
-                    disabled: isBroken,
+                    disabled: unpickableNote !== null,
                     "data-e2e": `pick-account-${account.id}`,
                     onclick: () => pickAccount(account.id),
                   },
                   identity,
                 )
               : identity,
-            picking && isBroken ? m("span", { class: css.ACCOUNT_BROKEN_NOTE }, "Not working") : null,
+            picking && unpickableNote !== null
+              ? m("span", { class: unpickableNote.class }, unpickableNote.text)
+              : null,
             m(
               Button,
               {
@@ -405,8 +413,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         : null,
     ]);
   }
-
-  // sign-in bodies
 
   /** ProviderSignInModal's stepsBlock, step 1, plus the old modal's copy-link fallback. */
   function openLinkStep(url: string, label: string, title = "Open the sign-in page"): m.Vnode {
