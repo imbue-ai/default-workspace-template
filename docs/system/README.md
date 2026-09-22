@@ -13,6 +13,7 @@ Internal documentation for the workspace machinery.
   `blueprint/chat-agent-split/plan-chat-agent-split.md`.
 - `avatar-designs.md` - How to draw and register a desktop avatar design (the
   drawing format the shell validates, and the registration helper).
-- `style_guide.md` - The code style guide (a symlink into the vendored mngr
-  repo, which is its source of truth).
+- `style_guide.md` - The code style guide, a symlink to the copy
+  `system/scripts/fetch_mngr_assets.sh` fetches from the pinned mngr commit at
+  build time (the mngr repo is its source of truth).
 

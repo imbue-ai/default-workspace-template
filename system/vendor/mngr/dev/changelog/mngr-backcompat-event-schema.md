@@ -1,3 +1,0 @@
-New repo-wide meta check (`test_meta_ratchets.py`): no `EventEnvelope` subclass anywhere in the repo may set `extra="forbid"` in its `model_config` (checked transitively by class name, covering the `ConfigDict`, plain-dict, and annotated-assignment spellings). Persisted event records must tolerate additive fields from other program versions; re-tightening one silently reintroduces the downgrade wedge of mngr-internal#422.
-
-The style guide's "Event logging to disk" section now documents the event schema-evolution convention: event models (and their nested payload models) ignore unknown fields, schema changes must be additive-with-defaults, and readers skip-and-warn on mismatching lines.
