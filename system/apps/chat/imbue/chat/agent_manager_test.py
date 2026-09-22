@@ -1950,11 +1950,7 @@ def _events_status_detail(manager: AgentManager) -> str:
 def test_autocompact_sweep_runs_mngr_only_for_running_chats_on_a_compacting_harness(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
-    """Workers, the primary, dead chats, and chats on a harness mngr cannot compact never reach mngr.
-
-    A codex chat used to be swept every minute anyway: a full mngr startup that ended in
-    "does not support context compaction".
-    """
+    """Workers, the primary, dead chats, and chats on a harness mngr cannot compact never reach mngr."""
     manager = AgentManager.build(broadcaster)
     try:
         with manager._lock:

@@ -538,11 +538,9 @@ def test_run_restic_backup_no_alarm_below_threshold(tmp_path: Path) -> None:
     assert alarms == []
 
 
-# ---------------------------------------------------------------------------
 # forget / prune under a stale lock
-# ---------------------------------------------------------------------------
 
-# What restic 0.18 prints when an exclusive lock (forget, prune) meets the
+# What restic prints when an exclusive lock (forget, prune) meets the
 # non-exclusive lock a dead container left behind; exit code 11.
 _NON_EXCLUSIVE_LOCK_STDERR = (
     "unable to create lock in backend: repository is already locked by "
@@ -727,9 +725,7 @@ def test_load_config_if_changed_caches_until_mtime_moves(tmp_path: Path) -> None
     assert state.last_loaded_backup_toml_mtime == 222.0
 
 
-# ---------------------------------------------------------------------------
 # Restore-marker age-out
-# ---------------------------------------------------------------------------
 
 _FIXED_NOW = datetime(2026, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
 

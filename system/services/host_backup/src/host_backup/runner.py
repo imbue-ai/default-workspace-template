@@ -292,9 +292,7 @@ def _run_one_tick(
     _maybe_run_prune(state=state, config=config, env_overrides=env_overrides)
 
 
-# ---------------------------------------------------------------------------
 # Per-step helpers
-# ---------------------------------------------------------------------------
 
 
 def _check_secrets_present(*, state: _LoopState) -> dict[str, str] | None:

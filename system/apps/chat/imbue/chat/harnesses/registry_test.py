@@ -70,10 +70,8 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
 
 def test_supports_compaction_matches_the_mngr_agent_classes_that_can_compact() -> None:
     # The autocompact sweep only runs `mngr autocompact run` on harnesses that declare
-    # supports_compaction, so the flag has to agree with mngr: a harness wrongly left False
-    # silently stops being compacted, and one wrongly True costs a full mngr startup per
-    # chat per minute that ends in "does not support context compaction". The seed
-    # pseudo-harness has no mngr agent type; every other harness must be listed here.
+    # supports_compaction, so the flag has to agree with mngr. The seed pseudo-harness has
+    # no mngr agent type; every other harness must be listed here.
     register_by_harness = {
         HarnessType.CLAUDE: register_claude_agent_type,
         HarnessType.CODEX: register_codex_agent_type,
