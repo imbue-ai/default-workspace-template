@@ -3,7 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LauncherField, isSecondaryChord } from "./LauncherField";
+import { LauncherField, isLineBreakChord, isSecondaryChord } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
 
 afterEach(unmountViews);
@@ -24,11 +24,11 @@ function render(overrides: Partial<LauncherFieldAttrs> = {}): { root: HTMLElemen
   return { root: mountView(() => m(LauncherField, attrs)), attrs };
 }
 
-function inputOf(root: HTMLElement): HTMLInputElement {
-  return root.querySelector("[data-launcher-field] input") as HTMLInputElement;
+function inputOf(root: HTMLElement): HTMLTextAreaElement {
+  return root.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
 }
 
-function press(input: HTMLInputElement, init: KeyboardEventInit): KeyboardEvent {
+function press(input: HTMLTextAreaElement, init: KeyboardEventInit): KeyboardEvent {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
   input.dispatchEvent(event);
   return event;
@@ -40,6 +40,15 @@ describe("isSecondaryChord", () => {
     expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: true })).toBe(true);
     expect(isSecondaryChord({ key: "Enter", ctrlKey: false, metaKey: false })).toBe(false);
     expect(isSecondaryChord({ key: "a", ctrlKey: true, metaKey: false })).toBe(false);
+  });
+});
+
+describe("isLineBreakChord", () => {
+  it("is Shift+Enter alone", () => {
+    const plain = { ctrlKey: false, metaKey: false, altKey: false };
+    expect(isLineBreakChord({ key: "Enter", shiftKey: true, ...plain })).toBe(true);
+    expect(isLineBreakChord({ key: "Enter", shiftKey: false, ...plain })).toBe(false);
+    expect(isLineBreakChord({ key: "Enter", shiftKey: true, ...plain, ctrlKey: true })).toBe(false);
   });
 });
 
@@ -64,6 +73,27 @@ describe("the launcher field", () => {
     press(input, { key: "Enter", metaKey: true });
     expect(attrs.onRunSecondary).toHaveBeenCalledTimes(2);
     expect(attrs.onRunHighlight).not.toHaveBeenCalled();
+  });
+
+  it("Shift+Enter is the text area's line break, and with lines in the text the arrows are the caret's", () => {
+    const { root, attrs } = render({ query: "plan the launch" });
+    const input = inputOf(root);
+    expect(input.tagName).toBe("TEXTAREA");
+    expect(press(input, { key: "Enter", shiftKey: true }).defaultPrevented).toBe(false);
+    expect(attrs.onRunHighlight).not.toHaveBeenCalled();
+    expect(attrs.onRunSecondary).not.toHaveBeenCalled();
+    unmountViews();
+    const lined = render({ query: "plan\nthe launch" });
+    const area = inputOf(lined.root);
+    expect(press(area, { key: "ArrowDown" }).defaultPrevented).toBe(false);
+    expect(press(area, { key: "ArrowUp" }).defaultPrevented).toBe(false);
+    expect(lined.attrs.onMoveHighlight).not.toHaveBeenCalled();
+    expect(press(area, { key: "Enter" }).defaultPrevented).toBe(true);
+    expect(lined.attrs.onRunHighlight).toHaveBeenCalledTimes(1);
+    // Escape clears the whole text, lines and all, in one press.
+    press(area, { key: "Escape" });
+    expect(lined.attrs.onQuery).toHaveBeenCalledWith("");
+    expect(lined.attrs.onClose).not.toHaveBeenCalled();
   });
 
   it("typing reports the query and opens the menu", () => {
@@ -95,7 +125,7 @@ describe("the launcher field", () => {
 
   it("in compact mode with the menu closed it is a button that opens the menu", () => {
     const { root, attrs } = render({ isCompact: true, isOpen: false });
-    expect(root.querySelector("[data-launcher-field] input")).toBeNull();
+    expect(root.querySelector("[data-launcher-field] textarea")).toBeNull();
     const toggle = root.querySelector("[data-launcher-field]") as HTMLElement;
     expect(toggle.tagName).toBe("BUTTON");
     toggle.click();

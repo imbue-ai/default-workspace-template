@@ -80,6 +80,8 @@ _TRIGGER_TIMEOUT_MS = 20000
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
 # The chat root's path with the fixture chat selected: what a link, and the agent's auto-open, open.
 _FIXTURE_ROOT_PATH = chat_root_path(ChatId(FIXTURE_AGENT_ID))
+# A second agent beside the fixture's, for the flows that need a choice of chats.
+_SECOND_AGENT_ID = "agent-5e2e5e2e5e2e5e2e5e2e5e2e5e2e5e2e"
 
 
 def _chat_root(page: Page) -> FrameLocator:
@@ -119,6 +121,7 @@ def _running_e2e_server(
     tmp_path: Path,
     session_events: list[dict[str, Any]] | None = None,
     is_account_signed_in: bool = True,
+    additional_agents: Sequence[tuple[str, str]] = (),
 ) -> AbstractContextManager[RunningWorkspace]:
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
@@ -126,6 +129,7 @@ def _running_e2e_server(
         find_free_port(),
         find_free_port(),
         session_events=session_events,
+        additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
     )
 
@@ -224,7 +228,7 @@ def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
     """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
     typed), and return the frame of the chat the root created and shows."""
     _land(page, server)
-    page.locator("[data-launcher-field] input").click()
+    page.locator("[data-launcher-field] textarea").click()
     menu = page.locator("[data-launcher-overlay]")
     expect(menu).to_be_visible(timeout=10000)
     menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
@@ -694,11 +698,11 @@ def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_roo
 def test_the_send_launch_path_offers_the_picker_and_sends_the_text_to_the_chat_picked(
     tmp_path: Path, page: Page
 ) -> None:
-    """The ``send`` launch path off a ``navigate`` (the desktop's Ctrl+Enter row): the picker opens over the chats;
-    Escape drops it and the text with it, and picking a chat sends the text there through the ordinary send and
-    selects it. Either way the window's stored path goes back to the selection alone, so a reload of the window
-    offers nothing again (launcher-and-getting-started plan section 4.5)."""
-    with _running_e2e_server(tmp_path) as server:
+    """The ``send`` launch path off a ``navigate`` (the desktop's Ctrl+Enter row), with two chats to choose from: the
+    picker opens over them; Escape drops it and the text with it, and picking a chat sends the text there through
+    the ordinary send and selects it. Either way the window's stored path goes back to the selection alone, so a
+    reload of the window offers nothing again (launcher-and-getting-started plan section 4.5)."""
+    with _running_e2e_server(tmp_path, additional_agents=[(_SECOND_AGENT_ID, "Second chat")]) as server:
         _open_fixture_chat(page, server)
         expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
         client_id = _client_id(page)
@@ -740,26 +744,19 @@ def test_the_send_launch_path_offers_the_picker_and_sends_the_text_to_the_chat_p
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_the_send_launch_path_loaded_directly_offers_the_picker_once_the_chats_are_listed(
-    tmp_path: Path, page: Page
-) -> None:
+def test_the_send_launch_path_with_one_chat_sends_to_it_without_the_picker(tmp_path: Path, page: Page) -> None:
     """The ``send`` launch path as a document load (a window opened at it when the chat has no independent pinned
-    window here, or a link): the root holds the picker until the chats have arrived, then offers them over the
-    text; picking one sends the text there and moves the root's own URL to the selection alone, so a reload of the
-    document offers nothing again. The root behaves the same visited directly, so no shell frames it here."""
+    window here, or a link), on a workspace with one chat: the root waits for the chats to arrive, then sends the
+    text to the one there is with no picker, selects it, and moves its own URL to the selection alone, so a reload
+    of the document sends nothing again. The root behaves the same visited directly, so no shell frames it here."""
     with _running_e2e_server(tmp_path) as server:
         messenger = server.chat_state.agent_manager._messenger
         assert isinstance(messenger, RecordingMngrMessenger)
         text = "Carry on with the seal"
         page.goto(f"{server.chat_url}/send?" + urllib.parse.urlencode({"message": text}))
-        expect(page.locator("[data-send-picker]")).to_be_visible(timeout=15000)
-        expect(page.locator(".send-picker-text")).to_contain_text(text)
-        expect(page.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]')).to_be_visible()
-
-        page.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]').click()
-        expect(page.locator("[data-send-picker]")).to_have_count(0)
-        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=10.0)
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=15.0)
         expect(page).to_have_url(f"{server.chat_url}{_FIXTURE_ROOT_PATH}", timeout=10000)
+        assert page.locator("[data-send-picker]").count() == 0
 
 
 # starting a chat

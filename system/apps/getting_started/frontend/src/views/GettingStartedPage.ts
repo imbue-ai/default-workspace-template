@@ -1,8 +1,9 @@
 /**
  * The Getting Started page (launcher-and-getting-started plan section 3.6), top to bottom: a
- * search field over its own content; "Start something", the eight intent tiles; "Start from a
- * template", the catalog's shelves. Picking a template shows its detail as a page inside this one,
- * with a way back. Typing swaps the sections for results: the matching intents and the matching
+ * search field over its own content; "Start something", the intent tiles two to a row (four at
+ * first, the rest behind "See more"); "Start from a template", the catalog's shelves. The page is
+ * its own scroller, since the shared base styles pin the body to the viewport. Picking a template
+ * shows its detail as a page inside this one, with a way back. Typing swaps the sections for results: the matching intents and the matching
  * templates, laid out as a grid of cards. Every tile and both detail actions start a chat with a
  * seeded text through the one callback the page is given (``shell:start-with-text``); the page
  * names no app.
@@ -106,7 +107,7 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
       m("h2", { class: `${SECTION_HEADING_CLASS} mb-2` }, START_SOMETHING_TITLE),
       m(
         "div",
-        { class: "grid gap-3 @max-[620px]:grid-cols-1 grid-cols-3" },
+        { class: "grid gap-3 @max-[420px]:grid-cols-1 grid-cols-2" },
         options.map((option) => startTile(option, attrs)),
       ),
       footer,
@@ -267,11 +268,8 @@ export function GettingStartedPage(): m.Component<GettingStartedPageAttrs> {
             ];
       return m(
         "main",
-        {
-          class:
-            "getting-started-page @container mx-auto min-h-screen w-full max-w-4xl bg-page px-6 py-5 text-primary",
-        },
-        body,
+        { class: "getting-started-page h-screen w-full overflow-y-auto bg-page px-6 py-5 text-primary" },
+        m("div", { class: "@container mx-auto w-full max-w-4xl" }, body),
       );
     },
   };

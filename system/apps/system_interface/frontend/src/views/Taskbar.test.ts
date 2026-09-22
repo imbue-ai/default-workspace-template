@@ -168,7 +168,7 @@ describe("Taskbar", () => {
           onRunSecondary: vi.fn(),
         },
       });
-      const input = taskbar.querySelector("[data-launcher-field] input") as HTMLInputElement;
+      const input = taskbar.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       expect(onQuery).toHaveBeenCalledWith("");
       expect(onClose).not.toHaveBeenCalled();

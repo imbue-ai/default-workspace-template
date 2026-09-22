@@ -527,7 +527,7 @@ def _cell_center(backdrop: FloatRect, column: int, row: int) -> tuple[float, flo
 
 def _open_launcher(page: Page) -> Locator:
     """Focus the launcher's field, answering the menu it opens."""
-    page.locator("[data-launcher-field] input").click()
+    page.locator("[data-launcher-field] textarea").click()
     menu = page.locator("[data-launcher-overlay]")
     expect(menu).to_be_visible(timeout=10000)
     return menu
@@ -690,13 +690,13 @@ def test_launcher_menu_lists_launch_paths_and_windows_and_runs_the_highlight(tmp
         assert window["app"] == _SECOND_APP_NAME and window["path"] == _STUB_LAUNCH_PATH
         expect(_window(page, window["id"])).to_be_visible(timeout=15000)
         expect(menu).to_be_hidden()
-        expect(page.locator("[data-launcher-field] input")).to_have_value("")
+        expect(page.locator("[data-launcher-field] textarea")).to_have_value("")
 
         _window(page, window["id"]).locator('[data-window-control="minimize"]').click()
         expect(_taskbar_entry(page, window["id"])).to_have_attribute("data-minimized", "true")
         menu = _open_launcher(page)
         expect(menu.locator("[data-launcher-window]")).to_have_count(0)
-        page.locator("[data-launcher-field] input").fill("notes")
+        page.locator("[data-launcher-field] textarea").fill("notes")
         expect(menu.locator("[data-launch]")).to_have_count(1)
         expect(menu.locator(f'[data-launcher-window="{window["id"]}"]')).to_have_attribute("data-minimized", "true")
         menu.locator(f'[data-launcher-window="{window["id"]}"]').click()
@@ -705,12 +705,12 @@ def test_launcher_menu_lists_launch_paths_and_windows_and_runs_the_highlight(tmp
         expect(_window(page, window["id"])).to_have_attribute("data-focused", "true")
 
         menu = _open_launcher(page)
-        page.locator("[data-launcher-field] input").fill("zzzz")
+        page.locator("[data-launcher-field] textarea").fill("zzzz")
         expect(menu.locator(".launcher-no-matches")).to_be_visible()
         expect(menu.locator("[data-launch]")).to_have_count(0)
         # One Escape clears the text; the next, on an empty field, closes the menu.
         page.keyboard.press("Escape")
-        expect(page.locator("[data-launcher-field] input")).to_have_value("")
+        expect(page.locator("[data-launcher-field] textarea")).to_have_value("")
         expect(menu.locator(".launcher-no-matches")).to_have_count(0)
         expect(menu.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]')).to_have_attribute("data-highlighted", "true")
         page.keyboard.press("Escape")
@@ -722,7 +722,8 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
     """The launch paths that take typed text are the menu's free-text rows: Enter with no match runs the primary
     one, Ctrl+Enter the secondary, each pointing this client's view of the app's independent pinned window at the
     launch path with the text (no second window opens) and showing it; the row at the pin's home path is a focus
-    row that raises the pinned window; and an empty field disables the secondary row."""
+    row that raises the pinned window; an empty field offers no secondary row; and Shift+Enter breaks the line,
+    after which the menu offers the free-text rows alone and the text goes with its line break."""
     with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
         _land(page, server)
         pinned = _pinned_window(server.base_url)
@@ -731,17 +732,21 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         primary = menu.locator('[data-text-action="primary"]')
         secondary = menu.locator('[data-text-action="secondary"]')
         expect(primary).to_have_attribute("data-launch", f"{_PINNED_APP_NAME}:{_PINNED_NEW_LAUNCH_ID}")
-        expect(secondary).to_have_attribute("data-launch", f"{_PINNED_APP_NAME}:{_PINNED_SEND_LAUNCH_ID}")
-        expect(secondary).to_have_attribute("data-disabled", "true")
-        # The first launch-path row is highlighted (the stub app's, in registry order); the pinned app's home-path
-        # row is a launch-path row too, and its free-text rows are never launch-path rows.
-        expect(menu.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]')).to_have_attribute("data-highlighted", "true")
+        expect(secondary).to_have_count(0)
+        # The first launch-path row is highlighted (the stub app's, in registry order) and wears the Enter caption;
+        # the pinned app's home-path row is a launch-path row too, and its free-text rows are never launch-path rows.
+        stub_row = menu.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]')
+        expect(stub_row).to_have_attribute("data-highlighted", "true")
+        expect(stub_row.locator('[data-key="enter"]')).to_have_text("Enter")
         expect(menu.locator(f'[data-launch="{_PINNED_APP_NAME}:root"]')).to_have_attribute("data-highlighted", "false")
-        expect(menu.locator("[data-launch]")).to_have_count(4)
+        expect(menu.locator("[data-launch]")).to_have_count(3)
 
-        page.locator("[data-launcher-field] input").fill("hello there")
+        page.locator("[data-launcher-field] textarea").fill("hello there")
         expect(menu.locator(".launcher-no-matches")).to_be_visible()
         expect(primary).to_have_attribute("data-highlighted", "true")
+        expect(primary.locator('[data-key="enter"]')).to_have_text("Enter")
+        expect(stub_row).to_have_count(0)
+        expect(secondary).to_have_attribute("data-launch", f"{_PINNED_APP_NAME}:{_PINNED_SEND_LAUNCH_ID}")
         expect(secondary).not_to_have_attribute("data-disabled", "true")
         page.keyboard.press("Enter")
         expect(menu).to_be_hidden()
@@ -754,11 +759,18 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         assert _pinned_window(server.base_url)["path"] == _PINNED_HOME_PATH
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
-        _open_launcher(page)
-        page.locator("[data-launcher-field] input").fill("again")
+        menu = _open_launcher(page)
+        field = page.locator("[data-launcher-field] textarea")
+        field.fill("again")
+        page.keyboard.press("Shift+Enter")
+        page.keyboard.type("and more")
+        expect(field).to_have_value("again\nand more")
+        # A text with a line break is a message: the free-text rows stand alone, without the no-match note.
+        expect(menu.locator("[data-launch]")).to_have_count(2)
+        expect(menu.locator(".launcher-no-matches")).to_have_count(0)
         page.keyboard.press("Control+Enter")
-        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], "/send?message=again")
-        expect(frame.locator("#where")).to_have_text("/send?message=again", timeout=15000)
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], "/send?message=again%0Aand+more")
+        expect(frame.locator("#where")).to_have_text("/send?message=again%0Aand+more", timeout=15000)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
         # The focus row raises the pinned window rather than opening a second root.
@@ -1663,10 +1675,10 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         menu_box = _box(phone_page.locator("[data-launcher-overlay]"))
         taskbar_box = _box(phone_page.locator("[data-taskbar]"))
         assert abs(menu_box["width"] - taskbar_box["width"]) <= _GRID_INSET, (menu_box, taskbar_box)
-        phone_page.locator("[data-launcher-field] input").fill("stub")
+        phone_page.locator("[data-launcher-field] textarea").fill("stub")
         expect(phone_page.locator(f'[data-launcher-overlay] [data-launcher-window="{window_id}"]')).to_be_visible()
         phone_page.keyboard.press("Escape")
-        expect(phone_page.locator("[data-launcher-field] input")).to_have_value("")
+        expect(phone_page.locator("[data-launcher-field] textarea")).to_have_value("")
         phone_page.keyboard.press("Escape")
         expect(phone_page.locator("[data-launcher-overlay]")).to_be_hidden()
 

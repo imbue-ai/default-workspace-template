@@ -11,8 +11,8 @@ import {
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 import {
-  NOTHING_TO_SEND_REASON,
   defaultHighlightIndex,
+  isMessageText,
   isRowEnabled,
   launcherRowsOf,
   moveHighlight,
@@ -59,21 +59,25 @@ function keys(rows: readonly { key: string }[]): string[] {
 }
 
 describe("the launcher's rows", () => {
-  it("with no query lists the launch-path rows (less the free-text ones) and the free-text rows, no windows", () => {
+  it("with no query lists the launch-path rows (less the free-text ones) and the primary text row, no windows", () => {
     const menu = launcherRowsOf(state(), "");
-    expect(keys(menu.rows)).toEqual([
-      "launch:chatty:root",
-      "launch:terminal:new",
-      "text:chatty:new",
-      "text:chatty:send",
-    ]);
+    expect(keys(menu.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
     expect(menu.launchRows[1].caption).toBe("Terminal");
     expect(menu.launchRows[0].caption).toBeNull();
-    expect(menu.textRows.map((row) => row.textAction)).toEqual(["primary", "secondary"]);
-    // Nothing typed: the primary runs the bare launch path, the secondary has nothing to send.
+    // Nothing typed: the primary runs the bare launch path; the secondary has nothing to send, so it is not offered.
+    expect(menu.textRows.map((row) => row.textAction)).toEqual(["primary"]);
     expect(menu.textRows[0].disabledReason).toBeNull();
-    expect(menu.textRows[1].disabledReason).toBe(NOTHING_TO_SEND_REASON);
     expect(menu.isNoMatch).toBe(false);
+    expect(defaultHighlightIndex(menu.rows)).toBe(0);
+  });
+
+  it("with a line break in the text offers the free-text rows alone: the text is a message, not a query", () => {
+    expect(isMessageText("plan\nthe launch")).toBe(true);
+    expect(isMessageText("plan the launch")).toBe(false);
+    const menu = launcherRowsOf(state(), "term\nand more");
+    expect(keys(menu.rows)).toEqual(["text:chatty:new", "text:chatty:send"]);
+    expect(menu.isNoMatch).toBe(false);
+    expect(menu.textRows[0].text).toBe("term\nand more");
     expect(defaultHighlightIndex(menu.rows)).toBe(0);
   });
 
@@ -105,7 +109,7 @@ describe("the launcher's rows", () => {
     expect(secondaryTextRow(menu.rows)?.key).toBe("text:chatty:send");
   });
 
-  it("stands a free-text row down over the path bound, and the secondary with nothing typed", () => {
+  it("stands a free-text row down over the path bound, and has no secondary with nothing typed", () => {
     const menu = launcherRowsOf(state(), "x".repeat(2100));
     expect(menu.textRows.every((row) => row.disabledReason === "Too long to send from here")).toBe(true);
     expect(defaultHighlightIndex(menu.rows)).toBe(-1);
@@ -116,7 +120,7 @@ describe("the launcher's rows", () => {
 
   it("moves the highlight through the enabled rows, wrapping, from the default when nothing was moved", () => {
     const { rows } = launcherRowsOf(state(), "");
-    expect(rows.map(isRowEnabled)).toEqual([true, true, true, false]);
+    expect(rows.map(isRowEnabled)).toEqual([true, true, true]);
     expect(moveHighlight(rows, -1, 1)).toBe(1);
     expect(moveHighlight(rows, 1, 1)).toBe(2);
     expect(moveHighlight(rows, 2, 1)).toBe(0);

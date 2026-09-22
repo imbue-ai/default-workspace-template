@@ -94,7 +94,7 @@ A launch-path row runs its launch path in one of two modes, decided by the manif
 - a launch path whose `path` equals its app's pin `path` runs in **focus** mode: the app's pinned window on the active desktop is restored and raised, and nothing is opened (the shell's own rule that a focus-mode open at the home path finds the pinned window);
 - every other launch path runs in **new** mode, as its shortcut does: a new window at the path.
 
-On a stock machine "Chat" raises the pinned chat window and "New Terminal", "New File Viewer", and "Open Browser" open windows.
+On a stock machine "Chat" raises the pinned chat window and "Terminal", "File Viewer", and "Browser" open windows.
 
 ### 3.4 The first-visit window
 
@@ -104,13 +104,13 @@ The shell learns nothing new; no manifest field, no shell state, and no placemen
 On startup the app starts one background thread that, while the window has not yet been delivered, polls the shell's client list (`GET /api/clients`) and, once a connected client is listed, posts two ops targeting that client on the first desktop (the first entry of `GET /api/desktops`):
 
 1. `open` with `app = getting-started`, `path = /`, `if_present = focus`, which answers the window id (an open of the same path twice answers the same window, so a retry is harmless);
-2. `place` of that window with `frame = 0.12,0.05,0.33,0.9`, the left complement of the pinned frame (contracts 4.2), which shows it normal at that frame on top of the client's stack.
+2. `place` of that window with `frame = 0.07,0.05,0.38,0.9`, the left complement of the pinned frame (contracts 4.2) flush against it, which shows it normal at that frame on top of the client's stack.
 
 Delivery is remembered in a ledger, `data/.state/getting-started/first_window.json` (`{"is_delivered": true}`), written once both ops were accepted; a restart of the app with the ledger present opens nothing, and closing the window never brings it back.
 A shell that cannot be reached, or that refuses an op, is retried on the next poll for as long as the window is undelivered.
 The window is ordinary from the moment it exists: closing it removes it for everyone, and a second client's first visit sees it minimized in its taskbar, as it sees any window opened elsewhere.
 
-`x` clears the one-column shortcut grid (the grid inset plus one cell width, 112px, is under 0.12 of any backdrop 940px or wider; a narrower backdrop overlaps the column's edge, which is accepted).
+`x` clears the one-column shortcut grid on a wide backdrop (the grid inset plus one cell width, 112px, is under 0.07 of any backdrop 1600px or wider; a narrower backdrop overlaps the column's edge, which is accepted for the room the tiles gain).
 The chat's welcome-chat restore and this open flush independently once a client connects, so which of the two windows ends on top is not fixed; the two frames do not overlap, so only the focus differs, which is accepted.
 
 ### 3.5 The launcher's rows
@@ -119,10 +119,11 @@ Given the inventory, the desktops, this client's layout, and the query `q`:
 
 - **Launch-path rows:** one per launch path of every non-internal app, apps in launcher order, launch paths in manifest order, less every launch path that is a free-text row (those are listed once, at the foot).
 - **Window rows:** every window of every desktop, the active desktop's first and in opening order, each read with this client's effective title (an independent window's own title, else the app's display name).
-- **Free-text rows:** section 3.1, in order, always.
+- **Free-text rows:** section 3.1, in order: the primary always, the rest only while there is text to send.
 
-With `q` empty the menu shows the launch-path rows and the free-text rows; window rows appear only while typing.
+With `q` empty the menu shows the launch-path rows and the primary free-text row; window rows appear only while typing.
 With `q` non-empty a launch-path row stays when every whitespace token of `q` occurs in its label or its app's display name or app name (`matchesQuery`, unchanged), a window row when every token occurs in its title, its desktop's name, or its app's names; free-text rows always stay.
+A `q` with a line break in it is a message, not a query (section 4.1): the menu shows the free-text rows alone, with no launch-path or window rows and no "no match" note.
 Rows keep their section order.
 
 The **highlight** is the first launch-path or window row when any survives, else the primary text action.
@@ -133,7 +134,8 @@ Running any row closes the menu and clears the field.
 ### 3.6 The Getting Started app
 
 An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), declaring no launch paths (so the shell synthesizes its one, `open` at `/`, labelled "Open Getting Started"; contracts section 2), a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, `critical = false`, and the first-visit opener of section 3.4.
-Its page holds, top to bottom: a search field over its own content; "Start something", the eight intent tiles of today's `startSomething.ts`; "Start from a template", the catalog shelves of today's `TemplateShelves.ts`.
+Its page holds, top to bottom: a search field over its own content; "Start something", the eight intent tiles of today's `startSomething.ts`, two to a row with four shown at first and the rest behind "See more"; "Start from a template", the catalog shelves of today's `TemplateShelves.ts`.
+The page is its own scroller (the shared base styles pin the body to the viewport), so a window shorter than its content scrolls.
 Picking a template shows the template's detail as a page inside the app (today's `TemplateDetailModal`, with a back control instead of a close), whose two actions are "Make it mine" and "Create a new machine from it".
 Every tile and both actions start a chat with a seeded text through `shell:start-with-text` (section 3.7); the Getting Started window stays where it is and the chat comes up beside it.
 The template catalog is the app's: today's `template_catalog.py` (the fetch, the six-hour reuse, the last-good copy on disk, `GET /api/templates-catalog`) moves into it whole, reading the same `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (kept so nothing outside the workspace changes) and keeping its cache under `data/.state/getting-started/`.
@@ -179,8 +181,9 @@ The field keeps its place at the taskbar's left and its width.
 Its placeholder is `Start app or send message...`.
 Focusing it opens the menu; typing filters; Escape clears the text, and a second Escape on an empty field closes the menu and blurs.
 A press outside the field and the menu closes the menu and leaves the text; the next focus reopens it with the text still there.
-The field is a single-line input; a text longer than the field scrolls inside it.
-Shift+Enter is not a line break, since the text is a query string and a chat's composer is the place to write paragraphs.
+The field is a one-row text area that grows with its text, to eight lines, and scrolls past that.
+Shift+Enter breaks the line: a longer message to an agent can be written here.
+A text with a line break in it is a message rather than a query, and the menu offers the free-text rows alone (section 3.5); with the last line break gone the text is a query again.
 
 In compact mode the field collapses to a button that expands over the taskbar's entries while the menu is open, as today.
 
@@ -192,9 +195,10 @@ The launch-path rows come first, then a divider and the window rows while typing
 A section with no rows draws nothing, not a heading.
 While typing with no launch-path or window match, one faint line above the free-text rows says `No apps or windows match`.
 
-A launch-path row reads its launch path's label ("New Terminal") with the app's display name as the caption when the two differ.
+A launch-path row reads its launch path's label ("Terminal") with the app's display name as the caption when the two differ.
 A window row reads the window's effective title with the app's display name as the caption, and the desktop's name after it for a window on another desktop; a minimized window's row is dimmed.
-The primary text action reads its launch path's label ("New Chat") with `Enter` as the caption; the secondary reads its label ("Send to chat...") with the platform's key (`Ctrl+Enter`, or `Cmd+Enter` on macOS); with text in the field the caption also carries the text's first words, faint, so the row says what it will do with what was typed.
+The highlighted row, whatever its kind, carries `Enter` as its last caption: the caption says what Enter does, and moves with the highlight.
+The primary text action reads its launch path's label ("New Chat"); the secondary reads its label ("Send to chat...") with the platform's key (`Ctrl+Enter`, or `Cmd+Enter` on macOS) as a caption whatever is highlighted, since the chord runs it regardless; with text in the field the caption of either also carries the text's first words, faint, so the row says what it will do with what was typed.
 A disabled free-text row is drawn faint with its reason as the tooltip.
 
 The highlighted row wears the active fill and `data-highlighted="true"`.
@@ -223,7 +227,8 @@ The user reads the chat's first turn beside the tiles they came from.
 ### 4.5 Sending a text to an existing chat
 
 Ctrl+Enter, or the "Send to chat..." row, runs the chat's `send` launch path with the text (section 8): the pinned chat window is pointed at `/send?message=<text>` and restored.
-The chat root shows a picker over its list, a typeahead over every chat's title; Enter or a click sends the text to that chat, selects it, and reports `/?chat=<id>`; Escape dismisses the picker and reports the selection alone, so the text is dropped.
+With one chat to send to, the chat root sends the text there at once, selects it, and reports `/?chat=<id>`; with none it starts a new chat with the text, as `new` would.
+Otherwise the chat root shows a picker over its list, a typeahead over every chat's title; Enter or a click sends the text to that chat, selects it, and reports `/?chat=<id>`; Escape dismisses the picker and reports the selection alone, so the text is dropped.
 Sending is the chat app's ordinary send, so a stopped chat is started by it as any send starts one.
 
 ### 4.6 First visit
@@ -245,8 +250,9 @@ Long press replaces nothing here, since the menu has no context menus.
 | Key | Where | Effect |
 |---|---|---|
 | Any character | field | Filters; the menu opens if closed |
-| Down, Up | menu open | Moves the highlight, wrapping |
+| Down, Up | menu open | Moves the highlight, wrapping; with a line break in the text, moves the caret instead |
 | Enter | menu open | Runs the highlighted row |
+| Shift+Enter | field | Breaks the line; the text becomes a message and the menu keeps the free-text rows alone |
 | Ctrl+Enter (Cmd+Enter on macOS) | menu open | Runs the secondary text action, when enabled |
 | Escape | field | Clears the text; on an empty field, closes the menu |
 
@@ -381,4 +387,3 @@ Each step leaves the tree green; the whole is one pull request per repository.
 - A first-visit window on later desktops, for later clients, or a per-user first visit; a manifest-declared first window the shell would seed itself.
 - Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" leaves with the tiles and returns when a row menu is designed.
 - The chat shortcut opening a second chat list while a pinned one exists.
-- Multi-line composition in the field; the chat's composer is for that.

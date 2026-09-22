@@ -16,6 +16,6 @@ mode = "new"
 
 [[launch_paths]]
 id = "new"
-label = "New Terminal"
+label = "Terminal"
 path = "/new"
 params = [{name = "workdir", label = "Working directory", required = false}]
