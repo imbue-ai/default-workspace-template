@@ -185,6 +185,16 @@ class IfPresent(LowerCaseStrEnum):
     NEW = auto()
 
 
+class ShowOutcome(LowerCaseStrEnum):
+    """How a ``show`` op put the path on screen (a wire value): a window already showing it raised, a window on the
+    same page navigated, the app's pinned window navigated, or a new window opened."""
+
+    RAISED = auto()
+    NAVIGATED = auto()
+    PINNED = auto()
+    OPENED = auto()
+
+
 class ShortcutTargetKind(LowerCaseStrEnum):
     """What a desktop shortcut runs; V1 has one kind, a launch path (a wire value)."""
 

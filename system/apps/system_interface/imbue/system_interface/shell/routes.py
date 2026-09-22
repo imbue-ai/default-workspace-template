@@ -2,6 +2,7 @@
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
+from typing import Any
 from typing import Final
 from typing import assert_never
 
@@ -23,6 +24,10 @@ from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
 from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
 from imbue.system_interface.shell.desktop_routes import resolved_client_wire_json
+from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
+from imbue.system_interface.shell.embedder_messages import deliver_forwarded_message
+from imbue.system_interface.shell.embedder_messages import forwarded_messages
+from imbue.system_interface.shell.embedder_messages import message_delivery_wire_json
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import DesktopConflictError
@@ -31,6 +36,7 @@ from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import LayoutOpError
+from imbue.system_interface.shell.errors import NoMessageHandlerError
 from imbue.system_interface.shell.errors import NoTargetClientError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import ShellError
@@ -59,6 +65,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_FORBIDDEN
 from imbue.system_interface.shell.route_helpers import HTTP_INTERNAL_ERROR
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
+from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import parse_request_body
@@ -70,6 +77,7 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
     match error:
         case (
             UnknownAppError()
+            | NoMessageHandlerError()
             | ClientNotFoundError()
             | DesktopNotFoundError()
             | WindowNotFoundError()
@@ -235,6 +243,35 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
     return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
+# Section 5.6: the embedder-message relay
+
+
+def relay_embedder_message() -> ResponseReturnValue:
+    """Post a message the minds chrome sent this client's page to every app registered for its type; 200 when
+    every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no app
+    handles the type."""
+    relayed = parse_request_body(EmbedderMessageRelayRequest)
+    forwarded = forwarded_messages([entry.row for entry in _shell().inventory.entries()], relayed)
+    if not forwarded:
+        raise NoMessageHandlerError(f"No registered app handles {str(relayed.type)!r}")
+    deliveries = [deliver_forwarded_message(message) for message in forwarded]
+    logger.info(
+        "Relayed {} from client {} to {}",
+        relayed.type,
+        relayed.client_id,
+        ", ".join(f"{delivery.app} ({delivery.status})" for delivery in deliveries),
+    )
+    answer: dict[str, Any] = {
+        "type": str(relayed.type),
+        "deliveries": [message_delivery_wire_json(delivery) for delivery in deliveries],
+    }
+    undelivered = [delivery for delivery in deliveries if not delivery.is_delivered]
+    if not undelivered:
+        return jsonify(answer), HTTP_OK
+    detail = "; ".join(f"{delivery.app} did not take it: {delivery.detail}" for delivery in undelivered)
+    return jsonify({**answer, "detail": detail}), HTTP_BAD_GATEWAY
+
+
 # The update notice: the rollback point the update-app careful flow's apply kept
 
 
@@ -348,6 +385,12 @@ def register_shell_routes(application: Flask) -> None:
         view_func=inventory_document,
         methods=["GET"],
         endpoint="inventory_document",
+    )
+    application.add_url_rule(
+        "/api/embedder-messages",
+        view_func=relay_embedder_message,
+        methods=["POST"],
+        endpoint="relay_embedder_message",
     )
     application.add_url_rule(
         "/api/layout/broadcast",

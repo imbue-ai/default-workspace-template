@@ -24,6 +24,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
@@ -38,6 +39,7 @@ from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.desktop_document import choose_show_target
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
@@ -64,9 +66,12 @@ from imbue.system_interface.shell.layout_ops import PINNED_WINDOW
 from imbue.system_interface.shell.layout_ops import RELOAD_SYSTEM_INTERFACE_OP
 from imbue.system_interface.shell.layout_ops import SELF_WINDOW
 from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
+from imbue.system_interface.shell.layout_ops import SHOW_OP
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import SharingMode
+from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -604,18 +609,20 @@ def _open_unplaced(
     )
 
 
-def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> ResponseReturnValue:
+def _answer_document(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> dict[str, Any]:
     desktop = shell.get_desktop(target.desktop.id)
-    return jsonify(
-        {
-            "ok": True,
-            "desktop_id": str(desktop.id),
-            "client_id": str(target.client_id),
-            "desktop": shell.desktop_wire_json(desktop),
-            "layout": _layout_wire_json(shell, desktop, target.client_id),
-            "window_id": str(window_id) if window_id is not None else None,
-        }
-    )
+    return {
+        "ok": True,
+        "desktop_id": str(desktop.id),
+        "client_id": str(target.client_id),
+        "desktop": shell.desktop_wire_json(desktop),
+        "layout": _layout_wire_json(shell, desktop, target.client_id),
+        "window_id": str(window_id) if window_id is not None else None,
+    }
+
+
+def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> ResponseReturnValue:
+    return jsonify(_answer_document(shell, target, window_id))
 
 
 @pure
@@ -717,6 +724,59 @@ def _op_window(
     return window.id
 
 
+def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
+    return ClientDesktopView(
+        desktop=desktop,
+        layout=shell.read_desktop_layout(desktop, client_id),
+        seen_windows=shell.windows_for_client(desktop, client_id),
+    )
+
+
+def _show(
+    shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
+) -> ResponseReturnValue:
+    """The ``show`` op: put the path of the app on the target client's screen, choosing the window by the rule
+    ``choose_show_target`` spells, and answer which way it went."""
+    app = _app_name_or_raise(arguments.app, "app")
+    shell.require_app_entry(str(app))
+    if not arguments.path:
+        raise LayoutOpError("show needs a path")
+    path = WindowPath(arguments.path)
+    showing = {WindowPath(candidate) for candidate in arguments.showing}
+    client_id = target.client_id
+    others = [
+        _client_desktop_view(shell, desktop, client_id)
+        for desktop in shell.list_desktops()
+        if desktop.id != target.desktop.id
+    ]
+    choice = choose_show_target(_client_desktop_view(shell, target.desktop, client_id), others, app, path, showing)
+    desktop = shell.get_desktop(choice.desktop_id)
+    if choice.window is None:
+        request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, launch=None)
+        window_id = shell.open_window(desktop.id, request, is_minimized=False).window.id
+    else:
+        window_id = choice.window.id
+        if choice.outcome is not ShowOutcome.RAISED:
+            # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
+            shell.report_window_location(desktop.id, window_id, client_id, path, choice.window.title)
+        shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
+        # Switched after the raise, so the layout the client fetches on arriving already has the window on top.
+        if desktop.id != target.desktop.id:
+            shell.set_client_active_desktop(client_id, desktop.id)
+    logger.info(
+        "layout op={} requester={} desktop={} client={} app={} path={} shown={}",
+        SHOW_OP,
+        requester,
+        desktop.id,
+        client_id,
+        app,
+        path,
+        choice.outcome.value,
+    )
+    shown_on = _DesktopOpTarget(client_id=client_id, desktop=desktop)
+    return jsonify({**_answer_document(shell, shown_on, window_id), "shown": choice.outcome.value})
+
+
 def dispatch_desktop_op(
     shell: ShellState, op: str, args_raw: Mapping[str, Any], requester: OpRequester | None
 ) -> ResponseReturnValue:
@@ -751,6 +811,8 @@ def dispatch_desktop_op(
             ).window.id
         case "refresh":
             return _refresh_window(shell, arguments, target, requester)
+        case "show":
+            return _show(shell, arguments, target, requester)
         case _ if op in SHORTCUT_OPS:
             _op_shortcuts(shell, op, arguments, target)
         case _:

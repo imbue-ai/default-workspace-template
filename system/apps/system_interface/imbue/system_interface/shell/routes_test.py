@@ -125,9 +125,7 @@ def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
     with a detail naming itself and touches no program. Opening a window edits the preview's own state copy, so
     it goes through, and the document says which kind of shell answered."""
     fake_supervisor.statename_by_program["files"] = "RUNNING"
-    registry_path = write_two_app_registry(
-        tmp_path, registry_row_toml("plain", "http://localhost:1", program="plain")
-    )
+    registry_path = write_two_app_registry(tmp_path, registry_row_toml("plain", "http://localhost:1", program="plain"))
     inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
     application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
     client = application.test_client()
@@ -1119,6 +1117,213 @@ def test_a_malformed_op_argument_is_a_400_naming_the_argument(
 ) -> None:
     _register_client(app, "c1", "home")
     refused = _op(client, op, args, _TERMINAL_REQUESTER)
+    assert refused.status_code == 400
+    assert fragment in refused.get_json()["detail"]
+
+
+# Section 8: the show op
+
+# What the show tests ask ``buddy`` to show, and the one other path that already counts as showing it.
+_SHOW_PATH = "/?doc=agent-1"
+_SHOWING_PATH = "/agent-1"
+_BUDDY_REQUESTER = {"app": "buddy", "marker": ""}
+
+
+def _show(client: FlaskClient, client_id: str = "c1") -> Any:
+    return _op(
+        client,
+        "show",
+        {"app": "buddy", "path": _SHOW_PATH, "showing": [_SHOWING_PATH], "client": client_id},
+        _BUDDY_REQUESTER,
+    )
+
+
+def _window_id_at(
+    client: FlaskClient, app_name: str, path: str, client_id: str = "c1", desktop_id: str = "home"
+) -> str:
+    """Open a window of ``app_name`` at ``path`` for ``client_id``, shown on top of its stack, and answer its id."""
+    opened = client.post(
+        f"/api/desktops/{desktop_id}/windows",
+        json={"app": app_name, "path": path, "client_id": client_id, "if_present": "new"},
+    )
+    assert opened.status_code == 201
+    return opened.get_json()["window"]["id"]
+
+
+def _placement_of(client: FlaskClient, window_id: str, client_id: str = "c1", desktop_id: str = "home") -> Any:
+    return next(
+        placement for placement in _placements(client, client_id, desktop_id) if placement["window_id"] == window_id
+    )
+
+
+def _paths_by_window(client: FlaskClient) -> dict[str, str]:
+    return {window["id"]: window["path"] for window in _desktop_windows(client)}
+
+
+def test_show_raises_the_frontmost_window_already_showing_the_path_on_the_active_desktop(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A window of the app at the path, or at a path that counts as showing it, is raised as it stands: the one
+    nearest the top of this client's stack wins, whatever order the windows were opened in."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    at_path = _window_id_at(client, "buddy", _SHOW_PATH)
+    at_showing_path = _window_id_at(client, "buddy", _SHOWING_PATH)
+    assert _op(client, "focus", {"window": at_path, "client": "c1"}, None).status_code == 200
+    _window_id_at(client, "terminal", "/?session=t1")
+    paths_before = _paths_by_window(client)
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"], answer["desktop_id"]) == ("raised", at_path, "home")
+    assert answer["layout"]["placements"][-1]["window_id"] == at_path
+    assert _placement_of(client, at_showing_path)["is_minimized"] is False
+    assert _paths_by_window(client) == paths_before
+
+
+def test_show_switches_the_client_to_another_desktop_already_showing_the_path(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A window already showing it on another desktop beats a window here that could be pointed at it: the client
+    is switched to that desktop and the window raised there, and nothing on the active desktop moves."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    client_queue = _register_client(app, "c1", "home")
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    elsewhere = _window_id_at(client, "buddy", _SHOWING_PATH, desktop_id="research")
+    assert (
+        _op(client, "minimize", {"window": elsewhere, "client": "c1", "desktop": "research"}, None).status_code == 200
+    )
+    assert _op(client, "load", {"desktop": "home", "client": "c1"}, None).status_code == 200
+    # On the active desktop, the pinned window is shown at the root, which step two could have repointed.
+    assert _op(client, "restore", {"window": "pinned", "client": "c1"}, _BUDDY_REQUESTER).status_code == 200
+    drain_messages(client_queue)
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"], answer["desktop_id"]) == ("raised", elsewhere, "research")
+    recorded = _shell(app).clients.get_client("c1")
+    assert recorded is not None and recorded.active_desktop == "research"
+    assert "active_desktop_changed" in [message["type"] for message in drain_messages(client_queue)]
+    assert _placement_of(client, elsewhere, desktop_id="research")["is_minimized"] is False
+    assert client.get("/api/placements/home?client=c1").get_json()["window_paths"] == {}
+
+
+def test_show_navigates_the_frontmost_shown_window_at_the_same_page_and_never_a_different_page(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """With nothing showing it, the frontmost shown window of the app whose path is the same page (the path before
+    ``?``) is pointed at the path and raised; a window on another page of the app is never repointed, even when it
+    is on top, and a lower window on the same page is left alone."""
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    lower_same_page = _window_id_at(client, "buddy", "/?doc=agent-4")
+    frontmost_same_page = _window_id_at(client, "buddy", "/?doc=agent-2")
+    other_page = _window_id_at(client, "buddy", "/agent-3")
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"]) == ("navigated", frontmost_same_page)
+    paths = _paths_by_window(client)
+    assert (paths[frontmost_same_page], paths[lower_same_page], paths[other_page]) == (
+        _SHOW_PATH,
+        "/?doc=agent-4",
+        "/agent-3",
+    )
+    assert answer["layout"]["placements"][-1]["window_id"] == frontmost_same_page
+
+
+def test_show_passes_over_minimized_windows_at_the_same_page_for_the_pinned_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A minimized window is not on screen, so it is not repointed: the app's pinned window on this desktop is
+    pointed at the path for this client alone and restored."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+    minimized = _window_id_at(client, "buddy", "/?doc=agent-2")
+    assert _op(client, "minimize", {"window": minimized, "client": "c1"}, None).status_code == 200
+    pinned_id = next(window["id"] for window in _desktop_windows(client) if window["is_pinned"])
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"]) == ("pinned", pinned_id)
+    assert answer["layout"]["window_paths"][pinned_id]["path"] == _SHOW_PATH
+    assert _placement_of(client, pinned_id)["is_minimized"] is False
+    assert _placement_of(client, minimized)["is_minimized"] is True
+    assert _paths_by_window(client)[minimized] == "/?doc=agent-2"
+    assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+
+
+def test_show_reads_an_independent_window_at_the_path_its_client_sees(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The pinned window already at the path for one client is raised for that client; for another client, whose
+    view of it is still the home path, it is the pinned window pointed at the path."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+    navigated = _op(client, "navigate", {"window": "pinned", "path": _SHOW_PATH, "client": "c1"}, _BUDDY_REQUESTER)
+    assert navigated.status_code == 200
+
+    assert _show(client, "c1").get_json()["shown"] == "raised"
+    assert _show(client, "c2").get_json()["shown"] == "pinned"
+
+
+def test_show_opens_a_window_at_the_path_when_the_app_has_no_pinned_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = shell_application(
+        tmp_path,
+        build_inventory(
+            write_two_app_registry(tmp_path, registry_row_toml("buddy", "http://localhost:7002")), broadcaster
+        ),
+        broadcaster,
+    )
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    minimized = _window_id_at(client, "buddy", "/?doc=agent-2")
+    assert _op(client, "minimize", {"window": minimized, "client": "c1"}, None).status_code == 200
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert answer["shown"] == "opened"
+    assert answer["window_id"] not in (None, minimized)
+    assert _paths_by_window(client) == {minimized: "/?doc=agent-2", answer["window_id"]: _SHOW_PATH}
+    on_top = answer["layout"]["placements"][-1]
+    assert (on_top["window_id"], on_top["is_minimized"]) == (answer["window_id"], False)
+
+
+@pytest.mark.parametrize(
+    ("args", "fragment"),
+    [
+        pytest.param({"path": _SHOW_PATH}, "app", id="no-app"),
+        pytest.param({"app": "buddy"}, "path", id="no-path"),
+        pytest.param({"app": "nobody", "path": _SHOW_PATH}, "nobody", id="unregistered-app"),
+        pytest.param({"app": "buddy", "path": _SHOW_PATH, "showing": ["agent-1"]}, "agent-1", id="unrooted-showing"),
+    ],
+)
+def test_a_show_without_an_app_and_paths_it_can_use_is_a_400(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, args: dict[str, Any], fragment: str
+) -> None:
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    refused = _op(client, "show", {**args, "client": "c1"}, _BUDDY_REQUESTER)
     assert refused.status_code == 400
     assert fragment in refused.get_json()["detail"]
 
