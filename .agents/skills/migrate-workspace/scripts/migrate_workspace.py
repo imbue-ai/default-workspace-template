@@ -1053,10 +1053,12 @@ def _supervisord_dropin_listing_command(supervisord_conf: str) -> str:
     target, the way :func:`_read_file_command` is.
     """
     quoted = _shell_quote(supervisord_conf)
-    return f"for path in {quoted}.d/*.conf; do [ -f \"$path\" ] || continue; printf '%s\\n' \"$path\"; done"
+    return f'for path in {quoted}.d/*.conf; do [ -f "$path" ] || continue; printf \'%s\\n\' "$path"; done'
 
 
-def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -> list[str]:
+def _list_remote_supervisord_dropins(
+    target: SshTarget, supervisord_conf: str
+) -> list[str]:
     """The SOURCE's drop-in paths, or [] when it has none (a source predating the split)."""
     listing = run_remote(target, _supervisord_dropin_listing_command(supervisord_conf))
     return sorted(line.strip() for line in listing.splitlines() if line.strip())

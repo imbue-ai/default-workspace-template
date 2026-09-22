@@ -320,6 +320,23 @@ def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
     assert "minds-location" not in source
 
 
+def test_the_runner_does_not_use_reloader() -> None:
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+    )
+    assert "use_reloader=False" in source
+
+
+def test_main_parser_supports_start_flag() -> None:
+    # Check that --start is accepted by the parser
+    # We can invoke scaffold_flask_lib with --help or inspect the parser in main
+    # Or test by creating an ArgumentParser with the same arguments
+    import inspect
+
+    main_src = inspect.getsource(scaffold_flask_lib.main)
+    assert '"--start"' in main_src
+
+
 def test_the_runner_module_evaluates_its_environment_reads(tmp_path: Path) -> None:
     """The runner reads its port and data dir from the environment at import; a
     runner whose imports do not cover that read crashes before serving anything."""

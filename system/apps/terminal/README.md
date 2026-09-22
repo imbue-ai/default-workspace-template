@@ -29,8 +29,7 @@ like every Python app with a manifest):
   directory; `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
   terminal back face. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
   `commands/<key>.sh` with the remaining arguments. It decompresses the OSC 52-capable
-  ttyd web client vendored with the `mngr_ttyd` plugin
-  (`system/vendor/mngr/libs/mngr_ttyd/`) and serves it via `ttyd -I`, falling back to
+  ttyd web client the `imbue-mngr-ttyd` package ships and serves it via `ttyd -I`, falling back to
   the stock client (with a warning) when the asset is missing or will not decompress,
   registers its manifest and port, and execs
   `ttyd -p 7683 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`.

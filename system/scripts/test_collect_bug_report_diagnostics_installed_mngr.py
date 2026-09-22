@@ -1,14 +1,14 @@
-"""The collector's chat transcripts, fetched through the real vendored ``mngr``.
+"""The collector's chat transcripts, fetched through the real installed ``mngr``.
 
 The unit tests stub mngr, so they can say neither whether the target the collector hands
 it is one mngr resolves, nor what mngr makes of a real stream. Inside a workspace
 container the host record in the host dir is stamped by the outer provider that built it,
 so ``mngr list`` names the host after that record (``workspace-1``) rather than
-``localhost``, and a target composed from the listing is only as good as the vendored
+``localhost``, and a target composed from the listing is only as good as the installed
 mngr's willingness to resolve it.
 
 So this drives the collector's ``list_agents`` -> ``fetch_transcript`` path against the
-vendored binary over a host dir shaped like a workspace's: a record naming the host
+installed binary over a host dir shaped like a workspace's: a record naming the host
 something other than ``localhost``, and one agent with a real ATIF stream. A change to
 mngr's addressing, or to what it makes of the records a harness writes, shows up here
 rather than as archives with no ``chats/`` member or with every line's speaker rewritten.
@@ -30,12 +30,9 @@ from imbue.mngr.agents.common_transcript_records import (
     StepRecord,
     StepSource,
 )
-from imbue.mngr.cli.testing import (
-    create_agent_with_events_dir,
-    write_common_transcript_events,
-)
+from imbue.mngr.hosts.common import get_agent_state_dir_path
 from imbue.mngr.interfaces.data_types import CertifiedHostData
-from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import AgentId, HostId
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COLLECTOR_PATH = Path(__file__).parent / "collect_bug_report_diagnostics.py"
@@ -93,6 +90,28 @@ def _atif_stream_records() -> list[dict[str, object]]:
     ]
 
 
+def _agent_with_events_dir(host_dir: Path, agent_name: str, events_source: str) -> Path:
+    """A minimal agent record under ``host_dir``; returns its ``events/<source>`` dir."""
+    agent_id = AgentId.generate()
+    agent_dir = get_agent_state_dir_path(host_dir, agent_id)
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "data.json").write_text(
+        json.dumps(
+            {
+                "id": str(agent_id),
+                "name": agent_name,
+                "type": "claude",
+                "command": "sleep 1",
+                "work_dir": "/tmp/test",
+                "create_time": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    events_dir = agent_dir / "events" / events_source
+    events_dir.mkdir(parents=True)
+    return events_dir
+
+
 def _workspace_shaped_host_dir(tmp_path: Path) -> Path:
     """A host dir as the outer provider leaves it: its id, and a record naming the host.
 
@@ -114,21 +133,18 @@ def _workspace_shaped_host_dir(tmp_path: Path) -> Path:
 
 
 @pytest.mark.timeout(120)
-def test_transcripts_are_fetched_through_the_vendored_mngr(
+def test_transcripts_are_fetched_through_the_installed_mngr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     host_dir = _workspace_shaped_host_dir(tmp_path)
-    _agent_id, events_dir = create_agent_with_events_dir(
-        host_dir,
-        agent_name="chatty",
-        events_source="claude/common_transcript",
-        agent_type="claude",
+    events_dir = _agent_with_events_dir(host_dir, "chatty", "claude/common_transcript")
+    (events_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in _atif_stream_records()) + "\n"
     )
-    write_common_transcript_events(events_dir, _atif_stream_records())
     mngr_binary = shutil.which("mngr")
     assert mngr_binary is not None and Path(mngr_binary).resolve().is_relative_to(
         _REPO_ROOT
-    ), f"the mngr on PATH is not this checkout's vendored one: {mngr_binary}"
+    ), f"the mngr on PATH is not this checkout's pinned install: {mngr_binary}"
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
     # A temp cwd, so mngr does not read this checkout's own .mngr/settings.toml as project settings.
     monkeypatch.chdir(tmp_path)
