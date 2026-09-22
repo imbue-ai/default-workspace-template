@@ -739,6 +739,29 @@ def test_the_send_launch_path_offers_the_picker_and_sends_the_text_to_the_chat_p
         # The recording messenger writes nothing into the fixture transcript, so the bubble is not looked for.
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_the_send_launch_path_loaded_directly_offers_the_picker_once_the_chats_are_listed(
+    tmp_path: Path, page: Page
+) -> None:
+    """The ``send`` launch path as a document load (a window opened at it when the chat has no independent pinned
+    window here, or a link): the root holds the picker until the chats have arrived, then offers them over the
+    text; picking one sends the text there and moves the root's own URL to the selection alone, so a reload of the
+    document offers nothing again. The root behaves the same visited directly, so no shell frames it here."""
+    with _running_e2e_server(tmp_path) as server:
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        text = "Carry on with the seal"
+        page.goto(f"{server.chat_url}/send?" + urllib.parse.urlencode({"message": text}))
+        expect(page.locator("[data-send-picker]")).to_be_visible(timeout=15000)
+        expect(page.locator(".send-picker-text")).to_contain_text(text)
+        expect(page.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]')).to_be_visible()
+
+        page.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]').click()
+        expect(page.locator("[data-send-picker]")).to_have_count(0)
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=10.0)
+        expect(page).to_have_url(f"{server.chat_url}{_FIXTURE_ROOT_PATH}", timeout=10000)
+
+
 # starting a chat
 
 
