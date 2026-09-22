@@ -783,9 +783,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         metavar="APP=PATH",
         help="An app's already-built static/ bundle from the worker (the artifact "
-        "the worker validated): system_interface=<path> or chat=<path>, once per "
-        "app. Installed as-is only when every app's is given and verified; a live "
-        "build is the fallback.",
+        "the worker validated): system_interface=<path>, chat=<path>, or "
+        "getting_started=<path>, once per app. Installed as-is only when every "
+        "app's is given and verified; a live build is the fallback.",
     )
     apply_parser.add_argument(
         "--target-ref",

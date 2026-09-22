@@ -142,7 +142,8 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   `system/supervisord.conf.d/*.conf`, and `data/.state/apps.toml`, so running
   manual port checks (`ss -tln`) is unnecessary. If you are picking a port
   manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
-  (system_interface), `8010` (the chat app) and `8081` (the browser service).
+  (system_interface), `8010` (the chat app), `8030` (the Getting Started app) and
+  `8081` (the browser service).
   Two things do not show up there: the `agent-observer` program binds no port at
   all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
   ports at boot, so nothing to avoid is written down for it.

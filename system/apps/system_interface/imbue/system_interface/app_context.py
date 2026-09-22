@@ -7,7 +7,6 @@ from pydantic import Field
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.config import Config
 from imbue.system_interface.shell.state import ShellState
-from imbue.system_interface.template_catalog import TemplateCatalogStore
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
 
 # Key under which the single SystemInterfaceState is stored on ``app.config`` so
@@ -36,8 +35,6 @@ class SystemInterfaceState(MutableModel):
     config: Config
     # The shell's own collaborators (the inventory, the stores, the activity log).
     shell: ShellState
-    # The launcher's template catalog: fetched from its URL, cached under the shell's state.
-    template_catalog: TemplateCatalogStore
     # Captures the tree HEAD this process started from, so the app shell can
     # say when the served tree has moved under it (see update_staleness.py).
     # A factory (not a shared default): the HEAD read happens per state build,

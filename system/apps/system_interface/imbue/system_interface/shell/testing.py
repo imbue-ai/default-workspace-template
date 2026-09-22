@@ -53,9 +53,11 @@ def registry_row_toml(
     display_name: str | None = None,
     label: str = "",
     launcher_rank: int | None = None,
-    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id.
+    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id, and
+    # ``launch_text_params`` the param of each that takes typed text.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
+    launch_text_params: Mapping[str, str] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
@@ -92,6 +94,9 @@ def registry_row_toml(
         params = (launch_params or {}).get(launch_id, ())
         if params:
             lines.append("params = [" + ", ".join(f'"{param}"' for param in params) + "]")
+        text_param = (launch_text_params or {}).get(launch_id)
+        if text_param is not None:
+            lines.append(f'text_param = "{text_param}"')
     return "\n".join(lines) + "\n"
 
 
