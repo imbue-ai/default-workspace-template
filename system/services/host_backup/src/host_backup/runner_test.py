@@ -22,8 +22,10 @@ from host_backup.runner import (
     _emit_tick_error,
     _load_config_if_changed,
     _LoopState,
+    _maybe_run_prune,
     _parse_restic_timestamp,
     _refresh_environment_record,
+    _run_forget,
     _run_restic_backup,
     _should_tick_now,
     _take_snapshot,
@@ -261,14 +263,13 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
     for returncode, events_subdir in ((1, "restic-failed"), (0, "restic-ok")):
         state = _LoopState(_direct_capabilities())
         state.events_dir = tmp_path / events_subdir
-        stub = _ResticStub([_completed(returncode)])
         _run_restic_backup(
             state=state,
             config=_build_config(),
             snapshot=_direct_snapshot(),
             env_overrides={},
-            backup_fn=stub.backup,
-            unlock_fn=stub.unlock,
+            backup_fn=_ScriptedRestic([_completed(returncode)]),
+            unlock_fn=_ScriptedRestic([]),
         )
         observed.add(last_event_type(state.events_dir))
 
@@ -412,22 +413,19 @@ def _completed(
     )
 
 
-class _ResticStub:
-    """Records restic backup/unlock calls and returns scripted results."""
+class _ScriptedRestic:
+    """A restic call that returns scripted results in order and counts its calls."""
 
-    def __init__(self, backup_results: list[subprocess.CompletedProcess[str]]) -> None:
-        self._backup_results = backup_results
-        self.backup_calls = 0
-        self.unlock_calls = 0
+    def __init__(self, results: list[subprocess.CompletedProcess[str]]) -> None:
+        self._results = results
+        self.calls = 0
 
-    def backup(self, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        result = self._backup_results[self.backup_calls]
-        self.backup_calls += 1
+    def __call__(
+        self, *_args: object, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        result = self._results[self.calls]
+        self.calls += 1
         return result
-
-    def unlock(self, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        self.unlock_calls += 1
-        return _completed(0)
 
 
 def _events_in(events_dir: Path | None) -> list[dict]:
@@ -438,23 +436,29 @@ def _events_in(events_dir: Path | None) -> list[dict]:
     ]
 
 
-def _run_backup_under_test(
-    tmp_path: Path,
-    stub: _ResticStub,
-    *,
-    initial_failures: int = 0,
-) -> tuple[_LoopState, bool]:
+def _state_recording_events(tmp_path: Path) -> _LoopState:
     state = _LoopState(_direct_capabilities())
     state.events_dir = tmp_path / "events"
     state.current_tick_id = "tick-under-test"
+    return state
+
+
+def _run_backup_under_test(
+    tmp_path: Path,
+    backup: _ScriptedRestic,
+    *,
+    unlock: _ScriptedRestic | None = None,
+    initial_failures: int = 0,
+) -> tuple[_LoopState, bool]:
+    state = _state_recording_events(tmp_path)
     state.consecutive_backup_failures = initial_failures
     succeeded = _run_restic_backup(
         state=state,
         config=_build_config(),
         snapshot=_direct_snapshot(),
         env_overrides={},
-        backup_fn=stub.backup,
-        unlock_fn=stub.unlock,
+        backup_fn=backup,
+        unlock_fn=unlock if unlock is not None else _ScriptedRestic([]),
     )
     return state, succeeded
 
@@ -467,17 +471,20 @@ _LOCK_STDERR = (
 
 def test_run_restic_backup_unlocks_and_retries_on_stale_lock(tmp_path: Path) -> None:
     """A lock error triggers `restic unlock` and one retry; the retry's success wins."""
-    stub = _ResticStub(
+    backup = _ScriptedRestic(
         [
             _completed(1, stderr=_LOCK_STDERR),
             _completed(0, stdout='{"message_type":"summary","snapshot_id":"snap1"}'),
         ]
     )
-    state, succeeded = _run_backup_under_test(tmp_path, stub, initial_failures=4)
+    unlock = _ScriptedRestic([_completed(0)])
+    state, succeeded = _run_backup_under_test(
+        tmp_path, backup, unlock=unlock, initial_failures=4
+    )
 
     assert succeeded is True
-    assert stub.backup_calls == 2
-    assert stub.unlock_calls == 1
+    assert backup.calls == 2
+    assert unlock.calls == 1
     assert state.consecutive_backup_failures == 0  # reset on success
     succeeded_events = [
         e
@@ -490,12 +497,13 @@ def test_run_restic_backup_unlocks_and_retries_on_stale_lock(tmp_path: Path) -> 
 
 def test_run_restic_backup_does_not_unlock_on_unrelated_failure(tmp_path: Path) -> None:
     """A non-lock failure is never retried and never runs unlock."""
-    stub = _ResticStub([_completed(1, stderr="network unreachable")])
-    state, succeeded = _run_backup_under_test(tmp_path, stub)
+    backup = _ScriptedRestic([_completed(1, stderr="network unreachable")])
+    unlock = _ScriptedRestic([])
+    state, succeeded = _run_backup_under_test(tmp_path, backup, unlock=unlock)
 
     assert succeeded is False
-    assert stub.backup_calls == 1
-    assert stub.unlock_calls == 0
+    assert backup.calls == 1
+    assert unlock.calls == 0
     failed_events = [
         e for e in _events_in(state.events_dir) if e["type"] == "RESTIC_BACKUP_FAILED"
     ]
@@ -505,9 +513,9 @@ def test_run_restic_backup_does_not_unlock_on_unrelated_failure(tmp_path: Path) 
 
 def test_run_restic_backup_emits_alarm_after_threshold(tmp_path: Path) -> None:
     """Crossing the consecutive-failure threshold emits a durable escalation event."""
-    stub = _ResticStub([_completed(1, stderr="backend error")])
+    backup = _ScriptedRestic([_completed(1, stderr="backend error")])
     state, succeeded = _run_backup_under_test(
-        tmp_path, stub, initial_failures=CONSECUTIVE_FAILURE_ALARM_THRESHOLD - 1
+        tmp_path, backup, initial_failures=CONSECUTIVE_FAILURE_ALARM_THRESHOLD - 1
     )
 
     assert succeeded is False
@@ -524,8 +532,8 @@ def test_run_restic_backup_emits_alarm_after_threshold(tmp_path: Path) -> None:
 
 def test_run_restic_backup_no_alarm_below_threshold(tmp_path: Path) -> None:
     """A single failure records the count but does not raise the alarm."""
-    stub = _ResticStub([_completed(1, stderr="backend error")])
-    state, _ = _run_backup_under_test(tmp_path, stub)
+    backup = _ScriptedRestic([_completed(1, stderr="backend error")])
+    state, _ = _run_backup_under_test(tmp_path, backup)
 
     assert state.consecutive_backup_failures == 1
     alarms = [
@@ -534,6 +542,142 @@ def test_run_restic_backup_no_alarm_below_threshold(tmp_path: Path) -> None:
         if e["type"] == "BACKUP_REPEATEDLY_FAILING"
     ]
     assert alarms == []
+
+
+# forget / prune under a stale lock
+
+# What restic prints when an exclusive lock (forget, prune) meets the
+# non-exclusive lock a dead container left behind; exit code 11.
+_NON_EXCLUSIVE_LOCK_STDERR = (
+    "unable to create lock in backend: repository is already locked by "
+    "PID 1928420 on efa2d6b8510d by root (UID 0, GID 0)"
+)
+
+
+def _forget_exit_codes(state: _LoopState) -> list[object]:
+    return [
+        e["exit_code"]
+        for e in _events_in(state.events_dir)
+        if e["type"] == "FORGET_COMPLETED"
+    ]
+
+
+_FORGET_LOCKED = _completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR)
+
+
+@pytest.mark.parametrize(
+    ("forget_results", "unlock_results", "expected_unlock_calls", "expected_exit_code"),
+    [
+        pytest.param(
+            [_FORGET_LOCKED, _completed(0)],
+            [_completed(0)],
+            1,
+            0,
+            id="stale-lock-cleared-retry-wins",
+        ),
+        pytest.param(
+            [_FORGET_LOCKED, _FORGET_LOCKED],
+            [_completed(0)],
+            1,
+            11,
+            id="live-lock-kept-one-retry-only",
+        ),
+        pytest.param(
+            [_FORGET_LOCKED],
+            [_completed(1, stderr="unable to open repository")],
+            1,
+            11,
+            id="unlock-failed-no-retry",
+        ),
+        pytest.param(
+            [_completed(1, stderr="network unreachable")],
+            [],
+            0,
+            1,
+            id="unrelated-failure-no-unlock",
+        ),
+    ],
+)
+def test_run_forget_unlock_and_retry(
+    tmp_path: Path,
+    forget_results: list[subprocess.CompletedProcess[str]],
+    unlock_results: list[subprocess.CompletedProcess[str]],
+    expected_unlock_calls: int,
+    expected_exit_code: int,
+) -> None:
+    """Only a lock error runs `restic unlock`; forget is retried once, and only after
+    a successful unlock. The recorded exit code is the last forget's."""
+    forget = _ScriptedRestic(forget_results)
+    unlock = _ScriptedRestic(unlock_results)
+    state = _state_recording_events(tmp_path)
+
+    _run_forget(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        forget_fn=forget,
+        unlock_fn=unlock,
+    )
+
+    assert forget.calls == len(forget_results)
+    assert unlock.calls == expected_unlock_calls
+    assert _forget_exit_codes(state) == [expected_exit_code]
+
+
+def test_prune_unlocks_and_retries_on_a_stale_lock_and_records_the_prune(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The prune gate file lives under the relative data/.state/.
+    monkeypatch.chdir(tmp_path)
+    prune = _ScriptedRestic(
+        [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
+    )
+    unlock = _ScriptedRestic([_completed(0)])
+    state = _state_recording_events(tmp_path)
+
+    _maybe_run_prune(
+        state=state,
+        config=_build_config(),
+        env_overrides={},
+        prune_fn=prune,
+        unlock_fn=unlock,
+    )
+
+    assert prune.calls == 2
+    assert unlock.calls == 1
+    assert (tmp_path / "data/.state/last-restic-prune").exists()
+
+
+def test_age_out_restore_markers_unlocks_and_retries_on_a_stale_lock(
+    tmp_path: Path,
+) -> None:
+    listed = _snapshots_result(
+        [{"id": "old-marker", "time": "2026-07-10T00:00:00Z", "tags": ["restored"]}]
+    )
+    forget_ids = _ScriptedRestic(
+        [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
+    )
+    unlock = _ScriptedRestic([_completed(0)])
+    state = _state_recording_events(tmp_path)
+
+    _age_out_restore_markers(
+        state=state,
+        config=_age_out_config(7.0),
+        env_overrides={},
+        list_fn=lambda _tags, _env: listed,
+        forget_ids_fn=forget_ids,
+        unlock_fn=unlock,
+        now_fn=lambda: _FIXED_NOW,
+    )
+
+    assert forget_ids.calls == 2
+    assert unlock.calls == 1
+    forgotten = [
+        e
+        for e in _events_in(state.events_dir)
+        if e["type"] == "RESTORE_MARKERS_FORGOTTEN"
+    ]
+    assert [e["exit_code"] for e in forgotten] == [0]
 
 
 def test_load_config_if_changed_caches_until_mtime_moves(tmp_path: Path) -> None:
@@ -564,9 +708,7 @@ def test_load_config_if_changed_caches_until_mtime_moves(tmp_path: Path) -> None
     assert state.last_loaded_backup_toml_mtime == 222.0
 
 
-# ---------------------------------------------------------------------------
 # Restore-marker age-out
-# ---------------------------------------------------------------------------
 
 _FIXED_NOW = datetime(2026, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -581,13 +723,6 @@ def _age_out_config(max_age_days: float) -> BackupConfig:
     return BackupConfig(
         retention=RetentionSettings(restore_marker_max_age_days=max_age_days)
     )
-
-
-def _age_out_state(tmp_path: Path) -> _LoopState:
-    state = _LoopState(_direct_capabilities())
-    state.events_dir = tmp_path / "events"
-    state.current_tick_id = "tick-age-out"
-    return state
 
 
 def test_parse_restic_timestamp_handles_z_and_nanoseconds() -> None:
@@ -641,7 +776,7 @@ def test_age_out_restore_markers_forgets_old_and_keeps_recent(tmp_path: Path) ->
         forget_calls.append(ids)
         return _completed(0)
 
-    state = _age_out_state(tmp_path)
+    state = _state_recording_events(tmp_path)
     _age_out_restore_markers(
         state=state,
         config=_age_out_config(7.0),
@@ -679,7 +814,7 @@ def test_age_out_restore_markers_noop_when_all_recent(tmp_path: Path) -> None:
         forget_calls.append(ids)
         return _completed(0)
 
-    state = _age_out_state(tmp_path)
+    state = _state_recording_events(tmp_path)
     _age_out_restore_markers(
         state=state,
         config=_age_out_config(7.0),
@@ -709,7 +844,7 @@ def test_age_out_restore_markers_disabled_when_max_age_zero(tmp_path: Path) -> N
         return _completed(0)
 
     _age_out_restore_markers(
-        state=_age_out_state(tmp_path),
+        state=_state_recording_events(tmp_path),
         config=_age_out_config(0.0),
         env_overrides={},
         list_fn=_list_fn,
@@ -736,7 +871,7 @@ def test_age_out_restore_markers_tolerates_list_failure(tmp_path: Path) -> None:
         return _completed(0)
 
     _age_out_restore_markers(
-        state=_age_out_state(tmp_path),
+        state=_state_recording_events(tmp_path),
         config=_age_out_config(7.0),
         env_overrides={},
         list_fn=_list_fn,

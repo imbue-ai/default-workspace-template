@@ -1,10 +1,16 @@
-"""Unit tests for the harness registry's declared popups."""
+"""Unit tests for the harness registry's declared popups and capabilities."""
 
 from imbue.chat.harnesses.registry import HARNESS_SPECS
 from imbue.chat.harnesses.registry import HarnessPopup
 from imbue.chat.harnesses.registry import HarnessType
 from imbue.chat.harnesses.registry import PopupAction
 from imbue.chat.harnesses.registry import PopupTrigger
+from imbue.mngr.interfaces.agent import HasCompactionMixin
+from imbue.mngr_antigravity.plugin import register_agent_type as register_antigravity_agent_type
+from imbue.mngr_claude.plugin import register_agent_type as register_claude_agent_type
+from imbue.mngr_codex.plugin import register_agent_type as register_codex_agent_type
+from imbue.mngr_opencode.plugin import register_agent_type as register_opencode_agent_type
+from imbue.mngr_pi_coding.plugin import register_agent_type as register_pi_coding_agent_type
 
 
 def _notice_popups(harness: HarnessType) -> list[HarnessPopup]:
@@ -60,3 +66,23 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
                 continue
             overlap = set(popup.commands) & {"/model", "/effort", "/fast"}
             assert overlap == set(), f"{harness}: {overlap} duplicated in the terminal-notice tuple"
+
+
+def test_supports_compaction_matches_the_mngr_agent_classes_that_can_compact() -> None:
+    # The autocompact sweep only runs `mngr autocompact run` on harnesses that declare
+    # supports_compaction, so the flag has to agree with mngr. The seed pseudo-harness has
+    # no mngr agent type; every other harness must be listed here.
+    register_by_harness = {
+        HarnessType.CLAUDE: register_claude_agent_type,
+        HarnessType.CODEX: register_codex_agent_type,
+        HarnessType.PI_CODING: register_pi_coding_agent_type,
+        HarnessType.OPENCODE: register_opencode_agent_type,
+        HarnessType.ANTIGRAVITY: register_antigravity_agent_type,
+    }
+    for harness, spec in HARNESS_SPECS.items():
+        if harness is HarnessType.SEED:
+            continue
+        agent_type_name, agent_class, _config_class = register_by_harness[harness]()
+        assert agent_type_name == harness.value
+        assert agent_class is not None, harness
+        assert spec.supports_compaction == issubclass(agent_class, HasCompactionMixin), harness
