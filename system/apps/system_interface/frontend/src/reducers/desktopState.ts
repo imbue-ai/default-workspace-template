@@ -25,7 +25,7 @@ import type {
 } from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
 import type { UpdateNotice } from "../model/UpdateNotice";
-import { DRAFT_PARAM, isChatRootPath, isPathShowingChat, launchTilesOf, promptTargetOfTiles } from "../model/launch";
+import { DRAFT_PARAM, isPathShowingChat, launchTilesOf, promptTargetOfTiles } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -35,7 +35,6 @@ import {
   withWindowRaised,
   withWindowRestored,
   withWindowState,
-  windowsOfAppFrontToBack,
   withoutPlacement,
 } from "../geometry/stack";
 import type { RenderModes } from "../theme/metrics";
@@ -347,43 +346,22 @@ export function chatApp(state: DesktopState): AppRecord | null {
   return promptTargetOfTiles(launchTilesOf(state.apps))?.app ?? null;
 }
 
-/** A window of ``app`` showing the chat ``chatId``, with the desktop it is on, or null when none is:
- *  the frontmost one on the active desktop, else the first on another desktop. The active desktop's
- *  windows are read as this client sees them; every other desktop's are read as the shared record,
- *  since an independent window's path is this client's own and only the active desktop's layout is
- *  loaded. */
+/** A window showing the chat ``chatId``, with the desktop it is on, or null when none is.
+ *  The active desktop's windows are read as this client sees them; every other desktop's are read
+ *  as the shared record, since an independent window's path is this client's own and only the
+ *  active desktop's layout is loaded. */
 export function windowShowingChat(
   state: DesktopState,
-  app: string,
   chatId: string,
 ): { desktop: Desktop; window: WindowRecord } | null {
-  const active = activeDesktop(state);
-  if (active !== null) {
-    const window = windowsOfAppFrontToBack(state.layout, active, app).find((candidate) =>
-      isPathShowingChat(effectiveWindow(state, candidate).path, chatId),
-    );
-    if (window !== undefined) return { desktop: active, window };
-  }
   for (const desktop of state.desktops) {
-    if (desktop.id === state.activeDesktopId) continue;
-    const window = desktop.windows.find(
-      (candidate) => candidate.app === app && isPathShowingChat(candidate.path, chatId),
-    );
-    if (window !== undefined) return { desktop, window };
+    const isActive = desktop.id === state.activeDesktopId;
+    for (const window of desktop.windows) {
+      const seen = isActive ? effectiveWindow(state, window) : window;
+      if (isPathShowingChat(seen.path, chatId)) return { desktop, window };
+    }
   }
   return null;
-}
-
-/** The chat app's window on the active desktop to show a chat in: the frontmost one on screen showing the
- *  root (never one showing a single chat), else the pinned one whatever it shows, else null. */
-export function chatRootWindowOf(state: DesktopState, app: string): WindowRecord | null {
-  const desktop = activeDesktop(state);
-  if (desktop === null) return null;
-  const placements = activePlacements(state);
-  const onScreen = windowsOfAppFrontToBack(state.layout, desktop, app).find(
-    (window) => !isWindowMinimized(placements, window.id) && isChatRootPath(effectiveWindow(state, window).path),
-  );
-  return onScreen ?? pinnedWindowOf(state, app);
 }
 
 /** Every window of the active desktop placed, back to front. */

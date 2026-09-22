@@ -1071,102 +1071,36 @@ describe("focus-chat", () => {
     expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
   });
 
-  it("reads a chat root window with the chat selected as showing it, frontmost first, and no other app's window", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [
-          windowRecord("win-4", "buddy", "/chat-7"),
-          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
-          windowRecord("win-5", "buddy", "/?chat=chat-7"),
-          windowRecord("win-1", "docs", "/?chat=chat-7"),
-        ],
-      }),
-    ];
-    api.writeLayout("home", CLIENT, {
-      updated_at: null,
-      placements: [
-        placementRecord("win-4"),
-        placementRecord("win-9"),
-        placementRecord("win-5"),
-        placementRecord("win-1"),
-      ],
-    });
-    const store = await chatStore();
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
-    expect(activeFocusedWindowId(store.getState())).toBe("win-5");
-  });
-
-  it("selects a chat nothing is showing in the frontmost chat root window on screen", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [
-          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
-          windowRecord("win-5", "buddy", "/?chat=chat-3"),
-          windowRecord("win-6", "buddy", "/chat-4"),
-        ],
-      }),
-    ];
-    api.writeLayout("home", CLIENT, {
-      updated_at: null,
-      placements: [
-        placementRecord("win-9", { is_minimized: true }),
-        placementRecord("win-5"),
-        placementRecord("win-6"),
-      ],
-    });
-    const store = await chatStore();
-    expect(await store.focusChat("chat-7")).toBe(true);
-    // The root the viewer is reading chats in takes it, over the pinned one tucked away and over the frontmost
-    // window, which shows a single other chat and is never repointed.
-    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([
-      `reportWindowLocation:home:win-5:${CLIENT}:/?chat=chat-7:Buddy`,
-    ]);
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
-    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-5", path: "/?chat=chat-7" });
-    expect(activeFocusedWindowId(store.getState())).toBe("win-5");
-  });
-
-  it("points this client's pinned chat window at a chat nothing is showing when no root is on screen", async () => {
+  it("points this client's pinned chat window at a chat nothing is showing", async () => {
     api.desktops = [
       desktopRecord("home", {
         windows: [
           windowRecord("win-1", "docs", "/a"),
           windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
-          windowRecord("win-5", "buddy", "/?chat=chat-3"),
         ],
       }),
     ];
-    api.writeLayout("home", CLIENT, {
-      updated_at: null,
-      placements: [
-        placementRecord("win-1"),
-        placementRecord("win-9", { is_minimized: true }),
-        placementRecord("win-5", { is_minimized: true }),
-      ],
-    });
     const store = await chatStore();
     expect(await store.focusChat("chat-7")).toBe(true);
     expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
-      `reportWindowLocation:home:win-9:${CLIENT}:/?chat=chat-7:Buddy`,
+      `reportWindowLocation:home:win-9:${CLIENT}:/chat-7:Buddy`,
     );
     // The chat lands where this viewer reads chats, shown, and as this client's own navigation for the follow.
-    expect(store.getState().layout.window_paths["win-9"]?.path).toBe("/?chat=chat-7");
+    expect(store.getState().layout.window_paths["win-9"]?.path).toBe("/chat-7");
     expect(placementOf(store.getState().layout, "win-9").is_minimized).toBe(false);
-    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/?chat=chat-7" });
+    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/chat-7" });
     // And a second ask for the chat it now shows moves nothing.
     const callsBefore = api.calls.length;
     expect(await store.focusChat("chat-7")).toBe(true);
     expect(api.calls.length).toBe(callsBefore);
   });
 
-  it("opens the chat in a root window of its own when no root window takes it", async () => {
+  it("opens the chat in a window of its own when no pinned window takes it", async () => {
     api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
     const store = await chatStore([appRecord("docs"), chatAppRecord({ pin: null })]);
     expect(await store.focusChat("chat-7")).toBe(true);
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([
-      "openWindow:home:buddy:/?chat=chat-7:focus:-",
+      "openWindow:home:buddy:/chat-7:focus:-",
     ]);
   });
 

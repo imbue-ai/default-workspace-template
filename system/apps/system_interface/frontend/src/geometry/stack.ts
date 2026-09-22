@@ -47,18 +47,15 @@ export function focusedWindowId(placements: readonly Placement[]): string | null
   return null;
 }
 
-/** The windows of ``app`` in this client's stack, frontmost first, minimized or not. */
-export function windowsOfAppFrontToBack(layout: Layout, desktop: Desktop, app: string): WindowRecord[] {
-  const windowsById = new Map(desktop.windows.map((window) => [window.id, window]));
-  return effectivePlacements(layout, desktop)
-    .map((placement) => windowsById.get(placement.window_id))
-    .filter((window): window is WindowRecord => window !== undefined && window.app === app)
-    .reverse();
-}
-
 /** The window of ``app`` nearest the top of this client's stack, minimized or not, or null. */
 export function mostRecentlyFocusedWindowOfApp(layout: Layout, desktop: Desktop, app: string): WindowRecord | null {
-  return windowsOfAppFrontToBack(layout, desktop, app)[0] ?? null;
+  const windowsById = new Map(desktop.windows.map((window) => [window.id, window]));
+  const placements = effectivePlacements(layout, desktop);
+  for (let index = placements.length - 1; index >= 0; index -= 1) {
+    const window = windowsById.get(placements[index].window_id);
+    if (window !== undefined && window.app === app) return window;
+  }
+  return null;
 }
 
 /** The window's stored placement, else its default. */
