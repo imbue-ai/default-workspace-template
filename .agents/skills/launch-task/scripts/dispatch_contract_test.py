@@ -299,10 +299,9 @@ def _prose_await_commands() -> list[tuple[str, str]]:
 
 
 def test_every_prose_await_is_started_through_the_harness_neutral_runner() -> None:
-    """A lead must be woken by its worker's report on every harness. Only claude's own
-    background tool wakes its agent, so an ``await`` the prose leaves to that tool strands a
-    codex, pi or opencode lead; ``run_in_background.py`` delivers the result to the lead's
-    chat instead."""
+    """A lead must be woken by its worker's report on every harness, and a harness's own
+    background tool does not wake its agent on most of them; ``run_in_background.py``
+    delivers the result to the lead's chat instead."""
     await_commands = _prose_await_commands()
     assert await_commands, "no prose runs create_worker.py await; this guard is vacuous"
     for prose, command in await_commands:

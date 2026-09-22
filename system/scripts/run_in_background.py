@@ -9,8 +9,8 @@ The script returns at once: the command runs in a detached process of its own, s
 caller's tool call ends and the agent can end its turn. When the command exits, its exit
 code and output are sent to the caller's chat as one message (through ``message_chat.py``),
 and that message starts the agent's next turn. This is the way to be woken by a finished
-command that works on every harness: claude's background tool starts a turn when its
-command finishes, but codex, pi and opencode have no such tool.
+command that works on every harness; most harnesses' own background tools do not start a
+turn when their command finishes.
 
 The message is a ``<background-task-report>`` whose ``<summary>`` line is all the chat
 shows the user (the chat app renders it as a one-line notice; a test there pins its copy of

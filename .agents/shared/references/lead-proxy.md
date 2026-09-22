@@ -18,8 +18,8 @@ contents, and exits 0; on timeout it exits non-zero (code 124).
 `run_in_background.py` returns at once and runs it detached; when `await`
 exits, its exit code and everything it printed arrive in your chat as a
 message, and that message starts your next turn. Use it whatever your harness:
-a harness's own background tool wakes you only on claude, and this works on
-every one. `--name <WORKER_NAME>` is required (the same name you passed to
+most harnesses' own background tools do not wake you, and this works on every
+one. `--name <WORKER_NAME>` is required (the same name you passed to
 `launch`) so the poll also watches the OOM shed ledger.
 
 `await` is a generic poll-until-file primitive; the gate cycle below is this
