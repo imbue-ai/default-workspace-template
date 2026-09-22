@@ -103,8 +103,8 @@ an encrypted restic repo on cheaper object storage.
   holds -- and one retry. `forget` and `prune` need an exclusive lock, which
   restic refuses while any other lock exists, so the non-exclusive lock a
   backup killed with its container leaves behind blocks them while new backups
-  still succeed. Without this, a single stale lock would fail every tick
-  indefinitely.
+  still succeed. Without this, a single stale lock would fail the blocked step
+  on every tick indefinitely.
 - Repeated-failure escalation: consecutive failed ticks are counted (reset on
   any success). Once the count reaches a threshold (3), each failing tick also
   emits a `backup_repeatedly_failing` event and logs at error level, so a
