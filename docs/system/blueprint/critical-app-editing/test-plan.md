@@ -253,8 +253,9 @@ All from the repo root with `uv run python3`, `--worktree data/.tasks/critical-l
     live `data/.apps/chat` mtime is unchanged after a send;
   - an account switch attempted from the preview page is refused with the "cannot change
     account from a preview" message;
-  - `/proc/<agent pid>/oom_score_adj` of a running chat's agent is unchanged after the
-    preview's sweep interval (the refusing `set_adj`);
+  - `/proc/<agent pid>/oom_score_adj` of a running chat's agent is unchanged after a
+    send from the preview and a minute's wait (the preview's prioritizer is inert: no
+    writer, no sweep);
   - **a message sent from the preview reaches the real agent** (the transcript in the
     live chat tab shows it). If it raises a permission card, note where it surfaced
     (open question in the plan).
