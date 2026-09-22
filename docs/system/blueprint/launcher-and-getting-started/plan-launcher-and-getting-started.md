@@ -104,7 +104,7 @@ The shell learns nothing new; no manifest field, no shell state, and no placemen
 On startup the app starts one background thread that, while the window has not yet been delivered, polls the shell's client list (`GET /api/clients`) and, once a connected client is listed, posts two ops targeting that client on the first desktop (the first entry of `GET /api/desktops`):
 
 1. `open` with `app = getting-started`, `path = /`, `if_present = focus`, which answers the window id (an open of the same path twice answers the same window, so a retry is harmless);
-2. `place` of that window with `frame = 0.07,0.05,0.38,0.9`, the left complement of the pinned frame (contracts 4.2) flush against it, which shows it normal at that frame on top of the client's stack.
+2. `place` of that window with `frame = 0.07,0.05,0.38,0.9`, the left complement of the pinned frame (contracts 4.2), a hair short of it, which shows it normal at that frame on top of the client's stack.
 
 Delivery is remembered in a ledger, `data/.state/getting-started/first_window.json` (`{"is_delivered": true}`), written once both ops were accepted; a restart of the app with the ledger present opens nothing, and closing the window never brings it back.
 A shell that cannot be reached, or that refuses an op, is retried on the next poll for as long as the window is undelivered.
