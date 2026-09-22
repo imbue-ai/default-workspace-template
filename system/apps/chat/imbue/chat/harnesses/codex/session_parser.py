@@ -160,7 +160,7 @@ def _unwrap_command_result_envelopes(output: str) -> str:
             try:
                 value, end = decoder.raw_decode(remaining)
             except (json.JSONDecodeError, RecursionError) as exc:
-                logger.warning("Could not decode code-mode task output: {}", exc)
+                logger.warning("Could not decode a code-mode command result envelope: {}", exc)
                 break
             if not isinstance(value, dict) or not isinstance(value.get("chunk_id"), str):
                 break
