@@ -366,7 +366,12 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
             "model": "claude-opus-4-6",
             "content": [
                 {"type": "text", "text": "Let me read that file."},
-                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file_path": "/tmp/project/test.txt"}},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_tc1",
+                    "name": "Read",
+                    "input": {"file_path": "/tmp/project/test.txt"},
+                },
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -814,8 +819,8 @@ def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_i
         assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
 
 
-# Flaky: the failure notice reaches the chat page over its socket, whose connect has stalled for twenty seconds in
-# CI while the create failed at once, so the notice missed its wait.
+# Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
+# once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
 @pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
@@ -828,7 +833,7 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     with _running_e2e_server(tmp_path) as server:
         chat = _start_new_chat(page, server)
         failed = chat.locator(".message-list-create-failed")
-        expect(failed).to_contain_text("This chat could not be started", timeout=20000)
+        expect(failed).to_contain_text("This chat could not be started", timeout=45000)
         expect(failed).to_contain_text("exited with code 3")
         expect(failed).to_contain_text("create failed on purpose")
         expect(failed.locator(".message-list-create-retry")).to_be_visible()
