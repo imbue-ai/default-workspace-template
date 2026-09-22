@@ -197,7 +197,7 @@ def test_a_caller_that_is_not_an_agent_is_refused_before_anything_starts(
         tmp_path, _agent_env(), "Say hello", *_python_command("print('hello')")
     )
 
-    assert started.returncode == 2
+    assert started.returncode == run_in_background.EXIT_USAGE
     assert "MNGR_AGENT_ID" in started.stderr
     # No task directory: the refusal comes before anything is started.
     assert not (tmp_path / "data").exists()
