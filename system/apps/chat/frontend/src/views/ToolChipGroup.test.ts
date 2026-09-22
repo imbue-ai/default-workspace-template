@@ -261,7 +261,8 @@ describe("the input a panel shows", () => {
     // A long description is shown on the chip as a shortened note (79 chars + an
     // ellipsis), so it no longer equals the raw value -- but it is still the field
     // the note came from, and printing it in full here would repeat the chip.
-    const description = "Run the full backend and frontend suites, then confirm the coverage threshold still holds fine";
+    const description =
+      "Run the full backend and frontend suites, then confirm the coverage threshold still holds fine";
     const note = description.slice(0, 79) + "…";
     const raw = JSON.stringify({ command: "uv run pytest", description });
     expect(formatToolInput(raw, note)).toBe("uv run pytest");
