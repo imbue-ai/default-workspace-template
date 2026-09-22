@@ -51,6 +51,13 @@ observe`, its own supervised service) writes, and serves:
   its last message as `last_messaged_at`, which the chat root's list orders on)
   and the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`).
+- `POST /api/focus-chat`: what the shell posts for the Mind app's `minds:focus-chat` (the user opened a
+  chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
+  message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
+  (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
+  screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not.
+  The shell picks the window. It answers the shell's `shown` and window id; `400` for a chat id of the
+  wrong shape, `403` in a secondary chat, and `502` when the shell cannot be reached or refuses.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
   the update apply polls on the `--preflight` boot and on every critical app
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
@@ -72,7 +79,8 @@ serving its last known list and reports degraded; the returning observer's
 opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
-(`shell:open`, `shell:focused`, the handshake); the shell never calls the chat.
+(`shell:open`, `shell:focused`, the handshake); the shell calls the chat only to
+post the messages its manifest registers for (`minds:focus-chat`).
 Sends are reported to the shell's client-activity route (`shell_client.py`) so
 agents can attribute a request to a client. A chat's status (`ChatStatus` in
 `primitives.py`: working, idle, attention, stopped, or error) comes from its

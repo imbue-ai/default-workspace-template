@@ -418,6 +418,22 @@ class RecordingClientActivityShell:
         return "", 204
 
 
+class RecordingLayoutOpShell:
+    """A stand-in shell that records every op posted to ``/api/layout/broadcast`` and answers each with one
+    status and JSON body."""
+
+    def __init__(self, status: int, answer: dict[str, Any]) -> None:
+        self.received: list[dict[str, Any]] = []
+        self.status = status
+        self.answer = answer
+        self.application = Flask("recording-op-shell")
+        self.application.add_url_rule("/api/layout/broadcast", view_func=self._accept, methods=["POST"], endpoint="op")
+
+    def _accept(self) -> tuple[str, int]:
+        self.received.append(request.get_json())
+        return json.dumps(self.answer), self.status
+
+
 def build_test_state(
     *,
     config: Config | None = None,
@@ -425,6 +441,7 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    is_secondary: bool = False,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -455,6 +472,7 @@ def build_test_state(
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
+        is_secondary=is_secondary,
     )
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
