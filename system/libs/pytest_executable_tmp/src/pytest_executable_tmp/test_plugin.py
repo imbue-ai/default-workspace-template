@@ -35,7 +35,7 @@ def _run_inner_session(
     env = {**os.environ, **env_overrides}
     env.pop("PYTEST_ADDOPTS", None)
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", str(project)],
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", str(project)],
         cwd=project,
         env=env,
         capture_output=True,
