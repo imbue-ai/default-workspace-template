@@ -98,7 +98,7 @@ or a provisional milestone merge:
    under `system/services/<package>/` (plus `system/supervisord.conf.d/<name>.conf`), a shared
    script or reference at its path. A critical app's merge lives in
    `update-app/references/critical-app.md` step 4, which applies this same
-   check over its `system/apps/<package>/` together with
+   check over each leased app's `system/apps/<package>/` together with
    `system/libs/workspace_ui/`, `system/package.json`,
    `system/package-lock.json`, and every file the pass branch changes. Empty output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; supersede it (below).
