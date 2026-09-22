@@ -84,6 +84,18 @@ def _manifest_path_constant(module_file: Path) -> str | None:
     return None
 
 
+def _scripts_by_package() -> dict[Path, dict[str, str]]:
+    """Every app package's ``[project.scripts]`` table, keyed by the package directory."""
+    return {
+        pyproject_path.parent: (
+            tomllib.loads(pyproject_path.read_text())
+            .get("project", {})
+            .get("scripts", {})
+        )
+        for pyproject_path in sorted(_APPS_DIR.glob("*/pyproject.toml"))
+    }
+
+
 def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     """Every app package declaring a console script, with the ``module:function`` it points at.
 
@@ -91,16 +103,11 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     ``terminal-pty`` both), and several packages may declare the same name, in which case only
     whichever is on PATH runs -- a declaration alone does not say a package runs anything.
     """
-    entry_points: list[tuple[Path, str]] = []
-    for pyproject_path in sorted(_APPS_DIR.glob("*/pyproject.toml")):
-        scripts = (
-            tomllib.loads(pyproject_path.read_text())
-            .get("project", {})
-            .get("scripts", {})
-        )
-        if script_name in scripts:
-            entry_points.append((pyproject_path.parent, scripts[script_name]))
-    return entry_points
+    return [
+        (package, scripts[script_name])
+        for package, scripts in _scripts_by_package().items()
+        if script_name in scripts
+    ]
 
 
 def _packages_running_program(program: str, command_by_program: dict[str, str]) -> set[Path]:
@@ -109,7 +116,10 @@ def _packages_running_program(program: str, command_by_program: dict[str, str]) 
 
     Run by no app package here, so excusing nothing: a program with no block, one whose command
     runs something other than an app's entry point, and one whose script several packages
-    declare -- which of those runs is not something this config decides.
+    declare -- which of those runs is not something this config decides. That last state is
+    reported under its own name by
+    ``test_no_two_app_packages_declare_the_same_console_script``, since the collision this
+    silence leaves standing says nothing about the duplicated declaration behind it.
     """
     command = command_by_program.get(program, "")
     if not command:
@@ -213,6 +223,27 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
     )
 
     assert collisions == [], f"apps whose names collide with another app's program: {collisions}"
+
+
+def test_no_two_app_packages_declare_the_same_console_script() -> None:
+    # An app carrying a manifest installs as its own uv tool (``build_workspace.sh``), and
+    # ``_tool_env.sh`` points every one of those installs at a single ``UV_TOOL_BIN_DIR``, so
+    # two packages declaring one script name leave one file there for whichever installed
+    # last. It is also what lets a supervisord command ending in a bare script name be
+    # traced back to the package that runs it, which the sidecar guard above rests on.
+    # Checked over every app package, user-built apps included: their tools land in the
+    # same directory.
+    packages_by_script: dict[str, list[str]] = {}
+    for package, scripts in _scripts_by_package().items():
+        for script_name in scripts:
+            packages_by_script.setdefault(script_name, []).append(package.name)
+    shared = sorted(
+        f"{script_name}: {', '.join(sorted(packages))}"
+        for script_name, packages in packages_by_script.items()
+        if len(packages) > 1
+    )
+
+    assert shared == [], f"console scripts declared by more than one app package: {shared}"
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
