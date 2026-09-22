@@ -104,7 +104,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         [
           m(
             "span",
-            { class: "flex h-9 shrink-0 items-center text-faint" },
+            { class: "flex h-8.5 shrink-0 items-center text-faint" },
             m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
           ),
           m("textarea", {
@@ -113,7 +113,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             placeholder: LAUNCHER_PLACEHOLDER,
             value: query,
             class:
-              "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-2 leading-5 " +
+              "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-1.75 leading-5 " +
               "text-(length:--font-size-row) text-primary outline-none placeholder:text-faint",
             oncreate: (created: m.VnodeDOM) => {
               fit(created.dom as HTMLTextAreaElement, vnode.attrs);
@@ -174,7 +174,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             ? null
             : m(
                 "span",
-                { class: "flex h-9 shrink-0 items-center" },
+                { class: "flex h-8.5 shrink-0 items-center" },
                 m(
                   Button,
                   {
