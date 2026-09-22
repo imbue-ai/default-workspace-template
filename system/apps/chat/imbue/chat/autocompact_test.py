@@ -1,12 +1,11 @@
-import inspect
 import threading
 from collections.abc import Sequence
 
+from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.autocompact import _DEFAULT_CHECK_CONCURRENCY
 from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.utils.polling import poll_until
-from imbue.chat.autocompact import _DEFAULT_CHECK_CONCURRENCY
-from imbue.chat.autocompact import ChatAutoCompactor
 
 
 def _make_finished_process(
@@ -115,7 +114,7 @@ def test_check_agent_process_setup_error_handled_gracefully(loguru_records: list
     assert len(warning_logs) == 1
 
 
-def test_sweep_checks_all_running_chat_agents() -> None:
+def test_sweep_checks_every_listed_compactable_chat_agent() -> None:
     recorded_commands: list[list[str]] = []
     lock = threading.Lock()
 
@@ -124,9 +123,9 @@ def test_sweep_checks_all_running_chat_agents() -> None:
             recorded_commands.append(list(command))
         return _make_finished_process(command=command, returncode=0)
 
-    running_chats = ["chat-alpha", "chat-beta", "chat-gamma"]
+    compactable_chats = ["chat-alpha", "chat-beta", "chat-gamma"]
     compactor = ChatAutoCompactor.build(
-        list_compactable_chat_agent_names=lambda: running_chats,
+        list_compactable_chat_agent_names=lambda: compactable_chats,
         runner=fake_runner,
         mngr_binary="mngr",
     )
@@ -166,9 +165,9 @@ def test_sweep_stops_early_if_stop_event_set() -> None:
         compactor._stop_event.set()
         return _make_finished_process(command=command, returncode=0)
 
-    running_chats = ["chat-1", "chat-2", "chat-3"]
+    compactable_chats = ["chat-1", "chat-2", "chat-3"]
     compactor = ChatAutoCompactor.build(
-        list_compactable_chat_agent_names=lambda: running_chats,
+        list_compactable_chat_agent_names=lambda: compactable_chats,
         runner=fake_runner,
         max_concurrency=1,
     )
