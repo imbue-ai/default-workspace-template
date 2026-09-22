@@ -384,3 +384,6 @@ system/apps/system_interface/frontend/src/permission-demo.ts
 # Fetched at build time from the pinned mngr commit by system/scripts/fetch_mngr_assets.sh.
 system/vendor/mngr-assets/
 system/vendor/mngr-assets.tmp/
+
+# macOS Finder metadata -- never tracked
+**/.DS_Store

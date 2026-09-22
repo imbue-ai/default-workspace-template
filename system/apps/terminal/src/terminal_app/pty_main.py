@@ -53,10 +53,14 @@ class TerminalPtyArguments(FrozenModel):
     oom_tag_script: Path = Field(
         description="The memory-shedding tag wrapper a terminal session runs its shell through"
     )
+    is_registered: bool = Field(
+        description="Whether this boot registers the manifest; a preview beside the live pty boots unregistered"
+    )
 
 
 def prepare_ttyd(arguments: TerminalPtyArguments) -> list[str]:
-    """Install the dispatch scripts and the web client, register the pty, and return the ttyd command line."""
+    """Install the dispatch scripts and the web client, register the pty (unless unregistered), and return the
+    ttyd command line."""
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
     oom_tag_script = arguments.oom_tag_script.absolute()
     warn_if_oom_tag_script_is_missing(oom_tag_script)
@@ -66,9 +70,10 @@ def prepare_ttyd(arguments: TerminalPtyArguments) -> list[str]:
     is_client_installed = compressed_client is not None and install_ttyd_web_client(
         compressed_client, paths.ttyd_index_path
     )
-    manifest = load_manifest(arguments.manifest_path)
-    with log_span("Registering {} at {}", manifest.name, arguments.app_url):
-        register_app(arguments.manifest_path, arguments.app_url)
+    if arguments.is_registered:
+        manifest = load_manifest(arguments.manifest_path)
+        with log_span("Registering {} at {}", manifest.name, arguments.app_url):
+            register_app(arguments.manifest_path, arguments.app_url)
     return build_ttyd_argv(
         ttyd_executable=arguments.ttyd_executable,
         port=app_url_port(arguments.app_url),
@@ -131,6 +136,13 @@ def run_terminal_pty(arguments: TerminalPtyArguments) -> NoReturn:
     show_default=True,
     help="The memory-shedding tag wrapper a terminal session runs its shell through",
 )
+@click.option(
+    "--no-register",
+    "is_unregistered",
+    is_flag=True,
+    default=False,
+    help="Skip the registration: a throwaway boot, such as a preview, that must not re-point the live pty row",
+)
 def main(
     manifest_path: Path,
     app_url: str,
@@ -138,6 +150,7 @@ def main(
     ttyd_web_client_archive: Path | None,
     ttyd_executable: str,
     oom_tag_script: Path,
+    is_unregistered: bool,
 ) -> None:
     """Run the terminal's pty origin: install the dispatch scripts, register, and become ttyd."""
     run_terminal_pty(
@@ -148,6 +161,7 @@ def main(
             ttyd_web_client_archive=ttyd_web_client_archive,
             ttyd_executable=ttyd_executable,
             oom_tag_script=oom_tag_script,
+            is_registered=not is_unregistered,
         )
     )
 

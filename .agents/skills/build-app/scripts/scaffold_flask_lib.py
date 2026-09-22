@@ -267,6 +267,7 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
+import os
 from pathlib import Path
 
 from flask import Flask, Response
@@ -449,7 +450,9 @@ def _write_lib(
         _lib_pyproject(name, package, description, extras)
     )
     (lib_dir / "app.toml").write_text(
-        _MANIFEST_TEMPLATE.format(name=name, display_name=display_name)
+        _MANIFEST_TEMPLATE.format(
+            name=name, display_name=display_name, package_upper=package.upper()
+        )
     )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
@@ -463,22 +466,39 @@ def _write_lib(
 # ``priority = "user"`` is what puts a user-built app in the user band the
 # ``oom_tag_service.py user`` prefix below also names. No launch paths: the
 # shell offers ``open`` at the app's root. No ``default_shortcut``: an app
-# pins itself to a desktop's backdrop only when the user asks.
+# pins itself to a desktop's backdrop only when the user asks. The ``[preview]``
+# table is the library's default for the name spelled out, so an edit to the
+# runner's env names has the table to keep in step beside it.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
 priority = "user"
 program = "{name}"
+
+# How update-app boots a throwaway preview of this app: on a free port, over a
+# scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).
+[preview]
+env = {{{package_upper}_PORT = "{{port:main}}", {package_upper}_HOST = "{{host}}", {package_upper}_DATA_DIR = "{{copy:data}}"}}
+copies = {{data = "data/.apps/{name}"}}
 """
 
+# ``startsecs``/``startretries`` bound a crash loop, and are why a user app's
+# block differs from a built-in service's (which retries forever, by design: the
+# workspace is unusable without them). An app that dies before it has been up
+# ``startsecs`` counts as a failed start, so supervisord backs off and gives up
+# in FATAL after ``startretries`` instead of restarting it at full speed for as
+# long as the workspace lives. Without this a broken app restarts a few times a
+# second forever, and every restart re-registers it (measured on a real
+# workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
 command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
-startretries=1000000
+startsecs=30
+startretries=5
 stopasgroup=true
 killasgroup=true
 stdout_logfile=/var/log/supervisor/{name}-stdout.log

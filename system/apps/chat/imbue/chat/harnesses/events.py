@@ -95,4 +95,8 @@ class DisplayKind(StrEnum):
     PERMISSION_RESOLUTION = "permission_resolution"
     # A subtle inline status message (e.g. "Context was compacted").
     STATUS = "status"
+    # A one-line notice on the ASSISTANT rail: a tick, a bold lead (``display_label``) and
+    # the plain summary (``display_body``). For a message the agent is told about rather
+    # than one the user sent -- a background task finishing.
+    NOTICE = "notice"
 
