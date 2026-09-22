@@ -551,6 +551,11 @@ def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> No
             shutil.rmtree(unserved_static)
 
 
+def _are_npm_dependencies_missing(npm_root: Path) -> bool:
+    """Whether ``npm_root`` has no node_modules, so a build there has no tsc or vite."""
+    return not (npm_root / "node_modules").is_dir()
+
+
 def _is_recovery_npm_ci_needed(
     layout: _RestoredFrontend, restored: Collection[str]
 ) -> bool:
@@ -616,9 +621,12 @@ def _recover_running_state(
             bundle.snapshot_name not in restored for bundle in frontend.bundles
         ):
             # No copy to put back: compile from source. node_modules likewise
-            # has to match the restored lockfile when its own copy is gone.
-            if plan.frontend_manifest and _is_recovery_npm_ci_needed(
-                frontend, restored
+            # has to match the restored lockfile when its own copy is gone, and
+            # has to exist at all: a forward pass that installed a worker bundle
+            # never ran `npm ci`, and one whose `npm ci` died emptied it.
+            if _are_npm_dependencies_missing(frontend.npm_root) or (
+                plan.frontend_manifest
+                and _is_recovery_npm_ci_needed(frontend, restored)
             ):
                 run_checked(runner, ["npm", "ci"], frontend.npm_root, "npm ci")
             run_checked(
@@ -1015,7 +1023,10 @@ def apply_update(
         # installing a verified worker bundle needs no node_modules.
         if usable_worker_bundles is None and (
             plan.frontend_manifest
-            or (plan.frontend and not (repo_root / NPM_ROOT_DIR / "node_modules").is_dir())
+            or (
+                plan.frontend
+                and _are_npm_dependencies_missing(repo_root / NPM_ROOT_DIR)
+            )
         ):
             run_checked(
                 runner,
