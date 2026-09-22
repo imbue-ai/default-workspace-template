@@ -35,10 +35,8 @@ Do NOT use it:
 - as a progress ticker. It goes out when the turn's work is done, never
   partway through, and never more than once per turn.
 
-A Stop hook asks for one at the end of every turn. It is a suggestion, not a
-gate: when the turn does not warrant a notification, output nothing at all in
-reply to it and just stop -- do not explain the decision to the user, who
-cannot see the question.
+No hook reminds you at the end of the turn: the decision is yours as you finish, and
+it is never narrated to the user.
 
 ## How
 
