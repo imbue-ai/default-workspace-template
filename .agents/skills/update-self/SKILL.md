@@ -517,9 +517,11 @@ labelled a `submit-upstream-changes` candidate, plus anything else you hit that
 was a defect in built-in code (a failing built-in test, a step of this flow that
 broke and had to be worked around). For each, either
 
-- submit it -- `submit-upstream-changes` when you have a fix you can stand
-  behind, otherwise the report POST in `.agents/skills/assist/SKILL.md` step 6
-  (which pops a modal for the user to review and send) -- or
+- submit it -- `submit-upstream-changes` when you have a fix to template code
+  you can stand behind, otherwise the report POST in
+  `.agents/skills/assist/SKILL.md` step 6 (which pops a modal for the user to
+  review and send). An mngr defect always goes in the report: its fix is its
+  own mngr PR, not a template one -- or
 - name it in the results message as an explicit recommendation, with the
   submission offered.
 
