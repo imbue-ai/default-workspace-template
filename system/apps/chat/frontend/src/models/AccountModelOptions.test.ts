@@ -5,13 +5,14 @@ const mocks = vi.hoisted(() => ({
   request: vi.fn(),
   catalogOptions: [] as CatalogModelOption[],
   accountHarness: "claude" as string | undefined,
+  switchMode: "eager_then_reconcile",
 }));
 vi.mock("mithril", () => ({ default: { request: mocks.request } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 vi.mock("./HarnessCatalog", () => ({
   ensureHarnessCatalogs: () => Promise.resolve(),
   getHarnessCatalog: (harness: string | undefined) =>
-    harness === undefined ? null : { options: mocks.catalogOptions },
+    harness === undefined ? null : { options: mocks.catalogOptions, switch_mode: mocks.switchMode },
 }));
 vi.mock("./Providers", () => ({
   accountForAgent: () => (mocks.accountHarness === undefined ? null : { harness: mocks.accountHarness }),
@@ -34,6 +35,7 @@ describe("fetchAccountModelOptions", () => {
   beforeEach(() => {
     mocks.request.mockReset();
     mocks.accountHarness = "claude";
+    mocks.switchMode = "eager_then_reconcile";
     mocks.catalogOptions = [option("sonnet", true), option("internal", false)];
   });
 
@@ -51,6 +53,14 @@ describe("fetchAccountModelOptions", () => {
   it("falls back to the harness's catalog when the route names no options", async () => {
     mocks.request.mockResolvedValue({ options: null });
     expect((await fetchAccountModelOptions("acct-anthropic")).map((each) => each.id)).toEqual(["sonnet"]);
+  });
+
+  it("offers nothing for a harness whose model the chat app cannot switch, whatever its catalog lists", async () => {
+    // agy's model is changed from the agent's terminal, so a pick armed here could never be applied.
+    mocks.request.mockResolvedValue({ options: null });
+    mocks.accountHarness = "antigravity";
+    mocks.switchMode = "read_only";
+    expect(await fetchAccountModelOptions("acct-google")).toEqual([]);
   });
 
   it("offers nothing for an account on a harness this build has no catalog for", async () => {

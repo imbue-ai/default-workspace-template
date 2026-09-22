@@ -1,0 +1,1 @@
+This app's test suite now loads the `pytest-executable-tmp` plugin. A workspace container created before `/tmp` was mounted executable has it `noexec`, so a stub executable a test writes under `tmp_path` and puts on `PATH` was skipped, and the real tool it stood in for ran instead. The plugin moves temporary files somewhere they can run, or stops the run before any test starts.

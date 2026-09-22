@@ -11,10 +11,11 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - Run commands by calling "uv run" from the root of the git checkout (ex: "uv run mngr create ...").
 - NEVER amend commits or rebase--always create new commits.
 - If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `system/vendor/`.
-- If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo. For mngr specifically -- including changes you tested by editing `system/vendor/mngr/` directly -- follow `.agents/skills/submit-upstream-changes/references/mngr-changes.md`, which submits them as their own mngr PR.
+- If you need to *actively develop* against an external repo, check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo. mngr is not one of them: it is installed here as packages from the commit `pyproject.toml` pins (`[tool.uv.sources]`), so a change to it is described and submitted per `.agents/skills/submit-upstream-changes/references/mngr-changes.md` rather than developed from this workspace.
 - This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
 - All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data, including its instance records at `data/.apps/<name>/instances.json`, and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state (what a program keeps about this machine and can rebuild: the registry, dispatch scripts, pty records, the shell's client layouts) under `data/.state/`. The rule is `docs/system/blueprint/workspace-app-model/contracts.md` section 17.
 - When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
+- **`system/scripts/layout.py open` puts a window on the user's screen the moment it returns.** It is not setup -- it is the act of showing them something, and it applies to the live workspace they are looking at right now. So open a window only when you are ready for the user to see what's in it; do everything you want to check privately *before* that call, not after; and never tell the user to open a window you opened yourself. The same goes for every other mutating `layout.py` op (`close`, `focus`, `place`, `refresh`, ...) -- they all change the user's view live. See the `manage-desktop` skill.
 
 # Continuing a chat that moved to you
 
@@ -67,26 +68,6 @@ When you delegate via the `launch-task` skill, the whole delegation is **one ste
 
 Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `priorities` — they're backlog features the chat progress view doesn't use.
 
-# How to get started on any task:
-
-Always begin your session by reading the relevant READMEs and any other related documentation in the docs/ directory of the project(s) you are working on.
-These represent *user-facing* documentation and are the most important to understand.
-
-Once you've read these once during a session, there's no need to re-read them unless explicitly instructed to do so.
-
-If you will be writing code, be sure to read the base style_guide.md, as well as any specific style_guide.md for the project.
-Then read all README.md files in the relevant project directories, as well as all `.py` files at the root of the project you are working on (ex: `primitives.py`, etc.).
-Also read everything in data_types, interfaces, and utils to ensure you understand the core abstractions.
-
-Then take a look at the other code directories, and based on the task, determine which files are most relevant to read in depth.
-Be sure to read the full contents from those files.
-
-Do NOT read files that end with "_test.py" during this first pass as they contain unit tests (unless you are explicitly instructed to read the unit tests).
-
-Do NOT read files that start with "test_" either, as they contain integration, acceptance, and release tests (again, unless you are explicitly instructed to read the existing tests).
-
-Only after doing all of the above should you begin writing code.
-
 # Important commands and conventions:
 
 - Never run `uv sync`, always run `uv sync --all-packages` instead
@@ -109,62 +90,6 @@ Only after doing all of the above should you begin writing code.
 - **Naming is informative, not cheeky.** Service names, app names, skill names, command names: prefer something that explains what the thing does (`slack-inbox-checker`) over something clever (`nothing-new`). Cute names tax every later mention.
 - **Platform-internal APIs are valid.** Don't restrict yourself to officially documented public APIs. If a platform's own client (web app, mobile app) uses internal or undocumented endpoints to do something, those endpoints are fair game -- inspect what the official client actually calls and use the same endpoints with the same user-session auth. This is often cleaner than designing brute-force workarounds on top of a limited public API.
 
-# When coding, follow these guidelines:
-
-- Only make the changes that are necessary for the current task.
-- Before implementing something, check if there is something in the codebase or look for a library
-- Reuse code and use external dependencies heavily. Before implementing something, make sure that it doesn't already exist in the codebase, and consider if there's a library that can be imported instead of implementing it yourself. We want to be able to maintain the minimum amount of code that gets the job done, even if that means introducing dependencies. If you don't know of a library but think one might be plausible, search the web. (I'm even open to using random GitHub projects, but run anything that's not a well-established library by me first so I can check if it's likely to be reliable.)
-- Code quality is extremely important. Do not compromise on quality to deliver a result--if you don't know a good way to do something, ask.
-- Follow the style guide!
-- Use the power of the type system to constrain your code and provide some assurance of correctness. If some required property can't be guaranteed by the type system, it should be runtime checked (i.e. explode if it fails).
-- Avoid using the `TYPE_CHECKING` guard. Do not add it to files that do not already contain it, and never put imports inside of it yourself--you MUST ask for explicit permission to do this (it's generally a sign of bad architecture that should be fixed some other way).
-- Do NOT write code in `__init__.py`--leave them completely blank (the only exception is for a line like "hookimpl = pluggy.HookimplMarker("mngr")", which should go at the very root __init__.py of a library).
-- Do NOT make constructs like module-level usage of `__all__`
-- Before finishing your response, if you have made any changes, then you must ensure that you have run ALL tests in the project(s) you modified, and that they all pass. DO NOT just run a subset of the tests! However, while iterating (e.g. fixing a failing test, developing a feature), run only the relevant tests for rapid feedback -- save the full suite for the final check.
-- To run tests for a single project: "cd system/vendor/mngr && uv run pytest", "cd system/apps/system_interface && uv run pytest", or "cd system/apps/chat && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
-- While you're iterating, you can pass "--no-cov --cov-fail-under=0" to disable coverge (slightly faster), but during your final check, you *MUST NOT* pass those flags (it will fail in CI anyway)
-- For faster iteration, add "-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'" to skip slow infrastructure tests (~30s instead of ~95s). These still run in CI. Note that you *MUST* also pass "--no-cov --cov-fail-under=0" when doing this, otherwise it will complain about a lack of coverage.
-- Note that "uv run pytest" defaults to running all "unit" and "integration" tests, but the "acceptance" tests also run in CI when a PR exists. Do *not* run *all* the acceptance tests locally to validate changes--let CI run them once a PR is opened (it's faster than running them locally).
-- If you need to run a specific acceptance or release test to write or fix it, iterate on that specific test locally by calling "just test <full_path>::<test_name>" from the root of the git checkout. Do this rather than re-running all tests in CI.
-- Tasks are not allowed to finish without all tests passing (in CI, if a PR exists).
-- Do NOT create a PR yourself--if a PR is needed, the user will create it. Do not mention PRs to the user unless they bring them up.
-- Run the tests, and keep the exact command and the pass/fail counts to yourself (they belong in your reasoning, or in a regular ticket if something is left failing). The user hears "checked it works", or what still fails and what that means for them. Give the command and counts only if the user asks or is already speaking technically.
-- If tests fail because of a lack of coverage, you should add tests for the new code that you wrote.
-- When adding tests, consider whether it should be a unit test (in a _test.py file) or an integration/acceptance/release test (in a test_*.py file, and marked with @pytest.mark.acceptance or @pytest.mark.release, no marks needed for integration).  See the style_guide.md for exact details on the types of tests. In general, most slow tests of all functionality should be release tests, and only important / core functionality should be acceptance tests.
-- Do NOT create tests for test utilities (e.g. never create `testing_test.py`). Code in `testing.py` and `conftest.py` is exercised by the tests that use it and does not need its own test file.
-- Do NOT create tests that code raises NotImplementedError.
-- If you see a flaky test, you must not let it pass silently: fix it as soon as possible (finish your task, commit, then fix the flaky test in a separate commit), and tell the user in their terms only if it affects them ("one of the checks fails at random; I'm making it reliable").
-- Do not add TODO or FIXME unless explicitly asked to do so
-- Code must work on both macOS and Linux. It's ok if it doesn't work on Windows.
-- To reiterate: code correctness and quality is the most important concern when writing code.
-
-# Ratchets
-
-Each project has a `test_ratchets.py` file containing automated code quality checks ("ratchets"). 
-Each ratchet tracks a count of violations for a specific anti-pattern (e.g. raising built-in exceptions, using monkeypatch.setattr). 
-The count can only stay the same or decrease -- increasing it fails the test.
-
-Ratchets are guidance and reminders about good code, not rules to be blindly obeyed. When a ratchet fires on your code:
-
-1. Understand *why* the ratchet exists by reading its `rule_description`. It explains the principle behind the check.
-2. Fix the code in the spirit of the ratchet. For example, if `PREVENT_MONKEYPATCH_SETATTR` fires, a valid fix could be to use dependency injection -- not to manually save/restore the attribute with `try/finally`, which evades the regex while violating the same principle.
-3. Never evade a ratchet. Restructuring code to dodge the regex pattern while still doing the same bad thing is worse than the original violation, because it hides the problem. Common evasion patterns include splitting a statement across lines, assigning to a temporary variable before the flagged operation, or using a synonym that the regex doesn't catch.
-4. If you cannot find a fix that honors the spirit of the ratchet, **flag this to the user** rather than silently working around it. Do not use type-system escape hatches (e.g. assigning through `Any`, intermediate variables, or synonyms) to bypass a ratchet -- these are evasions even if they dodge the regex.
-5. If the ratchet is a **true misfire** -- the regex pattern matched something that is genuinely not the anti-pattern it was designed to catch (e.g. a variable name that happens to contain a flagged substring, or a string literal / comment that matches the pattern) -- then first try to update the ratchet's regex to be more specific so it no longer misfires (be extra careful not to exclude any real violations in the process). If that's not feasible, bump the ratchet count and explain the misfire to the user. This is distinct from a case where there *is* a real violation but you believe it's "justified"; justified violations are still violations and should be handled per steps 1-4 above.
-
-## Test fixture discovery
-
-Before writing new tests, read the relevant `conftest.py` and `testing.py` files to avoid reimplementing things that already exist. 
-Test infrastructure lives in these files:
-
-| File pattern | Purpose |
-|---|---|
-| `conftest.py` | Pytest fixtures and hooks, scoped to the directory they're in (auto-discovered by pytest) |
-| `testing.py` | Non-fixture test utilities: factory functions, helpers, context managers (explicitly imported) |
-| `mock_*_test.py` | Concrete mock implementations of interfaces (explicitly imported) |
-
-All fixtures must be in conftest.py, not in individual test files.
-
 # Manual verification and testing
 
 Before declaring any feature complete, manually verify it: exercise the feature exactly as a real user would, with real inputs, and critically evaluate whether it *actually does the right thing*. 
@@ -173,17 +98,27 @@ Do not confuse "no errors" with "correct behavior" -- a command that exits 0 but
 Then crystallize the verified behavior into formal tests. 
 Assert on things that are true if and only if the feature worked correctly -- this ensures tests are both reliable and meaningful.
 
-## Verifying interactive components with tmux
-
-For interactive components (TUIs, interactive prompts, etc.), use `tmux send-keys` and `tmux capture-pane` to manually verify them. 
-This is a special case: do NOT crystallize these into pytest tests. 
-They are inherently flaky due to timing and useless in CI, but valuable for agents to verify that interactive behavior looks right during development.
-
 # Communication
 
 If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
 
 If the user asks you to read or act on something in a third-party tool they have an account with -- including a link they paste, such as a Notion page, Google Doc, or Slack thread -- run `latchkey services list --viable` before anything else, and use the `latchkey` skill for anything it lists (its names may differ from the product's, e.g. Notion is `notion-mcp`). That is how you reach the accounts the user connected in Minds; use the web tools or the browser only for tools latchkey does not cover.
+
+## Telling the user you finished
+
+**If you are a chat agent, end every turn in which you did work by sending a notification.** The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
+
+```
+python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is now done>"
+```
+
+Read the exit code -- when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance on what to write.
+
+Skip it for the turns that carry nothing: chitchat, a single-line acknowledgement, a trivial answer, a turn that only asks the user a question, or a reply that is one quick file read. Roughly the same line this file draws for step records. Never more than one per turn.
+
+Nothing reminds you of this at the end of a turn; decide it yourself as you finish, and do not narrate the decision -- the user never asked, so a sentence about it is a non-sequitur, the same way naming your `tk` calls is.
+
+**This is for chats only.** If you were launched by another agent -- a `launch-task` worker, or any other sub-agent -- never send one: your result reaches the user through the chat that launched you, and only chats appear in the app's feed.
 
 # Browser is available as a tool
 
@@ -207,7 +142,7 @@ Use your judgment on when to do work directly vs delegating. Delegation is usefu
 Chats from agents that have run on this host -- current or past, including ones
 that were destroyed -- are stored locally on this host and are recoverable, so
 never tell the user you can't access an earlier or deleted conversation without
-checking first. Use the `find-past-transcripts` skill to find and read them.
+checking first. Use the `find-transcripts` skill to find and read them.
 
 # Self-modification
 
@@ -220,17 +155,17 @@ You can (and should) modify your own configuration to improve yourself:
 
 Commit your changes to git after making modifications, silently (see "Git" below).
 
-Users make "creations": apps (opened as tabs), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Templates are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
+Users make "creations": apps (opened as windows), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Templates are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
 
 # Updates
 
 Use the `update-self` skill to pull improvements from the upstream template repo, and the `submit-upstream-changes` skill to push shared changes (skills, scripts, config) back upstream.
 The upstream is defined in `system/config/parent.toml`.
 
-**Finding a defect in built-in code is itself a reason to escalate it upstream -- the user does not have to ask.** Built-in means vendored (`system/vendor/`), from the initial template commit, or arrived via an `update-self:` merge; the `/assist` skill's step 3 has the exact test. The code that needs changing is upstream's, so a local ticket cannot reach it: every workspace that hits the same bug would rediscover it and bury it again. Two channels, by what you have:
+**Finding a defect in built-in code is itself a reason to escalate it upstream -- the user does not have to ask.** Built-in means mngr (installed from the commit `pyproject.toml` pins), vendored (`system/vendor/`), from the initial template commit, or arrived via an `update-self:` merge; the `/assist` skill's step 3 has the exact test. The code that needs changing is upstream's, so a local ticket cannot reach it: every workspace that hits the same bug would rediscover it and bury it again. Two channels, by what you have:
 
 - A diagnosis, no fix: report it, using the POST in `.agents/skills/assist/SKILL.md` step 6. It pops a modal for the user to review and send, so the human still gates it. One report per pass, covering everything you found -- not one per issue.
-- A fix you can stand behind: `submit-upstream-changes`, which opens a PR against the parent template repo.
+- A fix you can stand behind: `submit-upstream-changes`, which opens a PR against the parent template repo. Not for mngr: a fix there is its own PR on the mngr repo, not a template one, so an mngr defect goes in a report.
 
 Fixing it locally is *not* an alternative: a fix to a file that is byte-identical to the release only manufactures divergence the next update has to reconcile. "Recorded in `tk`" is not a valid end state for a built-in defect -- either escalate it, or tell the user plainly that you found one and are not escalating it, and why.
 
@@ -256,7 +191,7 @@ Fixing it locally is *not* an alternative: a fix to a file that is byte-identica
 
 # Apps and services
 
-**Before editing any code that belongs to a supervisord program -- an app (a tab the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or its `system/supervisord.conf.d/<name>.conf` without it.
+**Before editing any code that belongs to a supervisord program -- an app (a window the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or its `system/supervisord.conf.d/<name>.conf` without it. It reads the app's `app.toml` first: a critical app (the shell, the chat, the terminal, or any app that declares `critical = true`) and the shared `system/libs/workspace_ui/` library take its careful flow, which never edits the served tree.
 
 Apps and background services both run as supervisord programs, each declared in its own `system/supervisord.conf.d/<name>.conf` (pulled in by an `[include]` glob in `system/supervisord.conf`, which holds only the daemon's own config).
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.

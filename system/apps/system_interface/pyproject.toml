@@ -5,11 +5,13 @@ description = "The workspace's shell: the window manager and app management the 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "app-instances",
     "app-manifest",
     # The staleness tracker runs git through concurrency_group's subprocess helper.
     "concurrency-group",
-    "flask>=3.0",
+    # The avatar designs' validator parses registered SVG with DTDs and entities refused.
+    "defusedxml>=0.7",
+    # A registration bounds its own request body, a per-request setter Flask 3.1 added.
+    "flask>=3.1",
     "flask-sock>=0.7",
     "httpx>=0.27",
     "imbue-common",
@@ -36,6 +38,8 @@ dev = [
     # command to the CLI it names (test_chat_system.py, the one module that may import the
     # chat package's command builder beside it).
     "mngr-cli-contract",
+    # Keeps tmp_path somewhere a stub executable can run (older workspaces mount /tmp noexec).
+    "pytest-executable-tmp",
     # The tests' polling helper (imbue.mngr.utils.polling); the shell's own code imports
     # nothing from mngr (the import ratchet holds that).
     "imbue-mngr",

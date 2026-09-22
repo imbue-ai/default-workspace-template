@@ -40,8 +40,9 @@ If you are reading this in the workspace being *left* ("I'd like to move to a ne
 workspace"), you do exactly two things and stop:
 
 1. Create the fresh workspace via the `minds-api` skill (`POST
-   /api/v1/workspaces` with the template `git_url`, then poll
-   `operations/create/<op>` until `DONE`). Leave every `backup_*` field unset.
+   /api/v1/workspaces` with the template `git_url` and a `branch` read from
+   `GET /api/v1/app/version`, then poll `operations/create/<op>` until `DONE`).
+   Leave every `backup_*` field unset.
 2. Tell the user plainly: the new workspace is ready, open it, and ask its agent
    to bring everything over from this one. Name this workspace so they can say
    which.
@@ -423,10 +424,10 @@ an assumption:
 - **Nothing shifted on the source** during the copy (if the user declined
   quiescence): re-run the baseline diff with `--refresh` and re-sync anything new.
 
-Open the migrated **apps** as tabs in default positions
-(`python3 system/scripts/layout.py open app:<name>`).
-Do **not** open the recreated chats -- there can be many, and a wall of tabs is
-worse than none. Reproducing the old workspace's arrangement is out of scope;
+Open the migrated **apps** as windows in default positions
+(`python3 system/scripts/layout.py open <name>`).
+Do **not** open the recreated chats -- there can be many, and a wall of windows
+is worse than none. Reproducing the old workspace's arrangement is out of scope;
 offer to lay things out if the user asks.
 
 **The AI-integration review.** For each `ai` finding: rewrite the call site onto

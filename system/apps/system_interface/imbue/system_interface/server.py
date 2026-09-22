@@ -3,12 +3,11 @@ import json
 import queue
 import re
 import shlex
-from datetime import datetime
-from datetime import timezone
 from typing import Any
 from typing import Final
-from typing import assert_never
 
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from flask import Flask
 from flask import Response
 from flask import request
@@ -22,6 +21,8 @@ from werkzeug.exceptions import NotFound
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.avatar.routes import register_avatar_routes
+from imbue.system_interface.avatar.status import avatar_status_wire_json
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
@@ -30,20 +31,13 @@ from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ShellStateError
-from imbue.system_interface.shell.projects import project_wire_json
-from imbue.system_interface.shell.routes import HTTP_SERVICE_UNAVAILABLE
+from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
-from imbue.system_interface.template_catalog import TemplateCatalogAvailability
-from imbue.system_interface.template_catalog import catalog_wire_json
+from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
+from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
 from imbue.system_interface.wsgi import build_sock
-
-# The browser-side contract module (contracts.md section 10): built as its own library
-# entry into ``static/_static/`` and served with a permissive CORS header, since every
-# app page that speaks the contract loads it from the shell's origin.
-APP_CONTRACT_FILENAME: Final[str] = "app_contract.js"
-APP_CONTRACT_PATH: Final[str] = f"/_static/{APP_CONTRACT_FILENAME}"
 
 # The terminal app's registered name: the not-built placeholder embeds it as the way out.
 _TERMINAL_APP_NAME: Final[str] = "terminal"
@@ -330,20 +324,31 @@ def _shell_update_staleness() -> str | None:
     seconds per open tab for the length of an outage, and the placeholder
     itself never asks (it carries no banner). Reading staleness forks git, and
     an outage is precisely when the tree has moved and both of its reads run.
+    Skipped for a preview shell too: it serves a worktree the live tree is
+    expected to differ from, so the banner would only ever say so.
     """
-    if request.method == "HEAD":
+    if request.method == "HEAD" or get_state().is_preview:
         return None
     return get_state().update_staleness.staleness()
 
 
+def _inject_preview_meta_tag(html_content: str, is_preview: bool) -> str:
+    """Mark a preview shell's page so the frontend hides the verbs the backend refuses."""
+    if not is_preview:
+        return html_content
+    return inject_meta_tag(html_content, PREVIEW_META_TAG, PREVIEW_META_CONTENT)
+
+
 def _index() -> Response:
-    index_path = get_state().static_directory / "index.html"
+    state = get_state()
+    index_path = state.static_directory / "index.html"
     if index_path.exists():
         staleness = _shell_update_staleness()
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
         html_content = inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
+        html_content = _inject_preview_meta_tag(html_content, state.is_preview)
         return document_response(html_content, is_frontend_built=True)
     return _frontend_not_built_response()
 
@@ -399,7 +404,10 @@ def _frontend_not_built_response() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
-    # Every other path is a client-side route and renders the app shell.
+    # Every other path is a client-side route and renders the app shell -- except an
+    # unknown API path, whose caller wants an answer it can parse, not a page.
+    if path == API_PREFIX.strip("/") or path.startswith(API_PREFIX):
+        return json_response({"detail": f"No such API route: /{path}"}, status_code=HTTP_NOT_FOUND)
     return _index()
 
 
@@ -409,36 +417,18 @@ def _health_endpoint() -> Response:
     return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
 
 
-TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
-_TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
-
-
-def _templates_catalog_endpoint() -> Response:
-    """The New Tab page's template catalog: the freshest copy the store holds, with each drawing
-    resolved to a URL; ``catalog`` is null when no catalog URL is configured, and a 503 says
-    nothing could be loaded."""
-    state = get_state()
-    reading = state.template_catalog.read()
-    match reading.availability:
-        case TemplateCatalogAvailability.DISABLED:
-            return json_response({"catalog": None, "is_stale": False})
-        case TemplateCatalogAvailability.UNAVAILABLE:
-            return json_response({"detail": _TEMPLATES_UNAVAILABLE_DETAIL}, status_code=HTTP_SERVICE_UNAVAILABLE)
-        case TemplateCatalogAvailability.FRESH | TemplateCatalogAvailability.STALE:
-            assert reading.catalog is not None, "a fresh or stale reading carries its catalog"
-            return json_response(
-                {
-                    "catalog": catalog_wire_json(reading.catalog, state.template_catalog.catalog_url),
-                    "is_stale": reading.availability is TemplateCatalogAvailability.STALE,
-                }
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
+# Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
+API_PREFIX: Final[str] = "api/"
 
 
 def _serve_app_contract() -> Response:
-    """Serve the browser-side contract module (contracts.md section 10) for any origin's app page."""
-    contract_path = get_state().static_directory / "_static" / APP_CONTRACT_FILENAME
+    """Serve the browser-side contract module (desktop contracts.md section 7) from the shell's own origin.
+
+    An app page imports it from its own origin (each app serves the same build output), since a
+    cross-origin module import carries no cookie and the forwarder refuses it; this copy is what
+    the e2e stub pages import.
+    """
+    contract_path = get_state().static_directory / "_static" / SHELL_APP_CONTRACT_PATH.name
     if not contract_path.is_file():
         return Response(status=404)
     response = send_file(contract_path, mimetype="text/javascript")
@@ -467,7 +457,7 @@ def _serve_asset(filename: str) -> Response:
 
 
 def _ws_endpoint(websocket: Any) -> None:
-    """The one WebSocket per window (contracts.md section 8)."""
+    """The one WebSocket per window (desktop contracts.md section 6)."""
     _run_ws_broadcast_loop(websocket=websocket, shell=get_state().shell)
 
 
@@ -479,10 +469,10 @@ def _handle_client_state_message(
 ) -> bool:
     """Process one incoming WebSocket message; returns True for a well-formed ``client_state``.
 
-    ``client_state`` is the only message type clients send: it registers the browser's client
-    id, device kind, and active view (on connect and on every view switch). Registration feeds
-    the broadcaster's client registry (which targets layout ops), the client record, and the
-    client-activity log (a ``view_switch`` when the report names a different previous view).
+    ``client_state`` is the only message type clients send: it registers the browser's client id and the
+    desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
+    (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
+    the report names a different previous desktop).
     """
     try:
         parsed = json.loads(raw_message)
@@ -497,46 +487,46 @@ def _handle_client_state_message(
     except ValidationError as e:
         _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
-    shell.broadcaster.set_client_info(
-        client_queue, str(report.client_id), str(report.active_view), report.device_kind.value
-    )
+    shell.broadcaster.set_client_info(client_queue, str(report.client_id), str(report.active_desktop))
     # A state file the shell cannot write is a warning, not a dropped socket: the live
     # registration above is what the layout ops need, and the next report retries the write.
     try:
-        outcome = shell.clients.record_report(report, datetime.now(timezone.utc))
+        shell.record_client_report(report)
     except ShellStateError as e:
         _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
-    else:
-        # Only a report that moved the stored view is broadcast: a window following a push reports the
-        # view it was pushed to, which matches the record, so the chain ends after one hop.
-        if outcome.is_active_view_changed:
-            shell.broadcaster.broadcast_active_view_changed(str(report.client_id), str(report.active_view))
     if is_first_report:
         _loguru_logger.info(
-            "WS client registered: client_id={} view={} device={} (conn {})",
+            "WS client registered: client_id={} desktop={} (conn {})",
             report.client_id,
-            report.active_view,
-            report.device_kind.value,
+            report.active_desktop,
             id(client_queue),
         )
-    elif report.previous_view and report.previous_view != report.active_view:
+        return True
+    _log_client_switches(report, client_queue, shell)
+    return True
+
+
+def _log_client_switches(
+    report: ClientStateReport, client_queue: "queue.Queue[str | None]", shell: ShellState
+) -> None:
+    """Log, and append to the activity log, the desktop switch a re-report names (a report whose previous desktop
+    is empty or unchanged names none)."""
+    is_desktop_switch = bool(report.previous_desktop) and report.previous_desktop != report.active_desktop
+    # A switch the log cannot take is a warning: the record already moved the client.
+    if is_desktop_switch:
         _loguru_logger.info(
-            "WS client {} switched view {} -> {} (conn {})",
+            "WS client {} switched desktop {} -> {} (conn {})",
             report.client_id,
-            report.previous_view,
-            report.active_view,
+            report.previous_desktop,
+            report.active_desktop,
             id(client_queue),
         )
         try:
-            shell.activity.append_view_switch(
-                str(report.client_id), report.device_kind.value, report.previous_view, str(report.active_view)
+            shell.activity.append_desktop_switch(
+                str(report.client_id), report.previous_desktop, str(report.active_desktop)
             )
         except OSError as e:
-            _loguru_logger.opt(exception=e).warning("Could not log the view switch for {}", report.client_id)
-    else:
-        # A re-report on an already-registered connection with an unchanged view.
-        pass
-    return True
+            _loguru_logger.opt(exception=e).warning("Could not log the desktop switch for {}", report.client_id)
 
 
 def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
@@ -558,10 +548,17 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
         websocket.send(
             json.dumps(
                 {
-                    "type": "projects_updated",
-                    "projects": [project_wire_json(project) for project in shell.projects.list_projects()],
+                    "type": "desktops_updated",
+                    "desktops": shell.desktops_wire_json(shell.list_desktops()),
                 }
             )
+        )
+        websocket.send(json.dumps({"type": "avatar_status", **avatar_status_wire_json(shell.avatar_status.current())}))
+        # The notice too, so a window that reconnects after a rollback restarted this shell
+        # sees the outcome without a fetch of its own.
+        notice = shell.update_notice.current()
+        websocket.send(
+            json.dumps({"type": "update_notice_changed", "notice": notice.wire_json() if notice is not None else None})
         )
 
         is_client_registered = False
@@ -614,9 +611,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
-    application.add_url_rule(APP_CONTRACT_PATH, view_func=_serve_app_contract, methods=["GET"])
-    application.add_url_rule(TEMPLATES_CATALOG_PATH, view_func=_templates_catalog_endpoint, methods=["GET"])
+    application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
     register_shell_routes(application)
+    register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
 
     # Registered unconditionally, even when the bundle is absent at startup: the directory can

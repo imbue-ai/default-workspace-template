@@ -2,11 +2,15 @@ from functools import cached_property
 from pathlib import Path
 from typing import Final
 
+from pydantic import Field
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 # The chat app's own port (contracts.md section 2, the chat row's app URL).
 DEFAULT_CHAT_PORT: Final[int] = 8010
+# Where the chat persists the user's things (contracts.md section 17), relative to the repo
+# root every supervised program runs from.
+DEFAULT_CHAT_DATA_DIR: Final[Path] = Path("data/.apps/chat")
 
 
 class DuplicateStaticBasenameError(ValueError):
@@ -22,6 +26,9 @@ class Config(BaseSettings):
     chat_static_paths: list[str] | None = None
     chat_host: str = "127.0.0.1"
     chat_port: int = DEFAULT_CHAT_PORT
+    # A secondary chat (a preview) points this at a scratch copy so its writes never land
+    # in the live chat's data.
+    chat_data_dir: Path = Field(default=DEFAULT_CHAT_DATA_DIR)
 
     @field_validator("chat_javascript_plugins", "chat_static_paths", mode="before")
     @classmethod

@@ -1,14 +1,12 @@
 /**
- * The DOM the view tests need beyond jsdom: a requestAnimationFrame for mithril's redraw
- * scheduling. Imported before mithril, as the first import of a test file, so the polyfill is
- * in place when mithril reads the global.
+ * The DOM the shell's view tests need beyond jsdom: the library's requestAnimationFrame polyfill
+ * (imported first, before mithril reads the global) and a ResizeObserver, since the App view
+ * measures the backdrop area through one; the tests size the backdrop through the store
+ * (``setBackdropSize``) instead.
  */
 
-globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
-  setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
+import "@imbue/workspace-ui/src/testing/dom";
 
-// dockview-core watches its container's size through a ResizeObserver, which jsdom does not
-// provide; a dock built in a test is sized by an explicit ``layout(width, height)`` instead.
 globalThis.ResizeObserver ??= class {
   observe(): void {}
   unobserve(): void {}

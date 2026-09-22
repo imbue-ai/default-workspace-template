@@ -1,5 +1,0 @@
-New project implementing `specs/minds-openobserve-telemetry.md`: the operator CLI (`observability`) for the per-tier OpenObserve instances that aggregate logs and server telemetry from the minds infrastructure fleet.
-
-`provision` creates the instance VPS on OVH Public Cloud (reusing the share-relay provisioner); `deploy` installs the pinned-and-checksummed OpenObserve release, the rendered config (single-node mode with R2-backed parquet data, Neon-backed metadata, loopback-only HTTP), the caddy ingest gate (origin-TLS, OTLP routes + /healthz only, everything else 404), the Cloudflare-ranges-only nftables firewall, and a self-monitoring OpenTelemetry Collector.
-
-`dns` upserts the Cloudflare-proxied `telemetry.<domain>` record; `provision-accounts` mints the per-sender-class ingest users (Modal / boxes / relays) and applies the 90-day log-stream retention overrides through an SSH tunnel; `render-collector-install` / `install-collector` produce the pinned otelcol-contrib installs for the bare-metal boxes (via the prep flow) and share relays.
