@@ -10,31 +10,27 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
-    tag (semver-sorted, ``-rc``/prerelease excluded) that is **not newer than the
-    minds app driving this workspace**; an explicit override may name a specific
-    tag, ``main``, or any other ref, and is reported back as exceeding the
-    ceiling when it cannot be proven to sit at or below it.
+    Resolve the ref to update to. Default is the release the minds app driving
+    this workspace was built against -- the ``minds-v*`` tag it names, and only
+    that one; an explicit override may name a specific tag, ``main``, or any
+    other ref, and is reported back as exceeding the ceiling when it cannot be
+    proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, ``mngr``), so updating past
     the app's own release would leave the workspace speaking a protocol its app
     does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
-    cannot be read the command **fails** rather than silently updating uncapped.
-
-    The output also carries ``held_back_by_ceiling`` -- whether the ceiling, and
-    not the user, is why a newer release was not taken -- alongside
-    ``latest_available``, the newest stable tag upstream *ignoring* the ceiling
-    (``null`` if there is none) and so the release that flag names.
+    cannot be read, or names a release the upstream does not carry, the command
+    **fails** rather than choosing some other release: that pairing was never
+    verified, and which way out is right is the skill's call. Releases above the
+    app's are treated as absent: only an ``--override`` naming one puts it in
+    the output.
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
     than spending a backup, a worker, and a validation run on a merge that changes
-    nothing. This is what makes the ceiling bite for a workspace sitting *at* it:
-    with a newer release upstream the refusal names the app as the reason it
-    cannot be had, and without one it is a plain "already up to date". A workspace
-    *behind* the ceiling still updates to it.
+    nothing. A workspace *behind* the ceiling still updates to it.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
@@ -155,12 +151,11 @@ from update_environment import default_sweep_homes
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
-    CeilingUnavailableError,
+    AppVersionNotReleasedError,
+    AppVersionUnavailableError,
     NoUpdateTargetError,
     already_current_message,
     fetch_app_template_ref,
-    is_held_back_by_ceiling,
-    pick_latest_stable_tag,
     resolve_target,
 )
 
@@ -224,32 +219,19 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
-    latest_available = pick_latest_stable_tag(tags)
-    is_held_back = is_held_back_by_ceiling(
-        resolved_ref=target.ref,
-        latest_available=latest_available,
-        ceiling=target.ceiling,
-        has_override=args.override is not None,
-    )
+    app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
+    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
-        raise NoUpdateTargetError(
-            already_current_message(
-                target.ref, latest_available, target.ceiling, is_held_back
-            )
-        )
+        raise NoUpdateTargetError(already_current_message(target.ref))
     print(
         json.dumps(
             {
                 "ref": target.ref,
                 "kind": target.kind,
-                "ceiling": target.ceiling,
+                "ceiling": target.app_version,
                 "exceeds_ceiling": target.exceeds_ceiling,
-                "latest_available": latest_available,
-                "held_back_by_ceiling": is_held_back,
             }
         )
     )
@@ -699,10 +681,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Read already-fetched local tags instead of querying the remote.",
     )
     resolve_parser.add_argument(
+        "--app-version",
         "--ceiling",
+        dest="app_version",
         default=None,
-        help="Newest template ref to allow (default: ask the running minds app). "
-        "A non-release ref (e.g. a branch) imposes no ceiling.",
+        help="The release to update to, standing in for the running minds app's "
+        "own (default: ask the app). A ref that is not a release tag is a fault: "
+        "pass --override to say what to take instead.",
     )
     resolve_parser.set_defaults(func=_cmd_resolve_target)
 
@@ -964,7 +949,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (CeilingUnavailableError, NoUpdateTargetError, ApplyPreconditionError) as e:
+    except (
+        AppVersionNotReleasedError,
+        AppVersionUnavailableError,
+        NoUpdateTargetError,
+        ApplyPreconditionError,
+    ) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it
         # and read as a crash rather than a refusal.
