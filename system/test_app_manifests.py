@@ -110,24 +110,23 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     ]
 
 
-def _packages_running_program(program: str, command_by_program: dict[str, str]) -> set[Path]:
+def _package_running_program(program: str, command_by_program: dict[str, str]) -> Path | None:
     """The app package that runs a supervisord program: the sole declarer of the console script
     its command ends in, whose script is therefore the only one of the apps' on PATH.
 
-    Run by no app package here, so excusing nothing: a program with no block, one whose command
-    runs something other than an app's entry point, and one whose script several packages
-    declare -- which of those runs is not something this config decides. That last state is
-    reported under its own name by
-    ``test_no_two_app_packages_declare_the_same_console_script``, since the collision this
-    silence leaves standing says nothing about the duplicated declaration behind it.
+    ``None``, so excusing nothing: a program with no block, one whose command runs something
+    other than an app's entry point, and one whose script several packages declare -- which of
+    those runs is not something this config decides. That last state is reported under its own
+    name by ``test_no_two_app_packages_declare_the_same_console_script``, since the collision
+    this silence leaves standing says nothing about the duplicated declaration behind it.
     """
     command = command_by_program.get(program, "")
     if not command:
-        return set()
+        return None
     entry_points = _script_entry_points(command.split()[-1])
     if len(entry_points) != 1:
-        return set()
-    return {entry_points[0][0]}
+        return None
+    return entry_points[0][0]
 
 
 def _entry_point_manifest_paths(command: str) -> list[str]:
@@ -219,7 +218,7 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
         for claimed in manifest_by_package.values()
         if owner is not claimed
         and claimed.program.startswith(f"{owner.name}-")
-        and owner_package not in _packages_running_program(claimed.program, command_by_program)
+        and owner_package != _package_running_program(claimed.program, command_by_program)
     )
 
     assert collisions == [], f"apps whose names collide with another app's program: {collisions}"
