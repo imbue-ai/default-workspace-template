@@ -209,6 +209,32 @@ rm -f {path}.mngr-tmp
 
 
 @pure
+def render_gen2_tpm_preflight_section() -> str:
+    """The root bash that refuses the prep when the box has no usable TPM 2.0, before the storage partition is touched.
+
+    The storage volume's unattended boot unlock is its TPM keyslot, and every
+    re-prep re-seals to the TPM, so a box without one can never be a gen-2
+    box. OVH's catalog says nothing about TPMs and units of one plan differ,
+    so the delivered box is the only place to find out. The section belongs
+    right after the package install (which provides ``systemd-cryptenroll``)
+    and before the storage section, so a refused box has nothing on its
+    storage partition to undo. The device list is captured into a variable
+    rather than piped straight into ``grep -q``, whose early exit would
+    SIGPIPE the writer and, under ``pipefail``, fail a healthy box.
+    """
+    return """\
+# TPM preflight: the storage volume's boot unlock is a TPM keyslot, so a box
+# with no usable TPM 2.0 (module absent, or Intel PTT / AMD fTPM disabled in
+# the firmware) is refused before its storage partition is touched.
+tpm_devices=$(systemd-cryptenroll --tpm2-device=list 2>/dev/null || true)
+if ! grep -q '^/dev/' <<<"$tpm_devices"; then
+    echo "ERROR: no usable TPM 2.0 device on this box (systemd-cryptenroll --tpm2-device=list found none). The encrypted storage volume needs one for its unattended boot unlock, so this box cannot be a gen-2 box as delivered. Ask the supplier to enable the firmware TPM (Intel PTT / AMD fTPM) in the BIOS or to replace the unit, then re-run minds-admin server setup / prep. The storage partition was not touched." >&2
+    exit 1
+fi
+"""
+
+
+@pure
 def render_gen2_storage_encryption_section() -> str:
     """The idempotent root bash section that makes the storage root a mounted LUKS2 volume.
 

@@ -1,16 +1,13 @@
-from app_instances.errors import AppInstancesError
-
-
-class BrowserFleetError(AppInstancesError):
-    """Base error for the fleet as the instances adapter drives it; a library error, so the instances blueprint answers one the adapter does not map with a detail body."""
+class BrowserFleetError(Exception):
+    """Base error for the fleet's verbs: what the daemon's routes and the fleet CLI answer with a status code."""
 
 
 class InvalidBrowserNameValueError(BrowserFleetError, ValueError):
     """A string is not a browser name (see ``names.is_valid_browser_name``)."""
 
 
-class FleetCreateRefusedError(BrowserFleetError):
-    """The fleet cannot take a new browser right now: it is full, or Chromium is not installed yet."""
+class InvalidStartUrlError(BrowserFleetError, ValueError):
+    """A start page is not an absolute http(s) URL with a host."""
 
 
 class UnknownBrowserError(BrowserFleetError):
@@ -18,16 +15,4 @@ class UnknownBrowserError(BrowserFleetError):
 
 
 class BrowserNotDrivableError(BrowserFleetError):
-    """The browser cannot be navigated: Chromium is still launching, it crashed, or the fleet has no connection to it."""
-
-
-class BrowserHeldByAgentError(BrowserFleetError):
-    """An agent holds the browser, and agents are never preempted."""
-
-
-class NavigationFailedError(BrowserFleetError):
-    """Chromium refused or never finished a navigation."""
-
-
-class FleetUnavailableError(BrowserFleetError):
-    """The daemon could not complete a verb: its loop did not answer in time, or a startup failure or a lost Chromium underneath it."""
+    """The browser cannot be stopped or started: Chromium is still launching, it crashed, or the fleet has no connection to it."""
