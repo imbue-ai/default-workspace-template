@@ -588,7 +588,8 @@ Release the leases and close the ticket last, each as its own tool call: `tk
 close` the `editing service system_interface` lease if 5b took one, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
-merged and applied."`.
+merged and applied."`, adding the `archive/update-self-<timestamp>` name when
+Step 3b set a previous branch aside.
 
 ## To push local improvements back upstream
 
