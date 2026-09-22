@@ -7061,9 +7061,8 @@ def test_a_fast_forward_apply_cannot_keep_a_rollback_point(apply_repo: Path) -> 
 def test_an_update_self_landing_must_fast_forward(apply_repo: Path) -> None:
     """An ordinary merge puts the worker's ``update-self:`` merge on a second parent.
 
-    Every reader of that marker walks the first-parent line (the app's version
-    read, ``resolve_template_base.py``), so the landing would read as the
-    previous update's.
+    That marker is read along the first-parent line, so the landing would read
+    as the previous update's.
     """
     with pytest.raises(SystemExit, match="must fast-forward"):
         update_self.main(
@@ -7098,9 +7097,6 @@ def test_an_update_self_landing_cannot_keep_a_rollback_point(apply_repo: Path) -
         )
     assert update_apply_contract.read_marker(apply_repo) is None
     assert _rollback_point(apply_repo) is None
-
-
-# --- the kept rollback point and the notice ----------------------------------
 
 
 def _rollback_point(repo_root: Path) -> "update_apply_contract.LastGoodRecord | None":
@@ -7700,9 +7696,6 @@ def test_a_settled_verdict_tolerates_a_pid_that_settles_partway_through(
 def test_main_routes_rollback_last_and_confirm_last(apply_repo: Path) -> None:
     assert update_self.main(["confirm-last", "--repo-root", str(apply_repo)]) == 0
     assert update_self.main(["rollback-last", "--repo-root", str(apply_repo)]) == 1
-
-
-# --- what the kept point names, and what a rollback checks -------------------
 
 
 @pytest.mark.parametrize("diff", [_CHAT_FRONTEND_DIFF, _FRONTEND_DIFF])

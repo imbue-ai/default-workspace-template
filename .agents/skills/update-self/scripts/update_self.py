@@ -522,9 +522,9 @@ def _cmd_apply(args: argparse.Namespace) -> int:
             "fast-forward, and only an ordinary merge can be rolled back later. Keep --ff-only and "
             "drop --keep-rollback-point; the apply still reverts itself on any failure."
         )
-    # Every reader of the worker's `update-self:` merge walks HEAD's first-parent
-    # line (the app's version read, resolve_template_base.py); an ordinary merge
-    # puts it on a second parent, where they find the previous update's instead.
+    # The worker's `update-self:` merge is found by walking HEAD's first-parent
+    # line; an ordinary merge puts it on a second parent, where that walk finds
+    # the previous update's instead.
     if args.target_ref is not None and not args.ff_only:
         raise SystemExit(
             "error: an update-self landing (--target-ref) must fast-forward; pass --ff-only."
