@@ -46,7 +46,7 @@ def test_resolve_target_takes_the_release_the_app_names() -> None:
     # Not the newest tag upstream: the one this app was built against, even with
     # newer releases sitting right beside it.
     tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.4.0"]
-    result = update_target.resolve_target(None, tags, ceiling="minds-v0.3.7")
+    result = update_target.resolve_target(None, tags, app_version="minds-v0.3.7")
     assert result == update_target.ResolvedTarget("minds-v0.3.7", "tag", "minds-v0.3.7", False)
 
 
@@ -54,7 +54,7 @@ def test_resolve_target_takes_a_prerelease_app_to_its_own_prerelease_template() 
     # An rc build is a verified pair like any other, so its workspace runs the
     # matching rc template rather than the stable release before it.
     tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0"]
-    result = update_target.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
+    result = update_target.resolve_target(None, tags, app_version="minds-v0.4.0-rc1")
     assert result.ref == "minds-v0.4.0-rc1"
 
 
@@ -63,8 +63,8 @@ def test_a_missing_app_release_is_a_fault_not_a_refusal() -> None:
     # was never published as claimed, so the skill is told, and no other release
     # is quietly substituted.
     try:
-        update_target.resolve_target(None, ["minds-v0.3.8", "minds-v0.4.0"], ceiling="minds-v0.3.9")
-    except update_target.AppReleaseUnavailableError as exc:
+        update_target.resolve_target(None, ["minds-v0.3.8", "minds-v0.4.0"], app_version="minds-v0.3.9")
+    except update_target.AppVersionNotReleasedError as exc:
         message = str(exc)
         assert "minds-v0.3.9" in message
         assert "no such tag" in message
@@ -77,8 +77,8 @@ def test_an_app_naming_no_release_is_a_fault() -> None:
     # A dev build reports its branch. There is no release to match, and which
     # ref such a workspace should take is the skill's call, not this script's.
     try:
-        update_target.resolve_target(None, ["minds-v0.3.9", "minds-v0.4.0"], ceiling="main")
-    except update_target.AppReleaseUnavailableError as exc:
+        update_target.resolve_target(None, ["minds-v0.3.9", "minds-v0.4.0"], app_version="main")
+    except update_target.AppVersionNotReleasedError as exc:
         assert "not a release tag" in str(exc)
     else:
         raise AssertionError("expected a fault when the app names no release")
@@ -104,17 +104,17 @@ def test_resolve_target_override_known_tag_vs_arbitrary_ref() -> None:
 
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    newer = update_target.resolve_target("minds-v0.4.0", tags, ceiling="minds-v0.3.9")
+    newer = update_target.resolve_target("minds-v0.4.0", tags, app_version="minds-v0.3.9")
     assert newer.ref == "minds-v0.4.0"
     assert newer.exceeds_ceiling is True
 
 
 def test_override_at_or_below_the_ceiling_is_not_flagged() -> None:
     tags = ["minds-v0.3.6", "minds-v0.3.9"]
-    older = update_target.resolve_target("minds-v0.3.6", tags, ceiling="minds-v0.3.9")
+    older = update_target.resolve_target("minds-v0.3.6", tags, app_version="minds-v0.3.9")
     assert older.exceeds_ceiling is False
     at_ceiling = update_target.resolve_target(
-        "minds-v0.3.9", tags, ceiling="minds-v0.3.9"
+        "minds-v0.3.9", tags, app_version="minds-v0.3.9"
     )
     assert at_ceiling.exceeds_ceiling is False
 
@@ -125,13 +125,13 @@ def test_unprovable_overrides_are_flagged() -> None:
     tags = ["minds-v0.3.9"]
     assert (
         update_target.resolve_target(
-            "main", tags, ceiling="minds-v0.3.9"
+            "main", tags, app_version="minds-v0.3.9"
         ).exceeds_ceiling
         is True
     )
     assert (
         update_target.resolve_target(
-            "abc1234", tags, ceiling="minds-v0.3.9"
+            "abc1234", tags, app_version="minds-v0.3.9"
         ).exceeds_ceiling
         is True
     )
@@ -139,7 +139,7 @@ def test_unprovable_overrides_are_flagged() -> None:
     # 0.3.7-rc1 sits below the 0.3.9 ceiling -- so it is not flagged.
     assert (
         update_target.resolve_target(
-            "minds-v0.3.7-rc1", tags, ceiling="minds-v0.3.9"
+            "minds-v0.3.7-rc1", tags, app_version="minds-v0.3.9"
         ).exceeds_ceiling
         is False
     )
@@ -148,7 +148,7 @@ def test_unprovable_overrides_are_flagged() -> None:
 def test_overrides_are_never_flagged_without_a_ceiling() -> None:
     assert (
         update_target.resolve_target(
-            "main", ["minds-v0.3.9"], ceiling=None
+            "main", ["minds-v0.3.9"], app_version=None
         ).exceeds_ceiling
         is False
     )
@@ -243,7 +243,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
         assert "Update the minds app itself first" in str(exc)
     else:
@@ -262,7 +262,7 @@ def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
     else:
         raise AssertionError("expected a 404 to block rather than return no ceiling")
@@ -275,7 +275,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "could not reach the minds app" in str(exc)
         assert "connection refused" in str(exc)
     else:
@@ -291,7 +291,7 @@ def test_fetch_app_template_ref_blocks_on_an_unparseable_body(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "could not be parsed" in str(exc)
     else:
         raise AssertionError("expected an unparseable body to block")
