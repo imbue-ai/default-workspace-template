@@ -29,7 +29,8 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 
 # The frame the window is placed at: the left complement of the shell's pinned frame (desktop contracts.md 4.2),
-# clear of the one-column shortcut grid, as ``x,y,width,height`` in fractions of the backdrop.
+# clear of the one-column shortcut grid on a wide backdrop (launcher plan section 3.4), as ``x,y,width,height`` in
+# fractions of the backdrop.
 FIRST_WINDOW_FRAME: Final[str] = "0.07,0.05,0.38,0.9"
 # The page the window opens at: the app's root, its one launch path.
 FIRST_WINDOW_PATH: Final[str] = "/"
