@@ -1,11 +1,20 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it, a desktop, a window, a
- * placement, a launch path, a client record, a layout, the avatar state, the theme metrics, and a
- * published template as the catalog lists it. Each takes overrides so a test spells only what it
- * is about.
+ * placement, a launch path, a client record, a layout, the avatar state, the theme metrics, a
+ * published template as the catalog lists it, and the update notice as the shell sends it. Each
+ * takes overrides so a test spells only what it is about.
  */
 
-import type { AppRecord, ClientRecord, Desktop, LaunchPath, Layout, Placement, WindowRecord } from "../model/records";
+import type {
+  AppRecord,
+  ClientRecord,
+  Desktop,
+  LaunchPath,
+  Layout,
+  Placement,
+  UpdateNoticeWire,
+  WindowRecord,
+} from "../model/records";
 import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
@@ -124,6 +133,21 @@ export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTe
     needs_ai: false,
     apt_packages: [],
     choices: [],
+    ...overrides,
+  };
+}
+
+/** An open notice (no rollback started) for an apply that touched ``apps``, one program each. */
+export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> = {}): UpdateNoticeWire {
+  return {
+    merge_sha: "abc1234abc1234abc1234abc1234abc1234abc12",
+    applied_at: 1_780_000_000,
+    driven_by: "mngr/update-widgets",
+    apps,
+    programs: apps,
+    needs_system_services_restart: false,
+    progress: null,
+    outcome: null,
     ...overrides,
   };
 }

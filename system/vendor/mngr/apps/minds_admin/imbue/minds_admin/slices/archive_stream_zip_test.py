@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 
 from imbue.minds_admin.slices.archive_stream_zip import MAX_REPORTED_SKIPS
+from imbue.minds_admin.slices.archive_stream_zip import MAX_ZIP_DATE_TIME
+from imbue.minds_admin.slices.archive_stream_zip import MIN_ZIP_DATE_TIME
 from imbue.minds_admin.slices.archive_stream_zip import MSDOS_DIRECTORY_FLAG
 from imbue.minds_admin.slices.archive_stream_zip import SUMMARY_MARKER
 from imbue.minds_admin.slices.archive_stream_zip import WRITTEN
@@ -166,3 +168,24 @@ def test_streamer_deflates_files_at_the_cheapest_level(tmp_path: Path) -> None:
     entry = zipfile.ZipFile(io.BytesIO(stdout)).getinfo("a/text")
     assert entry.compress_type == zipfile.ZIP_DEFLATED
     assert len(zlib.compress(payload, 9)) < entry.compress_size < len(payload)
+
+
+def test_streamer_clamps_out_of_range_mtimes_to_the_zip_date_limits_instead_of_failing(tmp_path: Path) -> None:
+    # The DOS date field holds years 1980 to 2107; a file stamped outside that
+    # range (a pytest fixture with a synthetic mtime) must not fail the whole
+    # stream, since the stream is the only copy of the workspace being retired.
+    root = tmp_path / "root"
+    root.mkdir()
+    far_future = root / "future"
+    far_future.write_bytes(b"x")
+    os.utime(far_future, (0, 4_400_000_000))
+    far_past = root / "past"
+    far_past.write_bytes(b"y")
+    os.utime(far_past, (0, 2000))
+
+    stdout, summary = _run_streamer(["--root", f"a={root}"])
+
+    archive = zipfile.ZipFile(io.BytesIO(stdout))
+    assert archive.getinfo("a/future").date_time == MAX_ZIP_DATE_TIME
+    assert archive.getinfo("a/past").date_time == MIN_ZIP_DATE_TIME
+    assert summary["skipped_count"] == 0

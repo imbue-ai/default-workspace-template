@@ -90,14 +90,14 @@
 
 ### Unactivated source runs
 
-- `uv run minds run` (and any other CLI entry that loads the client config) refuses to start when no env is activated, with: "no env activated; run `minds env activate <name>` first". No silent fallback to a dev `client.toml`.
+- `uv run minds run` with no env activated is production: it loads the in-repo production `client.toml` (the same file a packaged build embeds) and the `minds` CLI seeds `MINDS_ROOT_NAME=minds` before its bootstrap, so the run owns `~/.minds/`. It refuses to start only when `MINDS_ROOT_NAME` names another env and neither `MINDS_CLIENT_CONFIG_PATH` nor `--config-file` says where that env's config lives -- there is no silent fallback to production for a half-activated dev env.
 - This applies symmetrically to admin/dev recipes: `propagate_changes`, `forward-*-system-interface`, `minds-start`, etc. all require activation.
 
 ### Packaged-Electron behavior
 
 - The Electron build reads two new build-time env vars: `MINDS_CLIENT_CONFIG_BUNDLE=<path>` (the non-secret `client.toml` to embed) and `MINDS_ROOT_NAME_BUNDLE=<minds(-<tier>)?>` (the on-disk root name the build should write to at runtime). Both are required for non-dev builds; `MINDS_BUILD_TIER` is removed.
 - At runtime, the Electron main process exports `MINDS_ROOT_NAME=<bundled-root-name>` (and the derived `MNGR_*` vars) before launching `minds run --config-file <bundled-config-path>`. A production build uses `MINDS_ROOT_NAME=minds`; a beta build pointed at staging uses `MINDS_ROOT_NAME=minds-staging` (so its on-disk state lands in `~/.minds-staging/` and never collides with an installed prod build).
-- The bundled-Electron path passes `--config-file` explicitly; there is no implicit fallback at any layer.
+- The bundled-Electron path passes `--config-file` explicitly, so it never relies on the loader's production fallback (which only a bare source run with nothing exported reaches).
 
 ### Data files
 

@@ -497,6 +497,21 @@ def create_neon_project(
     )
 
 
+def neon_project_exists(
+    name: DevEnvName,
+    *,
+    org_id: str,
+    api_token: SecretStr,
+) -> bool:
+    """Whether the per-dev-env Neon project named ``minds-<name>`` exists under ``org_id``.
+
+    Raises on duplicate matches, like :func:`delete_neon_project`.
+    """
+    project_name = _project_name_for(name)
+    candidates = _find_projects_by_name(org_id, project_name, api_token=api_token)
+    return _select_one_or_raise_multi_match(candidates, project_name, org_id=org_id) is not None
+
+
 def delete_neon_project(
     name: DevEnvName,
     *,

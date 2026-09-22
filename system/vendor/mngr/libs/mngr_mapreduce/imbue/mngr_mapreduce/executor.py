@@ -22,13 +22,13 @@ from loguru import logger
 from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentName
+from imbue.mngr.utils.thread_cleanup import mngr_executor
 from imbue.mngr_mapreduce.bindings import PipelineBindings
 from imbue.mngr_mapreduce.bindings import UnboundPipelineError
 from imbue.mngr_mapreduce.bindings import assert_pipeline_is_bound
@@ -438,7 +438,7 @@ class AbstractPipelineExecutor(PipelineExecutorInterface):
         placement = self.execution.plan.placement_for(running.node.name)
         launched: list[LaunchedAgent] = []
         launch_failures: list[JobResult] = []
-        with ConcurrencyGroupExecutor(
+        with mngr_executor(
             parent_cg=self.concurrency_group,
             name=f"pipeline_launch_{running.node.name}",
             max_workers=placement.max_parallel_launch,

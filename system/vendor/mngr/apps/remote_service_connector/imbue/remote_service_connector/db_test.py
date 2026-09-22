@@ -2,7 +2,14 @@
 
 import psycopg2
 
+from imbue.remote_service_connector.db import POOL_CONNECTION_SOCKET_BOUNDS
 from imbue.remote_service_connector.db import PooledConnectionAllocator
+
+# The workspaces' frpc drops its tunnel session when a heartbeat goes
+# unanswered this long (transport.heartbeatTimeout in the share gateway's
+# frpc.toml), so a stalled Neon socket has to fail before then for the ping
+# path's fail-open to matter.
+_FRPC_HEARTBEAT_TIMEOUT_SECONDS = 30
 
 
 class _StubCursor:
@@ -63,6 +70,7 @@ def _make_allocator(
     max_idle_connections: int,
     clock: _FakeClock | None = None,
     idle_probe_threshold_seconds: float = 60.0,
+    max_idle_age_seconds: float = 300.0,
 ) -> PooledConnectionAllocator:
     def _factory() -> _StubConnection:
         connection = _StubConnection(is_rollback_failing=False)
@@ -74,6 +82,7 @@ def _make_allocator(
         max_idle_connections=max_idle_connections,
         is_poolable_connection=lambda connection: isinstance(connection, _StubConnection),
         idle_probe_threshold_seconds=idle_probe_threshold_seconds,
+        max_idle_age_seconds=max_idle_age_seconds,
         monotonic=clock if clock is not None else _FakeClock(),
     )
 
@@ -207,10 +216,47 @@ def test_checkout_discards_a_stale_connection_whose_probe_fails_and_opens_a_fres
     connection = allocator.checkout()
     allocator.check_in(connection)
     connection.is_probe_failing = True
-    clock.now += 3600.0
+    clock.now += 120.0
 
     fresh = allocator.checkout()
 
     assert connection.closed
+    assert connection.executed_queries == ["SELECT 1"]
     assert fresh is not connection
     assert len(created) == 2
+
+
+def test_checkout_retires_a_connection_idle_past_the_max_age_without_probing() -> None:
+    """A long-idle connection is not worth a probe: the probe itself blocks when the peer went half-open."""
+    created: list[_StubConnection] = []
+    clock = _FakeClock()
+    allocator = _make_allocator(created, max_idle_connections=2, clock=clock, max_idle_age_seconds=300.0)
+    connection = allocator.checkout()
+    allocator.check_in(connection)
+    clock.now += 301.0
+
+    fresh = allocator.checkout()
+
+    assert connection.closed
+    assert connection.executed_queries == []
+    assert fresh is not connection
+    assert len(created) == 2
+
+
+def test_checkout_still_probes_a_connection_idle_just_under_the_max_age() -> None:
+    created: list[_StubConnection] = []
+    clock = _FakeClock()
+    allocator = _make_allocator(created, max_idle_connections=2, clock=clock, max_idle_age_seconds=300.0)
+    connection = allocator.checkout()
+    allocator.check_in(connection)
+    clock.now += 299.0
+
+    reused = allocator.checkout()
+
+    assert reused is connection
+    assert connection.executed_queries == ["SELECT 1"]
+
+
+def test_pool_connection_socket_bounds_surface_a_dead_peer_before_the_frpc_heartbeat_expires() -> None:
+    """Every way a Neon socket can stall must fail under frpc's heartbeat timeout, or the fail-open never runs."""
+    assert POOL_CONNECTION_SOCKET_BOUNDS.worst_case_dead_peer_detection_seconds() < _FRPC_HEARTBEAT_TIMEOUT_SECONDS

@@ -3,6 +3,8 @@
 Source design: the minds-options prototype (mind-sketches `prototypes/minds-options/`).
 Background study: `specs/minds-notification-integration.md`.
 
+Superseded in part by `blueprint/minds-notifications-overhaul/`, which makes the feed the single pipeline for every notification kind (the "other producers do not join the feed" decision below is reversed), drops browser-mode OS delivery and the osascript/tkinter fallbacks, and removes the in-app card focus gate and its catch-up queue.
+
 ## Overview
 
 - Port the prototype's notification design into the minds app chrome: titlebar bell with a red unresolved-count badge, an anchored durable feed, a transient toast stack, and OS delivery.
