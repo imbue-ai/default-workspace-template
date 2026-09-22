@@ -34,7 +34,7 @@ Two independent questions decide what to do next.
 
 Classify by git history:
 
-- **Built-in** if the file is any of:
+- **Built-in** if the code is mngr's (installed from the commit `pyproject.toml` pins, not a file in this repo -- see B), or if the file is any of:
   - under `vendor/` (a vendored snapshot of an external repo, e.g. `system/vendor/tk/`), or
   - introduced by the initial template commit (the root commit of this repo's history), or
   - last changed by a commit reachable from an `update-self:` merge (the `/update-self` skill merges upstream template code with a commit subject starting `update-self:`).
