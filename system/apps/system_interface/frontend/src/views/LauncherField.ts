@@ -97,9 +97,9 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         {
           "data-launcher-field": "",
           class:
-            "launcher-field absolute bottom-0 flex min-h-9 items-end gap-2 rounded-lg border bg-surface px-2.5 " +
-            (isOpen ? "border-accent " : "border-default ") +
-            (isCompact ? "inset-x-2 z-(--z-content)" : "inset-x-0"),
+            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-lg border bg-surface " +
+            "px-2.5 " +
+            (isOpen ? "border-accent" : "border-default"),
         },
         [
           m(
@@ -190,10 +190,18 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
               ),
         ],
       );
-      if (isCompact) return field;
-      // In the taskbar's flow the field keeps a one-row footprint and grows upward out of it, so the taskbar's
-      // height and its entries' places hold whatever the text's length.
-      return m("div", { class: "launcher-field-slot relative h-9 w-72 max-w-[40vw] shrink-0" }, field);
+      // The field keeps a one-row footprint and grows upward out of it, so the taskbar's height and its entries'
+      // places hold whatever the text's length. The slot is a flex item in the taskbar's flow; in compact mode it
+      // lies over the entries, centred in the taskbar by their alignment, as the collapsed button is.
+      return m(
+        "div",
+        {
+          class:
+            "launcher-field-slot h-9 " +
+            (isCompact ? "absolute inset-x-2 z-(--z-content)" : "relative w-72 max-w-[40vw] shrink-0"),
+        },
+        field,
+      );
     },
   };
 }
