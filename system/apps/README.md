@@ -14,9 +14,9 @@ Built-in apps:
   inside a window's iframe at its own origin. The `chat` package (`chat-app`)
   follows the workspace's agent observer (the `agent-observer` program, one
   `mngr observe` per workspace), serves the chat pages and their API on port
-  8010, and owns the provider accounts. Its frontend and the shell's are two
-  builds of one npm workspace (`system/package.json`) sharing the
-  `system/libs/workspace_ui` library.
+  8010, and owns the provider accounts. Its frontend, the shell's, and the
+  Getting Started app's are builds of one npm workspace (`system/package.json`)
+  sharing the `system/libs/workspace_ui` library.
 - `getting_started/` - The Getting Started page: the "Start something" intents
   and the "Start from a template" shelves (the published template catalog it
   fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`, see `catalog/README.md`),

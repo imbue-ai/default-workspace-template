@@ -311,7 +311,7 @@ never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
-workspace both frontends belong to.
+workspace every frontend belongs to.
 
 ## Memory shedding
 

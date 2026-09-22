@@ -423,9 +423,9 @@ The careful flow's apply (`update_self.py apply --keep-rollback-point`, see
 "Updating the running UI") does not discard its snapshots on success: it leaves
 `data/.state/update-apply/last-good.json`, a record of the merge it landed, the
 copies it kept, and the critical apps and supervisord programs included in rollback.
-A frontend apply includes both chat and shell, even if only one app's source changed,
-because it replaces both bundles. The shell turns that record into a notice only a
-person closes (`shell/update_notice.py`):
+A frontend apply includes both chat and shell (the critical bundle owners), even if only
+one app's source changed, because one build replaces every bundle. The shell turns that
+record into a notice only a person closes (`shell/update_notice.py`):
 one top banner beside the staleness one, naming every app the record names (or
 the workspace, when it names none), saying they were updated a moment ago and
 offering "Roll back" and "Everything seems good". It is one banner rather than a
