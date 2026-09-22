@@ -3,10 +3,10 @@
  * search field over its own content; "Start something", the intent tiles two to a row (four at
  * first, the rest behind "See more"); "Start from a template", the catalog's shelves. The page is
  * its own scroller, since the shared base styles pin the body to the viewport. Picking a template
- * shows its detail as a page inside this one, with a way back. Typing swaps the sections for results: the matching intents and the matching
- * templates, laid out as a grid of cards. Every tile and both detail actions start a chat with a
- * seeded text through the one callback the page is given (``shell:start-with-text``); the page
- * names no app.
+ * shows its detail as a page inside this one, with a way back. Typing swaps the sections for
+ * results: the matching intents and the matching templates, laid out as a grid of cards. Every
+ * tile and both detail actions start a chat with a seeded text through the one callback the page
+ * is given (``shell:start-with-text``); the page names no app.
  */
 
 import m from "mithril";
