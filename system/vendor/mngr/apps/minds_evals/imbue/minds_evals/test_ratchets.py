@@ -105,9 +105,10 @@ def test_prevent_setattr() -> None:
 
 # Every hit is an `asyncio.run` bridging blocking code into the async surface harbor forces (see the
 # async/await ratchet below): the tests that drive the driver and the collector, the flow lab's
-# tests and its CLI command, which drive the flow loop the collector shares.
+# tests and its CLI command, which drive the flow loop the collector shares, and the Slack report's
+# posting pass, whose waits go through the same async clock those poll loops wait on.
 def test_prevent_asyncio_import() -> None:
-    rc.check_asyncio_import(_DIR, snapshot(9))
+    rc.check_asyncio_import(_DIR, snapshot(10))
 
 
 def test_prevent_pandas_import() -> None:
@@ -142,8 +143,10 @@ def test_prevent_exit_stack() -> None:
 # testable, so both are async for the same reason. The UI-flow loop in `flow_runner.py` is async
 # because the collector drives it, and `flow_lab.py` and `test_flow_lab.py` implement and drive that
 # loop's executor interface, so all of them are excluded: their hits track how many trials the tests
-# exercise rather than how much async the project chooses. Within those files, keep new async to
-# what harbor's interfaces force.
+# exercise rather than how much async the project chooses. `slack_post.py` waits out a rate-limited
+# message on that same clock, which is the project's only injectable wait, so its posting pass and
+# the two test files that drive it are async for the clock's sake rather than by choice. Within
+# those files, keep new async to what harbor's interfaces and the clock force.
 # What remains counted is the async that is optional. Today that is three LiteLLM proxy callbacks in
 # `resources/box_proxy_hooks.py`, whose signatures the proxy fixes, plus three test strings naming
 # the `create_worker.py await` subcommand, which the regex reads as the keyword. Any increase is
@@ -164,6 +167,9 @@ def test_prevent_async_await() -> None:
             "flow_runner.py",
             "flow_lab.py",
             "test_flow_lab.py",
+            "slack_post.py",
+            "slack_post_test.py",
+            "mock_slack_poster_test.py",
         ),
     )
 

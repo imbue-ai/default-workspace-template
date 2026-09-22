@@ -1419,25 +1419,31 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-  # One Slack message per pair and eval config, each a grid of that config's cases
-  # by harness config -- or a single broken message when the run decided nothing to
-  # evaluate at all.
-  # Degrades to a warning when the webhook is missing, so a run is never red
-  # because the notification is.
+  # One Slack thread per pair and eval config -- a message carrying a grid of that
+  # config's cases by harness config, and the scores behind it in replies -- or a
+  # single broken message when the run decided nothing to evaluate at all.
+  # Posted with the bot token, and with the webhook when there is no token, which
+  # cannot thread. A missing credential and everything Slack refuses are warnings,
+  # so a run is never red because the notification is.
   notify:
     needs: [resolve, oracle, evaluate, diagnose-fixture, diagnose-behaviour]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch the Slack webhook from Vault
-        # continue-on-error because the webhook secret is optional, and because a
-        # Vault hiccup must not kill an always() notification: WEBHOOK then stays
-        # empty and the step below no-ops with a warning.
+      - name: Fetch the Slack credentials from Vault
+        # The bot token is what posts: it is the only credential Slack answers with
+        # a message id, which is what the report's replies are threaded under. The
+        # webhook is the fallback, and posts the top messages alone.
+        #
+        # continue-on-error because both secrets are optional, and because a Vault
+        # hiccup must not kill an always() notification: the post step then finds
+        # neither and no-ops with a warning.
         continue-on-error: true
         uses: imbue-ai/use-vault-secrets@main
         with:
           role: mngr_ci_gh
           secrets: |
+            mngr/ci/SLACK_MINDS_EVALS_BOT_TOKEN
             mngr/ci/SLACK_MINDS_EVALS_WEBHOOK
       # Checkout comes before the download: it deletes the workspace's contents,
       # so anything downloaded into it first is gone by the time the report runs.
@@ -1474,7 +1480,12 @@ jobs:
           merge-multiple: true
       - name: Report
         env:
-          WEBHOOK: ${{ env.SLACK_MINDS_EVALS_WEBHOOK }}
+          SLACK_MINDS_EVALS_BOT_TOKEN: ${{ env.SLACK_MINDS_EVALS_BOT_TOKEN }}
+          SLACK_MINDS_EVALS_WEBHOOK: ${{ env.SLACK_MINDS_EVALS_WEBHOOK }}
+          # Not a secret: a channel id names a channel and grants nothing. It is a
+          # plain value here so that where the report lands is readable from the
+          # workflow rather than from Vault.
+          SLACK_CHANNEL_ID: C0BUFUVU0T0
           GH_TOKEN: ${{ github.token }}
           DECISION_JSON: ${{ needs.resolve.outputs.decision }}
           DECISION_PATH: ${{ runner.temp }}/matrix.json
@@ -1533,15 +1544,14 @@ jobs:
             echo "::warning::minds-evals ci-report failed; posting a one-line notice in place of the report"
             jq -n \
               --arg text ":x: *minds-evals* -- the report could not be rendered (resolve=${RESOLVE_RESULT}, oracle=${ORACLE_RESULT}, evaluate=${EVALUATE_RESULT}, diagnose-fixture=${DIAGNOSE_FIXTURE_RESULT}, diagnose-behaviour=${DIAGNOSE_BEHAVIOUR_RESULT}); read the run instead: <${RUN_URL}|run logs>" \
-              '[{username: "Evals", icon_emoji: ":brainless:", text: $text}]' > /tmp/slack-payloads.json
+              '[{message: {username: "Evals", icon_emoji: ":brainless:", text: $text}, replies: []}]' > /tmp/slack-payloads.json
           fi
-          # One webhook payload per pair and eval config, one per line, so each is posted and
-          # summarised on its own.
-          jq -c '.[]' /tmp/slack-payloads.json > /tmp/slack-payloads.jsonl
+          # One thread per pair and eval config, one per line, so each is summarised on its own.
+          jq -c '.[]' /tmp/slack-payloads.json > /tmp/slack-threads.jsonl
           echo "## minds-evals" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          while IFS= read -r payload; do
-            printf '%s' "$payload" | jq -r '.text' > /tmp/slack-message.txt
+          while IFS= read -r thread; do
+            printf '%s' "$thread" | jq -r '.message.text' > /tmp/slack-message.txt
             cat /tmp/slack-message.txt
             # Fenced, not pasted: a message's text is Slack mrkdwn, which GitHub markdown renders
             # wrong (links as literal text, `*bold*` as italic, rows folded into one paragraph, the
@@ -1554,26 +1564,24 @@ jobs:
               echo '````'
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
-          done < /tmp/slack-payloads.jsonl
-          echo "[Run logs]($RUN_URL) | [Artifacts]($RUN_URL#artifacts)" >> "$GITHUB_STEP_SUMMARY"
-          if [[ -z "${WEBHOOK:-}" ]]; then
-            echo "::warning::mngr/ci/SLACK_MINDS_EVALS_WEBHOOK is not set in Vault -- the run summary above was not posted to Slack"
-            exit 0
-          fi
-          while IFS= read -r payload; do
-            printf '%s' "$payload" > /tmp/slack-payload.json
-            # --fail-with-body so an HTTP error is an exit code rather than a silently
-            # discarded message, and a warning rather than a failure so the run is never
-            # red because of its notification -- the same way a missing webhook reads.
-            if curl -sS --fail-with-body -X POST -H 'Content-type: application/json' \
-              --data @/tmp/slack-payload.json "$WEBHOOK"; then
-              continue
+            # The thread's replies under it, indented, so the summary reads the way the channel
+            # does: the arm's verdict, and then the numbers behind it.
+            printf '%s' "$thread" | jq -r '.replies[]? | .text + "\n"' > /tmp/slack-replies.txt
+            if [[ -s /tmp/slack-replies.txt ]]; then
+              {
+                echo '````'
+                sed 's/^/    /' /tmp/slack-replies.txt
+                echo '````'
+                echo ""
+              } >> "$GITHUB_STEP_SUMMARY"
             fi
-            # A refusal is most likely a block type this workspace does not render. The payload's
-            # own text says everything its blocks do, so it is posted on its own rather than lost.
-            echo "::warning::Slack rejected the report's blocks (see the response above); posting the text fallback instead"
-            jq '{username, icon_emoji, text}' /tmp/slack-payload.json > /tmp/slack-fallback.json
-            curl -sS --fail-with-body -X POST -H 'Content-type: application/json' \
-              --data @/tmp/slack-fallback.json "$WEBHOOK" \
-              || echo "::warning::Slack rejected the run summary (see the response above); it is in the run summary instead"
-          done < /tmp/slack-payloads.jsonl
+          done < /tmp/slack-threads.jsonl
+          echo "[Run logs]($RUN_URL) | [Artifacts]($RUN_URL#artifacts)" >> "$GITHUB_STEP_SUMMARY"
+          # Posting never fails the run: the command warns for everything Slack refuses and exits
+          # zero, and this guard covers the one case it cannot -- a toolchain that never installed,
+          # which the continue-on-error steps above allow.
+          if ! uv run --project apps/minds_evals minds-evals post-slack-report \
+            --payloads /tmp/slack-payloads.json \
+            --channel "$SLACK_CHANNEL_ID"; then
+            echo "::warning::minds-evals post-slack-report failed; the report is in the run summary above"
+          fi

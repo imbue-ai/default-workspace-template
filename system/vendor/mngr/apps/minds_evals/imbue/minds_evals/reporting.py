@@ -5,9 +5,10 @@ table, and `ci_report`'s Slack message. All three shorten a SHA to the same widt
 them can be read side by side; the two that render markdown tables also escape free text into a cell
 and write only the reports they were asked for. The rules live here so they cannot drift apart.
 
-`check_run` is the only one that reports cost today. The spelling of a figure and of its
-completeness lives here rather than with it, so that the renderer that reports cost next reaches for
-the rules instead of writing a second set.
+`check_run` and `ci_report` both report cost. How a group of spenders is classified -- priced whole
+or not at all, a floor or an exact figure -- lives here so the two cannot disagree about the same
+records, and so does the spelling of the figure and of its marks, so that a floor reads the same in
+a markdown cell, a Slack grid cell and a totals line.
 
 Cost is reported per spender rather than as one number. The workspace agent's spend is what the eval
 measures; the decider's and the verification agent's are what running the eval costs. The two halves
@@ -117,7 +118,7 @@ def select_spend(spend: Sequence[SpenderCost], spenders: AbstractSet[Spender]) -
 
 
 @pure
-def _unpriced_model_names(entries: Sequence[SpenderCost]) -> tuple[str, ...]:
+def unpriced_model_names(entries: Sequence[SpenderCost]) -> tuple[str, ...]:
     """The models that left this group of spenders with no figure, in first-seen order and named
     once each: two spenders that both ran on the same unpriced model say so once."""
     names: list[str] = []
@@ -129,7 +130,7 @@ def _unpriced_model_names(entries: Sequence[SpenderCost]) -> tuple[str, ...]:
 
 
 @pure
-def _group_cost(entries: Sequence[SpenderCost]) -> float | None:
+def group_cost(entries: Sequence[SpenderCost]) -> float | None:
     """What a group of spenders cost together, or None where no figure can stand for the group.
 
     Priced whole or not at all: one spender whose model carries no price leaves the rest a partial
@@ -143,7 +144,7 @@ def _group_cost(entries: Sequence[SpenderCost]) -> float | None:
 
 
 @pure
-def _is_group_floor(entries: Sequence[SpenderCost]) -> bool:
+def is_group_floor(entries: Sequence[SpenderCost]) -> bool:
     """Whether a group's figure holds less than the group spent -- traffic outside the total, or a
     rate nobody observed -- which is what the floor mark says about it."""
     return any(not entry.is_complete or not entry.is_rate_certain for entry in entries)
@@ -160,13 +161,13 @@ def format_spend_cell(entries: Sequence[SpenderCost]) -> str:
     """
     if not entries:
         return NO_SPEND_MARK
-    cost_usd = _group_cost(entries)
+    cost_usd = group_cost(entries)
     if cost_usd is None:
-        unpriced = _unpriced_model_names([entry for entry in entries if entry.cost_usd is None])
+        unpriced = unpriced_model_names([entry for entry in entries if entry.cost_usd is None])
         if not unpriced:
             return UNPRICED_MARK
         return "{} unpriced: {}".format(UNPRICED_MARK, ", ".join(unpriced))
-    return format_cost_figure(cost_usd, _is_group_floor(entries))
+    return format_cost_figure(cost_usd, is_group_floor(entries))
 
 
 @pure
@@ -186,7 +187,7 @@ def total_spend(spend_by_trial: Sequence[Sequence[SpenderCost]], spenders: Abstr
         entries = select_spend(spend, spenders)
         if not entries:
             continue
-        cost_usd = _group_cost(entries)
+        cost_usd = group_cost(entries)
         if cost_usd is None:
             unknown_trial_count += 1
             continue
@@ -194,7 +195,7 @@ def total_spend(spend_by_trial: Sequence[Sequence[SpenderCost]], spenders: Abstr
         total_usd += cost_usd
         # Only a trial that contributed a figure can qualify the sum: an unknown trial is named by
         # the count beside it instead.
-        is_floor = is_floor or _is_group_floor(entries)
+        is_floor = is_floor or is_group_floor(entries)
     return SpendTotal(
         cost_usd=total_usd,
         known_trial_count=known_trial_count,

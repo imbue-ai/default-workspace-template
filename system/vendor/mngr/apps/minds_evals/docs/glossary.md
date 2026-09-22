@@ -507,6 +507,15 @@ flowchart LR
 
 - **pass** (`PassReport`, `ci_report.py`): one oracle run or one cell's live run, each with its own summary artifact and a column of the Slack grid.
 
+- **report thread** (`SlackThread`, `ci_report.py`): what one pair and eval config gets in Slack: a message carrying the grid and the trials that failed, and the replies posted under it.
+  See [Results](../README.md#results).
+
+- **scoring reply** (`ScoringTable`, `render_scoring_reply`): the first reply of a thread, holding every score behind its grid as two tables -- `outcome` and `quality`, then `harness_quality` and `gates` -- a row per graded trial or per step of one, each dimension a super-column over the criteria that make it up.
+
+- **diagnostics reply** (`render_diagnostics_reply`): the reply posted wherever there is something to say: the known failures and the facts an agent did not follow, which are the pair's and so ride under its first message, and the live invariants the message's own cells missed, which any of the pair's messages can carry.
+
+- **poster** (`SlackPoster`, `slack_post.py`): how a run posts its report -- as the app the bot token belongs to, which answers with the message id a reply is threaded under, or through the incoming webhook, which does not and so gets the top messages alone.
+
 - **green marker** (`ci_matrix.cache_key_for`): the `actions/cache` entry recording that an exact arm passed end to end, keyed on the pair's SHAs, the eval config and the harness config.
   A green cell is skipped the next night.
 
