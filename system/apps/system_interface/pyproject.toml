@@ -38,6 +38,8 @@ dev = [
     # command to the CLI it names (test_chat_system.py, the one module that may import the
     # chat package's command builder beside it).
     "mngr-cli-contract",
+    # Keeps tmp_path somewhere a stub executable can run (a workspace mounts /tmp noexec).
+    "pytest-executable-tmp",
     # The tests' polling helper (imbue.mngr.utils.polling); the shell's own code imports
     # nothing from mngr (the import ratchet holds that).
     "imbue-mngr",
