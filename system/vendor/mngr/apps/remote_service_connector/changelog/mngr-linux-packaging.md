@@ -1,3 +1,0 @@
-# `/download` serves Linux installers once stable publishes them
-
-The download redirect resolves each platform out of its own stable channel file: `mac-arm64` (alias `mac`) from `stable-mac.yml` as before, and the new `linux-deb-x64` (alias `linux`) and `linux-appimage-x64` from `stable-linux.yml`, each cached for a minute. The Linux platforms pin no fallback, so until stable's `platforms` list includes `linux` they answer 404 and record no download event; for such a platform, one pinning no fallback, a feed that does not publish its channel file is logged at warning level rather than as an outage. The mac fallback moved from `_DEFAULT_TARGET_BY_PLATFORM` to `_RELEASE_CHANNEL_PLATFORMS`.
