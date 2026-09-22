@@ -1,1 +1,0 @@
-New box telemetry signal `STORAGE_VOLUME_LOCKED` (with its alert rule): a gen-2 box's storage root is not mounted from its LUKS mapper -- the TPM unlock failed at boot, or the box was never encrypted.

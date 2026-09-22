@@ -1,3 +1,0 @@
-The root `[tool.ty.src]` exclude no longer hides all of `apps/minds_evals/`. It names the project's own modules instead, so `apps/minds_evals/imbue/minds_evals/resources/` stays covered: those files run inside the eval box against this workspace's venv, making the root the environment that can actually check them, while the standalone project cannot resolve their `mngr_forward` and `litellm` imports.
-
-The trade is that a new subpackage under `imbue/minds_evals/` importing harbor now fails the root `ty check` until it is added to the exclude. That is the loud failure; the quiet one it replaces was two files type-checked nowhere.
