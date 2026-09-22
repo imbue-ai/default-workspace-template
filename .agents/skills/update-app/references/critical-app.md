@@ -311,11 +311,12 @@ With the worker `done` (and any final preview approved), land the change. Your
 leases from step 1 keep other passes off the apps you touched, but a pass on
 another critical app may have applied since you branched.
 
-1. **Freshness check.** The branch is mergeable only if nothing your app's
-   bundle is built from (its package, the shared library, the npm files), and no
-   file the branch itself changes, has changed on the served branch since the
-   worker branched (a change to the other critical app's sources is not
-   staleness: the apply rebuilds that bundle from the merged tree):
+1. **Freshness check.** The branch is mergeable only if nothing the apps you
+   hold leases on are built from (each one's package, the shared library, the
+   npm files), and no file the branch itself changes, has changed on the served
+   branch since the worker branched (a change to another critical app's sources
+   is not staleness: the apply rebuilds that bundle from the merged tree). Name
+   `system/apps/<package>/` once per leased app:
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
