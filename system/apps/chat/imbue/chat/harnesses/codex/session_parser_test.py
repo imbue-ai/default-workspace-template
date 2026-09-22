@@ -450,7 +450,7 @@ def test_turn_context_effective_model_stamps_assistant_messages() -> None:
     assert later[0]["model"] == "gpt-5.2"
 
 
-# --- code mode batches several delegated calls into ONE tool call -------------------------
+# Code mode batches several delegated calls into ONE tool call
 # Measured on codex-cli 0.147.0: one `custom_tool_call` holding three `tools.exec_command`
 # calls produced three PreToolUse events with three unrelated `tool_use_id`s and no field
 # naming the outer call. So "this call is ONLY an X" is unknowable for a batched program, and
