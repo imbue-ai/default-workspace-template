@@ -34,7 +34,7 @@ class HarnessType(StrEnum):
 
 
 # What an agent whose mngr type is not a harness is treated as. Such agents still get a
-# readable transcript and lifecycle-plus-tail activity rather than a dead chat tab.
+# readable transcript and lifecycle-plus-tail activity rather than a dead chat page.
 DEFAULT_HARNESS = HarnessType.CLAUDE
 
 

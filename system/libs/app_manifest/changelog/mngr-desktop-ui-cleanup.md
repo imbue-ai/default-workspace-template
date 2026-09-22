@@ -1,0 +1,1 @@
+`app_manifest.registry` gains `SHELL_APP_CONTRACT_PATH` (where the shell's frontend build writes the app contract module, relative to the repo root) and `APP_CONTRACT_ROUTE` (`/_static/app_contract.js`, the path every app serves it at from its own origin); `SHELL_APP_NAME` is removed, since no page derives the shell's origin any more.

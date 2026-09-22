@@ -13,14 +13,18 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `system/apps/system_interface/frontend/style_guide.md` is the rule for all of
   them.
 - `src/components/`: the shared Mithril recipes (Button, Modal, NoticeDialog,
-  menus, icons, badges, tooltips, the modal backdrop); beside it at `src/`,
-  `DestroyConfirmDialog.ts`, `portal.ts`, and `flyout-position.ts`.
-- `src/base-path.ts`, `src/origin.ts`, `src/addresses.ts`, `src/views.ts`, and
+  the Menu, the Dropdown that picks a value, icons, badges, tooltips, the modal
+  backdrop); beside it at `src/`, `DestroyConfirmDialog.ts`, `portal.ts`, and
+  `menu-position.ts` (the pure geometry the Menu and the Dropdown place
+  themselves with).
+- `src/base-path.ts`, `src/origin.ts`, and
   `src/models/` (`ClientIdentity`, `http`, `backoff`, `ws-json`,
   `request-error`): the base helpers every page shares.
 - `src/app_contract.ts`: an app page's side of the browser-side contract
-  (contracts.md section 10), which the shell also builds into the module it
-  serves at `/_static/app_contract.js`; `src/embed.ts` and
+  (contracts.md section 10 of the workspace app model, extended by section 7
+  of the desktop interface's contracts.md), which the shell's frontend also
+  builds into the module every app serves at `/_static/app_contract.js` from
+  its own origin; `src/embed.ts` and
   `src/embed-contract.d.ts`: the minds embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant
   the shell sends a framed page.

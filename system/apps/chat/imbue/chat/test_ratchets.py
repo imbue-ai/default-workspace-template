@@ -34,7 +34,10 @@ def test_prevent_while_true() -> None:
 def test_prevent_time_sleep() -> None:
     # +1 for testing.py's _wait_until_serving TCP-ready poll loop, used by the
     # WebSocket/SSE tests that need a real Werkzeug listener.
-    rc.check_time_sleep(_DIR, snapshot(4))
+    # +1 for the codex account probe's wait for the daemon to bind its socket: codex emits nothing
+    # when it binds (verified against 0.154.0 -- its only startup line is an unrelated sandbox
+    # warning), so there is no readiness signal to block on. mngr's own launcher waits the same way.
+    rc.check_time_sleep(_DIR, snapshot(5))
 
 
 def test_prevent_global_keyword() -> None:
@@ -156,8 +159,8 @@ def test_prevent_num_prefix() -> None:
     # parameters are num-prefixed (`num_last_images_to_include`, `num_games`). Renaming
     # them would make the documented signature wrong, and no identifier in our code is
     # num-prefixed. The rule's regex (`\bnum_\w+`) scans raw source and cannot tell a
-    # docstring from a declaration; it lives in the vendored imbue_common, so narrowing
-    # it here would diverge the subtree from mngr. Should a real violation ever land,
+    # docstring from a declaration; it lives in imbue_common, which this repo does not
+    # edit, so it cannot be narrowed here. Should a real violation ever land,
     # it will push this to 3 and be caught.
     rc.check_num_prefix(_DIR, snapshot(2))
 
