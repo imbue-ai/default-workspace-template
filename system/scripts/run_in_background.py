@@ -62,6 +62,7 @@ MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
 # ``mngr message``'s exit codes, which ``message_chat.py`` passes through.
 EXIT_DELIVERED = 0
 EXIT_DELIVERED_BUT_BLOCKED = 7
+# This script's own exit status when there is no chat to deliver the result to.
 EXIT_USAGE = 2
 # What a shell reports for a command it could not start.
 EXIT_COMMAND_NOT_RUNNABLE = 127
