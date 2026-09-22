@@ -231,12 +231,25 @@ class HealthProbeFindings(FrozenModel):
         description="Findings that fail the probe: the container, a template program, the UI or the VM gateway"
     )
     user_program_notes: tuple[str, ...] = Field(
-        description="Owner-added supervisord programs that are not running (the owner's to fix; e.g. gVisor refuses them)"
+        description=(
+            "Supervisord programs that are not running but do not block: owner-added ones (the owner's to fix; "
+            "e.g. gVisor refuses them) and template ones the workspace's own config no longer autostarts"
+        )
     )
 
     @property
     def is_healthy(self) -> bool:
         return not self.blocking
+
+
+class SupervisorHealthSplit(FrozenModel):
+    """The unhealthy supervisord entries of a replayed workspace, sorted by what the migrate does about each."""
+
+    blocking: tuple[str, ...] = Field(description="Template programs not running, and supervisorctl complaints")
+    user_program_entries: tuple[str, ...] = Field(description="Owner-added programs that are not running")
+    not_autostarted_template_entries: tuple[str, ...] = Field(
+        description="Template programs the workspace's own supervisord config leaves stopped (autostart=false)"
+    )
 
 
 class SavedProductArtifact(FrozenModel):

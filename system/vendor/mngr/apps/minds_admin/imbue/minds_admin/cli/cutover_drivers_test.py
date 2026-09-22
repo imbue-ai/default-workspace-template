@@ -864,6 +864,22 @@ def _ordered_outer(**kwargs: Any) -> tuple[OuterHostInterface, OrderedStubOuter]
     return cast(OuterHostInterface, stub), stub
 
 
+def _running_container_results(supervisor_output: str | None = None) -> dict[str, CommandResult]:
+    """Stub answers for a running ``mngr-ws`` container with its UI up.
+
+    ``supervisor_output`` is the container's ``supervisorctl status`` (exiting
+    non-zero, as supervisorctl does when any program is not RUNNING); None
+    leaves it to the stub's default, an empty success.
+    """
+    results = {
+        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
+        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
+    }
+    if supervisor_output is not None:
+        results["mngr-ws supervisorctl status"] = CommandResult(stdout=supervisor_output, stderr="", success=False)
+    return results
+
+
 def _tar_member_names_and_contents(tar_bytes: bytes) -> dict[str, bytes]:
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as archive:
         contents: dict[str, bytes] = {}
@@ -955,10 +971,7 @@ def test_start_latchkey_gateway_never_writes_a_secret_when_the_dir_is_not_ram_ba
 
 
 def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed() -> None:
-    healthy_container = {
-        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
-        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
-    }
+    healthy_container = _running_container_results()
     vm_findings = {
         "supervisorctl status latchkey-gateway latchkey-tunnel": CommandResult(
             stdout="latchkey-gateway RUNNING pid 1\nlatchkey-tunnel BACKOFF Exited too quickly\n",
@@ -1001,11 +1014,7 @@ def test_probe_workspace_health_reports_an_owner_added_program_without_blocking_
         "host-backup                      RUNNING   pid 2, uptime 0:10:00\n"
         "sg-download                      FATAL     Exited too quickly (process log may have details)\n"
     )
-    container = {
-        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
-        "mngr-ws supervisorctl status": CommandResult(stdout=supervisor_output, stderr="", success=False),
-        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
-    }
+    container = _running_container_results(supervisor_output)
     template_programs = frozenset({"system_interface", "host-backup"})
     outer, _stub = _ordered_outer(result_by_substring=container)
     findings = probe_workspace_health(
@@ -1016,14 +1025,9 @@ def test_probe_workspace_health_reports_an_owner_added_program_without_blocking_
     # The same output with the template's own program down blocks, and an
     # unknown template (the preflight) treats every program as blocking.
     outer_template_down, _stub = _ordered_outer(
-        result_by_substring={
-            **container,
-            "mngr-ws supervisorctl status": CommandResult(
-                stdout=supervisor_output.replace("host-backup                      RUNNING", "host-backup FATAL"),
-                stderr="",
-                success=False,
-            ),
-        }
+        result_by_substring=_running_container_results(
+            supervisor_output.replace("host-backup                      RUNNING", "host-backup FATAL")
+        )
     )
     template_down = probe_workspace_health(
         outer_template_down, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
@@ -1035,6 +1039,32 @@ def test_probe_workspace_health_reports_an_owner_added_program_without_blocking_
         outer_unknown, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
     )
     assert unknown.blocking == ("supervisord not healthy: sg-download FATAL",)
+    assert unknown.user_program_notes == ()
+
+
+def test_probe_workspace_health_reports_a_template_program_the_config_does_not_autostart_without_blocking() -> None:
+    supervisor_output = (
+        "system_interface                 RUNNING   pid 1, uptime 0:10:00\n"
+        "browser                          STOPPED   Not started\n"
+        "chat                             STOPPED   Sep 21 12:40 PM\n"
+    )
+    container = _running_container_results(supervisor_output)
+    template_programs = frozenset({"system_interface", "browser", "chat"})
+    outer, _stub = _ordered_outer(result_by_substring=container)
+    findings = probe_workspace_health(
+        outer, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
+    )
+    # The never-started browser is the workspace's own config; the hand-stopped chat is not.
+    assert findings.blocking == ("supervisord not healthy: chat STOPPED",)
+    assert findings.user_program_notes == (
+        "template program not autostarted by the workspace's config: browser STOPPED",
+    )
+    # An unknown template (the preflight) still blocks on it.
+    outer_unknown, _stub = _ordered_outer(result_by_substring=container)
+    unknown = probe_workspace_health(
+        outer_unknown, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
+    )
+    assert unknown.blocking == ("supervisord not healthy: browser STOPPED", "supervisord not healthy: chat STOPPED")
     assert unknown.user_program_notes == ()
 
 

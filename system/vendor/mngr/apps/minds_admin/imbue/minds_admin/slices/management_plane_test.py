@@ -29,8 +29,12 @@ def _assert_bash_syntax_ok(script: str) -> None:
 
 def _operators() -> tuple[WireguardOperatorConfig, ...]:
     return (
-        WireguardOperatorConfig.model_validate({"name": "josh", "public_key": "opkeyjosh=", "address": "10.112.0.2"}),
-        WireguardOperatorConfig.model_validate({"name": "alex", "public_key": "opkeyalex=", "address": "10.112.0.3"}),
+        WireguardOperatorConfig.model_validate(
+            {"name": "josh", "public_key": "wee0+EFoclrCL2Pdf3oT3dKtL3Z2W2Tr9JsbvLzqwLc=", "address": "10.112.0.2"}
+        ),
+        WireguardOperatorConfig.model_validate(
+            {"name": "alex", "public_key": "aAWhPfhifGs/d9CO0mkiyJc96qHKK8mmeiM7UXSAi3g=", "address": "10.112.0.3"}
+        ),
     )
 
 
@@ -77,9 +81,9 @@ def test_wireguard_prep_section_generates_once_and_echoes_the_public_key() -> No
     # carries a placeholder spliced on-box.
     assert "__MNGR_WG_PRIVATE_KEY__" in section
     # One peer block per operator, pinned to their /32.
-    assert "PublicKey = opkeyjosh=" in section
+    assert "PublicKey = wee0+EFoclrCL2Pdf3oT3dKtL3Z2W2Tr9JsbvLzqwLc=" in section
     assert "AllowedIPs = 10.112.0.2/32" in section
-    assert "PublicKey = opkeyalex=" in section
+    assert "PublicKey = aAWhPfhifGs/d9CO0mkiyJc96qHKK8mmeiM7UXSAi3g=" in section
     assert "AllowedIPs = 10.112.0.3/32" in section
     assert "Address = 10.112.1.5/16" in section
     assert "ListenPort = 51820" in section
@@ -100,6 +104,54 @@ def test_wireguard_prep_section_restarts_only_on_config_change() -> None:
     # The unchanged branch must not bounce a live interface (operators may be
     # connected over it while sync-peers runs).
     assert "systemctl start wg-quick@wg0" in section
+
+
+def test_wireguard_prep_section_validates_the_rendered_config_with_wg_before_installing_it() -> None:
+    section = render_wireguard_prep_section(
+        wireguard_address="10.112.1.5", listen_port=51820, operators=_operators(), overlay_prefix_length=16
+    )
+
+    _assert_bash_syntax_ok(section)
+    # wg parses the rendered file on a scratch interface (ListenPort dropped,
+    # the live interface holds it) before the mv; a rejection exits without
+    # touching the installed config.
+    check_idx = section.index('ip link add "$check_interface" type wireguard')
+    setconf_idx = section.index('wg setconf "$check_interface" /dev/stdin')
+    install_idx = section.index("mv /etc/wireguard/wg0.conf.mngr-tmp /etc/wireguard/wg0.conf")
+    assert check_idx < setconf_idx < install_idx
+    assert "sed '/^ListenPort/d'" in section
+    assert "wg rejected the rendered wg0.conf" in section
+
+
+def test_wireguard_prep_section_applies_peer_only_changes_live_with_wg_syncconf() -> None:
+    section = render_wireguard_prep_section(
+        wireguard_address="10.112.1.5", listen_port=51820, operators=_operators(), overlay_prefix_length=16
+    )
+
+    _assert_bash_syntax_ok(section)
+    # The operator's own session rides wg0: a restart severs it and costs tens
+    # of seconds of tunnel recovery, so peer changes reload in place and only
+    # an [Interface] change (compared section for section) restarts.
+    assert "wg syncconf wg0 <(wg-quick strip wg0)" in section
+    assert "interface_section" in section
+    assert "elif ! systemctl restart wg-quick@wg0; then" in section
+    assert "wg syncconf refused the rendered wg0.conf; restored the previous config" in section
+
+
+def test_wireguard_prep_section_restores_the_previous_config_when_the_restart_fails() -> None:
+    section = render_wireguard_prep_section(
+        wireguard_address="10.112.1.5", listen_port=51820, operators=_operators(), overlay_prefix_length=16
+    )
+
+    # The overlay is the only operator path to a locked-down box, so a config
+    # wg-quick will not come up on must not stay installed.
+    assert "cp -a /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.mngr-previous" in section
+    assert "systemctl restart wg-quick@wg0; then" in section
+    assert "mv /etc/wireguard/wg0.conf.mngr-previous /etc/wireguard/wg0.conf" in section
+    assert "restored the previous config" in section
+    # A first prep has no previous config to fall back on; the message says so
+    # rather than claiming a restore.
+    assert "(no previous config to restore)" in section
 
 
 def test_management_nftables_policy_scopes_the_drop_to_port_22() -> None:

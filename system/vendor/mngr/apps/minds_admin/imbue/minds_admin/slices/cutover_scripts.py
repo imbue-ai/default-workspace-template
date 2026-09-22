@@ -38,6 +38,7 @@ from imbue.minds_admin.slices.cutover_types import HarvestedKeys
 from imbue.minds_admin.slices.cutover_types import HarvestedLatchkeyState
 from imbue.minds_admin.slices.cutover_types import LatchkeyReplayPlan
 from imbue.minds_admin.slices.cutover_types import ReplayedContainerFile
+from imbue.minds_admin.slices.cutover_types import SupervisorHealthSplit
 from imbue.minds_admin.slices.cutover_types import TemplateReplayInputs
 from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_DIR
 from imbue.minds_admin.slices.cutover_types import VM_LATCHKEY_SUPERVISOR_CONF_DIR
@@ -1020,29 +1021,65 @@ def _is_supervisorctl_program_entry(entry: str) -> bool:
     return len(parts) == 2 and parts[1] in _SUPERVISOR_STATES
 
 
+# supervisord's description for a STOPPED program that was never asked to run
+# (``autostart=false`` and no ``supervisorctl start``); a program stopped by
+# hand carries the stop time instead.
+_SUPERVISOR_NEVER_STARTED_DESCRIPTION: Final[str] = "Not started"
+
+
+@pure
+def parse_supervisorctl_never_started(output: str) -> frozenset[str]:
+    """The programs supervisord reports as ``STOPPED   Not started``: configured not to autostart."""
+    names: set[str] = set()
+    for line in output.splitlines():
+        parts = line.split(maxsplit=2)
+        if len(parts) == 3 and parts[1] == "STOPPED" and parts[2].strip() == _SUPERVISOR_NEVER_STARTED_DESCRIPTION:
+            names.add(parts[0])
+    return frozenset(names)
+
+
 @pure
 def split_unhealthy_by_template(
-    unhealthy: Sequence[str], template_program_names: AbstractSet[str] | None
-) -> tuple[list[str], list[str]]:
-    """Split the unhealthy entries into the ones that block the migration and the owner-added programs.
+    unhealthy: Sequence[str],
+    template_program_names: AbstractSet[str] | None,
+    never_started_program_names: AbstractSet[str],
+) -> SupervisorHealthSplit:
+    """Split the unhealthy entries into the ones that block the migration and the ones only reported.
 
     The migrate verifies its own replay: a template-shipped program that is not
     running means the workspace did not come back. A program the owner added
     to supervisord is theirs (gVisor refuses some, such as anything using
-    ``ionice``), so it is reported rather than parking the workspace for it.
-    A supervisorctl complaint (no program at all) always blocks. ``None``
-    means the template's programs are unknown, so every entry blocks.
+    ``ionice``), so it is reported rather than parking the workspace for it,
+    and so is a template program the workspace's own config no longer
+    autostarts (a self-updated workspace runs a newer template than the one
+    its version tag names; the ``browser`` service stopped autostarting in a
+    later release). A supervisorctl complaint (no program at all) always
+    blocks. ``None`` means the template's programs are unknown, so every entry
+    blocks.
     """
     if template_program_names is None:
-        return list(unhealthy), []
+        return SupervisorHealthSplit(
+            blocking=tuple(unhealthy), user_program_entries=(), not_autostarted_template_entries=()
+        )
     blocking: list[str] = []
-    user_program_notes: list[str] = []
+    user_program_entries: list[str] = []
+    not_autostarted_template_entries: list[str] = []
     for entry in unhealthy:
-        if _is_supervisorctl_program_entry(entry) and entry.split()[0] not in template_program_names:
-            user_program_notes.append(entry)
+        if not _is_supervisorctl_program_entry(entry):
+            blocking.append(entry)
+            continue
+        program_name = entry.split()[0]
+        if program_name not in template_program_names:
+            user_program_entries.append(entry)
+        elif program_name in never_started_program_names:
+            not_autostarted_template_entries.append(entry)
         else:
             blocking.append(entry)
-    return blocking, user_program_notes
+    return SupervisorHealthSplit(
+        blocking=tuple(blocking),
+        user_program_entries=tuple(user_program_entries),
+        not_autostarted_template_entries=tuple(not_autostarted_template_entries),
+    )
 
 
 _SUPERVISORD_PROGRAM_SECTION_RE: Final[re.Pattern[str]] = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)

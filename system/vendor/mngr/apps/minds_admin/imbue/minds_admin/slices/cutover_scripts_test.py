@@ -65,6 +65,7 @@ from imbue.minds_admin.slices.cutover_scripts import parse_docker_inspect
 from imbue.minds_admin.slices.cutover_scripts import parse_latchkey_harvest_output
 from imbue.minds_admin.slices.cutover_scripts import parse_marked_files
 from imbue.minds_admin.slices.cutover_scripts import parse_qemu_img_info
+from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_never_started
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_not_running
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_unhealthy
 from imbue.minds_admin.slices.cutover_scripts import parse_used_bytes
@@ -503,12 +504,42 @@ volume_home_path = "/home/user"
 
 def test_split_unhealthy_by_template_keeps_template_programs_and_complaints_blocking() -> None:
     unhealthy = ["system_interface STARTING", "sg-download FATAL", "unix:///var/run/supervisor.sock no such file"]
-    blocking, notes = split_unhealthy_by_template(unhealthy, frozenset({"system_interface", "host-backup"}))
-    assert blocking == ["system_interface STARTING", "unix:///var/run/supervisor.sock no such file"]
-    assert notes == ["sg-download FATAL"]
+    split = split_unhealthy_by_template(unhealthy, frozenset({"system_interface", "host-backup"}), frozenset())
+    assert split.blocking == ("system_interface STARTING", "unix:///var/run/supervisor.sock no such file")
+    assert split.user_program_entries == ("sg-download FATAL",)
+    assert split.not_autostarted_template_entries == ()
     # Unknown template: everything blocks.
-    assert split_unhealthy_by_template(unhealthy, None) == (unhealthy, [])
-    assert split_unhealthy_by_template([], frozenset({"system_interface"})) == ([], [])
+    unknown_template = split_unhealthy_by_template(unhealthy, None, frozenset({"system_interface"}))
+    assert unknown_template.blocking == tuple(unhealthy)
+    assert unknown_template.user_program_entries == ()
+    empty = split_unhealthy_by_template([], frozenset({"system_interface"}), frozenset())
+    assert empty.blocking == ()
+
+
+def test_split_unhealthy_by_template_reports_a_never_started_template_program_instead_of_blocking() -> None:
+    # A self-updated workspace whose own config no longer autostarts a template
+    # program (the browser service, from a later release than its version tag)
+    # comes back with it STOPPED "Not started": reported, never a parked row.
+    # The same state on a program the template still autostarts (stopped by
+    # hand before the move, so no "Not started") keeps blocking.
+    unhealthy = ["browser STOPPED", "terminal STOPPED", "bowei-dispatch STOPPED"]
+    split = split_unhealthy_by_template(
+        unhealthy, frozenset({"browser", "terminal", "chat"}), frozenset({"browser", "bowei-dispatch"})
+    )
+    assert split.blocking == ("terminal STOPPED",)
+    assert split.not_autostarted_template_entries == ("browser STOPPED",)
+    assert split.user_program_entries == ("bowei-dispatch STOPPED",)
+
+
+def test_parse_supervisorctl_never_started_names_only_the_not_started_stopped_programs() -> None:
+    output = (
+        "browser                          STOPPED   Not started\n"
+        "chat                             STOPPED   Sep 21 12:40 PM\n"
+        "terminal                         RUNNING   pid 44, uptime 0:10:00\n"
+        "unix:///var/run/supervisor.sock no such file\n"
+    )
+    assert parse_supervisorctl_never_started(output) == frozenset({"browser"})
+    assert parse_supervisorctl_never_started("") == frozenset()
 
 
 def test_transplant_rescue_moves_a_crashed_attempts_disk_back_only_when_the_transplant_dir_lacks_it() -> None:

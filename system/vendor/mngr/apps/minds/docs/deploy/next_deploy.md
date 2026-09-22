@@ -689,6 +689,295 @@ deploy was deliberately not done.
     `~/.minds/archives/reports/archive-links-20260921T025320Z.{md,csv}`.
     No gen-1 row below the version floor remains in any status but
     `retired`; 74 retired rows await release.
+  - **Night 3, 2026-09-21 from 06:07Z: the hil box sweeps resume**, the plan
+    being every remaining hil gen-1 box (68 leased rows on eight boxes, susy's
+    two rows included, `46bf5609` included now that its pre-floor row is
+    retired), two lanes, each emptied box repaved except the last one, which
+    stays gen-1 until Josh closes the horizon. Step 0 read clean: the 72 rows
+    (68 leased plus four never-leased `available` 0.5.2 rows) matched the
+    plan's inventory, every box hil, no overlay duplicates, no suspended
+    owner, no in-flight cutover record, audit 34 exclusive / 0 contaminated
+    (`c011f511` unaudited, its TPM ticket pending), 0 legacy layouts among
+    91 leased slices, every one of the eight preflights 0 refused / 0 errors.
+    The four `available` rows (`68a2347a`, `af7915bc` on `219affc1`;
+    `b3522217`, `80693fdc` on `80972293`) were destroyed at 06:47Z (4/4).
+    A concurrent vin sweep run from the `mngr/deploy-retirement` tree wrote
+    state records carrying the new `origin_disk_gb` field
+    (`--shrink-oversized-disks`), which this branch's frozen record model
+    refused when listing the shared state dir: lane B's first launch and two
+    dry runs crashed before touching any row. That commit (`85bf189ebd`) was
+    cherry-picked onto this branch at 06:5xZ and everything since runs from
+    it; the two operators' trees are the same code again.
+  - **`91d1f669` -> `946923eb`** (lane A, 06:13Z-08:45Z, 12/12; no seed
+    needed, every tar in the bucket). Rows, in migration order, with the new
+    container port on `51.81.185.234` (the VM port is one below) and the
+    latchkey detail: `8370d6e3` workspace-2 (0.6.2, 22001, FULL), `b11d513d`
+    workspace-2 (0.6.2, 22003, FULL), `a32e595f` fun-stuff (0.6.1, 22005,
+    FULL; its own `health-diary` program in BACKOFF), `25713d9e` blogpod
+    (0.6.1, 22007, FULL), `f6c923bf` workspace-1 (0.3.10, 22009, FULL),
+    `083373a9` workspace-1 (0.3.11, 22011, FULL), `9b618391` comms-pr (0.6.1,
+    22013, FULL), `8d6cfb44` workspace-1 (0.3.11, 22015, FULL), `808a8e20`
+    workspace-1 (0.4.2, 22017, FULL), `0b89f195` cathy-s-demo-environment
+    (0.6.2, 22019, FULL; its ~50 owner-added demo programs read STOPPED
+    before and after the move, deliberately not autostarted), `1ee72c3c`
+    kanjun-s-demo-environment (0.6.2, 22021, FULL), `f30b9fc6` workspace-1
+    (0.4.2, 22023, FULL). Every row verified (`leased`, gen 2, `US-WEST-OR`,
+    runsc, home on the volume, UI 200, gateway bound). The box then held 0
+    rows (audit: 0 disks, `946923eb` 12/14, keys 0/0, CA correct,
+    encrypted); repave started 08:49Z. Report `migrate-20260921T084532Z.json`.
+    **Repaved** 08:49Z-09:0xZ: `ready`, generation 2, 14 slots, overcommit
+    4.0, TPM enrolled, encrypted, keys 0/0, CA correct, storage partition
+    936.5 GB. Not baked.
+  - **`529bf614` -> `0d59c281`** (lane B, 06:43Z-09:10Z, 11/11; started
+    once lane A's first row had verified; its 0.3.10 row needed no seed, the
+    vin sweep having published that tar). Rows, in migration order, with the
+    new container port on `51.81.185.140` and the latchkey detail:
+    `7e5fac6b` imbue-test-session (0.3.10, 22001, FULL), `b7b069f3`
+    education (0.3.11, 22003, FULL), `89890c95` workspace-2 (0.6.2, 22005,
+    FULL; its own `thought-space` in BACKOFF), `cf919982` workspace-2 (0.6.1,
+    22007, FULL), `a3700c82` workspace-2 (0.5.0, 22009, FULL; its own
+    `food-log` still STARTING), `0a76b55d` workspace-1 (0.4.2, 22011, FULL),
+    `2a787e99` workspace-1 (0.4.2, 22013, FULL), `b1baacbb` workspace-1
+    (0.4.2, 22015, none), `fb636d53` workspace-4 (0.6.2, 22017, FULL),
+    `d8b437d3` workspace-1 (0.4.2, 22019, none), `17c1e985` workspace-3
+    (0.6.1, 22021, FULL). One failure, resumed: `d8b437d3`'s disk transplant
+    died mid `btrfs send | receive` when the SSH session into the target box
+    dropped (`Connection to 127.0.0.1 closed by remote host`; the box was up
+    at load 7), leaving the row parked with its artifact saved; the same
+    invocation re-run with `--workspace d8b437d3` first redid the transplant
+    and restored it within ten minutes (08:49Z parked, 08:55Z verified).
+    Every row verified. The box then held 0 rows (audit: 0 disks,
+    `0d59c281` 11/14, keys 0/0, CA correct, encrypted); repave started
+    09:13Z. Reports `migrate-20260921T084953Z.json`,
+    `migrate-20260921T091022Z.json`. **Repaved** 09:13Z-09:2xZ: `ready`,
+    generation 2, 14 slots, TPM enrolled, encrypted, keys 0/0, CA correct,
+    storage partition 936.5 GB. Not baked.
+  - **`219affc1` -> `d6871163`** (lane A, 08:46Z-11:28Z, 11/11; no seed
+    needed). Rows, in migration order, with the new container port on
+    `51.81.242.221` and the latchkey detail: `e14043a5` geebspace (0.6.2,
+    22001, FULL), `8c6869d1` workspace-1 (0.3.10, 22003, FULL), `30cbf2b9`
+    workspace-1 (0.3.10, 22005, FULL), `5aae4ccd` workspace-1 (0.3.10,
+    22007, FULL), `b7b64e8d` personal (0.6.2, 22009, FULL; its own
+    `crm-cleanup` STOPPED), `9554849c` workspace-1 (0.3.10, 22011, FULL),
+    `5d73ce75` screenshots-inspirations-aug28-1 (0.6.2, 22013, FULL),
+    `2125882f` workspace-1 (0.4.2, 22015, none), `840da9fa` workspace-1
+    (0.4.2, 22017, FULL), `20dfb490` workspace-2 (0.5.0, 22019, FULL),
+    `32f629ad` frontend-choices-plus-scripts-pl (0.5.2, 22021, FULL). Every
+    row verified. The box then held 0 rows (audit: 0 disks, `d6871163`
+    11/14, keys 0/0, CA correct, encrypted); repave started 11:33Z. Report
+    `migrate-20260921T112845Z.json`.
+  - **`80972293` -> `7286e152`** (lane B, 09:11Z-11:26Z, 10/10; no seed
+    needed). Rows, in migration order, with the new container port on
+    `51.81.242.228` and the latchkey detail: `afa32861` workspace-1 (0.3.10,
+    22001, FULL), `420a4a79` workspace-1 (0.3.10, 22003, FULL), `8f323d31`
+    workspace-1 (0.3.10, 22005, FULL), `c0d00cce` workspace-1 (0.3.10,
+    22007, FULL), `a9f851c8` product-minds (0.6.2, 22009, FULL; its own
+    `early-access-review` still STARTING), `43a3f496` reminders (0.3.10,
+    22011, FULL), `584c49f8` work-stuff (0.6.2, 22013, FULL; its own
+    `orchard-tunnel` still STARTING), `27c3b5d4`
+    inspo-test-videos-shared-042 (0.6.2, 22015, FULL), `b1d40939` fresh-052
+    (0.5.2, 22017, FULL; its own `bowei-mind-dispatch` STOPPED as before),
+    `ffefcef6` workspace-1 (0.6.1, 22019, DISK_ONLY: the row repaired on
+    09-20 came back with every template program and the gateway left to the
+    desktop's next provisioning pass). Every row verified. The box then held
+    0 rows (audit: 0 disks, `7286e152` 10/14, keys 0/0, CA correct,
+    encrypted); repave started 11:33Z. Report `migrate-20260921T112625Z.json`.
+    **Its repave FAILED twice at the TPM seal** (11:33Z and 11:47Z,
+    `Esys_CreatePrimary` error `0x9a2`, "Failed to seal to TPM2: State not
+    recoverable"; the reinstall itself succeeded and the recovery passphrase
+    is in Vault), the same signature as `c011f511`: the TPM answers but all
+    three hierarchies carry unknown authorization values (`ownerAuthSet`,
+    `endorsementAuthSet`, `lockoutAuthSet` all 1, `inLockout` 0; NTC
+    manufacturer, firmware 1.3), so it cannot be cleared from the OS. The box
+    (`ns1007242`) sits at `installing`, generation 2, with no rows, excluded
+    from every pool path and reported unaudited, until OVH clears or reseats
+    its TPM: **OVH ticket 737902** (filed 15:5xZ at Josh's request,
+    referencing 737351 and 737104; 737351's own intervention is scheduled as
+    737879). Re-run `cutover repave --server-id 80972293-...` once OVH
+    reports done (it resumes from `installing`). Reports
+    `repave-20260921T114642Z.json`, `repave-20260921T114823Z.json`.
+  - **`219affc1` repaved** 11:33Z-11:47Z: `ready`, generation 2, 14 slots,
+    TPM enrolled, encrypted, keys 0/0, CA correct, storage partition 936.5
+    GB. Not baked. Audit at 11:5xZ: 33 exclusive, 0 contaminated, 2
+    unaudited (`c011f511`, `80972293`).
+  - **`46bf5609` -> `9ef5ab2e`** (lane A, 11:33Z-13:21Z, 6/6; no seed
+    needed). Rows, in migration order, with the new container port on
+    `147.135.97.121` and the latchkey detail: `ca5c1220`
+    an-actual-os-aug25noon (0.6.2, 22001, FULL), `aeb9d667` workspace-3
+    (0.5.2, 22003, FULL), `c7067f26` workspace-1 (0.4.2, 22005, FULL),
+    `8c30fc15` workspace-13 (0.4.2, 22007, none), `3a44f13d` computer-view
+    (0.6.1, 22009, FULL), `204bf2f8` autocompact-test-2 (0.6.1, 22011,
+    FULL). One failure, fixed in the tooling and resumed: `3a44f13d` failed
+    the health probe with `browser STOPPED` (12:55Z) because its own
+    supervisord config, self-updated past its 0.6.1 tag, no longer
+    autostarts the browser service (template commit "browser: stop
+    autostarting the headful Chromium service"), while the probe took the
+    program list from the 0.6.1 tag and required it. The probe now reports a
+    template program that supervisord shows as `STOPPED   Not started` (the
+    workspace's own `autostart=false`) instead of blocking on it (commit
+    `89634d3376`, `apps/minds_admin`'s changelog); the same invocation
+    re-run with `--workspace 3a44f13d` first restored it at 13:04Z. Every
+    row verified. The box then held 0 rows (`9ef5ab2e` 6/14); repave started
+    13:21Z. Reports `migrate-20260921T125535Z.json`,
+    `migrate-20260921T132058Z.json`. **Repaved** 13:21Z-13:4xZ: `ready`,
+    generation 2, 14 slots, TPM enrolled, encrypted, keys 0/0, CA correct,
+    storage partition 936.5 GB. Not baked.
+  - **`0b24ee94` -> `267e76bd`** (lane B, 11:27Z-13:57Z, 9/9; no seed
+    needed; susy's `f99f9d9a` rode the sweep as an ordinary row). Rows, in
+    migration order, with the new container port on `51.81.242.237` and the
+    latchkey detail: `ff6927e5` red-scribble (0.6.2, 22001, FULL),
+    `5da43659` workspace-1 (0.6.2, 22003, FULL), `5cd4a9a8`
+    open-source-explorer (0.5.0, 22005, FULL), `90839f51` workspace-1
+    (0.5.0, 22007, none), `53b2e558` bottlecap (0.6.2, 22009, FULL),
+    `6e9e7a45` ai-recruiting-coordinator (0.6.2, 22011, FULL), `dd887893`
+    workspace-1 (0.4.2, 22013, FULL), `f99f9d9a` workspace-2 (0.5.2, 22015,
+    FULL), `83964de5` fresh-060-updated-062 (0.6.2, 22017, FULL). Every row
+    verified, no owner-program notes. The box then held 0 rows (`267e76bd`
+    9/14); repave started 13:59Z. Report `migrate-20260921T135726Z.json`.
+    **Its repave FAILED at the TPM seal** (14:13Z, `0x9a2` "State not
+    recoverable"), the third box with the identical signature after
+    `c011f511` and `80972293`: all three hierarchies carry unknown
+    authorization values on an NTC TPM at firmware 1.3, so it cannot be
+    cleared from the OS and a retry cannot help (`80972293`'s did not; none
+    was run here). The box (`ns1010092`) sits at `installing`, generation
+    2, no rows, excluded from every pool path, until OVH clears or reseats
+    its TPM (**OVH ticket 737903**, filed 15:5xZ); then `cutover repave
+    --server-id 0b24ee94-...` resumes it. Report
+    `repave-20260921T141351Z.json`. Three of the ten gen-1 boxes
+    repaved since 09-20 have this TPM state; OVH's provisioning of that
+    TPM model may be the common cause and is worth raising in the ticket.
+  - **`bab2c8a1` -> `3841df6d`** (lane B, 13:59Z-14:23Z, 2/2; no seed
+    needed). Rows, in migration order, with the new container port on
+    `147.135.97.227` and the latchkey detail: `66e15326` workspace-1 (0.4.2,
+    22017, FULL), `d7e46527` workspace-2 (0.4.2, 22019, FULL). Both
+    verified; `3841df6d` then held 10/14. **The box holds 0 rows and stays
+    on gen-1, deliberately NOT repaved**: it is the last hil gen-1 box, kept
+    as the rollback destination and for debugging until Josh gives the
+    signal. Report `migrate-20260921T142303Z.json`.
+  - **`feb11eae` -> `782ed40b`** (lane A, 13:21Z-15:21Z, 7/7; no seed
+    needed; susy's `566de3ee` rode the sweep as an ordinary row). Rows, in
+    migration order, with the new container port on `51.81.154.150` and the
+    latchkey detail: `6b394b8b` workspace-1 (0.5.0, 22001, FULL),
+    `566de3ee` workspace-1 (0.5.2, 22003, FULL), `e25a780d`
+    serious-use-apps-aug26noon (0.6.2, 22005, FULL), `474a42c3` workspace-3
+    (0.5.0, 22007, FULL; created from a branch, no release tag, version
+    from the vendored `FALLBACK_BRANCH`), `3584ef5c` workspace-1 (0.5.0,
+    22009, FULL), `146c672f` workspace-1 (0.5.2, 22011, FULL), `5581d6bf`
+    latency-trimmed (0.6.2, 22013, FULL). Every row verified, no
+    owner-program notes. The box then held 0 rows (`782ed40b` 7/14); repave
+    started 15:21Z. Report `migrate-20260921T152102Z.json`.
+  - **Night-3 end state (15:21Z)**: 68/68 hil gen-1 workspaces migrated and
+    verified (every one `leased`, `box_generation` 2, `US-WEST-OR`,
+    `stop_kind` NULL, runsc, home on the volume, UI 200); hil has no leased
+    gen-1 row left (the 64 gen-1 rows still in the pool are the retired
+    stopped ones on no box). Targets after the sweep: `946923eb` 12/14,
+    `0d59c281` 11/14, `d6871163` 11/14, `7286e152` 10/14, `9ef5ab2e` 6/14,
+    `267e76bd` 9/14, `782ed40b` 7/14, `3841df6d` 10/14; `db7111f5` (29)
+    untouched. Repaved gen-2: `91d1f669`, `529bf614`, `219affc1`,
+    `46bf5609`, plus `feb11eae` once its repave finishes. TPM-blocked at
+    `installing`: `80972293`, `0b24ee94` (and vin's `c011f511`). Kept on
+    gen-1 with 0 rows: `bab2c8a1`, until Josh closes the hil horizon. Two
+    tooling fixes on this branch (the cherry-picked `--shrink-oversized-disks`
+    record field for state-dir compatibility with the concurrent vin sweep,
+    and the probe's tolerance of a not-autostarted template program), two
+    transient resumes (`d8b437d3`'s transplant SSH drop, `3a44f13d` after
+    the probe fix), no rollback. Timings: 10 to 18 minutes per workspace,
+    the whole 68 from 06:13Z to 15:21Z in two lanes. `feb11eae` repaved
+    15:21Z-15:37Z (`ready`, gen 2, TPM enrolled, encrypted; report
+    `repave-20260921T153719Z.json`). Final audit 15:4xZ: 35 boxes, 32
+    exclusive, 0 contaminated, 3 unaudited (the TPM-blocked `c011f511`,
+    `80972293`, `0b24ee94`), every gen-2 box encrypted with keys 0/0 and CA
+    correct, no degraded arrays; hil is 21 gen-2 `ready` boxes, 2 at
+    `installing`, and `bab2c8a1` alone on gen-1. No cutover record in
+    flight, keys dir empty, every harvested key shredded.
+  - **Owner-program follow-up (16:1xZ to 16:5xZ)**: of the nine
+    owner-added programs the probes reported, four had one root cause:
+    `health-diary` (`a32e595f`), `thought-space` (`89890c95`), `food-log`
+    (`a3700c82`) and `early-access-review` (`a9f851c8`) are user apps built
+    on port 8083, which the template's own `browser-service` binds for its
+    CDP proxy (`BROWSER_CDP_PROXY_PORT`, default 8083, since template
+    `eabb747f9` / minds-v0.4.3); the build-app port picker does not know
+    that port. It is a boot race the owners' apps won on gen-1 and lost on
+    the recreated gen-2 containers, so they crash-looped (`Address already
+    in use`, about once a second). Repaired at Josh's request in each
+    workspace: `environment=<APP>_PORT` plus the matching `forward_port.py
+    --url` in the program's supervisord config (8085, 8084, 8093, 8089, the
+    lowest free port of each workspace), `supervisorctl reread && update`,
+    each app RUNNING and answering 200 on its new port, the change
+    committed in the workspace. Filed as
+    imbue-ai/default-workspace-template#648 for the template fix.
+    `orchard-tunnel` (`584c49f8`) fails on a missing `cloudflared` binary the
+    owner had installed outside `/home/user` (lost with the container
+    layer, as the migration announcement warns): left to the owner. The
+    remaining STOPPED programs were stopped before the move.
+  - **Incident, 17:48Z-18:20Z: operator WireGuard lost on 16 production
+    gen-2 boxes, then restored.** PR #1185 (merged 17:37Z) added Gabriel as a
+    dev-tier operator with the public key
+    `Ux1S91tQAYjU5lMVdc7ab7dGFebbziqFwiCvvfQfvCw==`; asked to give him
+    production access, the operator agent copied that entry into
+    production's `deploy.toml` (address `10.64.0.3`, commit `67803fea6b`) and
+    ran `wireguard sync-peers --tier production` at 17:48Z. The key is not a
+    WireGuard key (45 characters, two `=`; `wg` says "Trailing characters
+    found after key"), and the config loader only checked the base64
+    charset, so the box script replaced `wg0.conf` and `systemctl restart
+    wg-quick@wg0` failed, leaving `wg0` DOWN on the 16 boxes the parallel
+    run reached before Josh interrupted it at 8/31 (hil: `219affc1`,
+    `267e76bd`, `46bf5609`, `529bf614`, `7286e152`, `782ed40b`, `91d1f669`,
+    `9ef5ab2e`, `d6871163`, `feb11eae`; vin: `642c2c1c`, `68069cdb`,
+    `8cade5fa`, `a7828ee9`, `d04e8224`, `d157ec61`). With `wg0` down and
+    the `mngr_mgmt` nftables lockdown dropping public `:22`, no operator
+    tooling could reach them (`server ssh` fell back to the public address
+    and got `Connection refused`); the other 15 prepped gen-2 boxes were
+    never reached and kept `wg0` up. Workspaces and the connector were
+    unaffected throughout (the lockdown is scoped to `tcp dport 22`; the
+    connector egresses from the allowlisted proxy IP). The production entry
+    was reverted in `89256b1960`. **Repair (18:14Z-18:20Z, the runbook's
+    break-glass Modal-sandbox bounce host):** a `modal.Sandbox` in the
+    `minds-production` workspace (env `main`) attached to the connector's
+    proxy `mind-connector-east`, egress verified as `52.206.40.121`, SSHed
+    each box's public `:22` as `debian` with Josh's Vault-signed operator
+    certificate and the row's pinned host key, backed `wg0.conf` up to
+    `wg0.conf.bad-gabriel-peer`, deleted the `gabriel` `[Peer]` block and
+    restarted `wg-quick@wg0`. Tested on `9ef5ab2e` first (verified from the
+    laptop over the userspace tunnel), then the other 15; every box came back
+    `active` with Josh's peer only. A convergence `sync-peers --tier
+    production` then reported 31/31 synced with no restart (the on-box
+    configs match the committed list), every prepped gen-2 box shows a fresh
+    handshake from the laptop, and `just server-audit` reads 32 exclusive /
+    0 contaminated / 3 unaudited (the TPM-blocked `c011f511`, `80972293`,
+    `0b24ee94`, as before). Follow-ups landed on this branch: the loader now
+    rejects any operator `public_key` that is not exactly 32 base64-decoded
+    bytes; `sync-peers` syncs one canary box first and re-reads its `wg0`
+    over a fresh session, refusing the rest of the fleet unless the interface
+    is active with exactly the committed peers (exercised against production
+    at 18:5xZ: canary `a7828ee9` verified, then 30 boxes, 31/31 synced, no
+    restart); and the dev tier's invalid entry was removed (Gabriel re-derives
+    the key with `wg pubkey` and re-adds it to dev, then production, per the
+    runbook's "Peer changes"). Not checked: whether a dev-tier `sync-peers`
+    or box prep already ran with the bad key (needs the dev registry; no
+    employee Vault login was available). Sandbox script and per-box output in
+    the session scratchpad (`wg_bounce.py`, `bounce-fix-*.log`,
+    `wg-fleet-check-after.txt`, `audit-after-wg-fix.json`).
+  - **Gabriel added as a management-plane operator on every tier (19:0xZ to
+    19:3xZ)**, with the corrected 44-character key (`Ux1S91tQAYjU5lMVdc7ab7dGFebbziqFwiCvvfQfvCw=`,
+    32 bytes, `wg pubkey`-clean): dev first (`10.112.0.4`; 5 gen-2 boxes,
+    canary `716159c2`, all five verified with three peers), then staging
+    (`10.96.0.3`; 3 boxes, canary `21ae4720`), then production (`10.64.0.3`;
+    31 boxes, canary `a7828ee9`). The first production pass restarted `wg0`
+    on each changed box and each one then took 20 to 100 seconds to report
+    back (the restart severs the operator's own tunnel session, which
+    re-handshakes and waits out TCP retransmit backoff), so the run outgrew
+    its shell timeout at 20/31 and a second, idempotent pass converged the
+    remaining 11. Every box was `active` throughout (no `wg0` was ever down).
+    Afterwards `wg show wg0 peers` on all 31 production boxes lists exactly
+    Josh's and Gabriel's keys and `just server-audit` reads 32 exclusive /
+    0 contaminated / 3 unaudited. That slowness is now gone: the box script
+    applies peer-only changes with `wg syncconf` (no restart; a dev canary
+    reload plus four no-op boxes took 13 seconds end to end) and restarts
+    only on an `[Interface]` change. Gabriel's tunnel itself is unverified
+    (his private key); his Vault `minds_production` role is still Josh's to
+    grant. The 16 repaired boxes still hold `wg0.conf.bad-gabriel-peer`
+    backups in `/etc/wireguard` (root-only; safe to delete).
   - **Vin sweep, 2026-09-21 06:21Z to 08:29Z: `d04e8224` and `68069cdb`
     emptied, plus the one default-size row of `a7828ee9`** (Josh's vin
     plan; the hil sweep ran concurrently from another session on its own
