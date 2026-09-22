@@ -2,14 +2,14 @@
 
 The Getting Started app: the ways into the workspace, on one page a window of the desktop
 frames at the app's own origin (`docs/system/blueprint/launcher-and-getting-started/`).
-Top to bottom: a search field over its own content; "Start something", eight intents two to a row (four at first, the rest behind "See more"), each
-with a seeded first message; "Start from a template", the published template catalog by
-shelf, with a detail page (the drawing, the write-up, what the template needs, its
-repository) whose two actions adopt the template into this machine or have a new machine
-made from it. Every tile and both actions start a chat through one contract message,
-`shell:start-with-text`, which the desktop runs as its launcher's primary text action; the
-page names no app, and the Getting Started window stays where it is while the chat comes up
-beside it.
+Top to bottom: a search field over its own content; "Start something", eight intents two to
+a row (four at first, the rest behind "See more"), each with a seeded first message; "Start
+from a template", the published template catalog by shelf, with a detail page (the drawing,
+the write-up, what the template needs, its repository) whose two actions adopt the template
+into this machine or have a new machine made from it. Every tile and both actions start a
+chat through one contract message, `shell:start-with-text`, which the desktop runs as its
+launcher's primary text action; the page names no app, and the Getting Started window stays
+where it is while the chat comes up beside it.
 
 It runs as the `getting-started` supervisord program (`system/supervisord.conf.d/getting-started.conf`)
 from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
