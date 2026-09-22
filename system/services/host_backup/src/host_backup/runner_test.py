@@ -263,14 +263,13 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
     for returncode, events_subdir in ((1, "restic-failed"), (0, "restic-ok")):
         state = _LoopState(_direct_capabilities())
         state.events_dir = tmp_path / events_subdir
-        stub = _ResticStub([_completed(returncode)])
         _run_restic_backup(
             state=state,
             config=_build_config(),
             snapshot=_direct_snapshot(),
             env_overrides={},
-            backup_fn=stub.backup,
-            unlock_fn=stub.unlock,
+            backup_fn=_ScriptedRestic([_completed(returncode)]),
+            unlock_fn=_ScriptedRestic([]),
         )
         observed.add(last_event_type(state.events_dir))
 
@@ -414,22 +413,19 @@ def _completed(
     )
 
 
-class _ResticStub:
-    """Records restic backup/unlock calls and returns scripted results."""
+class _ScriptedRestic:
+    """A restic call that returns scripted results in order and counts its calls."""
 
-    def __init__(self, backup_results: list[subprocess.CompletedProcess[str]]) -> None:
-        self._backup_results = backup_results
-        self.backup_calls = 0
-        self.unlock_calls = 0
+    def __init__(self, results: list[subprocess.CompletedProcess[str]]) -> None:
+        self._results = results
+        self.calls = 0
 
-    def backup(self, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        result = self._backup_results[self.backup_calls]
-        self.backup_calls += 1
+    def __call__(
+        self, *_args: object, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        result = self._results[self.calls]
+        self.calls += 1
         return result
-
-    def unlock(self, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        self.unlock_calls += 1
-        return _completed(0)
 
 
 def _events_in(events_dir: Path | None) -> list[dict]:
@@ -442,8 +438,9 @@ def _events_in(events_dir: Path | None) -> list[dict]:
 
 def _run_backup_under_test(
     tmp_path: Path,
-    stub: _ResticStub,
+    backup: _ScriptedRestic,
     *,
+    unlock: _ScriptedRestic | None = None,
     initial_failures: int = 0,
 ) -> tuple[_LoopState, bool]:
     state = _LoopState(_direct_capabilities())
@@ -455,8 +452,8 @@ def _run_backup_under_test(
         config=_build_config(),
         snapshot=_direct_snapshot(),
         env_overrides={},
-        backup_fn=stub.backup,
-        unlock_fn=stub.unlock,
+        backup_fn=backup,
+        unlock_fn=unlock if unlock is not None else _ScriptedRestic([]),
     )
     return state, succeeded
 
@@ -469,17 +466,20 @@ _LOCK_STDERR = (
 
 def test_run_restic_backup_unlocks_and_retries_on_stale_lock(tmp_path: Path) -> None:
     """A lock error triggers `restic unlock` and one retry; the retry's success wins."""
-    stub = _ResticStub(
+    backup = _ScriptedRestic(
         [
             _completed(1, stderr=_LOCK_STDERR),
             _completed(0, stdout='{"message_type":"summary","snapshot_id":"snap1"}'),
         ]
     )
-    state, succeeded = _run_backup_under_test(tmp_path, stub, initial_failures=4)
+    unlock = _ScriptedRestic([_completed(0)])
+    state, succeeded = _run_backup_under_test(
+        tmp_path, backup, unlock=unlock, initial_failures=4
+    )
 
     assert succeeded is True
-    assert stub.backup_calls == 2
-    assert stub.unlock_calls == 1
+    assert backup.calls == 2
+    assert unlock.calls == 1
     assert state.consecutive_backup_failures == 0  # reset on success
     succeeded_events = [
         e
@@ -492,12 +492,13 @@ def test_run_restic_backup_unlocks_and_retries_on_stale_lock(tmp_path: Path) -> 
 
 def test_run_restic_backup_does_not_unlock_on_unrelated_failure(tmp_path: Path) -> None:
     """A non-lock failure is never retried and never runs unlock."""
-    stub = _ResticStub([_completed(1, stderr="network unreachable")])
-    state, succeeded = _run_backup_under_test(tmp_path, stub)
+    backup = _ScriptedRestic([_completed(1, stderr="network unreachable")])
+    unlock = _ScriptedRestic([])
+    state, succeeded = _run_backup_under_test(tmp_path, backup, unlock=unlock)
 
     assert succeeded is False
-    assert stub.backup_calls == 1
-    assert stub.unlock_calls == 0
+    assert backup.calls == 1
+    assert unlock.calls == 0
     failed_events = [
         e for e in _events_in(state.events_dir) if e["type"] == "RESTIC_BACKUP_FAILED"
     ]
@@ -507,9 +508,9 @@ def test_run_restic_backup_does_not_unlock_on_unrelated_failure(tmp_path: Path) 
 
 def test_run_restic_backup_emits_alarm_after_threshold(tmp_path: Path) -> None:
     """Crossing the consecutive-failure threshold emits a durable escalation event."""
-    stub = _ResticStub([_completed(1, stderr="backend error")])
+    backup = _ScriptedRestic([_completed(1, stderr="backend error")])
     state, succeeded = _run_backup_under_test(
-        tmp_path, stub, initial_failures=CONSECUTIVE_FAILURE_ALARM_THRESHOLD - 1
+        tmp_path, backup, initial_failures=CONSECUTIVE_FAILURE_ALARM_THRESHOLD - 1
     )
 
     assert succeeded is False
@@ -526,8 +527,8 @@ def test_run_restic_backup_emits_alarm_after_threshold(tmp_path: Path) -> None:
 
 def test_run_restic_backup_no_alarm_below_threshold(tmp_path: Path) -> None:
     """A single failure records the count but does not raise the alarm."""
-    stub = _ResticStub([_completed(1, stderr="backend error")])
-    state, _ = _run_backup_under_test(tmp_path, stub)
+    backup = _ScriptedRestic([_completed(1, stderr="backend error")])
+    state, _ = _run_backup_under_test(tmp_path, backup)
 
     assert state.consecutive_backup_failures == 1
     alarms = [
@@ -546,19 +547,6 @@ _NON_EXCLUSIVE_LOCK_STDERR = (
     "unable to create lock in backend: repository is already locked by "
     "PID 1928420 on efa2d6b8510d by root (UID 0, GID 0)"
 )
-
-
-class _ScriptedRestic:
-    """A restic call that returns scripted results in order and counts its calls."""
-
-    def __init__(self, results: list[subprocess.CompletedProcess[str]]) -> None:
-        self._results = results
-        self.calls = 0
-
-    def __call__(self, *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        result = self._results[self.calls]
-        self.calls += 1
-        return result
 
 
 def _retention_state(tmp_path: Path) -> _LoopState:
