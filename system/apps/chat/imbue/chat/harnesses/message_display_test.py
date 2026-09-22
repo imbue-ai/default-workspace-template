@@ -7,8 +7,10 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 
 import importlib.util
 from pathlib import Path
+from typing import Any
 
 from imbue.chat.harnesses.events import DisplayKind
+from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import classify_user_message
@@ -303,3 +305,37 @@ def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() ->
     decision = classify_user_message(module.wrap_system_message("Browser b1 was handed back to you."))
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
+
+
+def _load_run_in_background_script() -> Any:
+    script = Path(__file__).resolve().parents[5] / "scripts" / "run_in_background.py"
+    spec = importlib.util.spec_from_file_location("run_in_background_for_tag_pin", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None:
+    """``system/scripts/run_in_background.py`` is standard-library only and cannot import this package,
+    so its copy of the tag is pinned here by classifying a report it composed."""
+    module = _load_run_in_background_script()
+    report = module.compose_report(
+        description="Wait for the background agent",
+        command=["uv", "run", "create_worker.py", "await", "--name", "fix-login"],
+        returncode=0,
+        output="---\ntype: status\nname: done\n---\nThe login flow is rebuilt.\n",
+        output_path=Path("data/.tasks/run-in-background/x/output.log"),
+    )
+
+    assert module.BACKGROUND_TASK_REPORT_TAG == BACKGROUND_TASK_REPORT_TAG
+    decision = classify_user_message(report)
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background task"
+    assert decision.display_body == "Wait for the background agent (finished)"
+    assert is_non_turn_tail(report) is False
+
+
+def test_text_that_merely_mentions_the_background_task_tag_is_a_human_turn() -> None:
+    assert classify_user_message(f"why did the <{BACKGROUND_TASK_REPORT_TAG}> message show up twice?") is None

@@ -287,6 +287,30 @@ def test_prose_launcher_invocation_is_accepted_by_the_real_parser(
         ) from exc
 
 
+def _prose_await_commands() -> list[tuple[str, str]]:
+    """Every fenced command that runs ``create_worker.py await``, line continuations joined."""
+    return [
+        (str(prose.relative_to(_REPO_ROOT)), command)
+        for prose in _prose_files()
+        for block in _fenced_blocks(prose.read_text(encoding="utf-8"))
+        for command in re.split(r"\n(?=\S)", block.replace("\\\n", " "))
+        if "create_worker.py await" in command
+    ]
+
+
+def test_every_prose_await_is_started_through_the_harness_neutral_runner() -> None:
+    """A lead must be woken by its worker's report on every harness. Only claude's own
+    background tool wakes its agent, so an ``await`` the prose leaves to that tool strands a
+    codex, pi or opencode lead; ``run_in_background.py`` delivers the result to the lead's
+    chat instead."""
+    await_commands = _prose_await_commands()
+    assert await_commands, "no prose runs create_worker.py await; this guard is vacuous"
+    for prose, command in await_commands:
+        assert "run_in_background.py" in command.split("create_worker.py await")[0], (
+            f"{prose}: `{command.strip()}` is not started through run_in_background.py"
+        )
+
+
 def _run_task_block(dispatcher: _Dispatcher, cwd: Path) -> Path:
     """Execute the dispatcher's task-file block in ``cwd`` (with the runtime dir
     its launch names already present, as the skill's earlier step creates it)

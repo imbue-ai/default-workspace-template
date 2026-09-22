@@ -11,12 +11,16 @@ Merging the milestone" names plumbing nobody can see. Say what changed, or nothi
 
 ## Polling for the next report
 
-Start a background poll for the report file with `create_worker.py await`. It
-reads `finish_report_path` from the task file's frontmatter, blocks until that
-file appears, prints its contents, and exits 0; on timeout it exits non-zero
-(code 124). Run it with Bash's `run_in_background: true` so it returns the
-instant the report lands. `--name <WORKER_NAME>` is required (the same name you
-passed to `launch`) so the poll also watches the OOM shed ledger.
+Poll for the report file with `create_worker.py await`, started through
+`system/scripts/run_in_background.py`. `await` reads `finish_report_path` from
+the task file's frontmatter, blocks until that file appears, prints its
+contents, and exits 0; on timeout it exits non-zero (code 124).
+`run_in_background.py` returns at once and runs it detached; when `await`
+exits, its exit code and everything it printed arrive in your chat as a
+message, and that message starts your next turn. Use it whatever your harness:
+a harness's own background tool wakes you only on claude, and this works on
+every one. `--name <WORKER_NAME>` is required (the same name you passed to
+`launch`) so the poll also watches the OOM shed ledger.
 
 `await` is a generic poll-until-file primitive; the gate cycle below is this
 flow's *use* of it. Non-interactive callers that launch a tightly-scoped agent
@@ -24,21 +28,23 @@ and wait for one finish report use the same `await` (or the synchronous
 `create_worker.py launch-sync` wrapper) with no gate handling.
 
 ```bash
-# Run with Bash run_in_background: true
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name <WORKER_NAME> \
     --task-file <TASK_FILE>
 ```
 
 `--timeout` defaults to `30m`; pass e.g. `--timeout 60m` to re-arm with a longer
-wait. The tool output is the report contents: YAML frontmatter (`type`, `name`)
-plus a body. If await exits non-zero (timeout) without printing a report, do
-*not* immediately treat it as a terminal failure -- see "Diagnose worker
+wait. The message is a `<background-task-report>`: its `Exit code:` line is
+`await`'s, and its `<output>` is what `await` printed -- the report contents,
+YAML frontmatter (`type`, `name`) plus a body. The chat shows the user only its
+one-line summary. If await exits non-zero (timeout) without printing a report,
+do *not* immediately treat it as a terminal failure -- see "Diagnose worker
 liveness" below.
 
 ### Never sleep on a worker
 
-Once the poll is armed, **end your turn**: its completion wakes you with the
+Once the poll is armed, **end your turn**: its message wakes you with the
 report in seconds, while a `sleep N` is a guess at someone else's finishing time
 and every second between the report landing and the sleep expiring is dead time
 on the critical path. Ending your turn is safe -- a worker with a live
@@ -51,8 +57,8 @@ same guess in a different command; an armed `await` plus ending the turn is the
 only sanctioned wait on a sibling.
 
 With several workers out, arm one poll per worker before ending the turn. Each
-completion wakes you separately, so you act on whichever reports first and merge
-it while the others are still running.
+poll's message wakes you separately, so you act on whichever reports first and
+merge it while the others are still running.
 
 Your own backgrounded commands are the one exception. Nothing else holds your
 turn open there, so a worker that ends its turn waiting on its own command is
@@ -106,7 +112,7 @@ intermediate lead waiting on its own child is never mistaken for a dead one.
 ## Do not interrupt more recent user work
 
 If the user gave you a more recent task since launching the worker, finish that
-task first. The report notification is informational -- act on it once the
+task first. The report's message is informational -- act on it once the
 user's current request is complete.
 
 ## Parsing the report

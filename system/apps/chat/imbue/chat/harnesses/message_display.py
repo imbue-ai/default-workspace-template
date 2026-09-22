@@ -14,8 +14,8 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome,
-   model-bar traffic, a latchkey resolution) -> that decision. Explicit detectors WIN over
+1. An explicit detector matches (stop hook, fleet, task-notification, background-task report,
+   skill, /welcome, model-bar traffic, a latchkey resolution) -> that decision. Explicit detectors WIN over
    ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet deliberately surfaces as a chip.
 2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
    whole family, present and future.
@@ -39,6 +39,11 @@ from imbue.imbue_common.pure import pure
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
+# Cross-layer contract: the wrapper ``system/scripts/run_in_background.py`` puts around the
+# report it sends an agent's own chat when a command it ran for that agent exits. Only its
+# ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
+BACKGROUND_TASK_REPORT_TAG = "background-task-report"
+
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
 _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
 _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
@@ -49,6 +54,9 @@ _ZERO_EXIT_CODE_RE = re.compile(r"\s*\(exit code 0\)")
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
 _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
+_BACKGROUND_TASK_REPORT_RE = re.compile(
+    rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
+)
 # The composer's model bar drives its harness with /model, /effort, and /fast slash
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
@@ -205,6 +213,17 @@ def _task_notification_summary(content: str) -> str:
     return _ZERO_EXIT_CODE_RE.sub("", match.group(1)).strip()
 
 
+def _match_background_task_report(content: str) -> MessageDisplay | None:
+    """A background command's result, delivered to the agent that started it; a NOTICE like
+    the harness's own task notification, showing only the report's summary line."""
+    match = _BACKGROUND_TASK_REPORT_RE.match(content)
+    if match is None:
+        return None
+    return MessageDisplay(
+        display=DisplayKind.NOTICE, display_label="Background task", display_body=match.group(1).strip()
+    )
+
+
 def _match_browser_fleet(content: str) -> MessageDisplay | None:
     """A browser-fleet nudge; the sentinel is stripped so the chip shows the inner text."""
     match = _BROWSER_FLEET_RE.match(content)
@@ -291,6 +310,7 @@ _DETECTORS = (
     _match_skill_expansion,
     _match_stop_hook,
     _match_task_notification,
+    _match_background_task_report,
     _match_browser_fleet,
     _match_composer_command,
     _match_handoff_summary_request,

@@ -186,13 +186,14 @@ extra flag.
 
 ## Step 5: Background-poll for worker reports
 
-Run the poll as a Bash tool call with `run_in_background: true`, then continue
-with other work (subsequent skill steps, interface design, other user requests).
-Reports surface as task notifications; handle them when they arrive.
+Start the poll through `system/scripts/run_in_background.py`, which returns at
+once, then continue with other work (subsequent skill steps, interface design,
+other user requests). Each report arrives in your chat as a message that starts
+your next turn; handle it then.
 
 ```bash
-# Run with Bash run_in_background: true.
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name crystallize-$NAME \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md \
     --timeout 90m

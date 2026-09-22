@@ -6,7 +6,7 @@ Usage, from the repo root (every skill's cwd)::
     python3 system/scripts/message_chat.py <chat-id> -m "text"
     python3 system/scripts/message_chat.py <chat-id> --message-file path/to/task.md
     some-command | python3 system/scripts/message_chat.py <chat-id>
-    python3 system/scripts/message_chat.py <chat-id> --system -m "an automated nudge"
+    python3 system/scripts/message_chat.py <chat-id> --system -m "a browser-fleet nudge"
 
 This is the in-workspace replacement for ``mngr message <agent>``. A chat is
 addressed by its chat id (``$MINDS_CHAT_ID`` on an agent the chat app created; the
@@ -41,9 +41,12 @@ no read timeout: the route blocks for as long as the harness takes to accept the
 text, and giving up part-way would be the one way to deliver the message twice.
 The connect timeout is short so an unreachable chat app is detected fast.
 
-``--system`` wraps the text in the sentinel the chat transcript renders as a
-collapsed system chip instead of a user bubble (the browser app's wake-up
-nudges use it); the tag is pinned against the chat app's copy by a test there.
+``--system`` wraps the text in the browser fleet's sentinel, which the chat
+transcript renders as a collapsed "Browser fleet" chip instead of a user bubble.
+It exists for the browser app's wake-up nudges and labels anything else wrongly;
+the result of a background command goes to its agent through
+``run_in_background.py`` instead. The tag is pinned against the chat app's copy
+by a test there.
 
 Standard library only: skills run this as ``python3 system/scripts/...`` and
 cron runs it before any venv exists. The chat app is found through its row in
@@ -319,7 +322,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--system",
         action="store_true",
-        help="Mark the message as an automated nudge, rendered as a collapsed chip in the chat.",
+        help="Mark the message as a browser-fleet nudge, rendered as a collapsed 'Browser fleet' chip in the chat. "
+        "For the browser app's wake-ups only; a background command's result goes through run_in_background.py.",
     )
     return parser
 

@@ -639,12 +639,12 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
-**Background-await the report** (Bash `run_in_background: true` -- never block
-on it), then continue with whatever else you were doing:
+**Background-await the report** (through `system/scripts/run_in_background.py`
+-- never block on it), then continue with whatever else you were doing:
 
 ```bash
-# Run with Bash run_in_background: true
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name <slug> \
     --task-file data/.tasks/launch-task/<slug>/task.md
 ```

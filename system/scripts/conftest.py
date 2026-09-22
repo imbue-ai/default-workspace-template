@@ -1,5 +1,5 @@
 """Fixtures for the scripts' tests: a registry file and a fake shell over loopback for
-layout.py, and a fake chat app and a fake ``mngr`` for message_chat.py."""
+layout.py, and a fake chat app and a fake ``mngr`` for message_chat.py and run_in_background.py."""
 
 from __future__ import annotations
 
@@ -31,6 +31,9 @@ def _load_script_module(module_name: str, filename: str) -> Any:
 
 layout = _load_script_module("layout_for_fixtures", "layout.py")
 message_chat = _load_script_module("message_chat_for_fixtures", "message_chat.py")
+run_in_background = _load_script_module(
+    "run_in_background_for_fixtures", "run_in_background.py"
+)
 seed_welcome_chat = _load_script_module("seed_welcome_chat_for_fixtures", "seed_welcome_chat.py")
 welcome_count = _load_script_module("welcome_count_for_fixtures", "welcome_count.py")
 

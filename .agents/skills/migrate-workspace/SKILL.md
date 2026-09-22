@@ -303,7 +303,7 @@ BODY_EOF
 
 Write the user's answers to `data/.tasks/migrate-workspace/decisions.md` before
 launching, then launch with the plain `worker` template and background-poll
-(`run_in_background: true`), re-arming per
+(through `system/scripts/run_in_background.py`), re-arming per
 `.agents/shared/references/lead-proxy.md`:
 
 ```bash
@@ -311,7 +311,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name migrate-workspace --template worker \
     --runtime-dir data/.tasks/migrate-workspace/ --task-file data/.tasks/migrate-workspace/task.md
 
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name migrate-workspace --task-file data/.tasks/migrate-workspace/task.md --timeout 90m
 ```
 
