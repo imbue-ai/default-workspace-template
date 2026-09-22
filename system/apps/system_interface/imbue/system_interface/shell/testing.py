@@ -28,6 +28,8 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
+from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -122,8 +124,11 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
     )
 
 
-def shell_application(tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster) -> Flask:
-    """The shell app over ``inventory``, its state under ``tmp_path``, sharing the inventory's broadcaster as in production.
+def shell_application(
+    tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster, is_preview: bool = False
+) -> Flask:
+    """The shell app over ``inventory``, its state under ``tmp_path/state`` and the update notice's workspace at
+    ``tmp_path/repo``, sharing the inventory's broadcaster as in production.
 
     Its bundle directory is ``tmp_path / "static"``, empty until a test fills it, so no route answer depends
     on whether the frontend has been built in the checkout.
@@ -132,6 +137,8 @@ def shell_application(tmp_path: Path, inventory: AppInventory, broadcaster: WebS
         broadcaster=broadcaster,
         shell_state_directory=tmp_path / "state",
         inventory=inventory,
+        is_preview=is_preview,
+        repo_root=tmp_path / "repo",
         static_directory=tmp_path / "static",
     )
     return create_application(state)
@@ -228,3 +235,88 @@ def desktop_with_windows(*windows: Window) -> Desktop:
         shortcuts=(),
         windows=windows,
     )
+
+
+# The update notice
+
+# Where the stub update-self script records each call it took.
+STUB_UPDATE_SELF_CALLS_REL: Final[str] = "data/.state/update-apply/stub-calls.jsonl"
+
+# A stand-in for ``update_self.py`` that records its argv, working directory, and session id, closes
+# the record on ``confirm-last`` and writes the first progress on ``rollback-last`` the way the real
+# script does (then holds for a moment, as a real rollback would), and exits as told. Written under
+# the test's workspace root so the shell finds it where it finds the real one.
+_STUB_UPDATE_SELF_SCRIPT = """\
+import json
+import os
+import sys
+import threading
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[4]
+record = root / "data/.state/update-apply/last-good.json"
+with (root / "{calls_rel}").open("a") as calls:
+    calls.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "sid": os.getsid(0)}}) + "\\n")
+if {exit_code} != 0:
+    sys.exit("the stub was told to fail")
+if sys.argv[1:] == ["confirm-last"]:
+    record.unlink(missing_ok=True)
+if sys.argv[1:] == ["rollback-last"]:
+    current = json.loads(record.read_text())
+    current["progress"] = "Reverting the update"
+    record.write_text(json.dumps(current))
+    threading.Event().wait({rollback_hold_seconds})
+sys.exit(0)
+"""
+
+
+def write_rollback_point(
+    repo_root: Path,
+    *,
+    apps: Sequence[str] = ("terminal",),
+    programs: Sequence[str] | None = None,
+    needs_system_services_restart: bool = False,
+    progress: str | None = None,
+    outcome: str | None = None,
+) -> Path:
+    """The record an apply run with ``--keep-rollback-point`` leaves, in the apply's own shape (its extra
+    fields included), under ``repo_root``."""
+    path = repo_root / LAST_GOOD_RECORD_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
+                "rollback_to": "def5678def5678def5678def5678def5678def56",
+                "applied_at": 1_780_000_000.0,
+                "driven_by": "mngr/update-widgets",
+                "snapshots": [
+                    {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
+                ],
+                "programs": list(programs) if programs is not None else list(apps),
+                "apps": list(apps),
+                "needs_system_services_restart": needs_system_services_restart,
+                "progress": progress,
+                "outcome": outcome,
+            }
+        )
+    )
+    return path
+
+
+def write_stub_update_self_script(repo_root: Path, exit_code: int = 0, rollback_hold_seconds: float = 0.0) -> Path:
+    path = repo_root / UPDATE_SELF_SCRIPT_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _STUB_UPDATE_SELF_SCRIPT.format(
+            calls_rel=STUB_UPDATE_SELF_CALLS_REL, exit_code=exit_code, rollback_hold_seconds=rollback_hold_seconds
+        )
+    )
+    return path
+
+
+def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
+    path = repo_root / STUB_UPDATE_SELF_CALLS_REL
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line]

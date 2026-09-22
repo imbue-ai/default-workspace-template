@@ -76,3 +76,15 @@ class WallpaperNotFoundError(ShellError, LookupError):
 
 class GridSearchExhaustedError(ShellError, AssertionError):
     """The unbounded nearest-free-cell search ran out of rings without finding a free cell, which cannot happen."""
+
+
+class UpdateNoticeRecordError(ShellError, ValueError):
+    """The kept rollback point's file does not hold a record."""
+
+
+class UpdateNoticeRefusedError(ShellError, ValueError):
+    """The update notice is not in a state the verb applies to: nothing kept, a rollback already running, or one done."""
+
+
+class UpdateNoticeCommandError(ShellError, RuntimeError):
+    """The update-self script behind a notice verb could not be run, or failed."""
