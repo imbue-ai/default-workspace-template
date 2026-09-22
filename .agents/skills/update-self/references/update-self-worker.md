@@ -141,21 +141,36 @@ whether the creation carries the workspace's own content, and whether the
 update reached it.
 
 ```bash
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+MERGE=$(git log --format=%H --grep='^update-self: merge upstream template' -1)
+[ -n "$MERGE" ] || { echo "no update-self merge commit on this branch" >&2; exit 1; }
+rm -rf data/.tasks/update-self/scopes
 mkdir -p data/.tasks/update-self/scopes
 for manifest in system/apps/*/app.toml; do
     package=$(basename "$(dirname "$manifest")")
-    uv run app-manifest footprint "$manifest" --diff-base "$BASE" --diff-ref HEAD^1 \
+    uv run --frozen app-manifest footprint "$manifest" \
+        --diff-base "$TARGET_REF" --diff-ref "$MERGE^1" \
         --out "data/.tasks/update-self/scopes/$package.local.json" || exit 1
-    uv run app-manifest footprint "$manifest" --diff-base HEAD^1 \
+    uv run --frozen app-manifest footprint "$manifest" \
+        --diff-base "$MERGE^1" --diff-ref "$MERGE" \
         --out "data/.tasks/update-self/scopes/$package.update.json" || exit 1
 done
 ```
+
+The ranges are pinned to the merge commit rather than to `HEAD`, so a fix you
+commit on top of it, and any rerun, reads the same two sides: the local range
+runs from the fork point with the target to the pre-merge local commit (the
+three-dot diff finds that fork point from `$TARGET_REF`), and the update range
+from that commit to the merge. `--frozen` keeps the command from re-locking
+the merged tree before 4b's environment gate has checked it.
 
 `<package>.local.json`'s `diff.inside_footprint` is the creation's own
 content: every file of its footprint in which the workspace differs from the
 base (all of them for an app built here, the modified ones for a built-in app
 the user changed). Empty means the creation is upstream's exactly as shipped,
-and nothing below concerns it. `<package>.update.json`'s
+so the footprint evidence names no customization of it to carry -- it does
+not exempt the app from any gate the rules below apply to the merged set.
+`<package>.update.json`'s
 `diff.inside_footprint` is what the update changed inside that same
 footprint. A creation with both non-empty is one **the update touches**: 4a
 names it and its `references` as consumers, and 4b's customization survival
@@ -164,11 +179,20 @@ local content that the update did not reach by footprint is still a consumer
 for 4a to find by grep and interface coupling (its steps 2 and 3): the
 footprint is what the app owns, not what it depends on.
 
+Two limits of this evidence. The footprint is read from the merged tree, so
+the local side is measured against the merged manifest: a local edit under a
+path the update removed from the manifest (a dropped `[[references]]` entry, a
+program moved out of the app) falls outside it, and the manifest's own diff in
+`.update.json` is the sign to look. And the update range is what the merge
+changed against the local side, so a conflict you resolved wholly to the local
+side shows no update change there; the discarded-side accounting (Step 2)
+carries that case.
+
 A `footprint` command that fails names a manifest the merged tree can no
 longer satisfy -- most often a `[[references]]` path the update deleted or
 moved. That is merge work: fix the reference in your branch (the root suite's
-`system/test_app_manifests.py` holds every manifest to it) and rerun; never
-drop the creation from the loop. An app directory with no `app.toml` has no
+`system/test_app_manifests.py` holds every manifest to it) and rerun the
+block; never drop the creation from the loop. An app directory with no `app.toml` has no
 footprint the library can compute, so its directory is its footprint, read by
 hand as before; a workspace-added skill has no footprint the update can reach
 at all and stays a consumer for step 2 to find.
