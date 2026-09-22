@@ -375,6 +375,13 @@ def test_forget_clears_a_dead_backups_lock_and_applies_retention(
     exists, stale or not; a new backup (non-exclusive) never trips over it, so
     nothing but forget's own retry clears it.
     """
+    # Without the flag (restic < 0.17) the backup exits at once and the FIFO read
+    # in _leave_a_dead_backups_lock would block until the timeout.
+    backup_help = subprocess.run(
+        ["restic", "backup", "--help"], capture_output=True, text=True, check=False
+    )
+    if "--stdin-from-command" not in backup_help.stdout:
+        pytest.skip("restic backup has no --stdin-from-command (needs restic >= 0.17)")
     repo_dir = tmp_path / "repo"
     source_dir = tmp_path / "source"
     source_dir.mkdir()
