@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from inline_snapshot import snapshot
+from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.dispatch import (
@@ -11,10 +12,12 @@ from terminal_app.dispatch import (
     build_ttyd_argv,
     install_dispatch_scripts,
     install_ttyd_web_client,
+    load_ttyd_web_client,
     render_agent_script,
     render_dispatch_snippet,
     render_session_script,
     render_workdir_script,
+    warn_if_oom_tag_script_is_missing,
 )
 from terminal_app.errors import UnsafeDispatchPathError
 
@@ -69,57 +72,31 @@ cd "$1" 2>/dev/null && exec bash
 
 
 def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> None:
-    assert render_session_script(_COMMANDS_DIR / "clients", _SESSIONS_DIR, _OOM_TAG_SCRIPT) == snapshot("""\
+    assert render_session_script(_SESSIONS_DIR, _OOM_TAG_SCRIPT) == snapshot("""\
 #!/bin/bash
 # Attach to (or create) a named, in-memory tmux terminal session.
 #
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
-#   $1 = session name (e.g. "terminal-1"), the terminal's key
-#   $2 = tab id       (per-tab id used to map this ttyd client's pty back to
-#                      the dockview tab for live tab-title tracking; may be "")
-#   $3 = working directory to anchor a newly-created session in (may be "")
+#   $1 = session name (e.g. "terminal-1"), the terminal's name
+#   $2 = working directory to anchor a newly-created session in (may be "")
 #
 # The terminal app records the tmux session id and creation time of every
-# terminal it created under the sessions directory, named by key; attaching by
-# that id keeps the tab on its session even after someone renamed the session
-# inside tmux. When the id file is missing or lacks the id or the creation
-# time, or the session under that id is gone or was created at another time (a
-# container restart cleared the tmux server, whose successor hands the same ids
-# out again), `tmux new-session -A` attaches when a session of that name exists
-# and creates it otherwise, so the tab comes back as a fresh shell. A created
-# session runs the login shell through the memory-shedding tag, as the app's
-# own creates do.
+# terminal it created under the sessions directory, named by terminal; attaching
+# by that id keeps the window on its session even after someone renamed the
+# session inside tmux. When the id file is missing or lacks the id or the
+# creation time, or the session under that id is gone or was created at another
+# time (a container restart cleared the tmux server, whose successor hands the
+# same ids out again), `tmux new-session -A` attaches when a session of that
+# name exists and creates it otherwise, so the window comes back as a fresh
+# shell. A created session runs the login shell through the memory-shedding
+# tag, as the app's own creates do.
 set -euo pipefail
 SESSION_NAME="${1:-}"
-TAB_ID="${2:-}"
-WORKDIR="${3:-}"
+WORKDIR="${2:-}"
 unset TMUX
 
 if [ -z "$SESSION_NAME" ]; then
     exec bash
-fi
-
-# Record this connection's pty under the tab id so the tmux
-# client-session-changed / session-renamed hooks can map a live client back
-# to the dockview tab that owns it (best-effort; never fatal).
-if [ -n "$TAB_ID" ]; then
-    CLIENTS_DIR="/home/user/workspace/data/.state/terminal/commands/clients"
-    mkdir -p "$CLIENTS_DIR"
-    MY_TTY="$(tty 2>/dev/null || true)"
-    if [ -n "$MY_TTY" ]; then
-        # This pty now authoritatively belongs to this tab id. Drop any
-        # stale mapping that still points at the same pty: Linux reuses a pty
-        # number after a client disconnects, so a since-closed tab's leftover
-        # file could otherwise shadow this one and misroute title updates to a
-        # closed tab (the resolver returns the first matching entry).
-        for existing in "$CLIENTS_DIR"/*; do
-            [ -f "$existing" ] || continue
-            if [ "$(cat "$existing" 2>/dev/null)" = "$MY_TTY" ]; then
-                rm -f "$existing"
-            fi
-        done
-        printf '%s\\n' "$MY_TTY" > "$CLIENTS_DIR/$TAB_ID" 2>/dev/null || true
-    fi
 fi
 
 # The id file holds the session id and its creation time: tmux reuses ids across servers, so
@@ -162,6 +139,24 @@ def test_session_command_tags_the_login_shell_into_the_terminal_session_band() -
     ]
 
 
+def test_a_missing_tag_wrapper_is_warned_about_and_a_present_one_is_not(
+    tmp_path: Path,
+) -> None:
+    present = tmp_path / "oom_tag_service.py"
+    present.write_text("")
+    captured: list[str] = []
+    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        warn_if_oom_tag_script_is_missing(present)
+        assert captured == []
+        warn_if_oom_tag_script_is_missing(tmp_path / "absent.py")
+    finally:
+        logger.remove(sink_id)
+
+    assert len(captured) == 1
+    assert "absent.py" in captured[0] and "will not start a shell" in captured[0]
+
+
 def test_install_writes_executable_scripts_and_keeps_an_existing_workdir_script(
     terminal_paths: TerminalPaths,
 ) -> None:
@@ -176,45 +171,52 @@ def test_install_writes_executable_scripts_and_keeps_an_existing_workdir_script(
     scripts = {path.name: path for path in terminal_paths.commands_dir.iterdir()}
     assert sorted(scripts) == ["agent.sh", "session.sh", "workdir.sh"]
     assert scripts["agent.sh"].read_text() == render_agent_script()
-    assert scripts["session.sh"].read_text() == render_session_script(
-        terminal_paths.clients_dir, terminal_paths.sessions_dir, _OOM_TAG_SCRIPT
-    )
+    assert scripts["session.sh"].read_text() == render_session_script(terminal_paths.sessions_dir, _OOM_TAG_SCRIPT)
     assert scripts["workdir.sh"].read_text() == "#!/bin/bash\n# customised\n"
     for script in scripts.values():
         assert script.stat().st_mode & stat.S_IXUSR
 
 
-def test_install_ttyd_web_client_decompresses_the_vendored_client(
-    tmp_path: Path,
-) -> None:
-    archive = tmp_path / "ttyd_index.html.gz"
-    archive.write_bytes(gzip.compress(b"<html>patched client</html>"))
+def test_install_ttyd_web_client_decompresses_the_patched_client(tmp_path: Path) -> None:
     destination = tmp_path / "commands" / "index.html"
     destination.parent.mkdir()
 
-    assert install_ttyd_web_client(archive, destination) is True
+    assert install_ttyd_web_client(gzip.compress(b"<html>patched client</html>"), destination) is True
     assert destination.read_bytes() == b"<html>patched client</html>"
 
 
-def test_install_ttyd_web_client_falls_back_when_the_asset_is_missing_or_broken(
-    tmp_path: Path,
-) -> None:
+def test_install_ttyd_web_client_falls_back_when_the_archive_will_not_decompress(tmp_path: Path) -> None:
     destination = tmp_path / "index.html"
     good = gzip.compress(b"<html>patched client</html>" * 100)
     broken_archives = {
-        "not-gzip.gz": b"not gzip at all",
-        "truncated.gz": good[: len(good) // 2],
-        "corrupt.gz": good[:20] + b"xx" + good[22:],
+        "not-gzip": b"not gzip at all",
+        "truncated": good[: len(good) // 2],
+        "corrupt": good[:20] + b"xx" + good[22:],
     }
 
-    assert install_ttyd_web_client(tmp_path / "absent.gz", destination) is False
-    assert not destination.exists()
-
     for name, contents in broken_archives.items():
-        broken = tmp_path / name
-        broken.write_bytes(contents)
-        assert install_ttyd_web_client(broken, destination) is False, name
+        assert install_ttyd_web_client(contents, destination) is False, name
         assert not destination.exists(), name
+
+
+def test_load_ttyd_web_client_reads_the_packaged_client_when_no_override_is_given() -> None:
+    # The terminal serves the OSC 52-capable client the imbue-mngr-ttyd package ships; a
+    # decompressible archive is what install_ttyd_web_client is then handed.
+    compressed_client = load_ttyd_web_client(None)
+
+    assert compressed_client is not None
+    assert gzip.decompress(compressed_client).startswith(b"<!DOCTYPE html>")
+
+
+def test_load_ttyd_web_client_reports_an_override_that_is_not_there(tmp_path: Path) -> None:
+    assert load_ttyd_web_client(tmp_path / "absent.gz") is None
+
+
+def test_load_ttyd_web_client_prefers_an_override_that_is_there(tmp_path: Path) -> None:
+    override = tmp_path / "ttyd_index.html.gz"
+    override.write_bytes(gzip.compress(b"<html>an operator's client</html>"))
+
+    assert load_ttyd_web_client(override) == override.read_bytes()
 
 
 def test_ttyd_argv_carries_the_port_the_client_and_the_dispatch() -> None:

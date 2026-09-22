@@ -1,1 +1,0 @@
-Added the download-attribution blueprint plan (`blueprint/download-attribution/plan-download-attribution.md`): the design for linking marketing campaigns to minds account creations and app downloads via a first-party `.imbue.com` attribution cookie, signup-time capture in the remote service connector, and a `/download` redirect route that records the funnel denominator.

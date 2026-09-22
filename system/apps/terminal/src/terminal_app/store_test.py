@@ -1,8 +1,8 @@
 import json
 
 import pytest
-from app_instances.errors import InstanceStoreError
 
+from terminal_app.errors import TerminalStoreError
 from terminal_app.primitives import TmuxSessionName
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import make_terminal_record
@@ -27,8 +27,8 @@ def test_store_starts_empty_and_keeps_records_in_creation_order(
     assert json.loads(session_store.store_path.read_text()) == {
         "version": 1,
         "sessions": [
-            {"name": "terminal-1", "title": None, "workdir": None, "session_id": None, "session_created": None, "is_stopped": False},
-            {"name": "terminal-2", "title": None, "workdir": "/home/user", "session_id": None, "session_created": None, "is_stopped": False},
+            {"name": "terminal-1", "title": None, "workdir": None, "session_id": None, "session_created": None, "is_stopped": False, "is_window_seen": False},
+            {"name": "terminal-2", "title": None, "workdir": "/home/user", "session_id": None, "session_created": None, "is_stopped": False, "is_window_seen": False},
         ],
     }
 
@@ -84,5 +84,36 @@ def test_store_refuses_a_document_of_another_version(
     session_store.store_path.parent.mkdir(parents=True)
     session_store.store_path.write_text('{"version": 2, "sessions": []}')
 
-    with pytest.raises(InstanceStoreError, match="is version 2"):
+    with pytest.raises(TerminalStoreError, match="is version 2"):
         session_store.list_records()
+
+
+def test_store_refuses_a_file_that_is_not_json(
+    session_store: JsonTerminalSessionStore,
+) -> None:
+    session_store.store_path.parent.mkdir(parents=True)
+    session_store.store_path.write_text("{not json")
+
+    with pytest.raises(TerminalStoreError, match="not valid JSON"):
+        session_store.list_records()
+
+
+def test_store_refuses_a_document_that_does_not_fit(
+    session_store: JsonTerminalSessionStore,
+) -> None:
+    session_store.store_path.parent.mkdir(parents=True)
+    session_store.store_path.write_text('{"version": 1, "sessions": [{"title": "no name"}]}')
+
+    with pytest.raises(TerminalStoreError, match="is malformed"):
+        session_store.list_records()
+
+
+def test_save_record_writes_the_store_atomically_and_leaves_no_temp_file(
+    session_store: JsonTerminalSessionStore,
+) -> None:
+    record = make_terminal_record(name="terminal-1", title="Build", workdir="/srv")
+
+    session_store.save_record(record)
+
+    assert session_store.list_records() == [record]
+    assert [path.name for path in session_store.store_path.parent.iterdir()] == [session_store.store_path.name]

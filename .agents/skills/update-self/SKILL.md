@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Mind app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the release the running Mind app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -26,9 +26,9 @@ still wait for the user: an `--override` past the version ceiling (asked at
 launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
-The default target is the **latest stable `minds-v*` tag**, never newer than
-the Mind app driving this workspace (the template ships the code that app
-talks to); see `references/version-ceiling.md`. Once the target is resolved,
+The default target is **the release the Mind app driving this workspace was
+built against**, and only that one: the template ships the code that app talks
+to, and no other pairing was verified. See `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, so fixes
@@ -118,19 +118,24 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 `--local-tags` reads the tags the fetch just landed. To honor a user override,
 append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
-`kind`, `ceiling`, `exceeds_ceiling`, `latest_available` and
-`held_back_by_ceiling`; `main` resolves to `upstream/main`. Tell the user which
-version you are updating to.
+`kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
+Tell the user which version you are updating to, and never mention a release
+above `ceiling` that they did not ask for by name: the Mind app announces its
+own updates.
 
-**If the command exits non-zero, stop -- nothing is wrong with the workspace.**
-Its single `error:` line says why no target could be chosen (the Mind app
-could not be reached or is too old to report its version; every release is
-newer than the app; the workspace is already on the release it may take).
-Relay that line in plain terms and offer the next step; never resolve a ref by
-hand. Record the verdict first: `run-status verdict ALREADY_CURRENT` when the
-error says the workspace is current, else `run-status verdict REFUSED --detail
-"<the error line, in plain terms>"` (with `--in-place-compatible-ref` when the
-error names a release the workspace could still take).
+**If the command exits non-zero, stop.** Its single `error:` line says why no
+target could be chosen. Relay it in plain terms, offer the next step, and
+record the verdict it calls for -- never resolve a ref by hand:
+
+- **Already on the release it may take.** Nothing is wrong with the workspace:
+  `run-status verdict ALREADY_CURRENT`.
+- **A fault**: the app could not be reached, is too old to report its version,
+  named a release the upstream does not carry, or named none at all. Say so
+  plainly and record `run-status verdict STUCK --detail "<the error line, in
+  plain terms>"`. Do **not** pick another release; only a version the user
+  names becomes an `--override`, as an operator testing a dev build would.
+- **Anything else**: `run-status verdict REFUSED --detail "<the error line, in
+  plain terms>"`.
 
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it
@@ -183,16 +188,22 @@ cat /tmp/update-self-recheck.json
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
-`exceeds_ceiling` is `true` here and the user has not already confirmed an
-over-ceiling override, take that confirmation now as in Step 2, offering the
-capped ref (re-run without `--override` to learn it). If they take the capped
-ref, set `$REF` to it and **re-run §2a** before dispatching (the staged copy
-must match the target). If they decline every option, record `run-status
-verdict REFUSED --detail "..."` as in Step 2.
+`exceeds_ceiling` is `true` here, it matters who chose `$REF`.
+
+**Step 2 chose it, without `--override`:** the user never asked for it. Do not
+name it. Set `$REF` to the capped ref (re-run without `--override` to learn it;
+an error there is handled as in Step 2), tell the user that version is the one
+you are updating to -- an initiator too old to know the ceiling has already
+announced the other -- and **re-run §2a** before dispatching, so the staged copy
+matches the target.
+
+**The user named it:** take the confirmation now as in Step 2, offering the
+capped ref; if they take it, set `$REF` to it and re-run §2a the same way. If
+they decline every option, record `run-status verdict REFUSED --detail "..."`.
 
 ### 3b. Launch
 
-Surface your own chat tab first (the Mind app sends the user into this
+Surface your own chat window first (the Mind app sends the user into this
 workspace when it starts an update, and this conversation is where they should
 land). The command detaches a helper that retries until a client is there; it
 is best-effort, and a failure is not a reason to stop:
@@ -397,14 +408,17 @@ container build/launch parameter a running container cannot adopt: say it
 stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
-**When the update touches `system/apps/system_interface/`,
-`system/apps/chat/frontend/`, `system/libs/workspace_ui/`, or
+**When the update touches a critical app (`system/apps/system_interface/`,
+`system/apps/chat/`, `system/apps/terminal/`), `system/libs/workspace_ui/`, or
 `system/package.json` / `system/package-lock.json` at all** (the trees the
-shell's bundle is stamped over, the same set `update-system-interface`'s
-freshness check names), also take the `editing service system_interface` lease
-through the apply, as `update-system-interface` does: check `tk ready` for a foreign one (surface
-instead of proceeding), then `tk create "editing service system_interface" -t
+critical bundles are built from, the same set the careful flow's freshness
+check names), also take the `editing critical apps` lease through the apply, as
+`update-app/references/critical-app.md` does: check `tk ready` for a foreign one
+(surface instead of proceeding), then `tk create "editing critical apps" -t
 chore` and `tk start` it, each as its own command. Release it afterwards.
+
+The apply run from here keeps its own run record and raises no "recently
+updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
 
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
@@ -427,13 +441,11 @@ affected environments, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
 mngr and the harness plugins), installs or builds the frontend
-bundle, runs the workspace layout migration
-(`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
-there is reported and left to the next boot's run), restarts the services
+bundle, restarts the services
 agent (every apply; the fresh supervisord it brings up reads the merged program
 table, so a program the update adds starts on its own), probes the shell's health
-route and the instances API of every critical app that serves one (the chat, the
-terminal; each at the URL its manifest or its fresh registry row names), probes the
+route and the health route of every critical app the user can open (the chat, the
+terminal; each at the URL its fresh registry row names), probes the
 live UI, refreshes every open view, writes the
 `docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
 reverting the entire merge and restoring the snapshots on any other failure.
@@ -490,17 +502,18 @@ exists, offered in the same breath).
 
 ## 6. Teardown
 
-If a stray system-interface preview is registered (an older pass may have left
-one; `update-system-interface` refuses its next pass while one is):
+If a stray preview of a critical app is registered (an older pass may have left
+one; the careful flow refuses its next pass on that app while one is), tear it
+down with the preview script and close its window:
 
 ```bash
-python3 system/scripts/layout.py close si-preview
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
+python3 system/scripts/layout.py close <name>-preview
+uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 ```
 
-The close goes first: an op addressed to an app the registry no longer holds is refused,
-so once `unpreview` has deregistered the row there is nothing left to close (the tab is
-pruned on its own when the app leaves the inventory).
+The close goes first: nothing takes a window away when its app leaves the registry, so
+once `down` has deregistered the row the preview's window would stay on the desktop
+pointing at a page nothing serves.
 
 **The rest is only for a successful apply (exit 0).** After a rollback the
 worker's branch, worktree and report are the retry path: keep them until the

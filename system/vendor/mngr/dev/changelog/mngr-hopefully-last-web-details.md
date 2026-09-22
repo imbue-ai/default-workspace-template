@@ -1,3 +1,0 @@
-Recorded the phase-6 (grants single-writer) revision in `blueprint/minds-web-client/plan-minds-web-client.md`: mngr client keygen flipped to Ed25519, compare-and-swap added to owner-exec's grants endpoints (in default-workspace-template), the connector's grants seed made seed-if-absent, and the desktop's migration onto the grants endpoint deferred.
-
-New `just provision-dev-relay` recipe (plus `scripts/provision_dev_relay_config.py`): stands up the activated dev/ci env's own share relay in one shot -- provisions the OVH instance, installs frps pointed at that env's connector, and upserts the region DNS records, pulling the relay SSH key and OVH/Cloudflare credentials from the tier's Vault entries.
