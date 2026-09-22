@@ -549,10 +549,10 @@ _NON_EXCLUSIVE_LOCK_STDERR = (
 )
 
 
-def _retention_state(tmp_path: Path) -> _LoopState:
+def _state_recording_events(tmp_path: Path) -> _LoopState:
     state = _LoopState(_direct_capabilities())
     state.events_dir = tmp_path / "events"
-    state.current_tick_id = "tick-retention"
+    state.current_tick_id = "tick-under-test"
     return state
 
 
@@ -611,7 +611,7 @@ def test_run_forget_unlock_and_retry(
     a successful unlock. The recorded exit code is the last forget's."""
     forget = _ScriptedRestic(forget_results)
     unlock = _ScriptedRestic(unlock_results)
-    state = _retention_state(tmp_path)
+    state = _state_recording_events(tmp_path)
 
     _run_forget(
         state=state,
@@ -635,7 +635,7 @@ def test_prune_unlocks_and_retries_on_a_stale_lock_and_records_the_prune(
         [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
     )
     unlock = _ScriptedRestic([_completed(0)])
-    state = _retention_state(tmp_path)
+    state = _state_recording_events(tmp_path)
 
     _maybe_run_prune(
         state=state,
@@ -660,7 +660,7 @@ def test_age_out_restore_markers_unlocks_and_retries_on_a_stale_lock(
         [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
     )
     unlock = _ScriptedRestic([_completed(0)])
-    state = _age_out_state(tmp_path)
+    state = _state_recording_events(tmp_path)
 
     _age_out_restore_markers(
         state=state,
@@ -727,13 +727,6 @@ def _age_out_config(max_age_days: float) -> BackupConfig:
     )
 
 
-def _age_out_state(tmp_path: Path) -> _LoopState:
-    state = _LoopState(_direct_capabilities())
-    state.events_dir = tmp_path / "events"
-    state.current_tick_id = "tick-age-out"
-    return state
-
-
 def test_parse_restic_timestamp_handles_z_and_nanoseconds() -> None:
     assert _parse_restic_timestamp("2026-07-24T18:47:38Z") == datetime(
         2026, 7, 24, 18, 47, 38, tzinfo=timezone.utc
@@ -785,7 +778,7 @@ def test_age_out_restore_markers_forgets_old_and_keeps_recent(tmp_path: Path) ->
         forget_calls.append(ids)
         return _completed(0)
 
-    state = _age_out_state(tmp_path)
+    state = _state_recording_events(tmp_path)
     _age_out_restore_markers(
         state=state,
         config=_age_out_config(7.0),
@@ -823,7 +816,7 @@ def test_age_out_restore_markers_noop_when_all_recent(tmp_path: Path) -> None:
         forget_calls.append(ids)
         return _completed(0)
 
-    state = _age_out_state(tmp_path)
+    state = _state_recording_events(tmp_path)
     _age_out_restore_markers(
         state=state,
         config=_age_out_config(7.0),
@@ -853,7 +846,7 @@ def test_age_out_restore_markers_disabled_when_max_age_zero(tmp_path: Path) -> N
         return _completed(0)
 
     _age_out_restore_markers(
-        state=_age_out_state(tmp_path),
+        state=_state_recording_events(tmp_path),
         config=_age_out_config(0.0),
         env_overrides={},
         list_fn=_list_fn,
@@ -880,7 +873,7 @@ def test_age_out_restore_markers_tolerates_list_failure(tmp_path: Path) -> None:
         return _completed(0)
 
     _age_out_restore_markers(
-        state=_age_out_state(tmp_path),
+        state=_state_recording_events(tmp_path),
         config=_age_out_config(7.0),
         env_overrides={},
         list_fn=_list_fn,
