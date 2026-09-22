@@ -67,8 +67,8 @@ the worker's runtime dir is `data/.tasks/harden/update-$SLUG/`.
 
 **Kick off provisioning in the background, then start exploring.** The one real
 up-front cost is a built worktree; hide it behind the reading you were going to
-do anyway. Both frontends build at the npm workspace root, so a change to one
-bundle or to the shared library gets both:
+do anyway. Every frontend builds at the npm workspace root, so a change to one
+bundle or to the shared library rebuilds them all:
 
 ```bash
 git worktree add -b "mngr/update-$SLUG" "data/.tasks/critical-live/update-$SLUG" HEAD
