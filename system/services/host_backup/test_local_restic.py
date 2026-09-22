@@ -358,10 +358,12 @@ def _leave_a_dead_backups_lock(tmp_path: Path, env: dict[str, str]) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    assert locked.read_text().strip() == "locked"
-    backup.kill()
-    # Reaped, so restic sees the lock's PID as gone rather than a zombie.
-    backup.wait()
+    try:
+        assert locked.read_text().strip() == "locked"
+    finally:
+        backup.kill()
+        # Reaped, so restic sees the lock's PID as gone rather than a zombie.
+        backup.wait()
     # Opening and closing the write end gives the orphaned `cat` its EOF.
     hold.write_text("")
 
