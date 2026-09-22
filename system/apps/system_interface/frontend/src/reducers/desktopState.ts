@@ -35,6 +35,7 @@ import {
   withWindowRaised,
   withWindowRestored,
   withWindowState,
+  windowsOfAppFrontToBack,
   withoutPlacement,
 } from "../geometry/stack";
 import type { RenderModes } from "../theme/metrics";
@@ -358,7 +359,7 @@ export function windowShowingChat(
 ): { desktop: Desktop; window: WindowRecord } | null {
   const active = activeDesktop(state);
   if (active !== null) {
-    const window = frontToBackWindowsOf(state, active, app).find((candidate) =>
+    const window = windowsOfAppFrontToBack(state.layout, active, app).find((candidate) =>
       isPathShowingChat(effectiveWindow(state, candidate).path, chatId),
     );
     if (window !== undefined) return { desktop: active, window };
@@ -379,19 +380,10 @@ export function chatRootWindowOf(state: DesktopState, app: string): WindowRecord
   const desktop = activeDesktop(state);
   if (desktop === null) return null;
   const placements = activePlacements(state);
-  const onScreen = frontToBackWindowsOf(state, desktop, app).find(
+  const onScreen = windowsOfAppFrontToBack(state.layout, desktop, app).find(
     (window) => !isWindowMinimized(placements, window.id) && isChatRootPath(effectiveWindow(state, window).path),
   );
   return onScreen ?? pinnedWindowOf(state, app);
-}
-
-/** The active desktop's windows of ``app``, frontmost first. */
-function frontToBackWindowsOf(state: DesktopState, desktop: Desktop, app: string): WindowRecord[] {
-  const windowsById = new Map(desktop.windows.map((window) => [window.id, window]));
-  return activePlacements(state)
-    .map((placement) => windowsById.get(placement.window_id))
-    .filter((window): window is WindowRecord => window !== undefined && window.app === app)
-    .reverse();
 }
 
 /** Every window of the active desktop placed, back to front. */
