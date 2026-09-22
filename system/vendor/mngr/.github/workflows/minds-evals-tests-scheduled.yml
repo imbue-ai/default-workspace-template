@@ -1,0 +1,83 @@
+name: minds evals tests (repeated)
+
+# The apps/minds_evals pytest suite, run several times over and reported as one
+# result. The project is a standalone uv project that offload never sees, so its
+# tests get no retries and a flaky one looks the same as a broken one -- on
+# whichever PR happens to draw it. Repeating the whole suite nightly is the
+# substitute: `just test-minds-evals-repeat` merges the passes into an
+# offload-shaped junit.xml, so a test that failed in some passes and passed in
+# others is reported as flaky-recovered (a neutral check), and the daily flake
+# sweep picks it up from the check-run like any offload suite's.
+#
+# Kept apart from minds-evals-scheduled.yml on purpose: that workflow boots paid
+# Modal trials, and this one costs a free runner about half an hour.
+
+on:
+  workflow_dispatch:
+    inputs:
+      passes:
+        description: 'How many times to run the suite undisturbed.'
+        required: false
+        default: '5'
+      stressed_passes:
+        description: 'How many further times to run it with every core kept busy.'
+        required: false
+        default: '1'
+  # An hour ahead of flake-sweep-scheduled.yml (13:00 UTC), so that the sweep reads the
+  # night's result rather than the previous night's. Schedules only fire from the default branch.
+  schedule:
+    - cron: '0 12 * * *'
+  # A change to the machinery itself runs it on the PR that makes the change, since neither
+  # a dispatch nor the schedule can reach a workflow that is not on the default branch yet.
+  # The justfile holds the recipe and is left out on purpose: it changes on many PRs that have
+  # nothing to do with this, and each run holds a runner for about half an hour.
+  pull_request:
+    paths:
+      - '.github/workflows/minds-evals-tests-scheduled.yml'
+      - '.github/actions/setup-minds-evals-tests/**'
+      - 'scripts/junit_merge_passes.py'
+
+# `checks: write` is what report-flaky-aware-tests posts its check-run with.
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: minds-evals-tests-repeated-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up the minds_evals test suite
+        uses: ./.github/actions/setup-minds-evals-tests
+
+      - name: Run the suite repeatedly
+        id: tests
+        env:
+          PASSES: ${{ inputs.passes || '5' }}
+          STRESSED_PASSES: ${{ inputs.stressed_passes || '1' }}
+        run: just test-minds-evals-repeat "$PASSES" "$STRESSED_PASSES"
+
+      # The name is one of flake_reconcile.py's _DEFAULT_SUITES, which is how the flake sweep
+      # finds this result; renaming it here without renaming it there drops the suite from the sweep.
+      - name: Report results to GitHub checks
+        if: always()
+        uses: ./.github/actions/report-flaky-aware-tests
+        with:
+          check-name: Minds Evals Tests (repeated)
+          junit-path: test-results/junit.xml
+          tests-outcome: ${{ steps.tests.outcome }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload every pass's junit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: minds-evals-repeated-passes
+          path: test-results/
+          if-no-files-found: warn

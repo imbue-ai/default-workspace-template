@@ -13,11 +13,19 @@ Provisioning and utility scripts:
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi
   spawns their `*_check.py` checkers from `.pi/extensions/`. See
   `tool-call-policies.md` for what each one enforces.
-- Claude Code features with no counterpart on the other harnesses
-  (`claude_status_line.sh`, `claude_update_plugin.sh`), wired in
-  `.claude/settings.json`.
-- Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
-  layout ops), `message_chat.py` (send a message to a chat by its id through
+- Plugin provisioning: `claude_update_plugin.sh` installs project-scoped Claude
+  plugins; `codex_update_plugin.sh` installs native code-guardian into each
+  mngr Codex agent's isolated home, after its config is written and before
+  launch. Requires code-guardian 0.6.0 or newer on the marketplace's `main`.
+  Re-provisioning restores plugin enablement after mngr rewrites the config.
+  Install failures warn without blocking launch; use `--strict` for verification.
+  The marketplace source and plugin enablement are declared in the Codex agent
+  type's `config_overrides`. Existing reviewer settings still control gates;
+  the worker's disabled review/CI/fetch gates are unchanged. mngr's existing
+  workspace-trust consent governs hook execution.
+- Claude status line: `claude_status_line.sh`, wired in `.claude/settings.json`.
+- Utility scripts: `forward_port.py` (port registry), `layout.py` (the
+  desktop's window and shortcut ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`; `--create` makes a new chat there
   the same way, with `mngr create` as the backoff), `seed_welcome_chat.py`
@@ -26,10 +34,7 @@ Provisioning and utility scripts:
   `welcome_count.py` (the number of times the welcome skill has run, which
   varies its greeting), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
-  interface changes), `migrate_claude_auth.py` (one-time auth migration),
-  `migrate_workspace_layouts.py` (one-time carry-over of the old per-agent
-  projects and layouts into the shell's state files; see
-  `docs/system/README.md`).
+  interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - The changelog gate: `check_changelog_entries.py`.
 

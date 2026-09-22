@@ -1,7 +1,9 @@
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 import pytest
 from click.testing import CliRunner
@@ -10,10 +12,15 @@ from click.testing import Result
 from imbue.imbue_common.primitives import PositiveInt
 from imbue.minds_evals import ci_matrix
 from imbue.minds_evals.cli import main
+from imbue.minds_evals.data_types import BehaviourDiagnosticCell
+from imbue.minds_evals.data_types import BehaviourHarnessEntry
 from imbue.minds_evals.data_types import CellDecision
 from imbue.minds_evals.data_types import CiMatrix
+from imbue.minds_evals.data_types import DiagnosticHarnessEntry
+from imbue.minds_evals.data_types import FixtureDiagnosticCell
 from imbue.minds_evals.data_types import FrozenPair
 from imbue.minds_evals.data_types import HarnessConfigEntry
+from imbue.minds_evals.data_types import HarnessName
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import NightlySuite
 from imbue.minds_evals.data_types import NightlySuiteArm
@@ -21,6 +28,7 @@ from imbue.minds_evals.data_types import OraclePass
 from imbue.minds_evals.data_types import PairDecision
 from imbue.minds_evals.data_types import ResolvedSuite
 from imbue.minds_evals.data_types import SuiteArm
+from imbue.minds_evals.data_types import harness_id
 from imbue.minds_evals.errors import CiMatrixError
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import read_scheduled_workflow_text
@@ -76,6 +84,38 @@ def _write_pairs(tmp_path: Path, *pairs: FrozenPair) -> Path:
     return path
 
 
+# The diagnostics every decision carries, so a test about the cells says only what it varies.
+_FIXTURE_HARNESS_CONFIG: Final[DiagnosticHarnessEntry] = DiagnosticHarnessEntry(
+    lane="anthropic", model="haiku", effort="medium"
+)
+_BEHAVIOUR_HARNESS_CONFIGS: Final[tuple[tuple[HarnessName, BehaviourHarnessEntry], ...]] = (
+    (HarnessName.CLAUDE, BehaviourHarnessEntry(lane="anthropic", model="haiku", effort="medium")),
+    (
+        HarnessName.CODEX,
+        BehaviourHarnessEntry(lane="openai", model="gpt-5.6-luna", effort="low", unsupported_pairs=("released",)),
+    ),
+)
+
+
+def _decide_matrix(
+    *,
+    pairs: Sequence[FrozenPair],
+    suites: Sequence[ResolvedSuite],
+    green_keys: frozenset[str],
+    is_forced: bool,
+    fixture_harness_config: DiagnosticHarnessEntry = _FIXTURE_HARNESS_CONFIG,
+    behaviour_harness_configs: Sequence[tuple[HarnessName, BehaviourHarnessEntry]] = _BEHAVIOUR_HARNESS_CONFIGS,
+) -> CiMatrix:
+    return ci_matrix.decide_matrix(
+        pairs=pairs,
+        suites=suites,
+        green_keys=green_keys,
+        is_forced=is_forced,
+        fixture_harness_config=fixture_harness_config,
+        behaviour_harness_configs=behaviour_harness_configs,
+    )
+
+
 def test_the_checked_in_harness_configs_file_loads_and_every_entry_is_runnable() -> None:
     """The file the scheduled run reads by default. Loading it validates every entry through the
     driver's own kwarg parsing, so this is also the check that nobody can commit a config the
@@ -102,6 +142,39 @@ def test_the_checked_in_files_nightly_set_is_exactly_these_configs() -> None:
         "haiku",
         "pi-gpt-5-mini",
     ]
+
+
+def test_the_checked_in_files_nightly_harnesses_are_claude_pi_coding_and_codex() -> None:
+    entries = ci_matrix.load_harness_configs(ci_matrix.CHECKED_IN_HARNESS_CONFIGS_PATH)
+
+    assert ci_matrix.select_nightly_harnesses(entries) == (
+        HarnessName.CLAUDE,
+        HarnessName.PI_CODING,
+        HarnessName.CODEX,
+    )
+
+
+def test_the_nightly_harnesses_name_each_harness_once_in_the_order_its_first_nightly_config_appears() -> None:
+    entries = (
+        HarnessConfigEntry(name="codex-a", is_nightly=True, lane="openai", model="gpt-5.5", effort="low"),
+        HarnessConfigEntry(name="pi-off", is_nightly=False, lane="openrouter"),
+        HarnessConfigEntry(name="claude-a", is_nightly=True, lane="anthropic"),
+        HarnessConfigEntry(name="codex-b", is_nightly=True, lane="openai", model="gpt-5.2", effort="medium"),
+        HarnessConfigEntry(name="pi-go", is_nightly=True, lane="opencode-go", key_env="OPENCODE_TOKEN"),
+    )
+
+    assert ci_matrix.select_nightly_harnesses(entries) == (
+        HarnessName.CODEX,
+        HarnessName.CLAUDE,
+        HarnessName.PI_CODING,
+    )
+
+
+def test_the_nightly_harnesses_of_a_file_with_no_nightly_config_are_refused() -> None:
+    entries = (HarnessConfigEntry(name="claude-a", is_nightly=False, lane="anthropic"),)
+
+    with pytest.raises(CiMatrixError, match="no harness config is marked nightly"):
+        ci_matrix.select_nightly_harnesses(entries)
 
 
 def test_the_checked_in_suite_file_runs_exactly_these_arms_on_exactly_these_configs() -> None:
@@ -217,6 +290,16 @@ def test_load_harness_configs_refuses_the_reserved_oracle_name(tmp_path: Path) -
     """A cell of that name would upload its job directory under the artifact name its own pair's
     oracle pass uses, and both uploads overwrite, so one would silently replace the other."""
     path = _write_configs(tmp_path, {"name": "oracle", "is_nightly": True})
+
+    with pytest.raises(CiMatrixError, match="reserved"):
+        ci_matrix.load_harness_configs(path)
+
+
+@pytest.mark.parametrize("name", ["diagnose", "diagnose-fixture", "diagnose-behaviour-codex"])
+def test_load_harness_configs_refuses_the_names_the_diagnose_jobs_upload_under(tmp_path: Path, name: str) -> None:
+    """A cell of one of those names would upload its summary under the artifact name of one of its
+    pair's diagnose jobs, and both uploads overwrite."""
+    path = _write_configs(tmp_path, {"name": name, "is_nightly": True})
 
     with pytest.raises(CiMatrixError, match="reserved"):
         ci_matrix.load_harness_configs(path)
@@ -892,7 +975,7 @@ def test_a_cell_whose_marker_is_green_is_skipped() -> None:
     pair = _resolved_pair()
     green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entry)})
 
-    matrix = ci_matrix.decide_matrix(pairs=[pair], suites=[_suite(entry)], green_keys=green, is_forced=False)
+    matrix = _decide_matrix(pairs=[pair], suites=[_suite(entry)], green_keys=green, is_forced=False)
 
     assert [cell.decision for cell in matrix.cells] == [CellDecision.SKIP]
     assert [decided.decision for decided in matrix.pairs] == [PairDecision.SKIP]
@@ -905,7 +988,7 @@ def test_force_runs_a_cell_whose_marker_is_green() -> None:
     pair = _resolved_pair()
     green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entry)})
 
-    matrix = ci_matrix.decide_matrix(pairs=[pair], suites=[_suite(entry)], green_keys=green, is_forced=True)
+    matrix = _decide_matrix(pairs=[pair], suites=[_suite(entry)], green_keys=green, is_forced=True)
 
     assert [cell.decision for cell in matrix.cells] == [CellDecision.RUN]
     assert [decided.decision for decided in matrix.pairs] == [PairDecision.RUN]
@@ -917,7 +1000,7 @@ def test_a_cell_carries_its_own_suites_config_and_attempts() -> None:
     carry, and how many times harbor runs each case."""
     entry = HarnessConfigEntry(name="default", is_nightly=True)
 
-    matrix = ci_matrix.decide_matrix(
+    matrix = _decide_matrix(
         pairs=[_resolved_pair()],
         suites=[_suite(entry, config="apps/minds_evals/configs/eval-config-time-to-mock.json", attempts=3)],
         green_keys=frozenset(),
@@ -937,9 +1020,7 @@ def test_an_arm_that_asks_for_nothing_runs_each_case_once() -> None:
     suite = NightlySuite(config=_CONFIG_PATH, harness_configs=(NightlySuiteArm(name="default"),))
 
     resolved = ci_matrix.resolve_suites((suite,), (entry,))
-    matrix = ci_matrix.decide_matrix(
-        pairs=[_resolved_pair()], suites=resolved, green_keys=frozenset(), is_forced=False
-    )
+    matrix = _decide_matrix(pairs=[_resolved_pair()], suites=resolved, green_keys=frozenset(), is_forced=False)
 
     assert int(matrix.cells[0].attempts) == 1
 
@@ -952,7 +1033,7 @@ def test_the_attempt_count_is_not_part_of_the_green_marker_key() -> None:
     pair = _resolved_pair()
 
     keys = {
-        int(attempts): ci_matrix.decide_matrix(
+        int(attempts): _decide_matrix(
             pairs=[pair], suites=[_suite(entry, attempts=attempts)], green_keys=frozenset(), is_forced=False
         )
         .cells[0]
@@ -968,7 +1049,7 @@ def test_two_suites_give_a_pair_a_cell_of_each_and_an_oracle_pass_of_each() -> N
     suite's pass says nothing about another's -- and a cell gates on the pass of its own config."""
     entry = HarnessConfigEntry(name="default", is_nightly=True)
 
-    matrix = ci_matrix.decide_matrix(
+    matrix = _decide_matrix(
         pairs=[_resolved_pair()],
         suites=[_suite(entry), _suite(entry, config=_OTHER_CONFIG_PATH)],
         green_keys=frozenset(),
@@ -993,7 +1074,7 @@ def test_a_suite_whose_cells_are_all_green_buys_no_oracle_pass_while_the_other_s
     pair = _resolved_pair()
     green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entry)})
 
-    matrix = ci_matrix.decide_matrix(
+    matrix = _decide_matrix(
         pairs=[pair],
         suites=[_suite(entry), _suite(entry, config=_OTHER_CONFIG_PATH)],
         green_keys=green,
@@ -1017,7 +1098,7 @@ def test_a_pair_runs_when_any_one_of_its_cells_does() -> None:
     pair = _resolved_pair()
     green = frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entries[0])})
 
-    matrix = ci_matrix.decide_matrix(pairs=[pair], suites=[_suite(*entries)], green_keys=green, is_forced=False)
+    matrix = _decide_matrix(pairs=[pair], suites=[_suite(*entries)], green_keys=green, is_forced=False)
 
     assert [(cell.harness_config, cell.decision) for cell in matrix.cells] == [
         ("default", CellDecision.SKIP),
@@ -1031,7 +1112,7 @@ def test_an_unresolved_pair_carries_no_cells_and_leaves_the_others_alone() -> No
     reported rather than aborting the run: the pairs answer different questions."""
     entry = HarnessConfigEntry(name="default", is_nightly=True)
 
-    matrix = ci_matrix.decide_matrix(
+    matrix = _decide_matrix(
         pairs=[_unresolved_pair(), _resolved_pair()],
         suites=[_suite(entry)],
         green_keys=frozenset(),
@@ -1056,7 +1137,7 @@ def test_the_job_matrices_hold_only_what_runs() -> None:
     green_pair = _resolved_pair(pair="released", mngr_sha="c" * 40, dwt_sha="d" * 40)
     green = frozenset(ci_matrix.cache_key_for(green_pair, _CONFIG_PATH, entry) for entry in entries)
 
-    matrix = ci_matrix.decide_matrix(
+    matrix = _decide_matrix(
         pairs=[running_pair, green_pair, _unresolved_pair(pair="custom")],
         suites=[_suite(*entries)],
         green_keys=green,
@@ -1076,7 +1157,7 @@ def test_a_cells_harbor_args_decode_back_to_the_argv_the_run_line_takes() -> Non
     cell's job decodes them; what comes back has to be exactly the argv."""
     entry = HarnessConfigEntry(name="haiku", is_nightly=True, model="haiku", effort="medium")
 
-    matrix = ci_matrix.decide_matrix(
+    matrix = _decide_matrix(
         pairs=[_resolved_pair()],
         suites=[_suite(entry)],
         green_keys=frozenset(),
@@ -1112,7 +1193,7 @@ def test_the_summary_names_every_arm_and_every_unresolved_pair() -> None:
     )
     pair = _resolved_pair()
 
-    matrix = ci_matrix.decide_matrix(
+    matrix = _decide_matrix(
         pairs=[pair, _unresolved_pair()],
         suites=[_suite(*entries)],
         green_keys=frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entries[1])}),
@@ -1131,6 +1212,156 @@ def test_the_summary_names_every_arm_and_every_unresolved_pair() -> None:
     )
     assert "- configs: `{}`".format(_CONFIG_PATH) in summary
     assert "gh cache list --repo imbue-ai/mngr-internal --key minds-evals-green-" in summary
+
+
+def test_the_checked_in_diagnostic_harness_configs_load_and_are_runnable() -> None:
+    """The two files the scheduled run reads by default, validated the way the paid jobs will read
+    them: a config the driver would refuse must fail the free resolve job, not a diagnose job."""
+    fixture = ci_matrix.load_fixture_harness_config(ci_matrix.CHECKED_IN_FIXTURE_HARNESS_CONFIG_PATH)
+    behaviour = ci_matrix.load_behaviour_harness_configs(ci_matrix.CHECKED_IN_BEHAVIOUR_HARNESS_CONFIGS_PATH)
+
+    assert ci_matrix.diagnostic_harness_config_kwargs(fixture).model == "haiku"
+    assert [harness_id(harness) for harness in behaviour] == ["claude", "pi-coding", "codex"]
+
+
+def test_a_behaviour_config_filed_under_a_harness_its_lane_does_not_run_is_refused(tmp_path: Path) -> None:
+    """The key is what names the cell and what the trial's own accounts listing is checked against, so
+    a mismatch would measure one harness under another's name."""
+    path = tmp_path / "behaviour.json"
+    path.write_text(json.dumps({"claude": {"lane": "openai", "model": "gpt-5.6-luna", "effort": "low"}}))
+
+    with pytest.raises(CiMatrixError, match="signs in on lane openai, whose chats run codex"):
+        ci_matrix.load_behaviour_harness_configs(path)
+
+
+def test_a_behaviour_config_with_a_key_that_is_no_kwarg_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "behaviour.json"
+    path.write_text(json.dumps({"claude": {"lane": "anthropic", "proxy": "true"}}))
+
+    with pytest.raises(CiMatrixError, match="is not a set of `--ak` kwargs"):
+        ci_matrix.load_behaviour_harness_configs(path)
+
+
+def test_a_nightly_harness_with_no_behaviour_config_is_refused() -> None:
+    """A harness made nightly without a cheap diagnostic config would get no behaviour cell, and the
+    readers only it exercises would go unchecked in silence."""
+    entry_by_harness = {HarnessName.CLAUDE: BehaviourHarnessEntry(lane="anthropic")}
+
+    with pytest.raises(CiMatrixError, match="name no config for codex"):
+        ci_matrix.select_behaviour_harness_configs(entry_by_harness, (HarnessName.CLAUDE, HarnessName.CODEX))
+
+
+def test_every_resolved_pair_is_diagnosed_whatever_its_cells_decided() -> None:
+    """An all-green night moves no SHA the diagnostics would notice, and is exactly the night on which
+    they are the only measurement taken."""
+    entries = (HarnessConfigEntry(name="default", is_nightly=True),)
+    pair = _resolved_pair()
+
+    matrix = _decide_matrix(
+        pairs=[pair],
+        suites=[_suite(*entries)],
+        green_keys=frozenset({ci_matrix.cache_key_for(pair, _CONFIG_PATH, entries[0])}),
+        is_forced=False,
+    )
+
+    assert [decided.decision for decided in matrix.pairs] == [PairDecision.SKIP]
+    assert [entry["pair"] for entry in matrix.diagnose_fixture_matrix["include"]] == ["main"]
+    assert [(entry["pair"], entry["harness"]) for entry in matrix.diagnose_behaviour_matrix["include"]] == [
+        ("main", "claude"),
+        ("main", "codex"),
+    ]
+    assert matrix.is_any_pair_diagnosed is True
+
+
+def test_a_behaviour_cell_its_config_calls_unsupported_is_left_out_and_named() -> None:
+    """No box is spent to produce a dark cell, and no table carries a per-pair exception; the report
+    names the cell instead, so a night that measured one harness less does not read as a full one."""
+    matrix = _decide_matrix(
+        pairs=[_resolved_pair(), _resolved_pair(pair="released", mngr_sha="c" * 40, dwt_sha="d" * 40)],
+        suites=[_suite(HarnessConfigEntry(name="default", is_nightly=True))],
+        green_keys=frozenset(),
+        is_forced=False,
+    )
+
+    assert [(entry["pair"], entry["harness"]) for entry in matrix.diagnose_behaviour_matrix["include"]] == [
+        ("main", "claude"),
+        ("main", "codex"),
+        ("released", "claude"),
+    ]
+    assert matrix.diagnose_unsupported == [
+        {"pair": "released", "harness": "codex", "reason": ci_matrix.UNSUPPORTED_PAIR_REASON}
+    ]
+
+
+def test_an_unresolved_pair_is_not_diagnosed_and_an_all_unresolved_run_diagnoses_nothing() -> None:
+    """GitHub refuses a matrix with no entries, so the jobs are skipped on the flag rather than handed
+    an empty one."""
+    matrix = _decide_matrix(
+        pairs=[_unresolved_pair()],
+        suites=[_suite(HarnessConfigEntry(name="default", is_nightly=True))],
+        green_keys=frozenset(),
+        is_forced=False,
+    )
+
+    assert matrix.diagnose_fixture_matrix["include"] == []
+    assert matrix.diagnose_behaviour_matrix["include"] == []
+    assert matrix.is_any_pair_diagnosed is False
+
+
+def test_a_diagnostic_cells_harbor_args_are_its_configs_and_nothing_more() -> None:
+    """The run line a diagnose job takes is a live cell's for the same harness config: the families
+    differ in their case and their table, never in how the box is driven."""
+    matrix = _decide_matrix(
+        pairs=[_resolved_pair()],
+        suites=[_suite(HarnessConfigEntry(name="default", is_nightly=True))],
+        green_keys=frozenset(),
+        is_forced=False,
+    )
+
+    (fixture,) = matrix.fixture_diagnostics
+    codex = next(cell for cell in matrix.behaviour_diagnostics if cell.harness == "codex")
+    assert json.loads(fixture.harbor_args) == [
+        "--ak",
+        "lane=anthropic",
+        "--ak",
+        "key_env=ANTHROPIC_API_KEY",
+        "--ak",
+        "model=haiku",
+        "--ak",
+        "effort=medium",
+        "--ak",
+        "fast=false",
+    ]
+    assert json.loads(codex.harbor_args) == [
+        "--ak",
+        "lane=openai",
+        "--ak",
+        "key_env=OPENAI_API_KEY",
+        "--ak",
+        "model=gpt-5.6-luna",
+        "--ak",
+        "effort=low",
+        "--ak",
+        "fast=false",
+    ]
+    assert (fixture.lane_key_env, codex.lane_key_env) == ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+
+
+def test_the_summary_names_every_diagnostic_and_every_unsupported_cell() -> None:
+    matrix = _decide_matrix(
+        pairs=[_resolved_pair(pair="released", mngr_sha="c" * 40, dwt_sha="d" * 40)],
+        suites=[_suite(HarnessConfigEntry(name="default", is_nightly=True))],
+        green_keys=frozenset(),
+        is_forced=False,
+    )
+
+    summary = ci_matrix.render_matrix_summary_markdown(matrix, "")
+
+    assert "| `released` | fixture | - | **run** |" in summary
+    assert "| `released` | behaviour | `claude` | **run** |" in summary
+    assert "| `released` | behaviour | `codex` | **unsupported**: {} |".format(ci_matrix.UNSUPPORTED_PAIR_REASON) in (
+        summary
+    )
 
 
 def _invoke_ci_matrix(pairs_path: Path, configs_path: Path, output_path: Path, *extra_arguments: str) -> Result:
@@ -1335,7 +1566,7 @@ def test_the_workflow_reads_the_decision_by_names_this_package_still_writes() ->
 def _job_block(workflow_text: str, job_name: str) -> str:
     """One job's YAML, from its key to the start of the next one. A job key is the only thing in the
     file indented by exactly two spaces, which is what makes the split possible without a parser."""
-    match = re.search(r"^  {}:\n(?:.*\n)*?(?=^  [a-z_]+:\n|\Z)".format(job_name), workflow_text, re.MULTILINE)
+    match = re.search(r"^  {}:\n(?:.*\n)*?(?=^  [a-z_-]+:\n|\Z)".format(job_name), workflow_text, re.MULTILINE)
     assert match is not None, "no {} job in {}".format(job_name, SCHEDULED_WORKFLOW_PATH)
     return match.group(0)
 
@@ -1350,30 +1581,33 @@ def test_the_workflow_reads_matrix_entries_by_names_the_entry_it_fans_out_over_c
     out of `matrix.<field>`. A renamed field interpolates empty rather than failing, which puts an
     empty Vault path or an empty marker key on a paid runner.
 
-    The two matrix jobs fan out over different entries -- `oracle` over a pair, `evaluate` over a
-    cell -- so each is held to the one it is actually given. A cell's field read in the oracle job
-    is empty there, and checking both jobs against the wider of the two models would not see it.
+    The four matrix jobs fan out over different entries -- `oracle` over a pair, `evaluate` over a
+    cell, and the diagnose jobs over their own -- so each is held to the one it is actually given. A
+    cell's field read in the oracle job is empty there, and checking every job against the widest of
+    the models would not see it.
     """
     workflow_text = read_scheduled_workflow_text()
-    oracle_block = _job_block(workflow_text, "oracle")
-    evaluate_block = _job_block(workflow_text, "evaluate")
-    oracle_fields = _matrix_fields_read(oracle_block)
-    evaluate_fields = _matrix_fields_read(evaluate_block)
+    blocks = {
+        # `oracle_matrix` dumps one OraclePass per (pair, eval config) with a cell to run.
+        "oracle": (_job_block(workflow_text, "oracle"), set(OraclePass.model_fields)),
+        "evaluate": (_job_block(workflow_text, "evaluate"), set(MatrixCell.model_fields) - {"decision"}),
+        "diagnose-fixture": (_job_block(workflow_text, "diagnose-fixture"), set(FixtureDiagnosticCell.model_fields)),
+        "diagnose-behaviour": (
+            _job_block(workflow_text, "diagnose-behaviour"),
+            set(BehaviourDiagnosticCell.model_fields),
+        ),
+    }
 
-    # A rewrite that stopped reading the matrix this way would otherwise leave this passing over
-    # nothing at all.
-    assert oracle_fields, "no matrix fields found in the oracle job"
-    assert evaluate_fields, "no matrix fields found in the evaluate job"
-    # `oracle_matrix` dumps one OraclePass per (pair, eval config) with a cell to run.
-    assert oracle_fields <= set(OraclePass.model_fields), "an oracle entry does not carry {}".format(
-        sorted(oracle_fields - set(OraclePass.model_fields))
-    )
-    cell_fields = set(MatrixCell.model_fields) - {"decision"}
-    assert evaluate_fields <= cell_fields, "a cell entry does not carry {}".format(
-        sorted(evaluate_fields - cell_fields)
-    )
-    # Only those two jobs fan out over a matrix, so a `matrix.` read anywhere else names nothing.
-    outside = workflow_text.replace(oracle_block, "").replace(evaluate_block, "")
+    for job_name, (block, entry_fields) in blocks.items():
+        fields = _matrix_fields_read(block)
+        # A rewrite that stopped reading the matrix this way would otherwise leave this passing over
+        # nothing at all.
+        assert fields, "no matrix fields found in the {} job".format(job_name)
+        assert fields <= entry_fields, "a {} entry does not carry {}".format(job_name, sorted(fields - entry_fields))
+    # Only those jobs fan out over a matrix, so a `matrix.` read anywhere else names nothing.
+    outside = workflow_text
+    for block, _ in blocks.values():
+        outside = outside.replace(block, "")
     assert not _matrix_fields_read(outside), "a job that is not a matrix job reads {}".format(
         sorted(_matrix_fields_read(outside))
     )
@@ -1387,6 +1621,55 @@ def test_the_workflow_validates_the_harness_configs_file_this_package_defaults_t
     relative_path = ci_matrix.CHECKED_IN_HARNESS_CONFIGS_PATH.relative_to(repo_root)
 
     assert "HARNESS_CONFIGS: {}\n".format(relative_path) in read_scheduled_workflow_text()
+
+
+def test_the_workflow_validates_the_diagnostic_harness_configs_this_package_defaults_to() -> None:
+    """Both files are validated on the free resolve job, and the tests above validate the ones the
+    checked-in paths name; two different files would leave the tests green over a file no run reads."""
+    repo_root = SCHEDULED_WORKFLOW_PATH.parents[2]
+    workflow_text = read_scheduled_workflow_text()
+
+    for variable_name, option, path in (
+        (
+            "DIAGNOSE_FIXTURE_HARNESS_CONFIG",
+            "--fixture-harness-config",
+            ci_matrix.CHECKED_IN_FIXTURE_HARNESS_CONFIG_PATH,
+        ),
+        (
+            "DIAGNOSE_BEHAVIOUR_HARNESS_CONFIGS",
+            "--behaviour-harness-configs",
+            ci_matrix.CHECKED_IN_BEHAVIOUR_HARNESS_CONFIGS_PATH,
+        ),
+    ):
+        assert "{}: {}\n".format(variable_name, path.relative_to(repo_root)) in workflow_text
+        assert '{} "${}"'.format(option, variable_name) in workflow_text
+
+
+def test_the_diagnose_jobs_need_only_resolve_and_are_gated_on_a_pair_to_diagnose() -> None:
+    """They are not gated on the oracle: it validates a different dataset and runs only when some cell
+    does, so on an all-green night -- exactly the night the diagnostics are the only measurement -- it
+    is skipped, and a job behind it would be too. GitHub refuses an empty matrix, which is what the
+    last clause is for."""
+    workflow_text = read_scheduled_workflow_text()
+
+    for job_name in ("diagnose-fixture", "diagnose-behaviour"):
+        block = _job_block(workflow_text, job_name)
+        assert "needs: [resolve]\n" in block
+        assert "needs.resolve.outputs.is_any_pair_diagnosed == 'true'" in block
+        assert "needs.resolve.outputs.is_live_pass_skipped != 'true'" in block
+        assert "timeout-minutes: 200\n" in block
+        assert "cache/save" not in block, "{} writes a green marker".format(job_name)
+        assert "minds-evals-green-" not in block, "{} reads a green marker".format(job_name)
+
+
+def test_only_the_fixture_diagnostic_runs_the_age_based_backstop_sweep() -> None:
+    """The sweep is the backstop for an earlier run that died before recording anything, and it runs
+    once per pair. The behaviour cells would only race each other for the same old names."""
+    workflow_text = read_scheduled_workflow_text()
+
+    assert "--sweep-prefix" in _job_block(workflow_text, "diagnose-fixture")
+    assert "--sweep-prefix" not in _job_block(workflow_text, "diagnose-behaviour")
+    assert "--job-dir" in _job_block(workflow_text, "diagnose-behaviour")
 
 
 def test_the_workflow_validates_the_suite_file_this_package_defaults_to() -> None:

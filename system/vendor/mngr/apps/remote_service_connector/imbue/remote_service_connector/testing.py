@@ -816,6 +816,7 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> bool:
         del user_context
+        self._raise_if_configured("revoke_session")
         # The fake's session handle IS the access token (see
         # ``FakeSessionContainer.get_handle``).
         session = self.sessions_by_access_token.pop(session_handle, None)
@@ -845,6 +846,7 @@ class FakeSuperTokensBackend:
         # removed from it, so both stateless and check_database verification
         # collapse to the same lookup here.
         del anti_csrf_check, session_required, check_database, override_global_claim_validators, user_context
+        self._raise_if_configured("get_session")
         return self.sessions_by_access_token.get(access_token)
 
     def list_users_by_account_info(
@@ -1101,6 +1103,19 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     return backend
 
 
+def make_supertokens_core_status_exception(method: str, path: str, status_code: int) -> Exception:
+    """The bare ``Exception`` the SuperTokens SDK's querier raises when the core answers a non-2xx status.
+
+    Feed it to ``FakeSuperTokensBackend.raise_on`` (or raise it from an
+    injected getter) to simulate a core outage; ``auth.call_supertokens_core``
+    recognizes it by this exact message shape.
+    """
+    return Exception(
+        f"SuperTokens core threw an error for a {method} request to path: '{path}' "
+        f"with status code: {status_code} and message: <html>upstream answered {status_code}</html>"
+    )
+
+
 # Host pool fakes
 #
 # Similar to FakeSuperTokensBackend, this provides an in-memory replacement
@@ -1331,6 +1346,12 @@ class FakeCursor:
             if found is not None:
                 self._results = [self._backend.workspace_supervisor_tuple(found)]
 
+        elif query_lower.startswith("select status, stop_kind from pool_hosts"):
+            # workspaces.py: the operator start's prologue (the retired guard reads the kind).
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                self._results.append((found.status, found.stop_kind))
+
         elif query_lower.startswith("select status from pool_hosts"):
             found = self._backend.find_pool_row(params[0])
             if found is not None:
@@ -1462,10 +1483,14 @@ class FakeCursor:
             found = self._backend.find_pool_row(raw_id)
             # workspaces.py: the owner's statement also carries the hold
             # predicate (the admin's does not).
-            is_hold_honored = "stop_kind is null or" not in query_lower or (
+            is_hold_honored = "stop_kind in (" not in query_lower or (
                 found is not None and found.stop_kind in (None, "owner", "idle")
             )
-            if found is not None and found.status == "stopped" and is_hold_honored:
+            # The admin's statement carries only the retired guard.
+            is_retire_honored = "stop_kind <> 'retired'" not in query_lower or (
+                found is not None and found.stop_kind != "retired"
+            )
+            if found is not None and found.status == "stopped" and is_hold_honored and is_retire_honored:
                 found.status = "starting"
                 found.transition_error = None
                 found.transition_failure_count = 0
@@ -2856,6 +2881,8 @@ class FakePoolBackend:
         # it is matched before the transfer-alive probe.
         if CLEANUP_DELETE_FAILED_MARKER in command:
             return 0, "", (f"{CLEANUP_DELETE_FAILED_MARKER}\n" if self.cleanup_vm_survives else "")
+        if "setsid nohup bash" in command:
+            return 0, "", ""
         if "kill -0" in command:
             return (0 if self.transfer_alive else 1), "", ""
         if "reserve.sh" in command:
@@ -4480,35 +4507,41 @@ class InMemoryAttributionStore:
         )
 
 
-def hold_stable_download_link(url: str | None) -> None:
-    """Put ``url`` -- or "could not be read" -- in the connector's stable-download cache.
+def hold_stable_download_link(url: str | None, platform: str) -> None:
+    """Put ``url`` -- or "could not be read" -- in the connector's stable-download cache for ``platform``.
 
     ``GET /download`` resolves the stable channel manifest over the network, so
-    every test runs with an entry held (see the autouse fixture) and none of
-    them reach the live feed. Tests that care what the link resolves to hold
-    their own; the parsing tests call ``_arm64_dmg_url_from``, which does not
-    read this cache.
+    every test runs with an entry held for every platform (see the autouse
+    fixture) and none of them reach the live feed. Tests that care what the
+    link resolves to hold their own; the parsing tests call
+    ``_artifact_url_from``, which does not read this cache.
     """
+    _stable_download_cache()[hashkey(platform)] = url
+
+
+def hold_no_stable_download_links() -> None:
+    """Hold "could not be read" for every release channel platform, dropping anything held."""
     cache = _stable_download_cache()
     cache.clear()
-    cache[hashkey()] = url
+    for platform in accounts_web_module._RELEASE_CHANNEL_PLATFORMS:
+        cache[hashkey(platform)] = None
 
 
-def clear_stable_download_link() -> None:
-    """Drop the held link, so the next read reaches the live feed."""
-    _stable_download_cache().clear()
+def clear_stable_download_link(platform: str) -> None:
+    """Drop the held link for ``platform``, so the next read reaches the live feed."""
+    _stable_download_cache().pop(hashkey(platform), None)
 
 
-def read_stable_download_link() -> str | None:
-    """What the last resolution left in the cache; ``None`` is a read that failed.
+def read_stable_download_link(platform: str) -> str | None:
+    """What the last resolution for ``platform`` left in the cache; ``None`` is a read that failed.
 
     Reading the cache rather than calling the resolver is what tells a route
     that resolved from one that never asked: the call would fill an empty cache
     itself.
     """
     cache = _stable_download_cache()
-    key = hashkey()
-    assert key in cache, "nothing has resolved the stable download link"
+    key = hashkey(platform)
+    assert key in cache, f"nothing has resolved the stable download link for {platform}"
     return cache[key]
 
 
@@ -4541,7 +4574,7 @@ def _web_template_ref_cache() -> MutableMapping[Any, Any]:
 
 def _stable_download_cache() -> MutableMapping[Any, Any]:
     # `cached` types its cache as optional because passing None disables it.
-    cache = accounts_web_module.stable_mac_arm64_url.cache
+    cache = accounts_web_module.stable_artifact_url.cache
     assert cache is not None, "the stable download resolver is not cached"
     return cache
 

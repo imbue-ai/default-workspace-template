@@ -132,7 +132,16 @@ def _step_boundary_step(boundary: StepBoundary, step_id: int) -> Step:
         timestamp=boundary.started_at,
         source="system",
         message=_step_boundary_message(boundary),
-        extra={"minds_evals": {"kind": STEP_BOUNDARY_KIND, "step_name": boundary.name}},
+        # The opening message rides along because it is the join the marker was placed on: a reader
+        # of the document can then check the placement against the conversation without the state
+        # file beside it. Empty when the step ended before the client said anything.
+        extra={
+            "minds_evals": {
+                "kind": STEP_BOUNDARY_KIND,
+                "step_name": boundary.name,
+                "opening_message": boundary.opening_message,
+            }
+        },
     )
 
 
@@ -278,14 +287,18 @@ def _provenance_extra(provenance: TrajectoryProvenance, source: TrajectorySource
 @pure
 def _resolved_final_metrics(workspace_usage: TrialUsage, total_steps: int) -> FinalMetrics | None:
     """The trial's resolved workspace usage in ATIF's aggregate shape, or None when the usage account
-    saw no messages at all (which is not the same claim as zero)."""
+    saw no messages at all (which is not the same claim as zero).
+
+    ATIF's cost field is left unset: a trial records tokens per model and prices nothing, so a figure
+    here would be a price frozen into the document. `check-run` prices the tokens instead.
+    """
     if not workspace_usage.message_count:
         return None
     return FinalMetrics(
         total_prompt_tokens=workspace_usage.n_input_tokens,
         total_completion_tokens=workspace_usage.tokens.output,
         total_cached_tokens=workspace_usage.n_cache_tokens,
-        total_cost_usd=workspace_usage.cost_usd,
+        total_cost_usd=None,
         total_steps=total_steps,
     )
 

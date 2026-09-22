@@ -929,9 +929,10 @@ def test_standalone_project_ci_gates_list_every_in_repo_dependency() -> None:
         }
         gate = _find_ci_path_gate(workflow, rel_project)
         assert gate is not None, f"no path-gated CI job found for standalone project {rel_project}"
-        # Compare whole shell words, not substrings: `libs/mngr` is a substring of the
-        # listed `libs/mngr_usage`, so a substring test would report a gate that omits
-        # `libs/mngr` as complete.
+        # Compare whole shell words, not substrings: one package path under `libs/` is a
+        # prefix of another's (`libs/mngr` of `libs/mngr_usage`, `libs/mngr_modal` and the
+        # rest), so a substring test would read a gate that lists only the longer one as
+        # covering the shorter.
         gate_words = set(gate.split())
         missing.extend(
             f"{rel_project}: CI gate omits {dep}" for dep in sorted(editable_deps) if str(dep) not in gate_words
@@ -1501,10 +1502,10 @@ def _mngr_level_terminology_chunks(rule: RegexRatchetRule) -> list[RatchetMatchC
 def test_prevent_workspace_vocabulary_in_mngr_level_code() -> None:
     """Keep the minds-level 'workspace' vocabulary out of mngr-level code (count may only fall)."""
     chunks = _mngr_level_terminology_chunks(_PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE)
-    assert len(chunks) <= snapshot(333), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+    assert len(chunks) <= snapshot(318), _PREVENT_WORKSPACE_VOCABULARY_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
 
 
 def test_prevent_minds_references_in_mngr_level_code() -> None:
     """Keep minds / default-workspace-template references out of mngr-level code (count may only fall)."""
     chunks = _mngr_level_terminology_chunks(_PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE)
-    assert len(chunks) <= snapshot(317), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))
+    assert len(chunks) <= snapshot(314), _PREVENT_MINDS_REFERENCES_IN_MNGR_LEVEL_CODE.format_failure(tuple(chunks))

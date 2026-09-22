@@ -20,7 +20,7 @@ from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
-from imbue.system_interface.shell.primitives import DeviceKind
+from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import catalog_document
@@ -103,6 +103,21 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     # Both the app and the placeholder are HTTP 200 HTML, so the header is
     # the only thing that distinguishes them to a health check.
     assert response.headers[FRONTEND_BUILT_HEADER] == "true"
+
+
+def test_a_preview_shells_page_says_so_and_carries_no_staleness_banner(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    state = build_test_state(is_preview=True)
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
+
+    assert response.status_code == 200
+    assert 'name="system-interface-preview"' in response.text
+    assert 'content="true"' in response.text
+    assert "system-interface-update-staleness" not in response.text
 
 
 def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
@@ -413,26 +428,43 @@ def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     handle_exception and surfaced every 404/405 as a 500 (observed live on a
     method-not-allowed destroy call).
     """
-    # Non-GET probes are the observable cases: the SPA catch-all intentionally
-    # serves the frontend for any unknown GET, so those return 200 by design.
     assert client.post("/api/definitely-not-a-route").status_code == 405
     assert client.put("/api/layout/broadcast").status_code == 405
+
+
+def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient) -> None:
+    """The SPA catch-all serves the app shell for any unknown GET, which is right for a
+    client-side route and wrong for a caller of the API: a 200 page where JSON was expected
+    reads as success to a script and as a parse error to a browser."""
+    response = client.get("/api/definitely-not-a-route")
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == "No such API route: /api/definitely-not-a-route"
+    assert client.get("/api").status_code == 404
+    # A client-side route still renders the shell.
+    assert client.get("/some/client/route").status_code == 200
 
 
 @pytest.mark.flaky
 @pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
-    """On connect the socket sends the shell's inventory and projects."""
+    """On connect the socket sends the shell's inventory, desktops, the avatar's status, and the update notice."""
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(2)]
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(4)]
         finally:
             close_ws(ws)
 
-    assert [message["type"] for message in messages] == ["apps_updated", "projects_updated"]
+    assert [message["type"] for message in messages] == [
+        "apps_updated",
+        "desktops_updated",
+        "avatar_status",
+        "update_notice_changed",
+    ]
     assert messages[0]["apps"] == []
-    assert messages[1]["projects"] == []
+    assert messages[1]["desktops"] == []
+    assert messages[2] == {"type": "avatar_status", "mood": "idle", "is_stale": True}
+    assert messages[3]["notice"] is None
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:
@@ -442,76 +474,45 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
     (shell.activity.events_path).mkdir(parents=True)
     client_queue = shell.broadcaster.register()
     try:
-        report = {"type": "client_state", "client_id": "c1", "device_kind": "desktop", "active_view": "everything"}
+        report = {"type": "client_state", "client_id": "c1", "active_desktop": "home"}
         assert _handle_client_state_message(json.dumps(report), client_queue, shell, is_first_report=True) is True
-        switched = {**report, "active_view": "alpha", "previous_view": "everything"}
+        switched = {**report, "active_desktop": "alpha", "previous_desktop": "home"}
         assert _handle_client_state_message(json.dumps(switched), client_queue, shell, is_first_report=False) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "alpha",
-            "device_kind": "desktop",
-        }
+        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "alpha"}
     finally:
         shell.broadcaster.unregister(client_queue)
 
 
-def test_client_state_reports_register_the_client_and_log_only_real_view_switches(app: Flask) -> None:
-    """A report registers the connection with the broadcaster and records the client; a view_switch is
-    logged only when the report names a previous view that differs; anything malformed is ignored."""
+def test_client_state_reports_register_the_client_and_log_only_real_desktop_switches(app: Flask) -> None:
+    """A report registers the connection with the broadcaster and records the client; a desktop_switch is
+    logged only when the report names a previous desktop that differs; anything malformed is ignored."""
     shell = state_of(app).shell
     client_queue = shell.broadcaster.register()
     try:
-        first = json.dumps(
-            {"type": "client_state", "client_id": "c1", "device_kind": "mobile", "active_view": "everything"}
-        )
+        first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "everything",
-            "device_kind": "mobile",
-        }
+        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
         recorded = shell.clients.get_client("c1")
         assert recorded is not None
-        assert recorded.device_kind is DeviceKind.MOBILE and recorded.active_view == "everything"
+        assert recorded.active_desktop == "home"
         assert shell.activity.read_events() == []
 
         switched = json.dumps(
-            {
-                "type": "client_state",
-                "client_id": "c1",
-                "device_kind": "mobile",
-                "active_view": "alpha",
-                "previous_view": "everything",
-            }
+            {"type": "client_state", "client_id": "c1", "active_desktop": "home", "previous_desktop": "research"}
         )
         assert _handle_client_state_message(switched, client_queue, shell, is_first_report=False) is True
         unchanged = json.dumps(
-            {
-                "type": "client_state",
-                "client_id": "c1",
-                "device_kind": "mobile",
-                "active_view": "alpha",
-                "previous_view": "alpha",
-            }
+            {"type": "client_state", "client_id": "c1", "active_desktop": "home", "previous_desktop": "home"}
         )
         assert _handle_client_state_message(unchanged, client_queue, shell, is_first_report=False) is True
         events = shell.activity.read_events()
-        assert [(event["type"], event["from_view_id"], event["to_view_id"]) for event in events] == [
-            ("view_switch", "everything", "alpha")
+        assert [(event["type"], event["from_desktop_id"], event["to_desktop_id"]) for event in events] == [
+            ("desktop_switch", "research", "home")
         ]
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "alpha",
-            "device_kind": "mobile",
-        }
 
         for malformed in ("{", json.dumps({"type": "other"}), json.dumps({"type": "client_state", "client_id": "c1"})):
             assert _handle_client_state_message(malformed, client_queue, shell, is_first_report=False) is False
-        assert shell.broadcaster.get_client_info(client_queue) == {
-            "client_id": "c1",
-            "active_view": "alpha",
-            "device_kind": "mobile",
-        }
+        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
     finally:
         shell.broadcaster.unregister(client_queue)
 
@@ -560,3 +561,36 @@ def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> N
     # The GET is the one that renders; the HEAD carries no page to render.
     assert "needs to be rebuilt" in get.text
     assert head.text == ""
+
+
+def test_a_report_of_a_deleted_desktop_lands_the_client_on_the_first_one_and_says_so_once(app: Flask) -> None:
+    """A report naming a desktop that no longer exists lands the client on the first one, which its window is
+    told once, and the switch is logged as the client reported it."""
+    shell = state_of(app).shell
+    shell.inventory.reload_registry()
+    shell.list_desktops()
+    client_queue = shell.broadcaster.register()
+    try:
+        first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
+        assert [message["type"] for message in drain_messages(client_queue)] == ["active_desktop_changed"]
+
+        stale = json.dumps(
+            {"type": "client_state", "client_id": "c1", "active_desktop": "gone", "previous_desktop": "home"}
+        )
+        assert _handle_client_state_message(stale, client_queue, shell, is_first_report=False) is True
+        landed = shell.clients.get_client("c1")
+        assert landed is not None and landed.active_desktop == "home"
+        events = shell.activity.read_events()
+        assert [(event["type"], event["to_desktop_id"]) for event in events] == [("desktop_switch", "gone")]
+        # The redirected window is told where it landed, once; a report of that desktop then changes nothing.
+        assert [
+            message["desktop_id"]
+            for message in drain_messages(client_queue)
+            if message["type"] == "active_desktop_changed"
+        ] == ["home"]
+        settled = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        assert _handle_client_state_message(settled, client_queue, shell, is_first_report=False) is True
+        assert drain_messages(client_queue) == []
+    finally:
+        shell.broadcaster.unregister(client_queue)

@@ -25,6 +25,7 @@ from supertokens_python.syncio import get_user
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
+from imbue.remote_service_connector.auth import call_supertokens_core
 from imbue.remote_service_connector.auth import is_email_paid
 from imbue.remote_service_connector.errors import PlanNotFoundError
 from imbue.remote_service_connector.errors import QuotaExceededError
@@ -238,10 +239,12 @@ def _get_user_time_joined_ms(user_id: str, user_getter: Callable[[str], Any] = g
 
     An unknown timestamp (missing user, SDK error) conservatively counts as
     pre-existing -- the pre-cutoff rule only *adds* the paid-list check, and a
-    genuinely-new account is never paid-listed by accident in practice.
+    genuinely-new account is never paid-listed by accident in practice. A
+    core outage instead propagates as ``SuperTokensCoreUnavailableError`` (a
+    retryable 503), so no entitlements row is created from a guess.
     """
     try:
-        user = user_getter(user_id)
+        user = call_supertokens_core(lambda: user_getter(user_id), caller="entitlements_time_joined")
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         emit_metric("supertokens_user_fetch_failed", 1, {"caller": "entitlements_time_joined"})
         logger.warning("Failed to fetch SuperTokens user %s for time_joined", user_id[:8], exc_info=exc)

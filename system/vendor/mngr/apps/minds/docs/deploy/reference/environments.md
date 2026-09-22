@@ -133,9 +133,13 @@ To deactivate:
 eval "$(uv run minds-admin env deactivate)"
 ```
 
-Source runs (`uv run minds run`, `just minds-start`, `propagate_changes`,
-the `forward-system-interface` recipe, etc.) refuse to start without
-activation -- no implicit default.
+A bare `uv run minds run` (or dev-mode `pnpm start`) with nothing
+exported targets production: it loads the in-repo production `client.toml`
+and owns `~/.minds/`. A shell whose `MINDS_ROOT_NAME` names another env
+without `MINDS_CLIENT_CONFIG_PATH` is refused rather than pointed at
+production. The `just` recipes (`minds-start`, `minds-start-cloud`),
+`propagate_changes`, the `forward-system-interface` recipe, etc. still
+refuse to run without activation.
 
 Behaviour by env type:
 
@@ -314,8 +318,10 @@ uv run minds run                       # or `just minds-start`
 ```
 
 `minds run` reads `MINDS_CLIENT_CONFIG_PATH` for the config to load.
-A `--config-file <path>` flag overrides the env var. Refuses to start
-when neither is set.
+A `--config-file <path>` flag overrides the env var. When neither is
+set it loads the in-repo production `client.toml`, provided
+`MINDS_ROOT_NAME` is unset or `minds`; a shell whose `MINDS_ROOT_NAME`
+names another env is refused instead of being pointed at production.
 
 For the packaged Electron app, see "Build embedding for the desktop
 client" below -- the runtime exports `MINDS_ROOT_NAME` and passes
@@ -492,9 +498,9 @@ to bake a per-build configuration into `_bundled/`:
   with an installed prod build); a beta build can use any name.
 
 Both must be set together. When both are unset (the dev-mode
-`pnpm start` case), `_bundled/` stays empty and the runtime relies on
-the user's activated shell. Setting only one of the two fails the
-build loudly.
+`pnpm start` case), `_bundled/` stays empty and the runtime loads the
+in-repo production config unless the user's shell exports another env.
+Setting only one of the two fails the build loudly.
 
 At runtime, the Electron startup reads `_bundled/root_name` (if
 present) and exports `MINDS_ROOT_NAME` + the derived `MNGR_HOST_DIR`

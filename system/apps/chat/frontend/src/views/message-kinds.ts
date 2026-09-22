@@ -98,6 +98,12 @@ export enum UserMessageKind {
    * A subtle inline status message (e.g. "Context was compacted").
    */
   StatusMessage = "status-message",
+  /**
+   * A one-line notice about something that happened to the agent rather than
+   * something the user said -- a background task finishing. Sits on the agent's
+   * own rail, since that is who was told.
+   */
+  Notice = "notice",
 }
 
 export interface KindSpec {
@@ -161,6 +167,14 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     netVisual:
       "A subtle centered status pill (e.g. 'Context was compacted') rendered as " +
       "its own row between turns or at the start/end of a turn.",
+  },
+  [UserMessageKind.Notice]: {
+    rail: Rail.Assistant,
+    boundary: false,
+    netVisual:
+      "A left-aligned single line tucked INTO the current turn: a tick, the lead " +
+      "in medium weight ('Background task completed:'), then the summary in plain " +
+      "secondary text. Nothing to expand -- the summary is the whole of it.",
   },
 };
 

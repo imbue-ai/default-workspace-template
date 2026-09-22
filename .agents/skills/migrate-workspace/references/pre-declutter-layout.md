@@ -184,7 +184,7 @@ for something that does not exist. `migrate_workspace.py audit-scan
 | `.agents/shared/worker/references/harden-artifact.md` | `harden-creation.md` | |
 | `.agents/shared/worker/references/artifact-skill.md` | `type-skill.md` | |
 | `.agents/shared/worker/references/artifact-service.md` | `type-service.md` (plus a new `type-app.md`) | The old single reference split |
-| `.agents/shared/worker/references/artifact-system-interface.md` | `type-system-interface.md` | |
+| `.agents/shared/worker/references/artifact-system-interface.md` | `type-app.md` (its "Critical apps" section) | The system interface is an app like any other now; its own reference is gone |
 
 The `launch-task` file-staging frontmatter key `source_artifacts_dir` kept its
 name; it is not part of the rename.
@@ -197,7 +197,7 @@ built.
 
 - **Scheduled tasks.** Recurring jobs run through cron drop-ins with a
   catch-up-and-retry runner (`system/scripts/run_job.sh`), and a **schedule agent**
-  can run any skill on a cadence in its own chat tab. See the
+  can run any skill on a cadence in its own chat. See the
   `manage-scheduled-tasks` skill. If the old workspace faked a schedule with a
   long-running loop in a supervisord program, this is where it should go instead.
 - **The Caretaker.** A weekly maintenance agent, **off by default**, woken only
@@ -207,9 +207,9 @@ built.
 - **Templates.** A publishable, bootable snapshot of what a mind has built, so
   another mind can be created from it or adopt it. See `publish-template`,
   `use-template`, `update-installed-template`.
-- **Layout operations.** `system/scripts/layout.py` inspects and rearranges the
-  dockview tabs -- open, split, move, focus, rename, close, maximize, swap a URL.
-  See `manage-layout`.
+- **Desktop operations.** `system/scripts/layout.py` reads and arranges the
+  desktop's windows -- open, focus, place, minimize, maximize, close, navigate.
+  See `manage-desktop`.
 - **`data/.apps/` and `data/.skills/`.** Per-creation data has a declared home
   instead of sharing one `runtime/` directory, and the visible/hidden split under
   `data/` tells the user which folders are theirs to organize.

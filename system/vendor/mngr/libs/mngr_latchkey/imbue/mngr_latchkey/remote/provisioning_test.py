@@ -20,19 +20,23 @@ from imbue.mngr_latchkey.core import GATEWAY_MAX_BODY_SIZE_BYTES
 from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
 from imbue.mngr_latchkey.core import REMOTE_GATEWAY_EXTENSION_FILENAME
 from imbue.mngr_latchkey.core import UPSTREAM_DATA_FORMAT_VERSION_FILENAME
+from imbue.mngr_latchkey.docker_bridge import BRIDGE_SERVICES_FIREWALL_UNIT_NAME
 from imbue.mngr_latchkey.encryption_key import load_or_create_encryption_key
+from imbue.mngr_latchkey.owner_exec_vm import VM_EXEC_PORT
 from imbue.mngr_latchkey.remote._mirror import store_machine_encryption_key
 from imbue.mngr_latchkey.remote._mirror import store_machine_gateway_password
 from imbue.mngr_latchkey.remote._mirror import stored_machine_encryption_key
 from imbue.mngr_latchkey.remote._mirror import stored_machine_gateway_password
 from imbue.mngr_latchkey.remote.errors import RemoteGatewayError
+from imbue.mngr_latchkey.remote.mock_outer_host_test import DEFAULT_DOCKER_BRIDGE_ADDRESS
 from imbue.mngr_latchkey.remote.mock_outer_host_test import MACHINE_KEY
 from imbue.mngr_latchkey.remote.mock_outer_host_test import StubOuter
 from imbue.mngr_latchkey.remote.mock_outer_host_test import WrittenFile
 from imbue.mngr_latchkey.remote.mock_outer_host_test import as_stub
 from imbue.mngr_latchkey.remote.mock_outer_host_test import stub_outer
 from imbue.mngr_latchkey.remote.provisioning import CONTAINER_TUNNEL_KEY_FILENAME
-from imbue.mngr_latchkey.remote.provisioning import DATALIB_CURL_VERSION
+from imbue.mngr_latchkey.remote.provisioning import CURL_SHIMS_SHA256_BY_TRIPLE
+from imbue.mngr_latchkey.remote.provisioning import CURL_SHIMS_VERSION
 from imbue.mngr_latchkey.remote.provisioning import DESKTOP_GATEWAY_VPS_PORT
 from imbue.mngr_latchkey.remote.provisioning import DesktopGatewaySecrets
 from imbue.mngr_latchkey.remote.provisioning import GATEWAY_PROGRAM_NAME
@@ -47,20 +51,25 @@ from imbue.mngr_latchkey.remote.provisioning import REMOTE_EXTENSIONS_DIR_NAME
 from imbue.mngr_latchkey.remote.provisioning import SUPERVISOR_CONFD_DIR
 from imbue.mngr_latchkey.remote.provisioning import TMPFS_SECRETS_DIR
 from imbue.mngr_latchkey.remote.provisioning import TUNNEL_PROGRAM_NAME
-from imbue.mngr_latchkey.remote.provisioning import _CURL_DISPATCH_PATH
 from imbue.mngr_latchkey.remote.provisioning import _CURL_IMPERSONATE_PATH
+from imbue.mngr_latchkey.remote.provisioning import _CURL_ROUTER_PATH
 from imbue.mngr_latchkey.remote.provisioning import _CURL_STAGED_SUFFIX
 from imbue.mngr_latchkey.remote.provisioning import _CURL_VERSION_STAMP_PATH
 from imbue.mngr_latchkey.remote.provisioning import _MINIMUM_NODE_MAJOR_VERSION
 from imbue.mngr_latchkey.remote.provisioning import _REMOTE_EXTENSION_CANDIDATE_SUFFIX
 from imbue.mngr_latchkey.remote.provisioning import _build_extension_install_script
 from imbue.mngr_latchkey.remote.provisioning import _build_supervisor_program_config
+from imbue.mngr_latchkey.remote.provisioning import _does_container_need_reverse_tunnel
+from imbue.mngr_latchkey.remote.provisioning import _does_container_resolve_outer_host
+from imbue.mngr_latchkey.remote.provisioning import _does_key_open_the_machine_store
+from imbue.mngr_latchkey.remote.provisioning import _ensure_bridge_services_firewalled
 from imbue.mngr_latchkey.remote.provisioning import _ensure_container_tunnel_keypair
 from imbue.mngr_latchkey.remote.provisioning import _ensure_latchkey_gateway_reachable_from_container
 from imbue.mngr_latchkey.remote.provisioning import (
     _ensure_latchkey_gateway_running as _ensure_latchkey_gateway_running_real,
 )
 from imbue.mngr_latchkey.remote.provisioning import _migrate_legacy_remote_gateway_state
+from imbue.mngr_latchkey.remote.provisioning import _resolve_bridge_listen_host
 from imbue.mngr_latchkey.remote.provisioning import _resolve_machine_encryption_key
 from imbue.mngr_latchkey.remote.provisioning import _resolve_machine_gateway_password
 from imbue.mngr_latchkey.remote.provisioning import ensure_latchkey_installed
@@ -72,7 +81,6 @@ from imbue.mngr_latchkey.store import plugin_data_dir
 
 # Where the stub machine keeps its latchkey directory (its $HOME is /root).
 _REMOTE_DIR = Path("/root/.latchkey")
-
 
 # This computer's own gateway secrets, as every provisioning call here hands
 # them over. Distinct strings from the machine's own listen password so a test
@@ -91,6 +99,7 @@ def _ensure_latchkey_gateway_running(
 ) -> None:
     _ensure_latchkey_gateway_running_real(
         outer,
+        DEFAULT_DOCKER_BRIDGE_ADDRESS,
         latchkey_directory,
         SecretStr(machine_encryption_key),
         machine_gateway_password,
@@ -157,48 +166,52 @@ def test_ensure_latchkey_installed_installs_impersonating_curl() -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
     ensure_latchkey_installed(outer)
     command = as_stub(outer).recorded[0].command
-    # Fetches the datalib curl tarball for the VPS arch from the pinned
-    # release, verifies it against the published .sha256, and installs both
-    # the dispatch curl and the impersonator it fronts.
-    assert f"releases/download/{DATALIB_CURL_VERSION}/" in command
-    assert "curl-${_ci_triple}.tar.gz" in command
+    # Fetches the latchkey-curl-shims tarball for the VPS arch from the pinned
+    # release, verifies it against the sha256 pinned here, and installs both
+    # the router and the impersonator it fronts.
+    assert f"github.com/imbue-ai/latchkey-curl-shims/releases/download/{CURL_SHIMS_VERSION}/" in command
+    assert '_ci_tb="latchkey-curl-shims-${_ci_triple}.tar.gz"' in command
     # Every arch the script resolves lands on a statically linked musl build:
-    # the glibc build only runs where glibc is at least as new as datalib's
+    # the glibc build only runs where glibc is at least as new as the release's
     # build host, which rules out older VPS images. Checked over the whole set
     # of ``_ci_triple`` assignments so an arch branch added later cannot
     # quietly reintroduce a gnu triple.
-    assert set(re.findall(r"_ci_triple=(\S+)", command)) == {
+    assert set(re.findall(r"_ci_triple=([^\s;]+)", command)) == {
         "x86_64-unknown-linux-musl",
         "aarch64-unknown-linux-musl",
     }
-    assert "sha256sum -c" in command
+    # Each arch is checked against its own pinned sum, never one fetched from
+    # the release the tarball came from.
+    assert dict(re.findall(r"_ci_triple=(\S+); _ci_sha256=(\S+)", command)) == dict(CURL_SHIMS_SHA256_BY_TRIPLE)
+    assert 'echo "${_ci_sha256}  ${_ci_tb}" | sha256sum -c -' in command
+    assert ".sha256" not in command
     assert "tar -xzf" in command and "--strip-components=1" in command
     # Both binaries are staged beside their destinations and then renamed into
     # place: overwriting them directly would truncate a file the running
     # gateway may be executing (ETXTBSY), and staging both before swapping
     # either leaves the previous pair untouched if the download, checksum, or
     # staging fails.
-    staged_dispatch = f"{_CURL_DISPATCH_PATH}{_CURL_STAGED_SUFFIX}"
+    staged_router = f"{_CURL_ROUTER_PATH}{_CURL_STAGED_SUFFIX}"
     staged_impersonate = f"{_CURL_IMPERSONATE_PATH}{_CURL_STAGED_SUFFIX}"
-    assert f'install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_PATH.rsplit("/", 1)[1]}" "{staged_dispatch}"' in command
+    assert f'install -m 0755 "${{_ci_tmp}}/{_CURL_ROUTER_PATH.rsplit("/", 1)[1]}" "{staged_router}"' in command
     assert (
         f'install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_PATH.rsplit("/", 1)[1]}" "{staged_impersonate}"' in command
     )
     assert f'mv -f "{staged_impersonate}" "{_CURL_IMPERSONATE_PATH}"' in command
-    assert f'mv -f "{staged_dispatch}" "{_CURL_DISPATCH_PATH}"' in command
-    # The dispatch curl -- the one LATCHKEY_CURL names -- is swapped last, so
-    # no request reaches a new dispatch curl fronting an old impersonator.
-    assert command.index(f'mv -f "{staged_impersonate}"') < command.index(f'mv -f "{staged_dispatch}"')
+    assert f'mv -f "{staged_router}" "{_CURL_ROUTER_PATH}"' in command
+    # The router -- the one LATCHKEY_CURL names -- is swapped last, so no
+    # request reaches a new router fronting an old impersonator.
+    assert command.index(f'mv -f "{staged_impersonate}"') < command.index(f'mv -f "{staged_router}"')
     # Version-gated, not presence-gated: the binaries are installed under
     # version-less names, so a VPS that already has an older release's pair
     # must be re-installed rather than skipped -- otherwise a bump only ever
     # reaches hosts that have never been provisioned.
-    assert f"[ ! -x {_CURL_DISPATCH_PATH} ] || " in command
+    assert f"[ ! -x {_CURL_ROUTER_PATH} ] || " in command
     assert f'[ "$(cat {_CURL_VERSION_STAMP_PATH} 2>/dev/null)" != "$_ci_want" ]; then' in command
-    assert f'_ci_want="{DATALIB_CURL_VERSION} ${{_ci_triple}}"' in command
+    assert f'_ci_want="{CURL_SHIMS_VERSION} ${{_ci_triple}}"' in command
     # The stamp is written only after both binaries are swapped in, so an
     # aborted install never leaves a stamp claiming the new version.
-    assert command.index(f'mv -f "{staged_dispatch}"') < command.index(f"> {_CURL_VERSION_STAMP_PATH}")
+    assert command.index(f'mv -f "{staged_router}"') < command.index(f"> {_CURL_VERSION_STAMP_PATH}")
     # Fail-loud like the other components -- no best-effort warning fallback
     # that swallows failures.
     assert "latchkey will use system curl" not in command
@@ -324,6 +337,16 @@ def _reload_commands(outer: OuterHostInterface) -> list[str]:
     return [r.command for r in as_stub(outer).recorded if r.command.startswith("supervisorctl reread")]
 
 
+def _recorded_commands_text(outer: OuterHostInterface) -> str:
+    """Every command run on the VPS, in order, as one searchable string."""
+    return "\n\n".join(r.command for r in as_stub(outer).recorded)
+
+
+def _written_content_text(outer: OuterHostInterface) -> str:
+    """The content of every file written to the VPS, in order, as one searchable string."""
+    return "\n\n".join(w.content.decode("utf-8", "replace") for w in as_stub(outer).written)
+
+
 def test_build_supervisor_program_config_escapes_percent_for_supervisord_interpolation() -> None:
     # supervisord expands %(...)s in every value before shell-splitting the
     # command, so a literal % (here in an exotic path) must be doubled to %%,
@@ -340,19 +363,22 @@ def test_build_supervisor_program_config_escapes_percent_for_supervisord_interpo
     assert conf.count("%") == conf.count("%%") * 2
 
 
-def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_port_loopback(
+def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_the_docker_bridge_address(
     tmp_path: Path,
 ) -> None:
     outer = stub_outer(CommandResult(stdout="", stderr="", success=True))
     _ensure_latchkey_gateway_running(outer, tmp_path, MACHINE_KEY, "machine-password")
     run_script = _gateway_run_script(outer)
     conf = _gateway_conf(outer)
-    # The wrapper exports the gateway config and execs the gateway. Gateway
-    # binds OUTER_PORT on loopback, with counting disabled.
+    # The wrapper exports the gateway config and execs the gateway. The gateway
+    # binds OUTER_PORT on the docker bridge address only -- reachable from the
+    # workspace container, never from off-host -- with counting disabled.
     # The listen port is named the way upstream reads it, so OUTER_PORT is what
     # the gateway actually binds rather than latchkey's default happening to match.
     assert f"export LATCHKEY_GATEWAY_LISTEN_PORT={OUTER_PORT}" in run_script
-    assert "export LATCHKEY_GATEWAY_LISTEN_HOST=127.0.0.1" in run_script
+    assert f"export LATCHKEY_GATEWAY_LISTEN_HOST={DEFAULT_DOCKER_BRIDGE_ADDRESS}" in run_script
+    assert "LISTEN_HOST=0.0.0.0" not in run_script
+    assert "LISTEN_HOST=127.0.0.1" not in run_script
     assert "export LATCHKEY_DISABLE_COUNTING=1" in run_script
     # The machine renews its own tokens: the store it runs on is its own, so
     # nothing else holds the refresh tokens in it to race with, and it keeps
@@ -389,11 +415,11 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     assert "machine-password" not in run_script
     assert "desktop-password" not in run_script
     assert "desktop-override-jwt" not in run_script
-    # Routes latchkey through the bundled dispatch curl. Unconditional export --
+    # Routes latchkey through the curl router. Unconditional export --
     # provisioning installs the pair fail-loud, so reaching this script at all
-    # guarantees they are there. The dispatch curl finds the impersonator as a
+    # guarantees they are there. The router finds the impersonator as a
     # sibling, so no second env var is exported.
-    assert f"export LATCHKEY_CURL={_CURL_DISPATCH_PATH}" in run_script
+    assert f"export LATCHKEY_CURL={_CURL_ROUTER_PATH}" in run_script
     assert "FRANKWEILER_IMPERSONATE_CURL" not in run_script
     # The wrapper refuses to launch a keyless gateway when the machine's own
     # tmpfs secrets are gone (e.g. wiped by a reboot). The desktop-owned pair is
@@ -547,13 +573,16 @@ def test_ensure_latchkey_gateway_reachable_registers_reverse_tunnel_program() ->
         container_ssh_user="root",
         container_ssh_port=2222,
         container_ssh_key_path=Path("/etc/mngr/container_key"),
+        gateway_address=DEFAULT_DOCKER_BRIDGE_ADDRESS,
     )
     conf = _tunnel_conf(outer)
-    # The VPS gateway is exposed at the same fixed container port used by
-    # local workspaces, so agents always use one LATCHKEY_GATEWAY URL.
+    # A container that predates the outer-host mapping keeps reaching the VPS
+    # gateway at its own loopback on the fixed port; the tunnel's far end is the
+    # docker bridge address the gateway binds, not the VPS loopback.
     assert f"[program:{TUNNEL_PROGRAM_NAME}]" in conf
     assert "autorestart=true" in conf
-    assert f"-R 127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}:127.0.0.1:{OUTER_PORT}" in conf
+    assert f"-R 127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}:{DEFAULT_DOCKER_BRIDGE_ADDRESS}:{OUTER_PORT}" in conf
+    assert f":127.0.0.1:{OUTER_PORT}" not in conf
     # SSHes into the published container sshd over VPS loopback, as the given
     # user, via an absolute ssh path (supervisord resolves via its own PATH).
     assert "/usr/bin/ssh" in conf
@@ -582,6 +611,7 @@ def test_ensure_latchkey_gateway_reachable_quotes_key_path_with_spaces() -> None
         container_ssh_user="root",
         container_ssh_port=2222,
         container_ssh_key_path=Path("/tmp/key dir/id_ed25519"),
+        gateway_address=DEFAULT_DOCKER_BRIDGE_ADDRESS,
     )
     conf = _tunnel_conf(outer)
     assert "-i '/tmp/key dir/id_ed25519'" in conf
@@ -595,7 +625,85 @@ def test_ensure_latchkey_gateway_reachable_raises_on_failure() -> None:
             container_ssh_user="root",
             container_ssh_port=2222,
             container_ssh_key_path=Path("/etc/mngr/container_key"),
+            gateway_address=DEFAULT_DOCKER_BRIDGE_ADDRESS,
         )
+
+
+def test_resolve_bridge_listen_host_is_the_docker_bridge_address() -> None:
+    outer = cast(OuterHostInterface, StubOuter(docker_bridge_address="172.18.0.1"))
+    assert _resolve_bridge_listen_host(outer) == "172.18.0.1"
+
+
+def test_resolve_bridge_listen_host_refuses_a_machine_with_no_docker_bridge() -> None:
+    # Failing closed: a wildcard bind on a VPS would put the gateway on its
+    # public interface, password-gated only.
+    outer = cast(OuterHostInterface, StubOuter(docker_bridge_address=""))
+    with pytest.raises(RemoteGatewayError, match="wildcard"):
+        _resolve_bridge_listen_host(outer)
+
+
+def test_ensure_bridge_services_firewalled_refuses_a_machine_the_firewall_cannot_be_applied_on() -> None:
+    # Failing closed: without the policy the bridge-bound services would answer
+    # a packet for the bridge address arriving on the VPS's public interface.
+    outer = stub_outer(CommandResult(stdout="", stderr="E: Unable to locate package nftables", success=False))
+    with pytest.raises(RemoteGatewayError, match="without the firewall.*Unable to locate package nftables"):
+        _ensure_bridge_services_firewalled(outer)
+    assert as_stub(outer).written == []
+
+
+def test_does_container_resolve_outer_host_reads_the_creation_time_mapping() -> None:
+    assert _does_container_resolve_outer_host(
+        cast(OuterHostInterface, StubOuter(container_extra_hosts=("host.docker.internal:host-gateway",))), "mngr-ws"
+    )
+    # An older container has no extra hosts at all (docker reports ``null``).
+    assert not _does_container_resolve_outer_host(
+        cast(OuterHostInterface, StubOuter(container_extra_hosts=())), "mngr-ws"
+    )
+    # Only the outer-host name counts; some unrelated mapping does not.
+    assert not _does_container_resolve_outer_host(
+        cast(OuterHostInterface, StubOuter(container_extra_hosts=("registry.internal:10.0.0.7",))), "mngr-ws"
+    )
+
+
+def test_does_container_resolve_outer_host_inspects_the_named_container() -> None:
+    outer = cast(OuterHostInterface, StubOuter())
+    _does_container_resolve_outer_host(outer, "mngr-ws-7")
+    command = as_stub(outer).recorded[-1].command
+    assert command.startswith("docker inspect")
+    assert "mngr-ws-7" in command
+    assert "ExtraHosts" in command
+
+
+def test_does_container_resolve_outer_host_raises_when_the_container_cannot_be_inspected() -> None:
+    outer = stub_outer(CommandResult(stdout="", stderr="Error: No such object: mngr-ws", success=False))
+    with pytest.raises(RemoteGatewayError, match="No such object"):
+        _does_container_resolve_outer_host(outer, "mngr-ws")
+
+
+def _registered_tunnel_files() -> dict[str, bytes]:
+    """The supervisord drop-in an earlier provisioning of the same VPS left registered."""
+    return {f"/etc/supervisor/conf.d/{TUNNEL_PROGRAM_NAME}.conf": b"[program:latchkey-tunnel]\n"}
+
+
+def test_does_container_need_reverse_tunnel_when_the_container_cannot_resolve_the_outer_host() -> None:
+    outer = cast(OuterHostInterface, StubOuter(container_extra_hosts=()))
+    assert _does_container_need_reverse_tunnel(outer, "mngr-ws")
+
+
+def test_does_container_need_reverse_tunnel_when_one_is_already_registered() -> None:
+    # The agent's LATCHKEY_GATEWAY was decided by the client that created its
+    # host: an older client names the loopback even in a container that carries
+    # the mapping, and registered the tunnel for it. The tunnel is kept.
+    outer = cast(OuterHostInterface, StubOuter(remote_files=_registered_tunnel_files()))
+    assert _does_container_need_reverse_tunnel(outer, "mngr-ws")
+
+
+def test_does_container_need_reverse_tunnel_is_false_for_a_container_that_resolves_the_outer_host() -> None:
+    outer = cast(OuterHostInterface, StubOuter())
+    assert not _does_container_need_reverse_tunnel(outer, "mngr-ws")
+    # The decision reads the container's creation flags, and nothing else is
+    # run on the VPS for it.
+    assert [r.command.split(" ", 2)[:2] for r in as_stub(outer).recorded] == [["docker", "inspect"]]
 
 
 def test_ensure_container_tunnel_keypair_generates_key_and_authorizes_in_container() -> None:
@@ -640,32 +748,44 @@ def test_provision_remote_gateway_runs_full_sequence_on_the_outer_host(tmp_path:
         latchkey_directory=tmp_path,
         desktop_secrets=_DESKTOP_SECRETS,
     )
-    commands = "\n\n".join(r.command for r in as_stub(outer).recorded)
-    written = "\n\n".join(w.content.decode("utf-8", "replace") for w in as_stub(outer).written)
-    # Install latchkey + supervisor, find the container, mint+authorize a key,
-    # and register the gateway + reverse-tunnel supervisord programs.
+    commands = _recorded_commands_text(outer)
+    written = _written_content_text(outer)
+    # Install latchkey + supervisor, resolve the docker bridge address, fence
+    # the bridge-bound ports before either service starts, register the gateway
+    # supervisord program bound there, and find + inspect the container. It
+    # carries the outer-host mapping and no tunnel was ever registered on this
+    # VPS, so no tunnel is wired: no keypair is minted and nothing is exec'd
+    # into the container.
     assert "npm install -g latchkey@" in commands
     assert "apt-get install -y supervisor" in commands
+    # One round trip resolves the bridge address for the owner-exec daemon and
+    # the gateway alike.
+    assert commands.count("addr show docker0") == 1
+    assert "apt-get install -y nftables" in commands
+    assert f"tcp dport {{ {OUTER_PORT}, {VM_EXEC_PORT} }} counter drop" in written
+    assert commands.index(f"systemctl enable --now {BRIDGE_SERVICES_FIREWALL_UNIT_NAME}") < commands.index(
+        "owner-exec"
+    )
     assert "docker ps -a --filter" in commands
     assert "com.imbue.mngr.host-id=" in commands
-    assert "ssh-keygen -t ed25519" in commands
-    assert "docker exec -u root" in commands
+    assert "docker inspect" in commands
     assert "mngr-ws-1" in commands
-    assert "supervisorctl reread && supervisorctl update && (supervisorctl start" in commands
+    assert "ssh-keygen" not in commands
+    assert "docker exec" not in commands
     # A legacy (nohup + PID-file) gateway/tunnel is torn down *before* the new
-    # supervisord programs are applied, so it frees OUTER_PORT / the container
-    # forward bind first.
+    # supervisord program is applied, so it frees OUTER_PORT first.
     assert '"$HOME/.latchkey/gateway.pid"' in commands
     assert commands.index('"$HOME/.latchkey/gateway.pid"') < commands.index("supervisorctl reread")
-    # Both supervisord programs (gateway + tunnel) were written.
+    # Only the gateway supervisord program was written, listening on the bridge.
     assert f"[program:{GATEWAY_PROGRAM_NAME}]" in written
-    assert f"[program:{TUNNEL_PROGRAM_NAME}]" in written
+    assert f"[program:{TUNNEL_PROGRAM_NAME}]" not in written
     assert "exec latchkey gateway" in written
+    assert f"export LATCHKEY_GATEWAY_LISTEN_HOST={DEFAULT_DOCKER_BRIDGE_ADDRESS}" in written
     # The VPS gateway's config.json hides the confusing built-in services and
     # loads only the desktop-gateway forwarding extension.
     assert "hideBuiltinServices" in written and "notion" in written
     assert "Desktop latchkey gateway is unreachable" in written
-    assert "-R 127.0.0.1:" in written
+    assert "-R 127.0.0.1:" not in written
     # Every password is written to a file, never a command. This machine is
     # brand new, so it takes this computer's password as its own listen
     # password, which is also what the forwarding extension presents back here.
@@ -674,6 +794,68 @@ def test_provision_remote_gateway_runs_full_sequence_on_the_outer_host(tmp_path:
         "/run/mngr-latchkey/gateway_listen_password",
         "/run/mngr-latchkey/desktop_gateway_password",
     ]
+
+
+def test_provision_remote_gateway_keeps_the_reverse_tunnel_for_a_container_without_the_mapping(
+    tmp_path: Path,
+) -> None:
+    """A container created before the outer-host mapping still reaches the gateway at its own loopback.
+
+    Its ``LATCHKEY_GATEWAY`` names ``127.0.0.1`` and neither that nor the
+    missing ``--add-host`` can change for the life of the container, so the
+    reverse tunnel is kept for it -- pointed at the bridge address the gateway
+    binds.
+    """
+    outer = cast(OuterHostInterface, StubOuter(container_name="mngr-ws-old", container_extra_hosts=()))
+    provision_remote_gateway(
+        outer,
+        host_id=HostId(),
+        container_ssh_user="root",
+        container_ssh_port=2222,
+        latchkey_directory=tmp_path,
+        desktop_secrets=_DESKTOP_SECRETS,
+    )
+    commands = _recorded_commands_text(outer)
+    written = _written_content_text(outer)
+    # The gateway itself is wired exactly as for a new container.
+    assert f"export LATCHKEY_GATEWAY_LISTEN_HOST={DEFAULT_DOCKER_BRIDGE_ADDRESS}" in written
+    # Then the keypair is minted and authorized in this container, and the
+    # tunnel program registered with the gateway's bridge address as its far end.
+    assert "ssh-keygen -t ed25519" in commands
+    assert "docker exec -u root" in commands
+    assert "mngr-ws-old" in commands
+    assert f"[program:{TUNNEL_PROGRAM_NAME}]" in written
+    assert f"-R 127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}:{DEFAULT_DOCKER_BRIDGE_ADDRESS}:{OUTER_PORT}" in written
+
+
+def test_provision_remote_gateway_keeps_a_registered_reverse_tunnel_for_a_container_with_the_mapping(
+    tmp_path: Path,
+) -> None:
+    """A tunnel an older client registered is kept and re-pointed at the address the gateway binds.
+
+    The container carries the mapping, but its agent's ``LATCHKEY_GATEWAY`` was
+    decided by the client that created its host, which may name the loopback;
+    the tunnel that client registered (forwarding to the VPS loopback the
+    gateway no longer binds) is what says so, and it is never dropped.
+    """
+    outer = cast(OuterHostInterface, StubOuter(container_name="mngr-ws-kept", remote_files=_registered_tunnel_files()))
+    provision_remote_gateway(
+        outer,
+        host_id=HostId(),
+        container_ssh_user="root",
+        container_ssh_port=2222,
+        latchkey_directory=tmp_path,
+        desktop_secrets=_DESKTOP_SECRETS,
+    )
+    commands = _recorded_commands_text(outer)
+    written = _written_content_text(outer)
+    assert "docker inspect" in commands
+    assert "ssh-keygen -t ed25519" in commands
+    assert "docker exec -u root" in commands
+    assert "mngr-ws-kept" in commands
+    assert f"[program:{TUNNEL_PROGRAM_NAME}]" in written
+    assert f"-R 127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}:{DEFAULT_DOCKER_BRIDGE_ADDRESS}:{OUTER_PORT}" in written
+    assert f":127.0.0.1:{OUTER_PORT}" not in written
 
 
 def test_migrate_legacy_remote_gateway_state_kills_pidfile_processes_and_scrubs_secrets() -> None:
@@ -739,6 +921,19 @@ def _outer_with_preexisting_latchkey_dir(is_present: bool) -> OuterHostInterface
         StubOuter(
             result=CommandResult(stdout="", stderr="", success=True),
             is_remote_latchkey_dir_present=is_present,
+        ),
+    )
+
+
+def _outer_with_machine_store(machine_store_key: str, machine_accounts: dict[str, list[str]]) -> OuterHostInterface:
+    """A provisioned machine already holding a credential store, readable only under its own key."""
+    return cast(
+        OuterHostInterface,
+        StubOuter(
+            result=CommandResult(stdout="", stderr="", success=True),
+            is_remote_latchkey_dir_present=True,
+            machine_accounts=machine_accounts,
+            machine_store_key=machine_store_key,
         ),
     )
 
@@ -812,15 +1007,7 @@ def test_resolve_machine_encryption_key_verifies_the_desktop_key_against_a_reboo
     latchkey_directory.mkdir()
     host_id = HostId.generate()
     desktop_key = load_or_create_encryption_key(latchkey_directory)
-    outer = cast(
-        OuterHostInterface,
-        StubOuter(
-            result=CommandResult(stdout="", stderr="", success=True),
-            is_remote_latchkey_dir_present=True,
-            machine_accounts={"slack": ["a@example.com"]},
-            machine_store_key=desktop_key.get_secret_value(),
-        ),
-    )
+    outer = _outer_with_machine_store(desktop_key.get_secret_value(), {"slack": ["a@example.com"]})
 
     key = _resolve_machine_encryption_key(outer, latchkey_directory, host_id)
 
@@ -829,20 +1016,26 @@ def test_resolve_machine_encryption_key_verifies_the_desktop_key_against_a_reboo
     assert as_stub(outer).machine_accounts == {"slack": ["a@example.com"]}
 
 
+def test_a_candidate_key_is_probed_without_its_script_reaching_the_logs(tmp_path: Path) -> None:
+    """The probe carries the candidate key in the script body, so it is withheld like any other."""
+    latchkey_directory = tmp_path / "latchkey"
+    latchkey_directory.mkdir()
+    desktop_key = load_or_create_encryption_key(latchkey_directory)
+    outer = _outer_with_machine_store(desktop_key.get_secret_value(), {"slack": ["a@example.com"]})
+
+    assert _does_key_open_the_machine_store(outer, desktop_key)
+
+    probes = [entry for entry in as_stub(outer).recorded if "auth list --offline" in entry.command]
+    assert len(probes) == 1
+    assert probes[0].is_kept_out_of_logs
+
+
 def test_resolve_machine_encryption_key_abandons_a_store_nobody_present_can_read(tmp_path: Path) -> None:
     """Provisioned by a computer that is gone, rebooted since: signing in again is possible, waiting is not."""
     latchkey_directory = tmp_path / "latchkey"
     latchkey_directory.mkdir()
     host_id = HostId.generate()
-    outer = cast(
-        OuterHostInterface,
-        StubOuter(
-            result=CommandResult(stdout="", stderr="", success=True),
-            is_remote_latchkey_dir_present=True,
-            machine_accounts={"slack": ["lost@example.com"]},
-            machine_store_key="a-key-only-the-lost-computer-held",
-        ),
-    )
+    outer = _outer_with_machine_store("a-key-only-the-lost-computer-held", {"slack": ["lost@example.com"]})
 
     key = _resolve_machine_encryption_key(outer, latchkey_directory, host_id)
 
@@ -1047,8 +1240,10 @@ def test_sync_permissions_refuses_a_policy_it_cannot_read_rather_than_storing_it
 def test_machine_latchkey_layout_names_exactly_what_provisioning_writes(tmp_path: Path) -> None:
     # The migrate carries a machine's latchkey state by these tuples, so a file
     # provisioning starts writing (or stops writing) without them changing
-    # would be silently dropped (or read as absent) on every migration.
-    outer = cast(OuterHostInterface, StubOuter(container_name="mngr-ws-1"))
+    # would be silently dropped (or read as absent) on every migration. The
+    # container predates the outer-host mapping, so the reverse tunnel (the
+    # one file a container with the mapping does without) is written too.
+    outer = cast(OuterHostInterface, StubOuter(container_name="mngr-ws-1", container_extra_hosts=()))
     host_id = HostId()
     provision_remote_gateway(
         outer,

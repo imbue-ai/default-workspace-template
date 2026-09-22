@@ -7,16 +7,22 @@ retry forever. The user recovers by restoring the workspace's backup into a
 fresh workspace; artifacts and any surviving VM are reclaimed at release.
 ``release`` retires a confirmed-abandoned lease through the connector's own
 release chain (artifacts, slice VM, workspace record, row), in any lifecycle
-status -- the operator counterpart of the user's destroy.
+status -- the operator counterpart of the user's destroy. ``repair-record-ids``
+is the one command here that talks to the pool DB directly (like the other
+``minds-admin`` repairs) rather than to the connector.
 """
 
 from typing import Final
 
 import click
+import psycopg2
 
+from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
 from imbue.minds_admin.cli._tier_secrets import make_admin_connector_client
+from imbue.minds_admin.cli._tier_secrets import resolve_pool_database_url
 from imbue.minds_admin.cli.paid import paid_auth_options
 from imbue.minds_admin.cli.paid import resolve_admin_api_key
+from imbue.minds_admin.slices.record_id_repair import run_record_id_repair
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.cli._common import handle_imbue_cloud_errors
 from imbue.mngr_imbue_cloud.wire_types import WorkspaceStopKind
@@ -24,7 +30,13 @@ from imbue.mngr_imbue_cloud.wire_types import WorkspaceStopKind
 # The kinds an operator may stamp (specs/workspace-stop-kinds.md); ``owner`` is
 # the owner route's alone.
 _OPERATOR_STOP_KINDS: Final[tuple[str, ...]] = tuple(
-    kind.value for kind in (WorkspaceStopKind.MAINTENANCE, WorkspaceStopKind.IDLE, WorkspaceStopKind.SUSPENSION)
+    kind.value
+    for kind in (
+        WorkspaceStopKind.MAINTENANCE,
+        WorkspaceStopKind.IDLE,
+        WorkspaceStopKind.SUSPENSION,
+        WorkspaceStopKind.RETIRED,
+    )
 )
 
 
@@ -43,7 +55,7 @@ def workspaces_admin() -> None:
     help=(
         "Why the machine is stopped, which decides who may start it: 'maintenance' is a hold only an "
         "operator start (or 'set-stop-kind idle') ends; 'idle' frees capacity and the user may start it; "
-        "'suspension' is the suspend fan-out's kind."
+        "'suspension' is the suspend fan-out's kind; 'retired' is final (see `workspaces retire`)."
     ),
 )
 @paid_auth_options
@@ -59,6 +71,25 @@ def admin_stop_workspace(host_db_id: str, kind: str, connector_url: str | None, 
     """
     client = make_admin_connector_client(connector_url)
     emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id, WorkspaceStopKind(kind)))
+
+
+@workspaces_admin.command(name="retire")
+@click.argument("host_db_id")
+@paid_auth_options
+@handle_imbue_cloud_errors
+def admin_retire_workspace(host_db_id: str, connector_url: str | None, api_key: str | None) -> None:
+    """Stop the workspace HOST_DB_ID for good: nobody starts it again, its owner included.
+
+    The ``retired`` stop kind for a workspace the gen-2 migration cannot take
+    (below the cutover's version floor, or without a release tag), taken
+    only after `minds-admin archives create` has archived it and the archive
+    has been checked. The owner's start answers 409 workspace_retired (the
+    desktop points them at their backups); the operator start refuses it
+    too -- `set-stop-kind <id> idle` first is the deliberate way back. Once
+    the owner is confirmed covered, `workspaces release` frees the row.
+    """
+    client = make_admin_connector_client(connector_url)
+    emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id, WorkspaceStopKind.RETIRED))
 
 
 @workspaces_admin.command(name="set-stop-kind")
@@ -93,8 +124,9 @@ def admin_start_workspace(host_db_id: str, connector_url: str | None, api_key: s
     by the gen-2 cutover runbook to start every stopped gen-1 workspace before
     the window so the drain can harvest it live. Idempotent -- a workspace
     already running/starting reports its status; a row the cutover has parked
-    is refused as under maintenance. Ignores the stop's kind (this is how a
-    held workspace comes back) and clears it.
+    is refused as under maintenance, a retired one as retired. Ignores a
+    maintenance / suspension kind (this is how a held workspace comes back)
+    and clears it.
     """
     client = make_admin_connector_client(connector_url)
     emit_json(client.admin_start_workspace(resolve_admin_api_key(api_key), host_db_id))
@@ -127,3 +159,44 @@ def admin_abandon_workspace(host_db_id: str, reason: str, connector_url: str | N
     client = make_admin_connector_client(connector_url)
     client.admin_abandon_workspace(resolve_admin_api_key(api_key), host_db_id, reason)
     emit_json({"host_db_id": host_db_id, "status": "crashed", "reason": reason})
+
+
+# CLEANUP: delete this command (with ``slices/record_id_repair.py`` and its
+# tests) after a final run once no minds client older than the release carrying
+# the imbue_cloud plugin's pinned-id slow path appears in the connector access
+# log's ``imbue_client`` field; nothing creates mismatched rows after that.
+@workspaces_admin.command(name="repair-record-ids")
+@click.option("--database-url", default=None, help=DATABASE_URL_HELP)
+@click.option(
+    "--execute",
+    "is_execute",
+    is_flag=True,
+    default=False,
+    help="Apply the plan. Without it the command only prints what it would change.",
+)
+def admin_repair_record_ids(database_url: str | None, is_execute: bool) -> None:
+    """Re-align pool leases whose services agent id drifted from their workspace record.
+
+    Before the imbue_cloud plugin pinned the slow path's rebuilt container to
+    the lease's agent id, a slow-path create minted a fresh one, so the
+    desktop's record and the pool row disagree about the workspace id: the
+    connector's lease-record sweep reports the lease as record-less, and the
+    lease-time record stub shows beside the desktop's record as a duplicate.
+    For every lease-holding row whose agent id names no client-written record
+    of its owner (none at all, or only the lease-time stub), this repoints the
+    row to the owner's client-written record naming the same host id when
+    exactly one exists, then deletes the lease-time stubs that leaves orphaned.
+    A record-less row, one with several candidates, and one whose only other
+    records for its host have the stub shape too (a client's record pushed
+    without a master password and without a backup bucket) are reported and
+    skipped, nothing of their hosts deleted. Dry-run by default; every write
+    is a compare-and-swap on the state the plan saw, and the whole plan applies
+    in one transaction. Safe to re-run whenever an old client recreates the
+    situation.
+    """
+    conn = psycopg2.connect(resolve_pool_database_url(database_url))
+    try:
+        report = run_record_id_repair(conn, is_execute=is_execute)
+    finally:
+        conn.close()
+    emit_json(report.model_dump(mode="json"))

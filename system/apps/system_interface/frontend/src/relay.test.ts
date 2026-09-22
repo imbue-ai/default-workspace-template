@@ -52,6 +52,19 @@ afterEach(() => {
   Object.defineProperty(window, "parent", { value: window, configurable: true });
 });
 
+describe("the origin the shell framed", () => {
+  it("accepts a shell message from a frame's own origin off the family, and still refuses a third origin", () => {
+    const handler = vi.fn();
+    setChildFrameMessageHandler("shell:location", handler);
+    const frame = mountFrame();
+    frame.src = "http://127.0.0.1:7001/new";
+    post({ type: "shell:location", path: "/x" }, "http://127.0.0.1:7001", frameWindow(frame));
+    expect(handler).toHaveBeenCalledWith(frame, expect.objectContaining({ path: "/x" }));
+    post({ type: "shell:location", path: "/y" }, FOREIGN_ORIGIN, frameWindow(frame));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("isWorkspaceFamilyOrigin", () => {
   it("accepts an origin on the same workspace coordinate and refuses every other", () => {
     const shellHost = "system_interface-x7k9q2w1.host-0123456789abcdef0123456789abcdef.localhost:8421";

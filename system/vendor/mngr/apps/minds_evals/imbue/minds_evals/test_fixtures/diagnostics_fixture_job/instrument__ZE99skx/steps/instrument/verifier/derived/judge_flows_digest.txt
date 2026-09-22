@@ -1,0 +1,1002 @@
+# UI flow evidence
+
+- armed_delete: completed (-), 5 step(s) recorded
+- deferred: completed (-), 5 step(s) recorded
+- pending: completed (-), 6 step(s) recorded
+- plain: completed (-), 9 step(s) recorded
+- start_over: completed (-), 4 step(s) recorded
+- ticker: completed (-), 4 step(s) recorded
+- unnamed: completed (-), 7 step(s) recorded
+
+22 screenshot(s) from these flows are attached to this judge request.
+
+Note on reloads: the agent driving a flow reloads the page only where the declared actions say to. A 'reload the page' step that the declared actions did not call for is the agent's last resort after the app stopped responding to it, and is evidence against the app: an app that needs a full reload to show its own state has already failed to work.
+
+Note on unnamed controls: a step marked 'addressed by ref' acted on a control the page exposes with no accessible name -- no label, no aria-label -- which the agent could only address by its position in the accessibility tree. That is an accessibility defect of the delivered app, recorded here for a separate measure of it. Unless the declared actions or the expectation you are judging call for accessibility, it is not what this flow measures, and on its own it is not meant to lower the score you give here.
+
+## flow: armed_delete
+
+declared actions: Step 1: click the button named 'Delete "Buy milk"'. Step 2: click the button named 'Delete "Buy milk"'.
+expect (YOU decide whether this holds): 'Buy milk' is gone.
+completion: completed (-)
+the agent's reading of the final state, as evidence rather than a verdict: scripted flow; no reading
+
+  step 1: click the button named 'Delete "Buy milk"'
+    agent reasoning: scripted
+    the page then: the page reacted but shows nothing new: something changed in the page that is not visible in its accessible tree (a highlight, an armed state, a style), and the tree is exactly as before
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?arm_delete=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 2: click the button named 'Delete "Buy milk"'
+    agent reasoning: scripted
+    the page then: new: - contentinfo: 1 task, 1 completed
+gone: - listitem:
+gone: - checkbox "Buy milk"
+gone: - generic: Buy milk
+gone: - button "Delete \"Buy milk\""
+gone: - contentinfo: 2 tasks, 1 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?arm_delete=1 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [active] [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 3: finish the flow
+    agent reasoning: scripted
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?arm_delete=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Learn React" [checked] [ref=e8]
+            - generic [ref=e9]: Learn React
+            - button "Delete \"Learn React\"" [ref=e10]
+        - button "Refresh" [ref=e11]
+        - status
+        - contentinfo [ref=e12]: 1 task, 1 completed
+        - paragraph [ref=e13]:
+          - link "Start over" [ref=e14] [cursor=pointer]:
+            - /url: ./
+  step 4: read the final state
+    agent reasoning: scripted flow; no reading
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?arm_delete=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Learn React" [checked] [ref=e8]
+            - generic [ref=e9]: Learn React
+            - button "Delete \"Learn React\"" [ref=e10]
+        - button "Refresh" [ref=e11]
+        - status
+        - contentinfo [ref=e12]: 1 task, 1 completed
+        - paragraph [ref=e13]:
+          - link "Start over" [ref=e14] [cursor=pointer]:
+            - /url: ./
+
+## flow: deferred
+
+declared actions: Step 1: type 'walk dog' into the textbox named 'New task'. Step 2: click the button named 'Add'.
+expect (YOU decide whether this holds): 'walk dog' is listed.
+completion: completed (-)
+the agent's reading of the final state, as evidence rather than a verdict: scripted flow; no reading
+
+  step 1: type 'walk dog' into the textbox named 'New task'
+    agent reasoning: scripted
+    the page then: new: - textbox "New task": walk dog
+gone: - textbox "New task"
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?latency=300 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 2: click the button named 'Add'
+    agent reasoning: scripted
+    the page then: new: - textbox "New task"
+new: - listitem:
+new: - checkbox "walk dog"
+new: - generic: walk dog
+new: - button "Delete \"walk dog\""
+new: - contentinfo: 3 tasks, 1 completed
+gone: - textbox "New task": walk dog
+gone: - contentinfo: 2 tasks, 1 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?latency=300 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [active] [ref=e4]: walk dog
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 3: finish the flow
+    agent reasoning: scripted
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?latency=300 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [active] [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox "walk dog" [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 1 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+  step 4: read the final state
+    agent reasoning: scripted flow; no reading
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?latency=300 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [active] [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox "walk dog" [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 1 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+
+## flow: pending
+
+declared actions: Step 1: type 'walk dog' into the textbox named 'New task'. Step 2: click the button named 'Add'. Step 3: wait for the page to change.
+expect (YOU decide whether this holds): 'walk dog' is listed once saving finishes.
+completion: completed (-)
+the agent's reading of the final state, as evidence rather than a verdict: scripted flow; no reading
+
+  step 1: type 'walk dog' into the textbox named 'New task'
+    agent reasoning: scripted
+    the page then: new: - textbox "New task": walk dog
+gone: - textbox "New task"
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?pending=2000 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 2: click the button named 'Add'
+    agent reasoning: scripted
+    the page then: new: - status: Saving...
+gone: - status
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?pending=2000 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [active] [ref=e4]: walk dog
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 3: wait for the page to change
+    agent reasoning: scripted
+    the page then: new: - textbox "New task"
+new: - listitem:
+new: - checkbox "walk dog"
+new: - generic: walk dog
+new: - button "Delete \"walk dog\""
+new: - status
+new: and 1 more
+gone: - textbox "New task": walk dog
+gone: - status: Saving...
+gone: - contentinfo: 2 tasks, 1 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?pending=2000 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]: walk dog
+          - button "Add" [active] [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status [ref=e16]: Saving...
+        - contentinfo [ref=e17]: 2 tasks, 1 completed
+        - paragraph [ref=e18]:
+          - link "Start over" [ref=e19] [cursor=pointer]:
+            - /url: ./
+  step 4: finish the flow
+    agent reasoning: scripted
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?pending=2000 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [active] [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox "walk dog" [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 1 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+  step 5: read the final state
+    agent reasoning: scripted flow; no reading
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?pending=2000 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [active] [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox "walk dog" [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 1 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+
+## flow: plain
+
+declared actions: Step 1: type 'walk dog' into the textbox named 'New task'. Step 2: click the button named 'Add'. Step 3: click the checkbox named 'walk dog'. Step 4: click the button named 'Delete "walk dog"'. Step 5: click the button named 'Refresh'. Step 6: reload the page.
+expect (YOU decide whether this holds): 'walk dog' was added, completed and deleted; the seed tasks are untouched.
+completion: completed (-)
+the agent's reading of the final state, as evidence rather than a verdict: scripted flow; no reading
+
+  step 1: type 'walk dog' into the textbox named 'New task'
+    agent reasoning: scripted
+    the page then: new: - textbox "New task": walk dog
+gone: - textbox "New task"
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 2: click the button named 'Add'
+    agent reasoning: scripted
+    the page then: new: - textbox "New task"
+new: - listitem:
+new: - checkbox "walk dog"
+new: - generic: walk dog
+new: - button "Delete \"walk dog\""
+new: - contentinfo: 3 tasks, 1 completed
+gone: - textbox "New task": walk dog
+gone: - contentinfo: 2 tasks, 1 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [active] [ref=e4]: walk dog
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 3: click the checkbox named 'walk dog'
+    agent reasoning: scripted
+    the page then: new: - checkbox "walk dog" [checked]
+new: - contentinfo: 3 tasks, 2 completed
+gone: - checkbox "walk dog"
+gone: - contentinfo: 3 tasks, 1 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [active] [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox "walk dog" [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 1 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+  step 4: click the button named 'Delete "walk dog"'
+    agent reasoning: scripted
+    the page then: new: - contentinfo: 2 tasks, 1 completed
+gone: - listitem:
+gone: - checkbox "walk dog" [checked]
+gone: - generic: walk dog
+gone: - button "Delete \"walk dog\""
+gone: - contentinfo: 3 tasks, 2 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox "walk dog" [checked] [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 2 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+  step 5: click the button named 'Refresh'
+    agent reasoning: scripted
+    the page then: nothing happened: the page did not react to that action at all, and shows exactly what it showed before
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 6: reload the page
+    agent reasoning: scripted
+    the page then: the page state is exactly the same as before that action
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [active] [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 7: finish the flow
+    agent reasoning: scripted
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 8: read the final state
+    agent reasoning: scripted flow; no reading
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+
+## flow: start_over
+
+declared actions: Step 1: click the link named 'Start over'.
+expect (YOU decide whether this holds): The page reloads at its own root.
+completion: completed (-)
+the agent's reading of the final state, as evidence rather than a verdict: scripted flow; no reading
+
+  step 1: click the link named 'Start over'
+    agent reasoning: scripted
+    the page then: new: page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+gone: page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?latency=300 (Todo)
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?latency=300 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 2: finish the flow
+    agent reasoning: scripted
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 3: read the final state
+    agent reasoning: scripted flow; no reading
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/ (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+
+## flow: ticker
+
+declared actions: Step 1: click the button named 'Refresh'.
+expect (YOU decide whether this holds): Nothing but the clock changes.
+completion: completed (-)
+the agent's reading of the final state, as evidence rather than a verdict: scripted flow; no reading
+
+  step 1: click the button named 'Refresh'
+    agent reasoning: scripted
+    the page then: (the page was still changing when it was read) new: - text: 7804 ms
+gone: - text: 1301 ms
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?ticker=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - text: 1301 ms
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 2: finish the flow
+    agent reasoning: scripted
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?ticker=1 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [active] [ref=e15]
+        - text: 7804 ms
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 3: read the final state
+    agent reasoning: scripted flow; no reading
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?ticker=1 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox "Buy milk" [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox "Learn React" [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [active] [ref=e15]
+        - text: 7804 ms
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+
+## flow: unnamed
+
+declared actions: Step 1: type 'walk dog' into the textbox named 'New task'. Step 2: click the button named 'Add'. Step 3: click the checkbox that has no accessible name beside 'walk dog'. Step 4: click the button named 'Delete "walk dog"'.
+expect (YOU decide whether this holds): 'walk dog' was added, completed through its nameless checkbox and deleted; the seed tasks are untouched.
+completion: completed (-)
+the agent's reading of the final state, as evidence rather than a verdict: scripted flow; no reading
+
+  step 1: type 'walk dog' into the textbox named 'New task'
+    agent reasoning: scripted
+    the page then: new: - textbox "New task": walk dog
+gone: - textbox "New task"
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?unnamed=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 2: click the button named 'Add'
+    agent reasoning: scripted
+    the page then: new: - textbox "New task"
+new: - listitem:
+new: - checkbox
+new: - generic: walk dog
+new: - button "Delete \"walk dog\""
+new: - contentinfo: 3 tasks, 1 completed
+gone: - textbox "New task": walk dog
+gone: - contentinfo: 2 tasks, 1 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?unnamed=1 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [active] [ref=e4]: walk dog
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 3: click the checkbox that has no accessible name (ref e16)
+    addressed by ref: the page gives this control no accessible name (see the note on unnamed controls above)
+    agent reasoning: scripted
+    the page then: new: - checkbox [checked]
+new: - contentinfo: 3 tasks, 2 completed
+gone: - checkbox
+gone: - contentinfo: 3 tasks, 1 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?unnamed=1 (Todo)
+      - generic [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [active] [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 1 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+  step 4: click the button named 'Delete "walk dog"'
+    agent reasoning: scripted
+    the page then: new: - contentinfo: 2 tasks, 1 completed
+gone: - listitem:
+gone: - checkbox [checked]
+gone: - generic: walk dog
+gone: - button "Delete \"walk dog\""
+gone: - contentinfo: 3 tasks, 2 completed
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?unnamed=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+          - listitem [ref=e15]:
+            - checkbox [checked] [ref=e16]
+            - generic [ref=e17]: walk dog
+            - button "Delete \"walk dog\"" [ref=e18]
+        - button "Refresh" [ref=e19]
+        - status
+        - contentinfo [ref=e20]: 3 tasks, 2 completed
+        - paragraph [ref=e21]:
+          - link "Start over" [ref=e22] [cursor=pointer]:
+            - /url: ./
+  step 5: finish the flow
+    agent reasoning: scripted
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?unnamed=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+  step 6: read the final state
+    agent reasoning: scripted flow; no reading
+    page state:
+      page https://todo-fixture-6ctgpmlt.agent-7f006f8e192743afb7dff069dd89ee66.localhost:8431/?unnamed=1 (Todo)
+      - generic [active] [ref=e1]:
+        - heading "Todo" [level=1] [ref=e2]
+        - generic [ref=e3]:
+          - text: New task
+          - textbox "New task" [ref=e4]
+          - button "Add" [ref=e5]
+        - list [ref=e6]:
+          - listitem [ref=e7]:
+            - checkbox [ref=e8]
+            - generic [ref=e9]: Buy milk
+            - button "Delete \"Buy milk\"" [ref=e10]
+          - listitem [ref=e11]:
+            - checkbox [checked] [ref=e12]
+            - generic [ref=e13]: Learn React
+            - button "Delete \"Learn React\"" [ref=e14]
+        - button "Refresh" [ref=e15]
+        - status
+        - contentinfo [ref=e16]: 2 tasks, 1 completed
+        - paragraph [ref=e17]:
+          - link "Start over" [ref=e18] [cursor=pointer]:
+            - /url: ./
+

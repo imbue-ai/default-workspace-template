@@ -14,16 +14,24 @@ dependencies = [
     "modal>=1.5.1",
     "anthropic>=0.40",
     "click>=8.0.0",
+    # What `slack_post` posts the run report with. Already installed as a dependency of
+    # anthropic and of harbor; declared because this project calls it directly.
+    "httpx>=0.27",
     "loguru>=0.7",
     "pydantic>=2.11",
     "imbue-common",
-    # Token -> USD pricing for the workspace agent's transcript usage. Reusing
-    # this table rather than copying it keeps the eval's cost numbers on the same
-    # per-token rates the in-box proxy is configured with, since proxy_config
-    # builds that config from this table too. The rates themselves are pinned to
-    # litellm's map by litellm_pricing_test -- the four flat buckets only, not
-    # the fast-mode or 1-hour-cache dimensions that map also carries.
-    "imbue-mngr-usage",
+    # Supplies the trajectory builder `trajectory` turns a captured workspace
+    # transcript into an ATIF document with, the agent-lifecycle primitives
+    # `evidence_collection` reads an agent's state against, and the polling and
+    # CLI-output helpers the flow modules use. Declared because this project
+    # imports it directly rather than reaching it behind another package.
+    "imbue-mngr",
+    # The price map every cost figure in a report is computed from (`pricing.py`),
+    # and the one the in-box proxy prices its own per-request records from. Already
+    # installed as a dependency of harbor; declared because this project imports it
+    # directly. The floor is the version harbor resolves to, whose map carries the
+    # 1-hour cache-write rate and the gateway-qualified ids the pi arms ask for.
+    "litellm>=1.93.0",
     # The flow lab drives the box-side UI-flow step script against a local
     # Chromium, which playwright installs and locates. The box runs the copy the
     # monorepo venv resolves (apps/minds depends on it), and a flow's page state
@@ -68,11 +76,11 @@ harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.22.0" }
 # Monorepo packages this project shares with the workspace. They are path
 # sources rather than workspace members because this project has no workspace.
 # Only the direct dependencies need an entry: a path source that points into the
-# root workspace carries that workspace's own sources with it, so
-# imbue-mngr-usage's transitive imbue-mngr and overlay resolve to this checkout
-# rather than to PyPI without being named here.
+# root workspace carries that workspace's own sources with it, so imbue-mngr's
+# transitive overlay resolves to this checkout rather than to PyPI without being
+# named here.
 imbue-common = { path = "../../libs/imbue_common", editable = true }
-imbue-mngr-usage = { path = "../../libs/mngr_usage", editable = true }
+imbue-mngr = { path = "../../libs/mngr", editable = true }
 resource-guards = { path = "../../libs/resource_guards", editable = true }
 
 [dependency-groups]
@@ -135,9 +143,10 @@ concurrency = ["multiprocessing", "thread"]
 omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*", "*/resources/*"]
 
 [tool.ty.src]
-# resources/ is shipped as source into the eval box, importing mngr_forward and
-# litellm, which this project does not depend on. It is type-checked by the root
-# workspace instead -- the box runs that venv, so it is the accurate environment
+# resources/ is shipped as source into the eval box, importing mngr_forward, which
+# this project does not depend on, and litellm at whichever version the box has
+# rather than the floor declared above. It is type-checked by the root workspace
+# instead -- the box runs that venv, so it is the accurate environment
 # for it, and it stays accurate for the proxy hooks, which the box loads from its
 # own /opt/eval_proxy venv: that venv installs the litellm version the root
 # workspace is ==-pinned to. The root [tool.ty.src] exclude deliberately does not

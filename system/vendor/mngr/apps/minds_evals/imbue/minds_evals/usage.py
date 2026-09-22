@@ -1,6 +1,6 @@
-"""Token and cost accounting for a trial, split by who spent it.
+"""Token accounting for a trial, split by who spent it.
 
-Two different LLM consumers run during a trial and they must not be conflated:
+Three LLM consumers run during a trial and they must not be conflated:
 
 - the **workspace agent** under test, whose consumption is the eval's subject. Its per-message usage
   already rides the workspace event stream: the workspace's chat app parses claude's session
@@ -13,9 +13,12 @@ Two different LLM consumers run during a trial and they must not be conflated:
   transcript stream and both are read: the watcher's ``assistant_message`` records, and the
   ATIF-shaped ``step`` records (``source: "agent"``, token counts under ATIF's ``metrics`` names)
   that mngr's own emitters write. The one reconciliation that matters is the input bucket -- see
-  ``_atif_token_snapshot``.
+  ``atif_token_snapshot``.
 - the **decider**, the harness's simulated-user model. It is a cost of running the eval, not a
   property of the thing being measured, so it is reported separately as metadata.
+- the **UI-flow verification agent**, which the evidence phase drives. Harness spend like the
+  decider's, and summed across the steps that ran a phase (``combined_verifier_usage``) so that the
+  block in ``usage.json`` describes the whole trial the way the other two do.
 
 **What the transcript does not see: delegated work.** The events endpoint serves main-session events
 only -- a subagent's turns are deliberately routed to a separate per-subagent stream so they do not
@@ -29,25 +32,20 @@ because every call in the workspace crosses it. Either way delegation is at leas
 with a subagent call or an uncaptured worker is marked ``is_cost_complete = False`` rather than
 quietly reporting a clean total.
 
-Both are priced with ``mngr_usage``'s table rather than a local copy, so these numbers and the
-in-box proxy's own are computed from one set of rates -- ``proxy_config`` builds the proxy's config
-from the same table. Those rates are pinned to litellm's map by ``litellm_pricing_test``, which
-covers the four flat per-token buckets; the fast-mode multiplier applied on top of them is
-``mngr_usage``'s own ``FAST_MODE_PRICE_MULTIPLIER``, pinned by ``pricing_test``.
+**Nothing here is priced.** Every account this module produces is tokens per model and the marks
+that say how far those tokens can be read; the money is ``pricing``'s, applied when a report is
+built. A trial therefore records what it consumed rather than what it cost, and a provider changing a
+price cannot rewrite it.
 
-**Speed tier and what it does to cost.** Fast mode bills the same tokens at twice the standard rate
-($10/$50 per MTok against $5/$25 on Opus 5 and Opus 4.8), and it is chosen per request, so a model id
-alone does not determine a price. Token counts are unaffected; only the rate applied to them is. The
-proxy records the tier per request and each tier's tokens are then priced at its own rate, so a trial
-that ran fast reports what it actually cost. A source that cannot see the tier -- the transcript --
-prices everything standard and says so through ``is_cost_rate_certain``: that figure is a floor, and
-half the truth if the workspace was in fast mode, which by default it is.
+**Speed tier.** Fast mode bills the same tokens at twice the standard rate and is chosen per request,
+so a model id alone does not determine a price. Token counts are unaffected; only the rate applied to
+them is. The proxy records the tier per request, and the portion served fast is kept as a subset of
+the totals so each portion can be priced at its own rate. A source that cannot see the tier -- the
+transcript -- says so through ``is_cost_rate_certain``, which makes any figure derived from it a
+floor, and half the truth if the workspace was in fast mode, which by default it is.
 
-Token buckets follow ``TokenSnapshot``'s non-overlapping convention: ``input`` counts only
-non-cached input, with cache reads and cache writes kept separate, because Anthropic prices the
-three differently (a cache write costs 1.25x a plain input token, a cache read 0.1x). Collapsing
-them into one "input" number cannot produce a correct cost, and hides the cache behaviour that
-cache-aware compaction work needs to see.
+Token buckets follow ``TokenSnapshot``'s non-overlapping convention, which is what makes a correct
+cost derivable from them at all.
 """
 
 import json
@@ -62,16 +60,8 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.data_types import DeciderResult
 from imbue.minds_evals.data_types import TokenBuckets
+from imbue.minds_evals.data_types import TokenSnapshot
 from imbue.minds_evals.ui_flows import VerifierUsage
-from imbue.mngr_usage.data_types import TokenSnapshot
-from imbue.mngr_usage.pricing import compute_cost
-
-# The workspace event stream reports a bare model id ("claude-opus-4-8"); the pricing table is keyed
-# by "<provider>/<model>". Only claude ids can be resolved to a provider by name -- anything else is
-# reported unpriced rather than guessed at, so a harness that starts reporting a different model
-# shows up as a missing price instead of a silently wrong cost.
-_ANTHROPIC_PREFIX: Final[str] = "anthropic/"
-_CLAUDE_MODEL_PREFIX: Final[str] = "claude"
 
 # The legacy workspace transcript's usage keys, which its converter renames from Anthropic's wire
 # names (cache_creation_input_tokens -> cache_write_tokens, and so on).
@@ -101,22 +91,11 @@ _WORKER_LAUNCH_MARKERS: Final[tuple[str, ...]] = ("create_worker.py launch", "mn
 # The proxy log's value for a request served in fast mode; standard-speed requests record null.
 _FAST_SPEED: Final[str] = "fast"
 _SPEED_KEY: Final[str] = "speed"
-
-
-@pure
-def canonical_model_key(model: str) -> str | None:
-    """The pricing-table key for a transcript's model id, or None when the provider is unknown.
-
-    An id that already carries a provider prefix is taken as-is; a bare claude id is Anthropic's.
-    Returning None (rather than a guess) is what makes an unpriceable model visible downstream.
-    """
-    if not model:
-        return None
-    if "/" in model:
-        return model
-    if model.startswith(_CLAUDE_MODEL_PREFIX):
-        return _ANTHROPIC_PREFIX + model
-    return None
+# The proxy log's marker for a request that was not served, written by the in-box hooks module
+# (resources/box_proxy_hooks.py, which this project cannot import). A record without an `outcome`
+# key predates failure recording and is a success.
+_OUTCOME_KEY: Final[str] = "outcome"
+_FAILED_OUTCOME: Final[str] = "failed"
 
 
 @pure
@@ -135,7 +114,7 @@ def _legacy_token_snapshot(raw_usage: Mapping[str, Any]) -> TokenSnapshot:
 
 
 @pure
-def _atif_token_snapshot(raw_metrics: Mapping[str, Any]) -> TokenSnapshot:
+def atif_token_snapshot(raw_metrics: Mapping[str, Any]) -> TokenSnapshot:
     """One ATIF step's ``metrics`` block as a TokenSnapshot.
 
     ATIF's ``prompt_tokens`` is cache-*inclusive* -- every input token, cached or not -- where
@@ -177,15 +156,8 @@ def _agent_turn_or_none(event: Mapping[str, Any]) -> tuple[str, TokenSnapshot | 
         raw_metrics = event.get("metrics")
         if not isinstance(raw_metrics, Mapping) or not raw_metrics:
             return model, None
-        return model, _atif_token_snapshot(raw_metrics)
+        return model, atif_token_snapshot(raw_metrics)
     return None
-
-
-@pure
-def _has_any_tokens(tokens: TokenSnapshot) -> bool:
-    return bool(
-        (tokens.input or 0) or (tokens.output or 0) or (tokens.cache_read or 0) or (tokens.cache_creation or 0)
-    )
 
 
 @pure
@@ -199,13 +171,11 @@ def _add(left: TokenSnapshot, right: TokenSnapshot) -> TokenSnapshot:
 
 
 class ModelUsage(FrozenModel):
-    """What one model consumed over a trial, and what that cost."""
+    """What one model consumed over a trial. The model id is carried so a reader can price it."""
 
     model: str = Field(description="Model id as the transcript reported it")
-    pricing_key: str | None = Field(description="Pricing-table key, or None when the provider is unknown")
     message_count: int = Field(description="Agent messages attributed to this model")
     tokens: TokenSnapshot = Field(description="Non-overlapping token buckets for this model")
-    cost_usd: float | None = Field(description="USD cost, or None when the model is not in the pricing table")
     fast_message_count: int = Field(
         default=0, description="Of message_count, those served in fast mode (0 when speed is unobserved)"
     )
@@ -220,11 +190,7 @@ class TrialUsage(FrozenModel):
 
     per_model: tuple[ModelUsage, ...] = Field(description="One entry per model seen, ordered by first appearance")
     tokens: TokenSnapshot = Field(description="Token buckets summed across models")
-    cost_usd: float | None = Field(
-        description="USD across all models, or None when any model is unpriced (a partial total would understate it)"
-    )
     message_count: int = Field(description="Agent messages carrying usage")
-    unpriced_models: tuple[str, ...] = Field(description="Models seen with no entry in the pricing table")
     delegated_call_count: int = Field(description="Subagent (Agent tool) calls, whose usage this total excludes")
     worker_launch_count: int = Field(
         description="Bash commands that look like a worker-agent launch; each one's usage is in this total only if captured"
@@ -242,26 +208,31 @@ class TrialUsage(FrozenModel):
     fast_tokens: TokenSnapshot = Field(
         default_factory=TokenSnapshot, description="The portion of `tokens` spent in fast mode -- a subset"
     )
+    failed_request_count: int = Field(
+        default=0,
+        description="Requests the proxy logged as failed; none of them is in the usage above "
+        "(always 0 for the transcript, which records no failures)",
+    )
 
     @property
     def is_cost_rate_certain(self) -> bool:
-        """Whether ``cost_usd`` was computed at the rate the traffic was actually billed at.
+        """Whether the rate this traffic was billed at can be told from the account.
 
         Fast mode bills the same tokens at twice the standard rate, so the rate is only known when
-        the tier was. When it was, each portion is priced at its own tier and the total is exact
+        the tier was. When it was, each portion is priced at its own tier and the figure is exact
         whether or not any of it ran fast. When it was not -- the transcript, which carries no speed
         information, or a proxy log predating speed recording -- everything is priced standard, which
         is a floor: correct if the trial happened to run entirely standard, and half the truth if it
         did not.
 
         Separate axis from ``is_cost_complete``: that one asks whether *all the traffic* is in the
-        total, this one whether the traffic in it is *priced correctly*.
+        account, this one whether what is in it can be priced correctly.
         """
         return self.is_speed_observed
 
     @property
     def is_cost_complete(self) -> bool:
-        """Whether the total accounts for all the work the agent caused.
+        """Whether the account holds all the work the agent caused.
 
         False once the agent delegates to a subagent, whose turns are served on a separate stream this
         sum never sees, or launches a worker whose stream was not captured. A trial in that state looks
@@ -290,33 +261,11 @@ class DeciderUsage(FrozenModel):
     """What the harness's simulated-user model consumed. Reported as metadata, never as the
     agent's own usage: it measures the cost of running the eval, not the agent under test."""
 
-    model: str = Field(description="Decider model")
+    model: str = Field(description="Decider model, which is what prices this block")
     call_count: int = Field(description="Decider calls made")
     fallback_count: int = Field(description="Calls that fell back to the literal message")
     input_token_count: int = Field(description="Input tokens across decider calls")
     output_token_count: int = Field(description="Output tokens across decider calls")
-    cost_usd: float | None = Field(description="USD cost, or None when the model is not in the pricing table")
-
-
-@pure
-def _tiered_cost(pricing_key: str | None, standard_tokens: TokenSnapshot, fast_tokens: TokenSnapshot) -> float | None:
-    """One model's cost with each tier's tokens priced at that tier's rate.
-
-    None if either portion is unpriceable, because a partial sum reads as a complete cost. A model
-    that served fast-mode traffic but has no fast-mode price is the case worth being strict about:
-    pricing it standard would halve a real bill.
-    """
-    if pricing_key is None:
-        return None
-    standard_cost = compute_cost(pricing_key, standard_tokens)
-    if standard_cost is None:
-        return None
-    if not _has_any_tokens(fast_tokens):
-        return standard_cost
-    fast_cost = compute_cost(pricing_key, fast_tokens, is_fast_mode=True)
-    if fast_cost is None:
-        return None
-    return standard_cost + fast_cost
 
 
 @pure
@@ -359,8 +308,6 @@ class _PerModelTotals(FrozenModel):
 
     tokens: TokenSnapshot = Field(description="Every model's tokens summed")
     fast_tokens: TokenSnapshot = Field(description="Every model's fast-mode tokens summed")
-    unpriced_models: tuple[str, ...] = Field(description="Models whose cost is unknown")
-    cost_usd: float | None = Field(description="USD across all models, or None when any is unpriced or there are none")
 
 
 @pure
@@ -370,16 +317,7 @@ def _per_model_totals(per_model: Sequence[ModelUsage]) -> _PerModelTotals:
     for entry in per_model:
         total_tokens = _add(total_tokens, entry.tokens)
         total_fast_tokens = _add(total_fast_tokens, entry.fast_tokens)
-    unpriced = tuple(entry.model for entry in per_model if entry.cost_usd is None)
-    return _PerModelTotals(
-        tokens=total_tokens,
-        fast_tokens=total_fast_tokens,
-        unpriced_models=unpriced,
-        # None rather than 0.0 in both unknown cases: summing only the priced models would report a
-        # total that looks complete and is not, and a trial with no usage at all did not cost zero --
-        # we simply do not know what it cost.
-        cost_usd=None if (unpriced or not per_model) else sum(entry.cost_usd or 0.0 for entry in per_model),
-    )
+    return _PerModelTotals(tokens=total_tokens, fast_tokens=total_fast_tokens)
 
 
 @pure
@@ -432,7 +370,7 @@ def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage
         if signature == previous_usage:
             continue
         previous_usage = signature
-        if not _has_any_tokens(tokens):
+        if not tokens.is_any_token_recorded:
             # Claude Code emits synthetic messages -- the pre-sign-in "Not logged in" notice, for
             # one -- under a `<synthetic>` model with an all-zero usage block. They cost nothing, so
             # counting them would only let an unpriceable pseudo-model void an otherwise complete
@@ -441,26 +379,14 @@ def summarize_workspace_usage(events: Sequence[Mapping[str, Any]]) -> TrialUsage
         tokens_by_model[model] = _add(tokens_by_model.get(model, TokenSnapshot()), tokens)
         messages_by_model[model] = messages_by_model.get(model, 0) + 1
 
-    per_model: list[ModelUsage] = []
-    for model, tokens in tokens_by_model.items():
-        pricing_key = canonical_model_key(model)
-        per_model.append(
-            ModelUsage(
-                model=model,
-                pricing_key=pricing_key,
-                message_count=messages_by_model[model],
-                tokens=tokens,
-                cost_usd=compute_cost(pricing_key, tokens) if pricing_key is not None else None,
-            )
-        )
-
-    totals = _per_model_totals(per_model)
+    per_model = [
+        ModelUsage(model=model, message_count=messages_by_model[model], tokens=tokens)
+        for model, tokens in tokens_by_model.items()
+    ]
     return TrialUsage(
         per_model=tuple(per_model),
-        tokens=totals.tokens,
-        cost_usd=totals.cost_usd,
+        tokens=_per_model_totals(per_model).tokens,
         message_count=sum(messages_by_model.values()),
-        unpriced_models=totals.unpriced_models,
         delegated_call_count=delegated_call_count,
         worker_launch_count=worker_launch_count,
     )
@@ -474,8 +400,7 @@ def summarize_turn_usage(events: Sequence[Mapping[str, Any]], start_index: int) 
     Per-turn spend is transcript-sourced by construction. The in-box proxy's log records requests
     with no way back to the message that provoked them, so it cannot be split per turn however
     complete it is. That means a per-turn figure carries every transcript caveat: it excludes
-    delegated and worker spend, prices every request at the standard rate whatever tier served it,
-    and is unknown on a codex trial, whose stream reports no usage at all.
+    delegated and worker spend, and is unknown on a codex trial, whose stream reports no usage at all.
     """
     return summarize_workspace_usage(events[start_index:])
 
@@ -486,17 +411,12 @@ def summarize_decider_usage(results: Sequence[DeciderResult], model: str) -> Dec
     configured decider model, so that is what the whole bucket is labelled and priced against; a
     result's own ``model`` is for the per-call audit events. A fallback contributes its tokens like
     any other result -- a model that answered unusably was still billed for answering."""
-    input_token_count = sum(result.input_token_count for result in results)
-    output_token_count = sum(result.output_token_count for result in results)
-    pricing_key = canonical_model_key(model)
-    tokens = TokenSnapshot(input=input_token_count, output=output_token_count)
     return DeciderUsage(
         model=model,
         call_count=len(results),
         fallback_count=sum(1 for result in results if result.is_fallback),
-        input_token_count=input_token_count,
-        output_token_count=output_token_count,
-        cost_usd=compute_cost(pricing_key, tokens) if pricing_key is not None else None,
+        input_token_count=sum(result.input_token_count for result in results),
+        output_token_count=sum(result.output_token_count for result in results),
     )
 
 
@@ -520,30 +440,32 @@ def _token_dict(tokens: TokenSnapshot) -> dict[str, int]:
 @pure
 def workspace_usage_metadata(usage: TrialUsage) -> dict[str, Any]:
     """The workspace agent's usage as trial metadata: the four-way split harbor's own fields cannot
-    express, plus the per-model breakdown an A/B of routing arms needs."""
+    express, plus the per-model breakdown an A/B of routing arms needs.
+
+    Tokens and the model that spent them, never money: what a report makes of them is `pricing`'s,
+    and a figure written here would be a price frozen into the trial record."""
     return {
         "message_count": usage.message_count,
         "tokens": _token_dict(usage.tokens),
-        "cost_usd": usage.cost_usd,
-        "unpriced_models": list(usage.unpriced_models),
-        # False means the agent delegated and this total excludes that work -- see TrialUsage.
+        # False means the agent delegated and this account excludes that work -- see TrialUsage.
         "is_cost_complete": usage.is_cost_complete,
         "delegated_call_count": usage.delegated_call_count,
         "worker_launch_count": usage.worker_launch_count,
         "worker_captured_count": usage.worker_captured_count,
-        # Which speed tier served the traffic, and therefore whether cost_usd is priced at the rate
+        # Which speed tier served the traffic, and therefore whether a reader can price it at the rate
         # it was billed at -- see TrialUsage.is_cost_rate_certain. The transcript carries no speed
         # information, so these stay false/zero unless the trial ran with the proxy.
         "is_speed_observed": usage.is_speed_observed,
         "is_cost_rate_certain": usage.is_cost_rate_certain,
         "fast_message_count": usage.fast_message_count,
         "fast_tokens": _token_dict(usage.fast_tokens),
+        # Requests the proxy saw fail, counted apart from the usage above; zero without a proxy.
+        "failed_request_count": usage.failed_request_count,
         "per_model": [
             {
                 "model": entry.model,
                 "message_count": entry.message_count,
                 "tokens": _token_dict(entry.tokens),
-                "cost_usd": entry.cost_usd,
                 "fast_message_count": entry.fast_message_count,
                 "fast_tokens": _token_dict(entry.fast_tokens),
             }
@@ -559,23 +481,44 @@ def decider_usage_metadata(usage: DeciderUsage) -> dict[str, Any]:
         "call_count": usage.call_count,
         "fallback_count": usage.fallback_count,
         "tokens": {"input": usage.input_token_count, "output": usage.output_token_count},
-        "cost_usd": usage.cost_usd,
     }
 
 
 @pure
 def verifier_usage_metadata(usage: VerifierUsage) -> dict[str, Any]:
-    """The UI-flow verification agent's own spend. Reported next to the decider's and priced the
-    same way: harness spend, never folded into what the agent under test consumed."""
-    pricing_key = canonical_model_key(usage.model)
-    tokens = TokenSnapshot(input=usage.input_token_count, output=usage.output_token_count)
+    """The UI-flow verification agent's own spend. Reported next to the decider's and read the same
+    way: harness spend, never folded into what the agent under test consumed."""
     return {
         "model": usage.model,
         "call_count": usage.call_count,
         "failed_call_count": usage.failed_call_count,
         "tokens": {"input": usage.input_token_count, "output": usage.output_token_count},
-        "cost_usd": compute_cost(pricing_key, tokens) if pricing_key is not None else None,
     }
+
+
+@pure
+def combined_verifier_usage(total: VerifierUsage | None, step: VerifierUsage) -> VerifierUsage:
+    """One trial's flow-agent spend across the steps that ran a verification phase.
+
+    Each step builds its own verification agent, so a step's record covers that step alone. A record
+    that describes the whole trial has to add them up, and one trial runs one verifier model, so the
+    model carries over unchanged.
+    """
+    if total is None:
+        return step
+    return VerifierUsage(
+        model=step.model,
+        call_count=total.call_count + step.call_count,
+        failed_call_count=total.failed_call_count + step.failed_call_count,
+        input_token_count=total.input_token_count + step.input_token_count,
+        output_token_count=total.output_token_count + step.output_token_count,
+    )
+
+
+@pure
+def is_failed_proxy_record(record: Mapping[str, Any]) -> bool:
+    """Whether a proxy log record is a request the proxy failed rather than served."""
+    return record.get(_OUTCOME_KEY) == _FAILED_OUTCOME
 
 
 @pure
@@ -587,15 +530,20 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
     even though they never appear in the chat agent's transcript. Measured on a delegating case, the
     transcript saw 44 responses and the proxy 69 -- 45% of the real cost was invisible.
 
-    The records already carry non-overlapping buckets, normalized by the proxy's own logger.
+    The records already carry non-overlapping buckets, normalized by the proxy's own logger. Their own
+    per-request `cost_usd` is the proxy's observation and is left where it is: nothing sums it.
+
+    Failed requests are counted in ``failed_request_count`` and contribute nothing else: no
+    per-model row, no tokens, no request count, and no say in ``is_speed_observed``.
     """
+    usage_records = [record for record in records if not is_failed_proxy_record(record)]
     # Kept apart by tier all the way through, because the two are billed at different rates and
     # summing them first would leave nothing to apply the right rate to.
     standard_tokens_by_model: dict[str, TokenSnapshot] = {}
     fast_tokens_by_model: dict[str, TokenSnapshot] = {}
     requests_by_model: dict[str, int] = {}
     fast_requests_by_model: dict[str, int] = {}
-    for record in records:
+    for record in usage_records:
         model = str(record.get("model") or "")
         tokens = TokenSnapshot(
             input=int(record.get("input_tokens") or 0),
@@ -610,29 +558,23 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
         else:
             standard_tokens_by_model[model] = _add(standard_tokens_by_model.get(model, TokenSnapshot()), tokens)
 
-    per_model: list[ModelUsage] = []
-    for model in requests_by_model:
-        pricing_key = canonical_model_key(model)
-        standard_tokens = standard_tokens_by_model.get(model, TokenSnapshot())
-        fast_tokens = fast_tokens_by_model.get(model, TokenSnapshot())
-        per_model.append(
-            ModelUsage(
-                model=model,
-                pricing_key=pricing_key,
-                message_count=requests_by_model[model],
-                tokens=_add(standard_tokens, fast_tokens),
-                cost_usd=_tiered_cost(pricing_key, standard_tokens, fast_tokens),
-                fast_message_count=fast_requests_by_model.get(model, 0),
-                fast_tokens=fast_tokens,
-            )
+    per_model = [
+        ModelUsage(
+            model=model,
+            message_count=requests_by_model[model],
+            tokens=_add(
+                standard_tokens_by_model.get(model, TokenSnapshot()), fast_tokens_by_model.get(model, TokenSnapshot())
+            ),
+            fast_message_count=fast_requests_by_model.get(model, 0),
+            fast_tokens=fast_tokens_by_model.get(model, TokenSnapshot()),
         )
+        for model in requests_by_model
+    ]
     totals = _per_model_totals(per_model)
     return TrialUsage(
         per_model=tuple(per_model),
         tokens=totals.tokens,
-        cost_usd=totals.cost_usd,
         message_count=sum(requests_by_model.values()),
-        unpriced_models=totals.unpriced_models,
         # Nothing is missing from this source: it is the boundary every call crosses, so delegated
         # work is already included rather than merely detected.
         delegated_call_count=0,
@@ -640,9 +582,10 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
         # Every record must carry the key, not merely some of them: a log written before the proxy
         # recorded speed reports no fast requests for the same reason a genuinely all-standard trial
         # does, and only the key's presence separates the two.
-        is_speed_observed=bool(records) and all(_SPEED_KEY in record for record in records),
+        is_speed_observed=bool(usage_records) and all(_SPEED_KEY in record for record in usage_records),
         fast_message_count=sum(entry.fast_message_count for entry in per_model),
         fast_tokens=totals.fast_tokens,
+        failed_request_count=len(records) - len(usage_records),
     )
 
 
@@ -650,10 +593,8 @@ def summarize_proxy_usage(records: Sequence[Mapping[str, Any]]) -> TrialUsage:
 def _add_model_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
     return ModelUsage(
         model=left.model,
-        pricing_key=left.pricing_key,
         message_count=left.message_count + right.message_count,
         tokens=_add(left.tokens, right.tokens),
-        cost_usd=None if left.cost_usd is None or right.cost_usd is None else left.cost_usd + right.cost_usd,
         fast_message_count=left.fast_message_count + right.fast_message_count,
         fast_tokens=_add(left.fast_tokens, right.fast_tokens),
     )
@@ -676,15 +617,14 @@ def combine_trial_usages(
     return TrialUsage(
         per_model=per_model,
         tokens=totals.tokens,
-        cost_usd=totals.cost_usd,
         message_count=sum(usage.message_count for usage in usages),
-        unpriced_models=totals.unpriced_models,
         delegated_call_count=sum(usage.delegated_call_count for usage in usages),
         worker_launch_count=worker_launch_count,
         worker_captured_count=worker_captured_count,
         is_speed_observed=bool(usages) and all(usage.is_speed_observed for usage in usages),
         fast_message_count=sum(entry.fast_message_count for entry in per_model),
         fast_tokens=totals.fast_tokens,
+        failed_request_count=sum(usage.failed_request_count for usage in usages),
     )
 
 

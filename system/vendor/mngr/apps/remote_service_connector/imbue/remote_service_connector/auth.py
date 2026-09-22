@@ -3,10 +3,13 @@
 import hmac
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
+from typing import Final
+from typing import TypeVar
 
 import psycopg2
 from fastapi import HTTPException
@@ -16,12 +19,94 @@ from supertokens_python.exceptions import GeneralError as SuperTokensGeneralErro
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.recipe.session.syncio import get_session_without_request_response
 from supertokens_python.syncio import get_user
+from tenacity import Retrying
+from tenacity import retry_if_exception_type
+from tenacity import stop_after_attempt
+from tenacity import wait_fixed
 
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.errors import EmailNotVerifiedError
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 
 logger = logging.getLogger(__name__)
+
+_CoreCallResult = TypeVar("_CoreCallResult")
+
+# The SDK's querier raises a bare ``Exception`` whose message has exactly this
+# shape whenever the core answers a non-2xx status.
+_CORE_STATUS_ERROR_MESSAGE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^SuperTokens core threw an error for a \w+ request to path: '(?P<path>[^']*)' with status code: (?P<status>\d+)"
+)
+# ...and this one once its connection-level retries against every configured
+# core host are exhausted.
+_CORE_UNREACHABLE_MESSAGE: Final[str] = "No SuperTokens core available to query"
+_CORE_CALL_ATTEMPTS: Final[int] = 2
+_CORE_CALL_RETRY_WAIT_SECONDS: Final[float] = 0.25
+
+
+def _core_unavailable_error_from(exc: Exception) -> SuperTokensCoreUnavailableError | None:
+    """Recognize the querier's bare ``Exception`` for a core 5xx or an unreachable core.
+
+    Returns None for everything else -- the SDK's typed errors, a core 4xx
+    (a real bug in our request, not an outage), and any other exception type
+    -- so those keep their existing handling.
+    """
+    if type(exc) is not Exception:
+        return None
+    message = str(exc)
+    if message.startswith(_CORE_UNREACHABLE_MESSAGE):
+        return SuperTokensCoreUnavailableError(path=None, status_code=None)
+    match = _CORE_STATUS_ERROR_MESSAGE_RE.match(message)
+    if match is None:
+        return None
+    status_code = int(match.group("status"))
+    if status_code < 500:
+        return None
+    return SuperTokensCoreUnavailableError(path=match.group("path"), status_code=status_code)
+
+
+def _call_supertokens_core_once(operation: Callable[[], _CoreCallResult], caller: str) -> _CoreCallResult:
+    """One attempt of ``call_supertokens_core``: translate the querier's core-outage Exception, pass the rest through."""
+    try:
+        return operation()
+    except Exception as exc:
+        # The only way to tell the querier's bare Exception apart from a
+        # genuine surprise is by its message, so the catch has to be this
+        # wide; anything unrecognized is re-raised untouched.
+        core_error = _core_unavailable_error_from(exc)
+        if core_error is None:
+            raise
+        emit_metric(
+            "supertokens_core_unavailable",
+            1,
+            {
+                "caller": caller,
+                "status": str(core_error.status_code) if core_error.status_code is not None else "unreachable",
+            },
+        )
+        logger.debug("SuperTokens core unavailable during %s: %s", caller, exc)
+        raise core_error from exc
+
+
+def call_supertokens_core(operation: Callable[[], _CoreCallResult], caller: str) -> _CoreCallResult:
+    """Run one SuperTokens SDK call, riding out a single transient core failure.
+
+    A core 5xx (the managed core's front proxy answering 502, typically) or an
+    unreachable core is retried once after a short wait; if it fails again the
+    call raises ``SuperTokensCoreUnavailableError`` (a retryable 503 on the
+    wire) instead of letting the SDK's bare ``Exception`` reach the 500
+    handler. Every other exception propagates unchanged. Each failure is
+    counted by the ``supertokens_core_unavailable`` metric rather than logged
+    at warning, since a transient upstream blip is routine, not a Bugsink event.
+    """
+    retrying = Retrying(
+        retry=retry_if_exception_type(SuperTokensCoreUnavailableError),
+        stop=stop_after_attempt(_CORE_CALL_ATTEMPTS),
+        wait=wait_fixed(_CORE_CALL_RETRY_WAIT_SECONDS),
+        reraise=True,
+    )
+    return retrying(_call_supertokens_core_once, operation, caller)
 
 
 class UserAuth(BaseModel):
@@ -63,9 +148,11 @@ def authenticate_request(request: Request, check_database: bool = False) -> User
     """Authenticate a request via its SuperTokens JWT Bearer token.
 
     Raises ``HTTPException(401)`` when the Bearer credentials are missing or
-    the token is not a valid SuperTokens session. Email verification is NOT
-    required here -- endpoints that authorize by email ownership must
-    additionally call :func:`require_verified_email`.
+    the token is not a valid SuperTokens session, and
+    ``SuperTokensCoreUnavailableError`` (a retryable 503 once mapped by
+    ``handle_endpoint_errors``) when the core itself is down. Email
+    verification is NOT required here -- endpoints that authorize by email
+    ownership must additionally call :func:`require_verified_email`.
 
     ``check_database=True`` verifies the session against the SuperTokens core
     rather than by signature alone, so a revoked-but-unexpired access token is
@@ -122,9 +209,11 @@ def resolve_account_email(
 
     Only the SuperTokens SDK's typed errors (``SuperTokensSessionError``,
     ``SuperTokensGeneralError``) are caught and turned into ``(None, False)``
-    (with a warning log); any other exception (e.g. transport-level network
-    errors that escape the SDK) is allowed to propagate, so that truly
-    unexpected failures surface loudly rather than silently denying access.
+    (with a warning log). A core outage propagates as
+    ``SuperTokensCoreUnavailableError`` (a retryable 503) rather than reading
+    as "no email" -- that would answer 401 and make clients treat a valid
+    session as dead; any other exception is allowed to propagate, so that
+    truly unexpected failures surface loudly rather than silently denying access.
 
     ``user_getter`` is exposed for tests so they can drive each branch
     (``None`` user, missing emails, SDK exception) without monkeypatching the
@@ -132,7 +221,7 @@ def resolve_account_email(
     """
     resolved_getter = user_getter if user_getter is not None else get_user
     try:
-        user = resolved_getter(user_id)
+        user = call_supertokens_core(lambda: resolved_getter(user_id), caller="resolve_account_email")
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         emit_metric("supertokens_user_fetch_failed", 1, {"caller": "resolve_account_email"})
         logger.warning("Failed to fetch SuperTokens user %s", user_id[:8], exc_info=exc)
@@ -160,11 +249,13 @@ def get_backfill_email(
     user who merely lacks verification must still get a (free) row -- so
     an existing-but-unverified user maps to ``""`` (create the row, skip the
     paid check) while a missing/unresolvable user maps to ``None`` (do not
-    create anything).
+    create anything). A core outage instead propagates as
+    ``SuperTokensCoreUnavailableError`` (a retryable 503) rather than reading
+    as an unresolvable user.
     """
     resolved_getter = user_getter if user_getter is not None else get_user
     try:
-        user = resolved_getter(user_id)
+        user = call_supertokens_core(lambda: resolved_getter(user_id), caller="get_backfill_email")
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         emit_metric("supertokens_user_fetch_failed", 1, {"caller": "get_backfill_email"})
         logger.warning("Failed to fetch SuperTokens user %s", user_id[:8], exc_info=exc)
@@ -183,7 +274,13 @@ def _authenticate_supertokens(
     email_resolver: Callable[[str], tuple[str | None, bool]] = resolve_account_email,
     check_database: bool = False,
 ) -> UserAuth:
-    """Validate a SuperTokens JWT access token. Returns UserAuth carrying the derived user-id prefix and email."""
+    """Validate a SuperTokens JWT access token. Returns UserAuth carrying the derived user-id prefix and email.
+
+    Raises ``HTTPException(401)`` for an invalid token and
+    ``SuperTokensCoreUnavailableError`` when the core itself is down (the
+    verify call reaches the core for ``check_database`` and for the first
+    access token minted after a refresh, even on read routes).
+    """
     connection_uri = os.environ.get("SUPERTOKENS_CONNECTION_URI")
     if not connection_uri:
         raise HTTPException(status_code=401, detail="SuperTokens not configured")
@@ -195,11 +292,14 @@ def _authenticate_supertokens(
         # endpoints that do require it check the live core state via
         # ``require_verified_email`` instead of the claim baked into the token
         # at login time.
-        session = session_getter(
-            access_token=token,
-            anti_csrf_check=False,
-            check_database=check_database,
-            override_global_claim_validators=lambda *_args, **_kwargs: [],
+        session = call_supertokens_core(
+            lambda: session_getter(
+                access_token=token,
+                anti_csrf_check=False,
+                check_database=check_database,
+                override_global_claim_validators=lambda *_args, **_kwargs: [],
+            ),
+            caller="authenticate_request",
         )
     except (ValueError, TypeError, SuperTokensSessionError, SuperTokensGeneralError) as exc:
         raise HTTPException(status_code=401, detail="Invalid token") from exc
@@ -243,8 +343,10 @@ def get_user_id_from_bearer_header(request: Request) -> str:
 def get_user_id_from_access_token(token: str) -> str:
     """Validate a SuperTokens JWT and return the full user_id (not just the prefix).
 
-    Raises ``HTTPException(401)`` on any validation failure. Used by auth-proxy
-    endpoints that need the full user_id to drive an API call (e.g. revoke).
+    Raises ``HTTPException(401)`` on any validation failure (and
+    ``SuperTokensCoreUnavailableError`` when the core is down). Used by
+    auth-proxy endpoints that need the full user_id to drive an API call
+    (e.g. revoke).
 
     Does NOT enforce email-verification at this layer -- callers like
     ``/auth/session/revoke`` legitimately need to work for unverified
@@ -256,10 +358,13 @@ def get_user_id_from_access_token(token: str) -> str:
     if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
         raise HTTPException(status_code=401, detail="SuperTokens not configured")
     try:
-        session = get_session_without_request_response(
-            access_token=token,
-            anti_csrf_check=False,
-            override_global_claim_validators=lambda *_args, **_kwargs: [],
+        session = call_supertokens_core(
+            lambda: get_session_without_request_response(
+                access_token=token,
+                anti_csrf_check=False,
+                override_global_claim_validators=lambda *_args, **_kwargs: [],
+            ),
+            caller="get_user_id_from_access_token",
         )
     except (ValueError, TypeError, SuperTokensSessionError, SuperTokensGeneralError) as exc:
         raise HTTPException(status_code=401, detail="Invalid token") from exc

@@ -48,6 +48,7 @@ import imbue.remote_service_connector.shares as shares_module
 from imbue.modal_app_kit.log_format import deployed_minds_env_name
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.modal_app_kit.request_logging import ensure_info_log_handler
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,10 @@ def _send_visitor_verification_email(user_id: str, email: str, continue_next_pat
     except HTTPException as exc:
         logger.warning("Could not resolve login method for visitor verification email: %s", exc.detail)
         return
+    except SuperTokensCoreUnavailableError as exc:
+        emit_metric("verification_email_send_failed", 1, {"caller": "share_broker"})
+        logger.warning("Could not resolve login method for visitor verification email", exc_info=exc)
+        return
     try:
         auth_proxy_module.send_verification_email_with_cooldown(
             user_id=user_id,
@@ -249,7 +254,7 @@ def _send_visitor_verification_email(user_id: str, email: str, continue_next_pat
             email=email,
             continue_next_path=continue_next_path,
         )
-    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+    except (SuperTokensSessionError, SuperTokensGeneralError, SuperTokensCoreUnavailableError) as exc:
         # A failed send must not fail the visit: the visitor still lands on
         # /check-inbox (which explains what to do), and the manage page offers
         # a resend. The cooldown slot was already released for the retry.

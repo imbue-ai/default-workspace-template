@@ -11,6 +11,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from anyio import to_thread
 from fastapi import FastAPI
 from fastapi import HTTPException
 
@@ -20,6 +21,7 @@ from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.accounts import router as accounts_router
 from imbue.remote_service_connector.accounts_web import router as accounts_web_router
 from imbue.remote_service_connector.auth_proxy import router as auth_proxy_router
+from imbue.remote_service_connector.deploy_constants import SYNC_ROUTE_THREAD_LIMIT
 from imbue.remote_service_connector.errors import ReportingProbeError
 from imbue.remote_service_connector.hosts import router as hosts_router
 from imbue.remote_service_connector.http_api import handle_unexpected_exception
@@ -45,7 +47,11 @@ logger = logging.getLogger(__name__)
 # The ``async`` is mandated by Starlette's lifespan protocol (the same
 # protocol-shim exception as the ASGI middlewares' ``async __call__``).
 @asynccontextmanager
-async def _flush_metrics_on_shutdown(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # The sync-route thread limiter belongs to the running event loop, so
+    # startup is the first place it can be resized (the sizing rationale is
+    # with the constant).
+    to_thread.current_default_thread_limiter().total_tokens = SYNC_ROUTE_THREAD_LIMIT
     yield
     # Modal container scaledown is a graceful ASGI shutdown, so the ping
     # metrics buffered since the last periodic flush are emitted here instead
@@ -53,7 +59,7 @@ async def _flush_metrics_on_shutdown(app: FastAPI) -> AsyncIterator[None]:
     shares_module.flush_frps_ping_metrics()
 
 
-web_app = FastAPI(lifespan=_flush_metrics_on_shutdown)
+web_app = FastAPI(lifespan=_lifespan)
 # Exceptions no layer expected (neither the routes nor raise_as_http's
 # domain mapping) land here: reported to Bugsink at top priority, answered
 # with the generic internal_error body. See http_api.handle_unexpected_exception.

@@ -14,6 +14,7 @@ from imbue.minds.utils.logging import console_level_from_verbose_and_quiet
 from imbue.minds.utils.logging import setup_logging
 from imbue.minds_admin.cli.accounts_admin import account_admin
 from imbue.minds_admin.cli.analytics_admin import analytics_admin
+from imbue.minds_admin.cli.archives import archives
 from imbue.minds_admin.cli.artifacts_admin import artifacts_admin
 from imbue.minds_admin.cli.cutover import cutover
 from imbue.minds_admin.cli.env import env
@@ -71,4 +72,5 @@ cli.add_command(repair_keys)
 cli.add_command(wireguard)
 cli.add_command(wireguard_alias)
 cli.add_command(cutover)
+cli.add_command(archives)
 cli.add_command(repair_home_layout)

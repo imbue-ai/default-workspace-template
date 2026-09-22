@@ -124,7 +124,7 @@ Three routes were available for producing the ATIF document:
 
 1. Run `mngr transcript <chat_agent_id> --format atif` inside the live workspace and pull the file out.
 2. Pull a copy of `events.jsonl` out and build the document host-side with `parse_stream_content` and `build_trajectory_from_records` from `libs/mngr`.
-   This is feasible: `apps/minds_evals` depends on `imbue-mngr-usage`, an editable path source whose transitive `imbue-mngr` resolves to this checkout, so `imbue.mngr.agents.trajectory_build` imports from the standalone venv.
+   This is feasible: `apps/minds_evals` depends on `imbue-mngr` as an editable path source into this checkout, so `imbue.mngr.agents.trajectory_build` imports from the standalone venv.
 3. Add a file-input mode to `mngr transcript` in `libs/mngr` and run that host-side on the pulled copy.
 
 Route 1 is taken.
@@ -256,5 +256,5 @@ No libs/mngr change, so `just test-minds-evals` covers everything.
 - **Re-pointing the driver's poll or its usage account at the common transcript.** See [Where the capture runs](#where-the-capture-runs).
 - **A file-input mode for `mngr transcript`.** See [Why the workspace builds the document](#why-the-workspace-builds-the-document).
 - **Pulling the subagents' own streams.** They are embedded in the document `mngr` builds (for proxy-run subagents); nothing further is captured for them.
-- **Pricing the document's per-step metrics.** `final_metrics.total_cost_usd` is the resolved trial cost; per-step `cost_usd` stays absent as the stream leaves it.
+- **Pricing the document's metrics at all.** The document carries the resolved trial's token counts and no money: `final_metrics.total_cost_usd` is unset and per-step `cost_usd` stays absent as the stream leaves it. `minds-evals check-run` prices the tokens when it builds a report.
 - **A raw copy of the polled UI feed in the artifacts.** It was only ever a debugging aid; the common-transcript stream in the bundle is the higher-fidelity record of the same session.

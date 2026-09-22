@@ -440,7 +440,7 @@ So the credential read and the boto3 client have one definition, shared by the r
 
 At the repo root next to `scripts/lima_image/publish.py`, which is the existing home for operator-run release tooling -- **not** `apps/minds/scripts/`, which holds build-time Node scripts.
 
-Fetches ToDesktop's per-build manifest, rewrites its URLs to absolute, and uploads it as `<channel>-mac.yml` with a short `Cache-Control`. Gates before writing anything: the Lima image manifest must exist for the build's `FALLBACK_BRANCH` with each arch the run names, on a tier that configures an image store; every rewritten URL must keep a `.zip`/`.dmg` extension; and the version must be plain `X.Y.Z` (`assert_plain_release_version`, called on its own rather than as a side effect of the backwards-move check).
+Fetches ToDesktop's per-build manifest for one platform, rewrites its URLs to absolute, and uploads it as `<channel>-<platform>.yml` (`-mac`, `-linux`) with a short `Cache-Control`. Gates before writing anything: the Lima image manifest must exist for the build's `FALLBACK_BRANCH` with each arch the run names, on a tier that configures an image store; every rewritten URL must keep the platform's artifact extension (`.zip`/`.dmg` for mac, `.AppImage`/`.deb` for linux, per `_REQUIRED_EXTENSIONS_BY_PLATFORM`); and the version must be plain `X.Y.Z` (`assert_plain_release_version`, called on its own rather than as a side effect of the backwards-move check).
 
 It is a library, not a command: it has no CLI, because a second entry point would be a second gate set to keep in step with the reviewed one.
 
@@ -459,7 +459,7 @@ Clients are unaffected either way -- they keep fetching the CDN copy, which is w
 
 A channel moves only by repointing its entry. **Removing an entry withdraws nothing** -- no manifest is ever deleted, so the channel keeps serving its last build, and the run names it rather than reporting a promotion. So `git revert` is the undo only between two builds carrying the same version at the same percentage, which is the ordinary `alpha` case. Reverting a version bump moves the channel back to the older build, which publishes like any other move and is named as backwards on the report line. Reverting a ramp step restores the previous, smaller band, which is a supported move and the way a bad build is stopped part-way through a ramp.
 
-- **`apps/minds/release-channels.toml`** declares which build each channel serves and how much of the channel is offered it (`build_id`, `version`, `fallback_branch`, `rollout_percentage` -- see [Staged rollout](#staged-rollout)), `stable` included. Every field is required and an unrecognised key is refused. `beta` carries an entry like the other two; what is still owed is the promotion cadence that keeps it moving (see [Decisions owed](#decisions-owed)).
+- **`apps/minds/release-channels.toml`** declares which build each channel serves, how much of the channel is offered it (`build_id`, `version`, `fallback_branch`, `rollout_percentage` -- see [Staged rollout](#staged-rollout)), and which platforms' manifests it publishes (`platforms`, a non-empty list drawn from `mac` and `linux`; see [specs/minds-linux-packaging/spec.md](../minds-linux-packaging/spec.md)), `stable` included. Every field is required and an unrecognised key is refused. `beta` carries an entry like the other two; what is still owed is the promotion cadence that keeps it moving (see [Decisions owed](#decisions-owed)).
 - **`scripts/release_channel/publish.py`** reads that file and makes it true, running every `manifest.py` gate per entry plus two the primitive has no basis for. The declared `version` must equal what the build actually is, or the diff a reviewer approves could say something different from what gets published. And `fallback_branch` must be `minds-v<that version>`: nothing here can read the tag baked into the build, so leaving the previous release's tag beside a bumped version would point the image gate at the previous release's image, find it, and pass -- the silent failure that gate exists to convert into a loud one, reported green. Re-running a promotion that is already applied is a no-op, decided by comparing the manifest it would publish against the one the channel serves -- not their versions, because a version is stamped once at cut and every build until the next one repeats it, so the ordinary `alpha` promotion is a new build at the version already served.
 - **`scripts/release_channel/resolve_tier.sh`** derives the app id, bucket, feed URL and image-store URL from files already in the repo, so the workflow carries no copies that can drift from the tier's own config. Bare values, never ready-made flags: the caller builds its own argv, so a config value carrying a space stays one argument instead of splitting into extra flags on a credentialed command. An unset `update_feed_base_url` is the honest "this tier serves no manifest yet" state, and the caller skips publishing rather than inventing a URL.
 - **`.github/workflows/minds-release-channels.yml`** runs it, split by trust: the `validate` job runs on the PR with **no credentials**, because every gate reads a public URL; only the push-to-main `publish` job takes the R2 credential, behind the `minds-release` environment.
@@ -479,7 +479,6 @@ A channel moves only by repointing its entry. **Removing an entry withdraws noth
   `environment`, `ip_address` and `user_agent`, never tags. A percentage ramp
   does not need it -- the ramped build and its control always carry different
   `release` strings -- so this is owed to the channel ladder, not to the ramp.
-- Linux (`<channel>-linux.yml`).
 
 ### Docs and changelog
 
@@ -782,10 +781,10 @@ See [Staged rollout](#staged-rollout) for the model and the guards, and finding 
 
    **Correcting the pessimism, 2026-08-25.** The fixed cohort cuts the other way too, and this matters more than the sampling cost given that nobody can be pulled back. Because the ramp restarts at its first step with every build, the installs that took a bad build are also the first offered its replacement. The property that makes the cohort a poor sample makes it the right population to repair first.
 
-7. **Linux: deferred (decided 2026-08-12).**
-   `latest-linux.yml` exists and ships an x86_64 AppImage with blockmaps, but Linux is not working well enough to carry channels.
-   No `<channel>-linux.yml` is published, so a Linux client sees stable only.
-   Nothing in the design blocks adding it later: the manifests are per-platform files and `manifest.py` gains a flag.
+7. **Linux: deferred (decided 2026-08-12); built 2026-09-11.**
+   Deferred at first because the Linux AppImage ToDesktop produced carried arm64 Mach-O tools and could not create a mind.
+   [specs/minds-linux-packaging/spec.md](../minds-linux-packaging/spec.md) fixed the staging, added a `.deb` beside the AppImage, and made every entry in `release-channels.toml` name its `platforms`.
+   `<channel>-linux.yml` is published for every entry that lists `linux`; stable lists `mac` only until a Linux build has passed the manual pass.
 
 ## Phasing
 

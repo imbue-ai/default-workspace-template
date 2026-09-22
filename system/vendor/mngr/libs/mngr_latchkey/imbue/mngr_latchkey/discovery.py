@@ -4,13 +4,17 @@ Exposes two callables:
 
 * :class:`LatchkeyDiscoveryHandler` -- on every agent discovery, ensures
   the shared desktop ``latchkey gateway`` subprocess is up and exposes exactly
-  one gateway on the agent's ``127.0.0.1:AGENT_SIDE_LATCHKEY_PORT``. Local
-  workspaces receive the desktop gateway directly. Remote workspaces receive
-  the VPS gateway, while a separate desktop-to-VPS tunnel lets its forwarding
-  extension reach Minds-owned endpoints on the desktop. A workspace whose
-  gateway location cannot be resolved yet receives *neither*: guessing the
-  desktop gateway would half-work while exposing it to a workspace that is not
-  entitled to it (see ``_warn_unresolved_gateway_route``).
+  one gateway at the agent's fixed ``LATCHKEY_GATEWAY`` URL, on
+  ``AGENT_SIDE_LATCHKEY_PORT``. A local agent receives the desktop gateway,
+  reverse-tunneled onto its own loopback. A remote agent receives the VPS
+  gateway, which its container reaches over the docker bridge as
+  ``host.docker.internal`` (see :mod:`imbue.mngr_latchkey.remote.provisioning`
+  for the container that predates that mapping), while a separate
+  desktop-to-VPS tunnel lets that gateway's forwarding extension reach
+  Minds-owned endpoints on the desktop. An agent whose gateway location cannot
+  be resolved yet receives *neither*: guessing the desktop gateway would
+  half-work while exposing it to an agent that is not entitled to it (see
+  ``_warn_unresolved_gateway_route``).
 * :class:`LatchkeyDestructionHandler` -- on every agent destruction,
   tears down the reverse tunnel that belongs to that agent so the
   manager's health-check loop doesn't keep spinning paramiko transports
@@ -44,6 +48,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.mngr.api.providers import close_provider_instances_for_context
 from imbue.mngr.api.providers import get_provider_instance
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import ProviderInstanceConfig
@@ -178,14 +183,16 @@ class LatchkeyDiscoveryHandler(MutableModel):
     Intended to be registered via ``MngrStreamManager.add_on_agent_discovered_callback``.
 
     For every discovered agent, ensures the shared ``latchkey gateway``
-    subprocess is running on the desktop host. Agents that reach the
-    desktop via SSH (containers, VMs, VPS) also get a reverse tunnel that
-    exposes the host-side gateway on the agent's own
-    ``127.0.0.1:AGENT_SIDE_LATCHKEY_PORT``. Agents discovered without SSH
-    info (e.g. local-provider agents in tests, or any discovery that
-    arrives before the host SSH event) skip the reverse-tunnel step and
-    are expected to reach the gateway via whatever direct route already
-    exists.
+    subprocess is running on the desktop host. A desktop-gateway agent that
+    reaches the desktop via SSH (containers, VMs) also gets a reverse tunnel
+    that exposes the host-side gateway on the agent's own
+    ``127.0.0.1:AGENT_SIDE_LATCHKEY_PORT``. A VPS-gateway agent instead has
+    the VPS-resident gateway provisioned on its outer host, where its
+    container reaches it over the docker bridge (see the module docstring).
+    Agents discovered without SSH info (e.g. local-provider agents in tests,
+    or any discovery that arrives before the host SSH event) skip the
+    reverse-tunnel step and are expected to reach the gateway via whatever
+    direct route already exists.
 
     An agent whose host discovery reports as not-running (stopped, paused,
     crashed, ...) instead has its reverse tunnel torn down and skips gateway
@@ -373,7 +380,9 @@ class LatchkeyDiscoveryHandler(MutableModel):
 
         A cycle that wired this host to the desktop gateway (e.g. before
         a provider reload revealed its outer host) left a tunnel holding 1989
-        in the container, where the VPS->container tunnel must bind. Removal is
+        in the container, serving a gateway the host is not entitled to
+        (and, for a container that predates the outer-host mapping, squatting
+        the port the VPS->container tunnel must bind). Removal is
         keyed by the container endpoint rather than the agent tag: the
         desktop->VPS tunnel set up right after this carries the same agent tag,
         so an agent-keyed removal tore it down and re-dialed it on every
@@ -814,7 +823,13 @@ class LatchkeyDiscoveryHandler(MutableModel):
         )
         # A fresh context object also invalidates ``get_provider_instance``'s
         # cache, which is keyed by ``(name, id(mngr_ctx))``.
+        retired_ctx = self.mngr_ctx
         self.mngr_ctx = self.mngr_ctx.model_copy_update(to_update(self.mngr_ctx.field_ref().config, config))
+        # Invalidating that cache leaves the instances it held in it, answering
+        # from the configuration this reload replaced and holding the listings
+        # they built against it. Retired once the context that replaced them is
+        # the one resolution reads.
+        close_provider_instances_for_context(retired_ctx)
         with self._remote_hosts_lock:
             # Routes resolved against the previous provider set may have been
             # decided by a provider that has since been (re)configured.
@@ -836,9 +851,9 @@ class LatchkeyDiscoveryHandler(MutableModel):
         """Surface a host whose outer sshd rejected our key, once per host, loudly.
 
         Provisioning reaches the workspace's gateway over the outer host, so an
-        outer key rejection means nothing can be wired: the in-container gateway
-        port stays unbound and every latchkey call from that host's agents fails
-        with connection-refused. Falling back to the desktop gateway is not an
+        outer key rejection means nothing can be wired: nothing serves the host's
+        gateway URL and every latchkey call from that host's agents fails with
+        connection-refused. Falling back to the desktop gateway is not an
         option for the same reasons spelled out in
         ``_warn_unresolved_gateway_route``.
 
@@ -853,8 +868,8 @@ class LatchkeyDiscoveryHandler(MutableModel):
             self._unauthenticated_hosts.add(host_id_str)
         message = (
             "Host {} rejected this machine's SSH key (host state UNAUTHENTICATED), so its latchkey "
-            "gateway cannot be provisioned: its in-container gateway port stays closed and latchkey "
-            "calls from its agents will fail with connection-refused. The workspace itself is "
+            "gateway cannot be provisioned: nothing serves its gateway URL and latchkey calls from "
+            "its agents will fail with connection-refused. The workspace itself is "
             "unaffected (it reaches the container over a different sshd), so nothing else will report "
             "this. The host's outer authorized_keys has most likely lost this machine's key."
         )
@@ -866,9 +881,9 @@ class LatchkeyDiscoveryHandler(MutableModel):
     def _warn_unresolved_gateway_route(self, host_id: HostId, provider_name: str) -> None:
         """Surface an unresolvable gateway route once per host, loudly.
 
-        Nothing is wired for such a host: its in-container gateway port stays
-        unbound, so its latchkey calls fail with connection-refused until a later
-        cycle resolves the route. That is deliberately worse-looking than
+        Nothing is wired for such a host: nothing serves its gateway URL, so its
+        latchkey calls fail with connection-refused until a later cycle resolves
+        the route. That is deliberately worse-looking than
         tunnelling the desktop gateway in as a guess, which is what this used to
         do, because for a VPS-backed workspace that guess is actively harmful:
 
@@ -881,9 +896,10 @@ class LatchkeyDiscoveryHandler(MutableModel):
           gated by the shared password alone, so the workspace can enumerate the
           user's services, accounts and credential status, and start auth flows
           on the user's own machine.
-        * It squats the container's ``AGENT_SIDE_LATCHKEY_PORT``, which the
-          VPS->container tunnel has to bind, so provisioning then has to tear
-          down a tunnel we opened ourselves.
+        * For a container that predates the outer-host mapping, it squats the
+          container's ``AGENT_SIDE_LATCHKEY_PORT``, which the VPS->container
+          tunnel has to bind, so provisioning then has to tear down a tunnel
+          we opened ourselves.
 
         Resolution normally succeeds on the first try for desktop hosts
         (their providers answer without network I/O), so "unresolved" almost
@@ -899,8 +915,8 @@ class LatchkeyDiscoveryHandler(MutableModel):
             self._unresolved_route_hosts.add(host_id_str)
         message = (
             "Could not resolve the latchkey gateway route for host {} via provider {}; "
-            "leaving its latchkey gateway unwired until this resolves (its in-container "
-            "gateway port stays closed, so latchkey calls will fail there). Check that "
+            "leaving its latchkey gateway unwired until this resolves (nothing serves its "
+            "gateway URL, so latchkey calls will fail there). Check that "
             "provider {} is configured in the settings this supervisor loaded."
         )
         if is_first:
@@ -972,7 +988,8 @@ class LatchkeyDiscoveryHandler(MutableModel):
                     host_id,
                 )
                 return
-            # The reverse tunnel runs *on the outer host*, so it needs the
+            # A container that predates the docker-bridge route still gets
+            # a reverse tunnel, which runs *on the outer host*: it needs the
             # port the container's sshd is published on from the outer host's
             # own loopback -- not ``ssh_info.port``, which is how a remote
             # client reaches the container (a box-forwarded port for slices).

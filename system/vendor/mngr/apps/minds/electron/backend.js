@@ -25,27 +25,25 @@ for (const stream of [process.stdout, process.stderr]) {
 let backendProcess = null;
 
 /**
- * Env var that points the latchkey gateway at the bundled "dispatch curl".
+ * Env var that points the latchkey gateway at the bundled curl router.
  * Set on the minds backend process so it flows -- via ``dict(os.environ)``
  * inheritance -- to the minds process's own latchkey calls, the detached
  * ``mngr latchkey forward`` supervisor, and the gateway subprocess it
  * spawns.
  *
- * ``LATCHKEY_CURL`` is read by the upstream latchkey CLI. The dispatch
- * curl finds the impersonator binary as a sibling in the same
- * ``resources/curl/`` dir (download-binaries.js installs both or neither),
- * so no extra env var is needed. Returns ``{}`` whenever the dispatch curl
- * is absent -- on the platforms it is never fetched for (macOS x86_64,
- * Windows), and in packaged builds, which build.js does not stage it into --
- * so latchkey falls back to the system curl. Never point ``LATCHKEY_CURL``
- * at a nonexistent file, which would break every credential check.
+ * ``LATCHKEY_CURL`` is read by the upstream latchkey CLI. The router finds
+ * the impersonator binary as a sibling in the same ``resources/curl/`` dir
+ * (download-binaries.js installs both or neither), so no extra env var is
+ * needed. Returns ``{}`` whenever the router is absent -- on Windows, which
+ * it is never fetched for -- so latchkey falls back to the system curl. Never point ``LATCHKEY_CURL`` at a nonexistent file,
+ * which would break every credential check.
  */
 function latchkeyCurlEnv() {
-  const dispatch = paths.getLatchkeyCurlDispatchPath();
-  if (!fs.existsSync(dispatch)) {
+  const router = paths.getLatchkeyCurlRouterPath();
+  if (!fs.existsSync(router)) {
     return {};
   }
-  return { LATCHKEY_CURL: dispatch };
+  return { LATCHKEY_CURL: router };
 }
 
 // Backend stdout JSONL event fields that carry secrets and must be masked
@@ -259,8 +257,8 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
       // build, which today means production or staging), pass --config-file explicitly
       // so the backend doesn't have to fall back to MINDS_CLIENT_CONFIG_PATH.
       // Dev-mode builds (no bundle) inherit MINDS_CLIENT_CONFIG_PATH from
-      // the user's activated shell instead; the backend refuses to start
-      // if neither path is set.
+      // the shell when one is exported; otherwise the backend defaults to
+      // the in-repo production config.
       const bundledClientConfig = paths.getBundledClientConfigPath();
       const configFileArgs = bundledClientConfig ? ['--config-file', bundledClientConfig] : [];
 
@@ -467,7 +465,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
                   reject(new Error(`Backend emitted login URL but server never became ready: ${err.message}`));
                 });
               }
-            } else if (event.event === 'notification' && event.message && onNotification) {
+            } else if (event.event === 'notification' && onNotification) {
               onNotification(event);
             } else if ((event.event === 'auth_success' || event.event === 'auth_required') && onAuthEvent) {
               onAuthEvent(event);

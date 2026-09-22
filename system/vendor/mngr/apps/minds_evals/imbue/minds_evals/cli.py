@@ -11,25 +11,39 @@ import os
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import click
 from loguru import logger
 from pydantic import SecretStr
+from pydantic import ValidationError
 
 from imbue.imbue_common.logging import setup_logging
+from imbue.imbue_common.primitives import InvalidPrimitiveValueError
+from imbue.minds_evals import check_diagnostics
 from imbue.minds_evals import check_run
 from imbue.minds_evals import ci_matrix
 from imbue.minds_evals import ci_report
 from imbue.minds_evals import cleanup_environments
 from imbue.minds_evals import flow_browser
 from imbue.minds_evals import flow_lab
+from imbue.minds_evals import pricing
+from imbue.minds_evals import slack_post
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.clock import ClockInterface
+from imbue.minds_evals.clock import RealClock
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import CiReportContext
+from imbue.minds_evals.data_types import DiagnosticVerdict
+from imbue.minds_evals.data_types import FlowStartPath
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.data_types import ScriptedFlowAction
 from imbue.minds_evals.decider import DEFAULT_DECIDER_MODEL
 from imbue.minds_evals.errors import CiMatrixError
 from imbue.minds_evals.errors import CleanupScopeError
+from imbue.minds_evals.errors import EvalConfigError
+from imbue.minds_evals.errors import ExpectedFactsTableError
+from imbue.minds_evals.expectations import parse_flow_script
 from imbue.minds_evals.generate import MNGR_REPO
 from imbue.minds_evals.generate import generate_dataset
 from imbue.minds_evals.minds_bridge import ANTHROPIC_API_KEY_ENV_VAR
@@ -118,7 +132,9 @@ def check_run_command(job_dir: Path, summary_md_path: Path | None, summary_json_
     went unmeasured, and it is not recorded as having answered on a model other than the one its
     harness config asked for. Judge scores are reported and never gated.
     """
-    result = check_run.check_job_directory(job_dir)
+    # One map for the whole report: litellm's table is read once here, so every figure in the two
+    # summaries is priced at the same rates and the report can name the map they came from.
+    result = check_run.check_job_directory(job_dir, pricing.load_litellm_price_map())
     check_run.write_run_check_reports(result, summary_md_path, summary_json_path)
     for trial in result.trials:
         if not trial.is_passed:
@@ -138,6 +154,89 @@ def check_run_command(job_dir: Path, summary_md_path: Path | None, summary_json_
         len(result.trials),
     )
     if not result.is_passed:
+        raise SystemExit(1)
+
+
+@main.command("check-diagnostics")
+@click.argument("job_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option(
+    "--expected",
+    "expected_table_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The family's expected-facts table (JSON): {case_id, requires, facts: {<fact>[@<step>]: {...}}}",
+)
+@click.option(
+    "--record-only",
+    "is_record_only",
+    is_flag=True,
+    default=False,
+    help="Compute every trial's per-step facts and write them out, asserting nothing",
+)
+@click.option(
+    "--summary-md",
+    "summary_md_path",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write a GitHub step-summary markdown table of the verdicts here",
+)
+@click.option(
+    "--summary-json",
+    "summary_json_path",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write the machine-readable verdicts (per trial, with every fact that decided each) here",
+)
+def check_diagnostics_command(
+    job_dir: Path,
+    expected_table_path: Path | None,
+    is_record_only: bool,
+    summary_md_path: Path | None,
+    summary_json_path: Path | None,
+) -> None:
+    """Check a finished self-diagnostic job against its expected-facts table, and exit non-zero only
+    when some trial failed.
+
+    Each trial is not measured, failed, not followed, known or passed. Only failed is the instrument's
+    own fault, so it alone fails the command. The computed facts are written beside whichever summary
+    was asked for, whether or not a table graded them.
+    """
+    if is_record_only == (expected_table_path is not None):
+        raise click.UsageError("give either --expected <table> or --record-only")
+    if summary_md_path is None and summary_json_path is None:
+        raise click.UsageError("give --summary-md or --summary-json to say where the facts go")
+    table = None
+    if expected_table_path is not None:
+        try:
+            table = check_diagnostics.load_expected_facts_table(expected_table_path)
+        except ExpectedFactsTableError as exc:
+            raise click.BadParameter(str(exc), param_hint="'--expected'") from None
+    with TemporaryDirectory(prefix="minds-evals-diagnostics-") as work_dir:
+        job_facts = check_diagnostics.compute_job_facts(job_dir, Path(work_dir))
+    result = None if table is None else check_diagnostics.check_job_facts(job_dir.name, job_facts, table)
+    check_diagnostics.write_diagnostics_reports(result, job_facts, summary_md_path, summary_json_path)
+    if result is None:
+        logger.info("Recorded the facts of {} trial(s) of {}", len(job_facts), job_dir.name)
+        return
+    for trial in result.trials:
+        if trial.verdict is DiagnosticVerdict.FAILED:
+            logger.error(
+                "Trial {} failed on {}",
+                trial.trial_name,
+                ", ".join(
+                    outcome.fact_name
+                    for outcome in (*trial.failed_facts, *trial.not_recorded_facts, *trial.unexpectedly_passing_facts)
+                ),
+            )
+        else:
+            logger.info("Trial {}: {}", trial.trial_name, trial.verdict.value.replace("_", " "))
+    logger.info(
+        "{}: {} of {} trial(s) failed",
+        result.job_name,
+        sum(1 for trial in result.trials if trial.verdict is DiagnosticVerdict.FAILED),
+        len(result.trials),
+    )
+    if result.is_failed:
         raise SystemExit(1)
 
 
@@ -279,6 +378,22 @@ def ci_user_id_prefix_command(output_path: Path) -> None:
     help="The named harness configs file",
 )
 @click.option(
+    "--fixture-harness-config",
+    "fixture_harness_config_path",
+    default=ci_matrix.CHECKED_IN_FIXTURE_HARNESS_CONFIG_PATH,
+    show_default=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The fixture diagnostic's harness config: one object of `--ak` kwargs",
+)
+@click.option(
+    "--behaviour-harness-configs",
+    "behaviour_harness_configs_path",
+    default=ci_matrix.CHECKED_IN_BEHAVIOUR_HARNESS_CONFIGS_PATH,
+    show_default=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The behaviour diagnostic's harness configs: an object of `--ak` kwargs per harness",
+)
+@click.option(
     "--nightly-suites",
     "nightly_suites_path",
     default=ci_matrix.CHECKED_IN_NIGHTLY_SUITES_PATH,
@@ -345,6 +460,8 @@ def ci_user_id_prefix_command(output_path: Path) -> None:
 def ci_matrix_command(
     pairs_path: Path,
     harness_configs_path: Path,
+    fixture_harness_config_path: Path,
+    behaviour_harness_configs_path: Path,
     nightly_suites_path: Path,
     selection: str,
     config_path: str,
@@ -357,9 +474,10 @@ def ci_matrix_command(
 ) -> None:
     """Decide which arms a scheduled run evaluates: every frozen pair times every suite's eval
     config times that suite's harness configs, minus the cells whose green marker says that exact
-    arm was already verified.
+    arm was already verified -- and the diagnose jobs of every resolved pair, one fixture diagnostic
+    and one behaviour diagnostic per nightly harness the pair supports, which no marker skips.
 
-    Both checked-in files are validated whole, selected or not: the harness configs through the
+    Every checked-in file is validated whole, selected or not: the harness configs through the
     driver's own kwarg parsing, so a config the driver would refuse at construction is refused here
     on the free job, and the suite list against the configs actually in the checkout.
     """
@@ -374,6 +492,11 @@ def ci_matrix_command(
             ),
             entries,
         )
+        fixture_harness_config = ci_matrix.load_fixture_harness_config(fixture_harness_config_path)
+        behaviour_harness_configs = ci_matrix.select_behaviour_harness_configs(
+            ci_matrix.load_behaviour_harness_configs(behaviour_harness_configs_path),
+            ci_matrix.select_nightly_harnesses(entries),
+        )
         pairs = ci_matrix.read_frozen_pairs(pairs_path)
         green_keys = (
             frozenset()
@@ -382,13 +505,26 @@ def ci_matrix_command(
         )
     except CiMatrixError as exc:
         raise click.UsageError(str(exc)) from exc
-    matrix = ci_matrix.decide_matrix(pairs=pairs, suites=suites, green_keys=green_keys, is_forced=is_forced)
+    matrix = ci_matrix.decide_matrix(
+        pairs=pairs,
+        suites=suites,
+        green_keys=green_keys,
+        is_forced=is_forced,
+        fixture_harness_config=fixture_harness_config,
+        behaviour_harness_configs=behaviour_harness_configs,
+    )
     ci_matrix.write_matrix_reports(matrix, output_path, summary_md_path, repository)
     for cell in matrix.cells:
         logger.info("{} x {} x {}: {}", cell.pair, cell.config_slug, cell.harness_config, cell.decision.value)
     for pair in matrix.pairs:
         if pair.decision is not PairDecision.RUN:
             logger.info("pair {}: {}", pair.pair, pair.decision.value)
+    for behaviour_diagnostic in matrix.behaviour_diagnostics:
+        logger.info("{} x diagnose behaviour {}: run", behaviour_diagnostic.pair, behaviour_diagnostic.harness)
+    for unsupported in matrix.unsupported_diagnostics:
+        logger.info(
+            "{} x diagnose behaviour {}: unsupported ({})", unsupported.pair, unsupported.harness, unsupported.reason
+        )
 
 
 @main.command("ci-report")
@@ -424,12 +560,19 @@ def ci_matrix_command(
 @click.option("--resolve-result", default="", help="The resolve job's result, as GitHub reports it")
 @click.option("--oracle-result", default="", help="The oracle job's result, as GitHub reports it")
 @click.option("--evaluate-result", default="", help="The evaluate job's result, as GitHub reports it")
+@click.option("--diagnose-fixture-result", default="", help="The diagnose-fixture job's result, as GitHub reports it")
+@click.option(
+    "--diagnose-behaviour-result", default="", help="The diagnose-behaviour job's result, as GitHub reports it"
+)
 @click.option(
     "--output",
     "output_path",
     required=True,
     type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to write the Slack webhook payloads, as a JSON array of one payload per pair and eval config",
+    help=(
+        "Where to write the Slack messages, as a JSON array of {message, replies} objects, one per pair "
+        "and eval config"
+    ),
 )
 def ci_report_command(
     matrix_path: Path | None,
@@ -441,13 +584,16 @@ def ci_report_command(
     resolve_result: str,
     oracle_result: str,
     evaluate_result: str,
+    diagnose_fixture_result: str,
+    diagnose_behaviour_result: str,
     output_path: Path,
 ) -> None:
-    """Write the Slack report of a scheduled run: one webhook payload per pair and eval config, each
-    a grid of that config's cases by harness config.
+    """Write the Slack report of a scheduled run: one thread per pair and eval config, whose message
+    is a grid of that config's cases by harness config and whose replies hold the scores behind it.
 
     This command is the whole notification of a run, so it never fails: a matrix that cannot be read
     or a summary that is missing is reported as such, and the exit code is zero either way.
+    `post-slack-report` is what posts the file it writes.
     """
     context = CiReportContext(
         run_url=run_url,
@@ -457,12 +603,112 @@ def ci_report_command(
         resolve_result=resolve_result,
         oracle_result=oracle_result,
         evaluate_result=evaluate_result,
+        diagnose_fixture_result=diagnose_fixture_result,
+        diagnose_behaviour_result=diagnose_behaviour_result,
     )
-    messages = ci_report.render_slack_report(matrix_path, summaries_dir, context)
-    payloads = [ci_report.as_slack_payload(message) for message in messages]
+    threads = ci_report.render_slack_report(matrix_path, summaries_dir, context)
+    payloads = [ci_report.as_slack_thread_payload(thread) for thread in threads]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payloads, indent=2))
-    logger.info("Wrote {} run report message(s) to {}", len(payloads), output_path)
+    logger.info("Wrote {} run report thread(s) to {}", len(payloads), output_path)
+
+
+@main.command("post-slack-report")
+@click.option(
+    "--payloads",
+    "payloads_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The ci-report output: a JSON array of {message, replies} objects, one per pair and eval config",
+)
+@click.option(
+    "--channel",
+    required=True,
+    help="The Slack channel to post to, as its `C...` id. Not a secret, unlike the credentials below",
+)
+def post_slack_report_command(payloads_path: Path, channel: str) -> None:
+    """Post a rendered run report to Slack, one thread per pair and eval config.
+
+    The bot token is read from SLACK_MINDS_EVALS_BOT_TOKEN, and absent that the incoming webhook from
+    SLACK_MINDS_EVALS_WEBHOOK, which cannot thread: a run posting through it gets the top messages
+    alone. With neither, nothing is posted and the run's step summary is the whole report.
+
+    A notification must never turn a run red, so every refusal Slack answers with is a warning and the
+    exit code is zero once posting has begun. A rate-limited message is the one refusal that is not
+    reported straight away: it is posted again after the wait Slack asked for.
+    """
+    poster = slack_post.poster_from_environment(os.environ, slack_post.SLACK_POST_TIMEOUT_SECONDS)
+    run_post_slack_report(poster, channel=channel, payloads_path=payloads_path, clock=RealClock())
+
+
+def run_post_slack_report(
+    poster: slack_post.SlackPoster | None,
+    *,
+    channel: str,
+    payloads_path: Path,
+    clock: ClockInterface,
+) -> None:
+    """Everything `post-slack-report` decides, against a given Slack and a given clock.
+
+    Split from the command so that what is posted, and in what order, can be driven against a stand-in
+    poster, and so that the waits a rate limit costs can be driven without spending them. Both
+    refusals here are about the request rather than about Slack, and both are raised: they are decided
+    before anything is posted, which is the only point at which this command may still fail.
+    """
+    if not channel.startswith(slack_post.SLACK_CHANNEL_ID_PREFIX):
+        raise click.UsageError(
+            "--channel takes a channel id starting with {}; a U id is a person, which Slack delivers to "
+            "through its system user and will not thread under".format(slack_post.SLACK_CHANNEL_ID_PREFIX)
+        )
+    threads = _read_slack_threads(payloads_path)
+    if poster is None:
+        _echo_workflow_warning(
+            "neither {} nor {} is set -- the run summary was not posted to Slack".format(
+                slack_post.SLACK_BOT_TOKEN_ENV_VAR, slack_post.SLACK_WEBHOOK_ENV_VAR
+            )
+        )
+        return
+    outcome = asyncio.run(slack_post.post_threads(poster, clock, channel, threads))
+    for warning in outcome.warnings:
+        _echo_workflow_warning(warning)
+    logger.info(
+        "Posted {} message(s) to {} ({} as text, {} refused)",
+        outcome.posted_count,
+        channel,
+        outcome.fallback_count,
+        outcome.failed_count,
+    )
+
+
+def _read_slack_threads(payloads_path: Path) -> tuple[slack_post.SlackThreadPayload, ...]:
+    """The rendered report, refused as a bad parameter when it is not one.
+
+    A file this cannot read is a defect in whatever wrote it rather than anything Slack did, so it is
+    reported as the bad input it is instead of being posted around.
+    """
+    try:
+        payloads = json.loads(payloads_path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise click.BadParameter(
+            "{} could not be read: {}".format(payloads_path, error), param_hint="'--payloads'"
+        ) from None
+    if not isinstance(payloads, list):
+        raise click.BadParameter("{} does not hold a list of threads".format(payloads_path), param_hint="'--payloads'")
+    try:
+        return tuple(slack_post.SlackThreadPayload.model_validate(payload) for payload in payloads)
+    except ValidationError as error:
+        raise click.BadParameter(
+            "{} is not a rendered report: {}".format(payloads_path, error), param_hint="'--payloads'"
+        ) from None
+
+
+def _echo_workflow_warning(warning: str) -> None:
+    """One line a reader of the run should see, annotated the way GitHub Actions reads it.
+
+    On stdout rather than through the logger, because GitHub reads its annotations off a step's
+    standard output and loguru writes to standard error.
+    """
+    write_human_line("{}{}".format(slack_post.GITHUB_WARNING_PREFIX, warning))
 
 
 @main.command("flow-lab")
@@ -474,11 +720,21 @@ def ci_report_command(
     help="Directory served as the app's origin; a fixture under flow_lab_apps/, or an app taken out of a trial",
 )
 @click.option(
-    "--page",
+    "--start-path",
     default="",
-    help="Appended to the served origin: empty for its index, or a query such as '?latency=300'",
+    help=(
+        "Where on the served origin the flow opens, under a case flow's start_path rule: empty for its "
+        "index, or a query such as '?latency=300'"
+    ),
 )
-@click.option("--actions", required=True, help="What the flow does in the UI, as a case would state it")
+@click.option("--actions", default="", help="What a model-driven flow does in the UI, as a case would state it")
+@click.option(
+    "--script",
+    "script_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="A JSON file holding a scripted flow's actions, shaped as a case flow's 'script'; in place of --actions",
+)
 @click.option("--expect", required=True, help="The flow's end condition, recorded in the log for the judge")
 @click.option(
     "--output",
@@ -493,18 +749,30 @@ def ci_report_command(
     show_default=True,
     help="The model the verification agent reasons with",
 )
-def flow_lab_command(app_dir: Path, page: str, actions: str, expect: str, output_dir: Path, model: str) -> None:
-    """Drive one UI flow against a local app with the real verification agent, and no box at all.
+def flow_lab_command(
+    app_dir: Path,
+    start_path: str,
+    actions: str,
+    script_path: Path | None,
+    expect: str,
+    output_dir: Path,
+    model: str,
+) -> None:
+    """Drive one UI flow against a local app, with no box at all: a model-driven flow with the real
+    verification agent, or a scripted flow exactly as its script says.
 
-    Needs ANTHROPIC_API_KEY for the agent's calls. Exits non-zero when the flow did not complete
-    its declared actions; whether the `expect` holds is not decided here, exactly as at trial time.
+    A model-driven flow needs ANTHROPIC_API_KEY for the agent's calls; a scripted one makes none.
+    Exits non-zero when the flow did not complete its declared actions; whether the `expect` holds
+    is not decided here, exactly as at trial time.
     """
-    api_key = os.environ.get(ANTHROPIC_API_KEY_ENV_VAR, "")
-    if not api_key:
-        raise click.UsageError("{} is not set; the verification agent cannot be run".format(ANTHROPIC_API_KEY_ENV_VAR))
-    agent = ui_flows.AnthropicVerificationAgent(
-        model=model, api_key=SecretStr(api_key), timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS
-    )
+    try:
+        flow_start_path = FlowStartPath(start_path)
+    except InvalidPrimitiveValueError as error:
+        raise click.BadParameter(str(error), param_hint="'--start-path'") from None
+    if bool(actions.strip()) == (script_path is not None):
+        raise click.UsageError("Give exactly one of --actions (a model-driven flow) or --script (a scripted flow)")
+    script = _read_flow_script(script_path) if script_path is not None else ()
+    model_agent = _flow_lab_model_agent(model) if not script else None
     # Resolved before the loop starts: playwright's sync API refuses to run inside one.
     chromium_path = flow_browser.resolve_chromium_path()
     if not chromium_path.exists():
@@ -512,27 +780,51 @@ def flow_lab_command(app_dir: Path, page: str, actions: str, expect: str, output
     run = asyncio.run(
         flow_lab.run_lab_flow(
             app_dir=app_dir,
-            page=page,
-            check=flow_lab.lab_flow_check("lab", actions, expect),
-            agent=agent,
+            check=flow_lab.lab_flow_check("lab", actions.strip(), script, expect, flow_start_path),
+            model_agent=model_agent,
             output_dir=output_dir,
             chromium_path=chromium_path,
         )
     )
     for record in run.records:
         write_human_line(flow_lab.describe_record(record))
-    usage = ui_flows.summarize_verifier_usage(tuple(agent.calls), model)
-    logger.info(
-        "Flow {}{}; {} agent call(s), {} input / {} output tokens; evidence in {}",
-        run.status.value,
-        " ({})".format(run.reason) if run.reason else "",
-        usage.call_count,
-        usage.input_token_count,
-        usage.output_token_count,
-        output_dir,
-    )
+    outcome = "Flow {}{}".format(run.status.value, " ({})".format(run.reason) if run.reason else "")
+    if model_agent is None:
+        logger.info("{}; scripted, so no agent calls; evidence in {}", outcome, output_dir)
+    else:
+        usage = ui_flows.summarize_verifier_usage(tuple(model_agent.calls), model)
+        logger.info(
+            "{}; {} agent call(s), {} input / {} output tokens; evidence in {}",
+            outcome,
+            usage.call_count,
+            usage.input_token_count,
+            usage.output_token_count,
+            output_dir,
+        )
     if run.status is not CheckStatus.PASSED:
         raise SystemExit(1)
+
+
+def _read_flow_script(script_path: Path) -> tuple[ScriptedFlowAction, ...]:
+    """A `--script` file's actions, refused under exactly the rules a case flow's `script` meets."""
+    try:
+        raw_script = json.loads(script_path.read_text())
+    except json.JSONDecodeError as error:
+        raise click.BadParameter("{} is not JSON: {}".format(script_path, error), param_hint="'--script'") from None
+    try:
+        return parse_flow_script(raw_script, "flow-lab", "--script")
+    except EvalConfigError as error:
+        raise click.BadParameter(str(error), param_hint="'--script'") from None
+
+
+def _flow_lab_model_agent(model: str) -> ui_flows.AnthropicVerificationAgent:
+    """The real verification agent, refused up front when there is no key, before any browser launches."""
+    api_key = os.environ.get(ANTHROPIC_API_KEY_ENV_VAR, "")
+    if not api_key:
+        raise click.UsageError("{} is not set; the verification agent cannot be run".format(ANTHROPIC_API_KEY_ENV_VAR))
+    return ui_flows.AnthropicVerificationAgent(
+        model=model, api_key=SecretStr(api_key), timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS
+    )
 
 
 if __name__ == "__main__":

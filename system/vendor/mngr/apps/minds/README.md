@@ -16,12 +16,15 @@ The minds app creates and manages persistent Claude agents running in Docker con
 minds ships as a desktop app (Electron, packaged via ToDesktop; see
 [docs/desktop-app.md](./docs/desktop-app.md)).
 
-To run it from source for development, follow the setup guide
-**[docs/dev-setup.md](./docs/dev-setup.md)**: install the one-time
-prerequisites (Docker, Node/pnpm, GNU rsync, GitHub access, Vault, Modal),
-then the `minds-dev-workflow` skill takes you through first-time bootstrap and
-the every-startup launch. You create your first agent from the login URL the
-app prints on startup.
+To run it from source, follow the setup guide
+**[docs/dev-setup.md](./docs/dev-setup.md)**. On Linux one script installs
+the prerequisites (Docker, uv, the pinned Node and pnpm) and launches the app;
+on macOS you install those once and run `apps/minds/scripts/start-desktop.sh`.
+Run from source, the app targets production and needs nothing exported. You
+create your first agent from the login URL the app prints on startup. The
+guide's Imbue-internal section covers developing against a dev env (Vault,
+Modal, GNU rsync, the `minds-dev-workflow` skill), none of which a public
+contributor needs.
 
 ## How it works
 
@@ -34,7 +37,7 @@ app prints on startup.
 
 2. **Agents** are created from template repositories (like [default-workspace-template](https://github.com/imbue-ai/default-workspace-template)) using `mngr create`. The template's `.mngr/settings.toml` drives all configuration.
 
-3. Inside each minds container, the "primary" agent (`system-services`) runs only the bootstrap and background services -- it is a plain `command`-type agent whose window-0 command is `sleep infinity`, so no claude is ever involved. The user's chat agents are separate `mngr` agents created on demand: the workspace opens on the welcome chat the creation page seeded with the onboarding conversation, whose first agent is launched by the first message sent there (further chats start from the New Tab page), and each chat binds to a provider account -- a folder under `~/.minds/accounts` minted by the sign-in flow -- when it is created (the credential rides `mngr create`'s own flags, so claude chats point at their account via a per-agent `CLAUDE_CONFIG_DIR` in the agent's env file, and other harnesses follow a credential symlink in the agent's state directory). Destroying chat agents does not affect services; the services agent is hidden from the UI agent list (it carries `is_primary=true`) and protected against direct destroy.
+3. Inside each minds container, the "primary" agent (`system-services`) runs only the bootstrap and background services -- it is a plain `command`-type agent whose window-0 command is `sleep infinity`, so no claude is ever involved. The user's chat agents are separate `mngr` agents created on demand: the workspace opens on the welcome chat the creation page seeded with the onboarding conversation, whose first agent is launched by the first message sent there (further chats start from the desktop's launcher), and each chat binds to a provider account -- a folder under `~/.minds/accounts` minted by the sign-in flow -- when it is created (the credential rides `mngr create`'s own flags, so claude chats point at their account via a per-agent `CLAUDE_CONFIG_DIR` in the agent's env file, and other harnesses follow a credential symlink in the agent's state directory). Destroying chat agents does not affect services; the services agent is hidden from the UI agent list (it carries `is_primary=true`) and protected against direct destroy.
 
 4. Inside the services agent's Docker container:
    - The bootstrap (`uv run bootstrap`) runs first-boot setup and then execs `supervisord -n`, which supervises the background services declared as `[program:*]` sections in `supervisord.conf`, or in the drop-in files its `[include]` glob pulls in

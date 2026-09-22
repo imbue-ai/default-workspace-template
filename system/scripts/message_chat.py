@@ -47,11 +47,11 @@ collapsed system chip instead of a user bubble (the browser app's wake-up
 nudges use it); the tag is pinned against the chat app's copy by a test there.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
-create route, so the chat is what a New Tab chat would be: the app mints its id,
+create route, so the chat is what a launcher-started chat would be: the app mints its id,
 binds it to the workspace's default account and harness, names it (``--name``,
 else the next free "Chat N"), and sends the message as its first one. ``--label``
-adds a label to the chat's agent (``auto_open=true`` has the workspace open its
-tab); ``--skip-installation-check`` lets the create through a claude version
+adds a label to the chat's agent (``auto_open=true`` has the workspace surface its
+window); ``--skip-installation-check`` lets the create through a claude version
 check the workspace would otherwise fail, for the update run that repairs it.
 The script waits for the chat app to finish the create and exits 0 with one
 JSON line on stdout, ``{"chat_id", "name", "display_name"}``, or 1 with the
@@ -572,7 +572,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="NAME=VALUE",
-        help="A label for the new chat's agent (auto_open=true opens its tab); repeatable.",
+        help="A label for the new chat's agent (auto_open=true surfaces its window); repeatable.",
     )
     create.add_argument(
         "--skip-installation-check",
