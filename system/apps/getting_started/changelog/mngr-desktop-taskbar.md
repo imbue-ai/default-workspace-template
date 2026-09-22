@@ -5,3 +5,5 @@ The app fetches the template catalog itself (the shell's `template_catalog.py` m
 It opens its own window once per workspace: a poller watches the shell's connected clients and, for the first one, opens a Getting Started window on the first desktop through the op route (`open` with `if_present = focus`, then `place` at the frame `0.07,0.05,0.38,0.9`, to the left of the pinned chat, a hair short of it), recording the delivery in `data/.state/getting-started/first_window.json` so no later client or restart opens it again.
 
 The page lays its "Start something" tiles two to a row, shows four before "See more", and scrolls itself, since the shared base styles pin the body to the viewport.
+
+Its manifest declares a `[preview]` table for `update-app`'s `preview_app.py`: `getting-started --no-register --state-dir {scratch}/state` on a free port. The new `--no-register` flag skips the registration and the first-visit opener, so a preview neither re-points the live `getting-started` row nor opens a window in the live desktop.

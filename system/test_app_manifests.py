@@ -276,6 +276,9 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["getting-started"].default_shortcut.launch == "open"
     assert by_name["getting-started"].default_shortcut.mode == "focus"
     assert by_name["getting-started"].pin is None
+    # Its preview (update-app's preview_app.py) boots unregistered, so it neither re-points the live row nor opens
+    # the first-visit window.
+    assert by_name["getting-started"].preview.command[:2] == ("getting-started", "--no-register")
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
     for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
