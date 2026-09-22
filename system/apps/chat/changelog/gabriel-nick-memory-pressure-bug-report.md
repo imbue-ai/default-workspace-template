@@ -1,0 +1,5 @@
+The chat app's supervisord entry now sets `MALLOC_ARENA_MAX=4`, capping how many per-thread allocator arenas glibc spreads the app's heap across. Folding the agent stream allocates and frees continuously -- every event arrives as JSON, becomes pydantic models, is folded into the agent view, and is dropped -- and glibc keeps the freed pages in whichever arena they came from, so the app's RSS tracked the high-water mark of every arena at once (eight per core by default) rather than what it holds.
+
+Measured by replaying the same 300 seconds of agent stream at each setting: RSS grew 193 MB at the default, 88 MB at 4, and 59 MB at 2. 4 is the setting here because 2 costs 55% more CPU per MB against this allocation pattern while 4 costs 9%.
+
+This lowers the plateau a long-lived chat app settles at; it is not what made the app in the incident grow for six days. That growth is retention -- the app keeping the whole `mngr observe` output stream, and one watcher per agent -- which two separate open changes address.

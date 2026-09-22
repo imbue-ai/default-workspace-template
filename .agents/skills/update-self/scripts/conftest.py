@@ -20,3 +20,17 @@ def _isolate_git_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tool_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point the pinned tool home at a temporary directory for every test.
+
+    The apply falls back to the home the build pins when it cannot resolve an
+    installation from PATH, and its tests drive it with a fake PATH that
+    resolves nothing -- so the fallback would otherwise read (and name in the
+    argv it records) the real ``/root`` of whatever machine runs the suite.
+    That is live workspace state, which is how a test came to delete the
+    installation it was validating a release against.
+    """
+    monkeypatch.setenv("TOOL_ENV_HOME", str(tmp_path / "pinned-tool-home"))

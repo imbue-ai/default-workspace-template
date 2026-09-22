@@ -75,9 +75,10 @@ one URL per service name.
 ## Port already in use
 
 If the port you chose is bound by something else, the start command
-will fail loudly (the framework will print an error and exit). With
-`autorestart=true`, supervisord will keep restarting it, producing a
-crash loop visible via `supervisorctl status <name>` and
+will fail loudly (the framework will print an error and exit).
+Supervisord retries it a few times and then leaves the program in
+FATAL (`startsecs`/`startretries` in the program block bound the loop),
+so the failure shows up via `supervisorctl status <name>` and
 `/var/log/supervisor/<name>-stderr.log`. Pick a different port.
 
 The scaffolder's port-picking pre-flight (which parses `system/supervisord.conf`,

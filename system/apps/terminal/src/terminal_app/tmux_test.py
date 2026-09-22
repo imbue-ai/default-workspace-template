@@ -2,15 +2,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from terminal_app.data_types import TmuxClient, TmuxSession
+from terminal_app.data_types import TmuxSession
 from terminal_app.errors import TmuxCommandError
 from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
 from terminal_app.testing import FakeTmux, fake_created_epoch, make_tmux_session
 from terminal_app.tmux import (
-    CLIENTS_FORMAT,
     SESSIONS_FORMAT,
     SubprocessTmux,
-    parse_tmux_clients,
     parse_tmux_sessions,
 )
 
@@ -34,32 +32,11 @@ def test_parse_tmux_sessions_reads_the_activity_timestamp_and_skips_short_lines(
     ]
 
 
-def test_parse_tmux_clients_reads_tty_name_and_id_and_skips_a_client_with_no_pty() -> (
-    None
-):
-    parsed = parse_tmux_clients("/dev/pts/7\tterminal-1\t$3\n\tbuild\t$4\n")
-
-    assert parsed == [
-        TmuxClient(client_tty="/dev/pts/7", session_name="terminal-1", session_id="$3")
-    ]
-
-
 def test_list_sessions_is_empty_when_no_server_runs(fake_tmux: FakeTmux) -> None:
     (fake_tmux.state_dir / "sessions.tsv").unlink()
 
     assert SubprocessTmux().list_sessions() == []
     assert fake_tmux.calls() == [["list-sessions", "-F", SESSIONS_FORMAT]]
-
-
-def test_list_clients_asks_for_the_tty_name_and_id(fake_tmux: FakeTmux) -> None:
-    fake_tmux.set_clients(
-        [TmuxClient(client_tty="/dev/pts/2", session_name="build", session_id="$4")]
-    )
-
-    assert SubprocessTmux().list_clients() == [
-        TmuxClient(client_tty="/dev/pts/2", session_name="build", session_id="$4")
-    ]
-    assert fake_tmux.calls() == [["list-clients", "-F", CLIENTS_FORMAT]]
 
 
 def test_kill_session_targets_the_exact_name_and_tolerates_an_absent_session(

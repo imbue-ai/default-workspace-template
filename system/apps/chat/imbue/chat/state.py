@@ -56,6 +56,11 @@ class ChatAppState(MutableModel):
     include_filters: tuple[str, ...]
     exclude_filters: tuple[str, ...]
     agent_manager: AgentManager
+    is_secondary: bool = Field(
+        default=False,
+        description="A second chat beside the live one (a preview): it reports no client activity to the shell, "
+        "whose activity log is the live chat's",
+    )
     # The workspace-wide chat settings the settings routes read and write; the manager reads
     # the same store at create. In memory unless the composition root points it at the file.
     chat_settings: ChatSettingsStore = Field(default_factory=lambda: ChatSettingsStore(path=None))

@@ -124,20 +124,21 @@ vi.mock("../models/ModelSettings", () => ({
 // so the mock ships a per-harness fixture mirroring the real declarations (the
 // matcher itself is reimplemented here minimally; the real one is covered by
 // HarnessCatalog.test.ts).
-vi.mock("../models/HarnessCatalog", () => {
+vi.mock("../models/HarnessCatalog", async () => {
+  const { harnessCatalogFixture } = await import("../models/harnessCatalogFixture");
   const catalogs: Record<
     string,
     { label: string; popups: { trigger: string; commands: string[]; action: string }[] }
   > = {
     claude: {
-      label: "Claude Code",
+      label: harnessCatalogFixture("claude")!.label,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
       ],
     },
     codex: {
-      label: "Codex",
+      label: harnessCatalogFixture("codex")!.label,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },
@@ -909,15 +910,28 @@ describe("MessageInput switching harness", () => {
     expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
   });
 
-  it("offers no way back into a dialog for an armed rebind, which was armed without one", () => {
-    mocks.switching.target = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+  it("offers the dialog for an armed rebind too, which was armed without one, and carries the pick made there", async () => {
+    const target = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+    mocks.switching.target = target;
     mocks.switching.kind = "rebind";
-    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
-    const strip = findByClass(rendered, "message-input-switch-strip");
-    expect(renderedText(strip)).toContain("switches this chat to Anthropic 2 (Claude Code)");
-    expect(findByClass(rendered, "message-input-switch-change")).toBeUndefined();
-    press(findByClass(rendered, "message-input-switch-cancel"));
-    expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
+    const component = MessageInput();
+    const rendered = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(findByClass(rendered, "message-input-switch-strip"))).toContain(
+      "switches this chat to Anthropic 2 (Claude Code)",
+    );
+    press(findByClass(rendered, "message-input-switch-change"));
+    expect(mocks.openSwitchDialog).toHaveBeenCalledWith("agent-1", target);
+
+    mocks.switching.pick = { identity: { model_id: "haiku", effort: "low", fast: false }, label: "Haiku 4.5 · Low" };
+    const armed = typeDraft(component, "agent-1", "Carry on here");
+    expect(renderedText(findByClass(armed, "message-input-switch-strip"))).toContain(
+      "switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · Low",
+    );
+    press(findByAttr(armed, "aria-label", "Switch and send"));
+    await flushAsync();
+    const [, accountId, , , pick] = mocks.switchChat.mock.calls[0] as unknown as unknown[];
+    expect(accountId).toBe("acct-anthropic-2");
+    expect(pick).toEqual({ model_id: "haiku", effort: "low", fast: false });
   });
 
   it("shows no strip while the switch is already running", () => {

@@ -3,9 +3,7 @@
         "enabled_when": "false",
         "fetch_and_merge": false,
         "base_branch": "main",
-        "additional_git_directories": [
-            ".external_worktrees/mngr"
-        ]
+        "additional_git_directories": []
     },
     "autofix": {
         "is_enabled": false,

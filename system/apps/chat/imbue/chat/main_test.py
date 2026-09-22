@@ -1,9 +1,17 @@
 """Tests for the chat app's entry point: the CLI args and the state they build."""
 
+from pathlib import Path
+
+from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.chat_settings import FastModeMode
+from imbue.chat.chat_settings import SETTINGS_FILENAME
 from imbue.chat.config import Config
 from imbue.chat.main import MANIFEST_PATH
 from imbue.chat.main import _parse_args
 from imbue.chat.main import build_application
+from imbue.chat.main import build_production_state
+from imbue.chat.message_stamps import STAMPS_FILENAME
+from imbue.chat.primitives import ChatId
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 
@@ -54,3 +62,15 @@ def test_preflight_is_off_by_default_and_a_flag_of_its_own() -> None:
     """``--preflight`` is the update apply's throwaway boot; a plain boot never takes it."""
     assert _parse_args([]).preflight is False
     assert _parse_args(["--preflight"]).preflight is True
+
+
+def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
+    """The chat's data directory is the config's: a secondary chat pointed at a scratch copy writes nowhere else."""
+    state = build_production_state(Config(chat_data_dir=tmp_path / "scratch"), is_secondary=True)
+    try:
+        state.agent_manager.record_message_sent(ChatId("agent-stamped"))
+        state.chat_settings.write(ChatSettings(fast_mode_default=FastModeMode.ON))
+        assert (tmp_path / "scratch" / STAMPS_FILENAME).exists()
+        assert (tmp_path / "scratch" / SETTINGS_FILENAME).exists()
+    finally:
+        state.shutdown()

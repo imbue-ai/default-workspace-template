@@ -100,8 +100,9 @@ worker side:
     of its worktree into the caller's tree at the same repo-relative paths, so
     the task files and consumed reports of the whole subtree survive.
     Unmerged commits and a dirty worktree are printed as a warning, never a
-    refusal. Branches ``mngr/<name>`` survive unless ``--delete-branches`` is
-    passed; mngr preserves each destroyed agent's transcript under
+    refusal. Worker branches (``mngr/<name>`` by default, or whatever
+    ``--branch`` resolved to) survive unless ``--delete-branches`` is passed,
+    which deletes only a branch mngr created; mngr preserves each destroyed agent's transcript under
     ``$MNGR_HOST_DIR/preserved/``. One outcome line per agent goes to stderr;
     the exit code is non-zero if any agent failed. ``--no-recursive`` destroys
     the one agent and names each descendant it leaves behind.
@@ -212,6 +213,7 @@ import functools
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -252,6 +254,100 @@ _AWAIT_IDLE_RC = 76
 # absorb the race where the worker is mid-delivery: the report file is checked
 # first on every loop, so a delivered report always wins.
 _IDLE_POLLS_BEFORE_GIVING_UP = 3
+
+
+class WorkerBranchUnknownError(ValueError):
+    """Raised when mngr cannot tell us which branch the worker ended up on."""
+
+
+# What mngr accepts as an agent name (``SafeName``): alphanumeric, with dashes and
+# underscores allowed in the middle. Re-stated here because the name is
+# interpolated into a CEL filter string below, where a quote would silently
+# reshape the expression rather than fail -- and the failure it produces ("mngr
+# reports no agent named ...") reads as "the worker is gone" and destroys it.
+_MNGR_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")
+
+
+def _describe_list_errors(payload: object) -> str:
+    """Render an ``mngr ls`` payload's ``errors`` channel as a trailing clause.
+
+    Empty when the listing reported none, so the caller's message reads as a
+    plain sentence in the ordinary case.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    errors = payload.get("errors")
+    if not isinstance(errors, list) or not errors:
+        return ""
+    return f" (the listing also reported provider errors: {errors!r})"
+
+
+def read_worker_branch(name: str, runner: Runner) -> str:
+    """Ask mngr which branch the worker's work_dir is actually on.
+
+    Observed, not predicted: the answer is the agent's ``initial_branch`` field,
+    which mngr reads back from the work_dir and populates whether it created the
+    branch or checked out one that already existed -- including the
+    ``--branch <existing>`` case this script's callers use. Parsing the
+    ``--branch`` spec here instead would restate mngr's own resolution rules.
+
+    ``launch-sync`` publishes this as the ref its callers merge from, so a wrong
+    answer sends them at a branch the worker never committed to. Raising is
+    therefore better than guessing.
+    """
+    if not _MNGR_SAFE_NAME_RE.match(name):
+        # The filter below embeds the name in a quoted CEL string, where a quote
+        # or a backslash reshapes the expression instead of failing it -- and the
+        # empty listing that follows is indistinguishable from "the worker is
+        # gone", which is the branch that destroys the worker.
+        raise WorkerBranchUnknownError(
+            f"{name!r} is not a name mngr can have given an agent (alphanumeric, with dashes "
+            "and underscores allowed in the middle), so it cannot be looked up"
+        )
+    result = runner.run(
+        [
+            "mngr",
+            "ls",
+            "--include",
+            f'name == "{name}"',
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # Deliberately not gated on the exit code. `mngr ls` writes the whole
+    # ``{"agents": [...], "errors": [...]}`` payload to stdout and only then exits
+    # non-zero if *any* configured provider was unreachable or unauthenticated
+    # (see ``_exit_code_for_list_errors`` in mngr's cli/list.py; listing runs under
+    # ErrorBehavior.CONTINUE). A modal provider with no credentials, or an SSH host
+    # that is down, has nothing to do with the local worker -- but it would make a
+    # return-code check destroy a worker that is sitting in the payload it just
+    # printed. The answer is in the payload; the errors channel is what says
+    # whether an empty one means "gone" or "could not look".
+    payload_text = getattr(result, "stdout", "") or ""
+    try:
+        payload = json.loads(payload_text)
+        agents = payload["agents"]
+    except (ValueError, KeyError, TypeError) as e:
+        # A genuinely failed `mngr ls` lands here rather than above: it leaves
+        # stdout empty, so this is where its exit code and stderr are the evidence.
+        raise WorkerBranchUnknownError(
+            f"could not parse `mngr ls` output for {name!r} "
+            f"(exit {getattr(result, 'returncode', 0)}): {e}; "
+            f"stderr: {getattr(result, 'stderr', '')!r}"
+        ) from e
+    if not agents:
+        raise WorkerBranchUnknownError(
+            f"mngr reports no agent named {name!r}{_describe_list_errors(payload)}"
+        )
+    branch = agents[0].get("initial_branch")
+    if not branch:
+        raise WorkerBranchUnknownError(
+            f"mngr reports no branch for agent {name!r}; it may not have a git work_dir"
+        )
+    return str(branch)
 
 
 def _normalize_dir(value: str) -> str:
@@ -848,6 +944,7 @@ def launch(
     task_file: Path,
     state_dir: Path | None = None,
     runner: Runner | None = None,
+    branch: str | None = None,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -859,8 +956,9 @@ def launch(
     would satisfy ``await`` instantly, so launch refuses until the caller has
     confirmed it was handled and moved it aside (likewise an unconsumed
     milestone beside it). So does either sync source resolving outside ``data/``
-    (see ``_sync_path_refusal``). So does a dirty working tree:
-    the worker branches from committed HEAD, so uncommitted changes never reach
+    (see ``_sync_path_refusal``). So does a dirty working tree: the worker is
+    created from a committed branch tip -- this checkout's HEAD by default, or
+    whatever ``branch`` names -- so uncommitted changes never reach
     it (and ``mngr create`` refuses a dirty tree anyway) -- launch stops with an
     actionable "commit first" message rather than letting that surface as an
     opaque ``mngr create`` failure. Malformed task-file frontmatter instead
@@ -871,6 +969,19 @@ def launch(
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
     sees fresh events.
+
+    ``branch`` is an optional mngr ``--branch`` spec, passed through verbatim in
+    the full ``[BASE][:NEW]`` form. The default (``None``) keeps mngr's own
+    default (branch ``mngr/<name>`` from the current HEAD). Pass an existing
+    branch name (e.g. ``mngr/update-<slug>``) to have the worker *check out that
+    branch directly* instead of branching anew -- so its commits extend the
+    branch the lead already built up, rather than starting from the lead's
+    current HEAD. In that ``[BASE]``-only form the caller is responsible for the
+    branch not being checked out in another worktree at create time (git forbids
+    the same branch in two worktrees); the ``BASE:NEW`` form has no such
+    constraint, since mngr cuts ``NEW`` from ``BASE`` without checking ``BASE``
+    out. The spec is handed to ``mngr create`` verbatim, so a malformed one
+    surfaces as mngr's own error.
     """
     runner = runner or Runner()
 
@@ -949,19 +1060,20 @@ def launch(
             print(refusal, file=sys.stderr)
             return 2
 
-    # A dirty working tree is fatal: the worker is created from committed HEAD,
-    # so uncommitted changes never reach it, and ``mngr create`` refuses a dirty
+    # A dirty working tree is fatal: the worker is created from a committed
+    # branch tip (this checkout's HEAD, or the one ``--branch`` names), so
+    # uncommitted changes never reach it, and ``mngr create`` refuses a dirty
     # tree regardless. Catch it here with an actionable message. Commit -- never
     # stash: stashed work silently drops out of multi-agent coordination and
     # gets lost.
     if not _worktree_is_clean(runner):
         print(
             f"create_worker: refusing to launch {name}: the working tree has "
-            "uncommitted changes. The worker is created from your committed "
-            "HEAD, so uncommitted changes never reach it (and `mngr create` "
-            "refuses a dirty tree). Commit your changes -- do NOT stash "
-            "(stashed work gets lost during multi-agent coordination) -- then "
-            "relaunch.",
+            "uncommitted changes. The worker is created from a committed branch "
+            "tip (this checkout's HEAD, or the branch `--branch` names), so "
+            "uncommitted changes never reach it (and `mngr create` refuses a "
+            "dirty tree). Commit your changes -- do NOT stash (stashed work "
+            "gets lost during multi-agent coordination) -- then relaunch.",
             file=sys.stderr,
         )
         return 2
@@ -1024,6 +1136,8 @@ def launch(
         "--label",
         f"{_RUNTIME_DIR_LABEL}={_repo_relative_path(runtime_dir, toplevel)}",
     ]
+    if branch is not None:
+        create_argv += ["--branch", branch]
     try:
         created = runner.run(create_argv, check=True, stdout=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as exc:
@@ -1740,8 +1854,8 @@ def _unmerged_work_warning(record: Mapping[str, object], runner: Runner) -> None
     """Print one line on what destroying ``record``'s agent leaves unmerged.
 
     Uncommitted changes are lost with the worktree (dead-worker-recovery.md's
-    salvage flow is for that); commits on ``mngr/<name>`` not in HEAD stay on
-    the branch. Never blocks: a lead destroys after it has merged, and a
+    salvage flow is for that); commits on the worker's branch not in HEAD stay
+    on it. Never blocks: a lead destroys after it has merged, and a
     superseded pass is meant to be dropped.
     """
     name = _record_name(record)
@@ -1760,7 +1874,8 @@ def _unmerged_work_warning(record: Mapping[str, object], runner: Runner) -> None
         dirty_text = "worktree has UNCOMMITTED changes (lost with the worktree)"
     else:
         dirty_text = "worktree clean"
-    branch = f"mngr/{name}"
+    # A worker launched with ``--branch`` is on that branch, not the default one.
+    branch = _record_field(record, "initial_branch") or f"mngr/{name}"
     count = _git_output(["git", "rev-list", "--count", f"HEAD..{branch}"], runner)
     if count is None:
         commits_text = f"branch {branch} not found"
@@ -1837,9 +1952,12 @@ def destroy(
     Deepest first, the root last, so each agent's worktree is still there when
     the runtime dirs of the workers it dispatched are pulled out of it.
     RUNNING descendants are destroyed too -- a superseded pass's in-flight
-    siblings are exactly what needs to go. Branches ``mngr/<name>`` survive
-    unless ``delete_branches`` adds ``-b``. Every step is best-effort; one
-    outcome line per agent, and ``0`` only if every agent was destroyed.
+    siblings are exactly what needs to go. Branches survive unless
+    ``delete_branches`` adds ``-b``. A worker's branch is ``mngr/<name>`` unless
+    ``launch`` was given a ``--branch`` spec; ``read_worker_branch`` reports
+    whichever it is, but only while the agent still exists -- so read it before
+    destroying. Every step is best-effort; one outcome line per agent, and ``0``
+    only if every agent was destroyed.
     """
     runner = runner or Runner()
     records = _agent_records(runner)
@@ -2089,6 +2207,7 @@ def launch_sync(
     out: TextIO | None = None,
     result_path: Path | None = None,
     archive_timestamp: Callable[[], str] = _utc_timestamp,
+    branch: str | None = None,
 ) -> int:
     """Launch a worker, wait for its report in the *foreground*, emit JSON, destroy.
 
@@ -2118,9 +2237,36 @@ def launch_sync(
         task_file=task_file,
         state_dir=state_dir,
         runner=runner,
+        branch=branch,
     )
     if launch_rc != 0:
         return launch_rc
+
+    # Read the branch now, not after the await. The worker exists from here on, so
+    # mngr can answer; and if it cannot, this is the moment to say so. Left until
+    # after the wait, a failure here would surface only once the worker had run to
+    # completion, and would discard the report we had just collected.
+    try:
+        worker_branch = read_worker_branch(name, runner)
+    except WorkerBranchUnknownError as branch_error:
+        # The worker exists but we cannot name the branch our caller is supposed to
+        # merge from, so proceeding is not an option. Destroy it rather than leaking
+        # it: this file's own rule (see ``_flush_common_transcript``) is that a
+        # failure here must not orphan a half-launched worker, and an orphan also
+        # wedges the next call -- ``launch`` refuses a stale report and ``mngr
+        # create`` refuses the duplicate name, so the task could not be retried
+        # without manual cleanup.
+        if destroy(name, runner) != 0:
+            # Both facts matter and neither may replace the other: the branch error
+            # is why we are here, and the destroy failing means the cleanup this
+            # path promises did not happen, so a worker really is orphaned.
+            raise WorkerBranchUnknownError(
+                f"{branch_error}; and the worker could not be destroyed afterwards "
+                f"(see the outcome line above), so agent {name!r} is orphaned -- "
+                f"clean it up with `create_worker.py destroy --name {name}` before "
+                "retrying"
+            ) from branch_error
+        raise
 
     buffer = io.StringIO()
     await_rc = await_report(
@@ -2138,7 +2284,6 @@ def launch_sync(
         # still-hardening worker destroyed.
         watch_milestones=False,
     )
-    branch = f"mngr/{name}"
     if await_rc != 0:
         # Timed out: leave the worker alive for liveness diagnosis.
         _emit_run_result(
@@ -2147,7 +2292,7 @@ def launch_sync(
                 "type": None,
                 "name": None,
                 "body": "",
-                "branch": branch,
+                "branch": worker_branch,
                 "raw_report": "",
             },
             stream,
@@ -2173,7 +2318,7 @@ def launch_sync(
             "type": report.report_type,
             "name": report.name,
             "body": report.body,
-            "branch": branch,
+            "branch": worker_branch,
             "raw_report": report.raw,
             "destroy_failed": destroy_failed,
         },
@@ -2193,6 +2338,7 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         task_file=args.task_file,
         state_dir=state_dir,
         runner=runner,
+        branch=args.branch,
     )
 
 
@@ -2223,18 +2369,27 @@ def _run_launch_sync(args: argparse.Namespace, runner: Runner | None) -> int:
     _read_finish_report_path(args.task_file)
     state_dir_env = os.environ.get("MNGR_AGENT_STATE_DIR")
     state_dir = Path(state_dir_env) if state_dir_env else None
-    return launch_sync(
-        name=args.name,
-        template=args.template,
-        runtime_dir=args.runtime_dir,
-        task_file=args.task_file,
-        timeout_seconds=args.timeout,
-        poll_interval_seconds=args.poll_interval,
-        destroy_on_finish=not args.keep_agent,
-        state_dir=state_dir,
-        runner=runner,
-        result_path=args.result_json,
-    )
+    try:
+        return launch_sync(
+            name=args.name,
+            template=args.template,
+            runtime_dir=args.runtime_dir,
+            task_file=args.task_file,
+            timeout_seconds=args.timeout,
+            poll_interval_seconds=args.poll_interval,
+            destroy_on_finish=not args.keep_agent,
+            state_dir=state_dir,
+            runner=runner,
+            result_path=args.result_json,
+            branch=args.branch,
+        )
+    except WorkerBranchUnknownError as e:
+        # Not an authoring bug like the ValueError above: mngr answered, and its
+        # answer was that it cannot name the branch. That is an ordinary run-time
+        # failure of this command, so it reports like every other one instead of
+        # reaching the caller as a traceback.
+        sys.stderr.write(f"create_worker: {e}\n")
+        return 2
 
 
 def _run_report(args: argparse.Namespace, runner: Runner | None) -> int:
@@ -2288,7 +2443,10 @@ def build_parser() -> argparse.ArgumentParser:
         "launch", help="Create the worker and hand it the task (synchronous)."
     )
     launch_parser.add_argument(
-        "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
+        "--name",
+        required=True,
+        help="Worker name; also names the default branch (mngr/<name>) unless "
+        "--branch says otherwise.",
     )
     launch_parser.add_argument(
         "--template",
@@ -2306,6 +2464,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
+    )
+    launch_parser.add_argument(
+        "--branch",
+        default=None,
+        help="Optional mngr --branch spec. Omit to branch mngr/<name> from the "
+        "current HEAD (the default). Pass an existing branch (e.g. "
+        "mngr/update-<slug>) to have the worker check it out directly and extend "
+        "it, instead of branching anew. The branch must not be checked out in "
+        "another worktree at create time.",
     )
 
     await_parser = subparsers.add_parser(
@@ -2349,7 +2516,10 @@ def build_parser() -> argparse.ArgumentParser:
         "destroy, in one call. For non-interactive callers (services).",
     )
     launch_sync_parser.add_argument(
-        "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
+        "--name",
+        required=True,
+        help="Worker name; also names the default branch (mngr/<name>) unless "
+        "--branch says otherwise.",
     )
     launch_sync_parser.add_argument(
         "--template",
@@ -2393,6 +2563,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Also write the result JSON to this path (the machine-readable "
         "contract for programmatic callers; stdout still carries it too).",
+    )
+    launch_sync_parser.add_argument(
+        "--branch",
+        default=None,
+        help="Optional mngr --branch spec (see `launch --branch`). Omit for the "
+        "default (branch mngr/<name> from the current HEAD).",
     )
 
     report_parser = subparsers.add_parser(
@@ -2439,7 +2615,8 @@ def build_parser() -> argparse.ArgumentParser:
     destroy_parser = subparsers.add_parser(
         "destroy",
         help="Destroy a worker agent and, by default, every worker under it; "
-        "branches survive unless --delete-branches.",
+        "its branch (mngr/<name> by default, or whatever --branch resolved to) "
+        "survives unless --delete-branches.",
     )
     destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
     destroy_parser.add_argument(
@@ -2450,8 +2627,9 @@ def build_parser() -> argparse.ArgumentParser:
     destroy_parser.add_argument(
         "--delete-branches",
         action="store_true",
-        help="Also delete the mngr/<name> branch of every destroyed agent "
-        "(for a superseded or abandoned pass whose work is not wanted).",
+        help="Also delete each destroyed agent's branch if mngr created it (a "
+        "pre-existing branch a worker was launched on is kept); for a superseded "
+        "or abandoned pass whose work is not wanted.",
     )
 
     stop_parser = subparsers.add_parser(

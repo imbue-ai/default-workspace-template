@@ -35,20 +35,48 @@ def test_browser_fleet_nudge_is_a_chip_with_the_sentinel_stripped() -> None:
     assert decision.display_body == inner
 
 
-def test_bare_task_notification_is_a_chip() -> None:
-    decision = classify_user_message("<task-notification>\n<status>completed</status>\n</task-notification>")
+def test_bare_task_notification_is_a_notice_carrying_its_summary() -> None:
+    decision = classify_user_message(
+        "<task-notification>\n<status>completed</status>\n"
+        '<summary>Agent "Crispy comments" finished</summary>\n</task-notification>'
+    )
     assert decision is not None
-    assert decision.display is DisplayKind.CHIP
-    assert decision.display_label == "Background task"
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background task completed"
+    assert decision.display_body == 'Agent "Crispy comments" finished'
 
 
-def test_task_notification_behind_a_system_preamble_is_a_chip() -> None:
+def test_task_notification_behind_a_system_preamble_is_a_notice() -> None:
     decision = classify_user_message(
         "[SYSTEM NOTIFICATION - NOT USER INPUT]\nblah\n<task-notification>x</task-notification>"
     )
     assert decision is not None
-    assert decision.display is DisplayKind.CHIP
-    assert decision.display_label == "Background task"
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background task completed"
+
+
+def test_a_task_notification_summary_drops_a_zero_exit_code_and_keeps_any_other() -> None:
+    """Every ordinary completion carries "(exit code 0)", so it says nothing "completed" has
+    not; a non-zero one is the whole news."""
+    zero = classify_user_message(
+        "<task-notification>\n<summary>Background command \"build\" completed (exit code 0)</summary>\n"
+        "</task-notification>"
+    )
+    assert zero is not None
+    assert zero.display_body == 'Background command "build" completed'
+
+    failed = classify_user_message(
+        "<task-notification>\n<summary>Background command \"build\" completed (exit code 2)</summary>\n"
+        "</task-notification>"
+    )
+    assert failed is not None
+    assert failed.display_body == 'Background command "build" completed (exit code 2)'
+
+
+def test_a_task_notification_with_no_summary_shows_what_it_does_carry() -> None:
+    decision = classify_user_message("<task-notification>\n<status>completed</status>\n</task-notification>")
+    assert decision is not None
+    assert decision.display_body == "<task-notification>\n<status>completed</status>\n</task-notification>"
 
 
 def test_skill_expansion_lifts_the_skill_name_as_the_label() -> None:

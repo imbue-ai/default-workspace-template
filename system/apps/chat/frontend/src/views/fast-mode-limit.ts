@@ -3,8 +3,8 @@
  *
  * A chat runs in one of three modes (models/FastMode.ts): ``off``, ``auto`` (fast for the
  * workspace's configured number of the user's turns, then standard speed) and ``on``. This module
- * decides when auto's "then" is, and applies a mode the user picks (in the model picker's modal or
- * with ``/fast on`` and ``/fast off`` in the composer).
+ * decides when auto's "then" is, and applies a mode the user picks (in the model picker's Fast
+ * Mode submenu, or with ``/fast on`` and ``/fast off`` in the composer).
  *
  * The check runs per render, where the loaded transcript and the idle flag meet, on a chat whose
  * harness declared the ``fast_mode_limit`` turn check (claude, codex). Auto switches a chat at

@@ -58,6 +58,12 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
         label: event.display_label ?? (event.display_body !== undefined ? content : null),
         body: event.display_body ?? content,
       };
+    case "notice":
+      return {
+        kind: UserMessageKind.Notice,
+        label: event.display_label ?? null,
+        body: event.display_body ?? content,
+      };
     default:
       return { kind: UserMessageKind.UserPrompt, label: null, body: content };
   }
@@ -84,6 +90,11 @@ export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
 }
 
+/** True when the message is a one-line notice on the agent's rail. */
+export function isNoticeUserMessage(event: ClassifiableUserMessage): boolean {
+  return classifyUserMessage(event).kind === UserMessageKind.Notice;
+}
+
 /** True when the message is a subtle inline status message. */
 export function isStatusUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.StatusMessage;
@@ -95,11 +106,14 @@ export function isSkillExpansionUserMessage(event: ClassifiableUserMessage): boo
   return classifyUserMessage(event).kind === UserMessageKind.SkillExpansion;
 }
 
-/** True when the message produces NO row on the user rail -- either fully hidden
- *  (`/welcome`, an is_meta injection) or relocated into an assistant-side block
- *  (skill expansion). The rendering/rows layers use this to skip emitting a row. */
+/** True when the message produces NO row of its own -- either fully hidden (`/welcome`, an
+ *  is_meta injection) or relocated into an assistant-side block (a skill expansion). The
+ *  rendering/rows layers use this to skip emitting a row.
+ *
+ *  Not "off the user rail": a notice draws its own row on the agent's. */
 export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
-  return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
+  const kind = classifyUserMessage(event).kind;
+  return KIND_SPEC[kind].rail === Rail.None || kind === UserMessageKind.SkillExpansion;
 }
 
 /** The slash command the chat app sends a retiring agent for its handoff summary (the backend's

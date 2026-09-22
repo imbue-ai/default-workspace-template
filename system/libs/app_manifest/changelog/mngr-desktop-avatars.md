@@ -1,0 +1,3 @@
+The manifest gains a `[pin]` table (pinned-taskbar-entries plan section 3.1): `path` (a launch-path-shaped home path, required), `style` (`plain` or `avatar`), `scope` (`linked` or `independent`), and `default_mode` (`bar` or `floating`). `RegistryRow` gains `pin`, read with the same defaults for keys the row omits; `PinStyle`, `LocationScope`, and `EntryMode` are the three vocabularies, defined here beside `ShortcutMode` because the manifest validates them.
+
+`read_app_window_paths` answers each window's `client_paths` values beside its `path`, so an app's window-bound-resource sweep counts what each client shows through an independent pinned window; a window whose `client_paths` is not a map of strings reads as an unknown document, as any other wrong shape does.

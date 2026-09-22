@@ -12,6 +12,28 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
+/* The chat root's list (root/ChatRail.ts): a chat that is working wears a dot that breathes,
+   so the eye finds the live one without reading. Reduced motion holds it steady. */
+@keyframes chat-rail-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.chat-rail-dot--pulse {
+  animation: chat-rail-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-rail-dot--pulse {
+    animation: none;
+  }
+}
+
 /* On .app-content (ChatPanel / SubagentView), native scroll anchoring stays ON
    (the browser default) so the viewport holds steady when rows above it load or
    measure to their real height, with no per-frame JS scrollTop writes. The
@@ -20,8 +42,20 @@
    rather than a resizing spacer. The app only writes scrollTop for the discrete
    tail-follow and jump pins. */
 
+/* The agent's prose stops short of the column's right edge (--width-agent-gutter),
+   left-aligned, so a reply reads as one side of a conversation rather than as
+   full-bleed text. A contextual rule rather than a utility: the prose element is
+   MarkdownContent's own div, shared with the user bubble and every other render
+   site, so the cap has to come from the context it sits in. The timeline's task
+   rows carry the same inset as a utility (see ProgressBlock / handoff-node);
+   tool blocks are chrome and keep the full width. */
+.message-assistant .message-content.markdown-content,
+.pv-final .message-content.markdown-content {
+  max-width: calc(100% - var(--width-agent-gutter));
+}
+
 .markdown-content {
-  line-height: 1.5;
+  line-height: 1.4;
   font-size: var(--font-size-body);
   color: var(--c-text-primary);
 }
@@ -114,8 +148,14 @@
 .markdown-content pre code {
   background-color: transparent;
   padding: 0;
+  /* The inline-code chip's border has to go too, not just its fill: a <code>
+     inside a <pre> is still an inline box, so the border draws once per wrapped
+     LINE, turning a fenced block into a stack of outlined strips. (Only fences
+     the tool-call wrapper claims get `display: block`; a plain one in agent
+     prose stays inline.) */
+  border: none;
   border-radius: 0;
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-helper);
   line-height: 1.55;
 }
 
@@ -153,7 +193,9 @@
   left: 10px;
   top: 14px;
   font-family: var(--font-mono);
-  font-size: var(--font-size-body);
+  /* Same size and leading as the code it points at, so the two line boxes start
+     together and the glyph sits on the first line rather than under it. */
+  font-size: var(--font-size-helper);
   line-height: 1.55;
   color: var(--c-text-faint);
   transition: transform 150ms;
@@ -271,10 +313,24 @@
      as a hole with two pictures behind it. */
   background: var(--c-surface);
   border-radius: inherit;
-  overflow: hidden;
+  /* No `overflow: hidden` here: every child that needs clipping does its own, so a clip at the
+     face's edge would only ever trim what a child casts past it. */
 }
 .chat-flip-back {
   transform: rotateY(180deg);
+  /* The terminal brings its own dark surface, so it sits IN the pane rather than filling it:
+     a 4px gutter. The bottom is flush, though -- that edge is where the composer's bottom edge
+     is on the other face, so turning the card over leaves the bottom line where it was. */
+  padding: 4px 4px 0;
+}
+/* The ttyd frame fills that padded box and carries the corner: 8px is what the pane's own 12px
+   corner leaves once you step 4px inward, so the terminal reads as concentric with the pane. An
+   iframe clips its own painting to its border-radius, so its background rounds with the frame. */
+.terminal-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: var(--radius-lg);
 }
 
 /* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
@@ -286,9 +342,7 @@
 }
 
 /* The switch that turns the card over. Only the row around it is styled here -- the switch
-   itself is the shared one from `modelCardStyles`, at its own size: the knob's offset is a
-   Tailwind utility, which a `transform` here would lose to, leaving the knob outside the
-   track. */
+   itself is the shared one from `modelProviderMenuStyles`, at its own size. */
 .terminal-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -298,11 +352,16 @@
   background: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  color: var(--c-text-secondary);
+  /* Faint, like the model chip beside it: a view setting under the composer is not something to
+     draw the eye down there. */
+  color: var(--c-text-faint);
   font-size: var(--font-size-row);
   transition: color var(--dur-base);
 }
-.terminal-view-toggle:hover,
+.terminal-view-toggle:hover {
+  color: var(--c-text-secondary);
+}
+/* Switched ON is a state rather than a hover, and says so at full strength. */
 .terminal-view-toggle[aria-checked="true"] {
   color: var(--c-text-primary);
 }
@@ -310,23 +369,23 @@
 /* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
    base and grows upward, so its top edge is not somewhere the eye naturally checks for "more",
    and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
-.model-flyout-scroll {
+.model-submenu-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--c-border) transparent;
 }
-.model-flyout-scroll::-webkit-scrollbar {
+.model-submenu-scroll::-webkit-scrollbar {
   width: 8px;
 }
-.model-flyout-scroll::-webkit-scrollbar-track {
+.model-submenu-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-.model-flyout-scroll::-webkit-scrollbar-thumb {
+.model-submenu-scroll::-webkit-scrollbar-thumb {
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: var(--radius-sm);
   background-color: var(--c-border);
 }
-.model-flyout-scroll::-webkit-scrollbar-thumb:hover {
+.model-submenu-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--c-text-faint);
 }
 
@@ -446,23 +505,52 @@
   word-break: break-word;
 }
 
+/* The inline tool chips' detail panel (views/ToolChipGroup.ts) shows a tool's
+   raw input and output, so its <pre>/<code> shed the markdown chrome they would
+   otherwise inherit -- the panel's own border is the only frame it needs, and a
+   code chip drawn per line inside it would fight that border. Contextual rules
+   rather than utilities on the elements: `.markdown-content pre` is an
+   element-plus-class selector, so it outranks a utility class sitting on the
+   element itself, and the panel renders inside `.markdown-content` wherever a
+   step's revealed work does. */
+.tool-chip-detail pre,
+.tool-chip-detail code {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
 /* Progress view (the per-turn task timeline rendered from tk tickets).
-   The timeline's structure lives as utilities in views/ProgressBlock.ts and the
-   library's components/icons.ts. What stays here is what utilities cannot carry: the
-   narration classes (they style markdown-rendered children, and the live
-   one's shimmer is a keyframe + background-clip machine) and the expanded
-   panel's markdown/tool-block child rules. */
+   The timeline's structure lives as utilities in views/timeline-node.ts and
+   views/ProgressBlock.ts, and the bullets in the library's components/icons.ts.
+   What stays here is what utilities cannot carry: the narration classes (they
+   style markdown-rendered children), the live task's shimmer (a keyframe +
+   background-clip machine, shared by its title and its narration) and the
+   expanded panel's markdown/tool-block child rules. */
 
 .pv-tl-narration {
-  margin-top: 3px;
+  /* No top gap: the live narration reads as the second line of its title, not
+     as a caption under it (the settled one below keeps the gap). */
+  margin-top: 0;
   padding-left: --spacing(0.5);
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-helper);
   font-style: italic;
-  color: var(--c-text-secondary);
+  color: var(--c-text-primary);
   line-height: 1.5;
-  /* The "glint" that sweeps across active-step narration: the faint tone as
-     the moving highlight over the muted caption color. */
-  background: linear-gradient(90deg, var(--c-text-secondary) 0%, var(--c-text-faint) 40%, var(--c-text-secondary) 80%);
+}
+
+/* The glint that sweeps across the live task -- its title AND its narration, so
+   the one thing being worked on right now pulses as a unit rather than as two
+   parts. A moving highlight over the text colour; the title's own colour
+   utility is the fallback where background-clip:text is unsupported. */
+.pv-tl-title--current,
+.pv-tl-narration {
+  /* #bcbcbc: the highlight, deliberately lighter than --c-text-faint. A
+     design-system-exception -- it is one end of a moving gradient, not a text
+     role, and at faint the sweep barely reads against the text it crosses. */
+  background: linear-gradient(90deg, var(--c-text-primary) 0%, #bcbcbc 40%, var(--c-text-primary) 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -478,12 +566,19 @@
   }
 }
 
+/* The expand chevron is an affordance, not narration: it takes back a solid
+   fill inside the shimmering title, which would otherwise sweep it too and
+   leave the one clickable thing on the row flickering. */
+.pv-tl-title--current .pv-chev {
+  -webkit-text-fill-color: currentColor;
+}
+
 /* Static (settled) narration: an unclosed step that went idle still shows
    its mid-work narration, but without the live shimmer -- muted italic. */
 .pv-tl-narration--static {
   margin-top: 3px;
   padding-left: --spacing(0.5);
-  font-size: var(--font-size-body);
+  font-size: var(--font-size-helper);
   font-style: italic;
   color: var(--c-text-secondary);
   line-height: 1.5;
@@ -562,7 +657,7 @@
   margin: 0.5em 0;
 }
 
-/* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
+/* Transcript custom scrollbar (transcript-smooth-scroll spec) */
 
 /* The transcript scroll container hides its native scrollbar entirely; the
    TranscriptScrollbar overlay replaces it (physical region in pixel space,

@@ -1,55 +1,21 @@
 # Submitting mngr changes
 
-`system/vendor/mngr/` is a vendored snapshot of the mngr repo, refreshed by
-periodic sync commits (`system/vendor/mngr: refresh from mngr <sha>`). Editing
-it directly is a fine way to test an mngr change in the running workspace, but
-it is never the way to ship one: the next vendor sync overwrites direct edits,
-and this repo's PRs are not where mngr code gets reviewed.
+mngr runs in this workspace as Python packages installed from the public mngr repo
+at the commit `pyproject.toml` pins (`[tool.uv.sources]`, `imbue-mngr`). The
+installed files under the tool's `site-packages` are a build of that commit, and the
+next reinstall (any `mngr plugin add`, the update-self refresh, `uv sync`) puts that
+build back, so there is nothing here to edit or commit.
 
-**The rule: changes under `system/vendor/mngr/` do not go in an upstream
-template PR. They get their own PR on the mngr repo.** Vendor syncs from mngr
-main happen frequently upstream, so once the mngr PR merges, the template
-picks the change up automatically -- the template PR usually does not need to
-carry any mngr content at all.
+**The rule: mngr changes are not template changes. They are developed and tested in
+an mngr-internal checkout on a developer's machine, land as their own mngr PR, and
+reach this template by a pin bump once the public mirror carries them.** Until then a
+template change that needs them cannot be verified here, since this template's CI
+only ever builds against the pin.
 
-## Flow
-
-1. Iterate directly in `system/vendor/mngr/` until the change works in the
-   running workspace. Committing those edits to the workspace repo as you go
-   is fine (and keeps the clean-tree gate happy); they just won't be part of
-   the upstream submission.
-
-2. Once satisfied, create a standalone mngr checkout:
-
-   ```bash
-   git clone git@github.com:imbue-ai/mngr-internal.git .external_worktrees/mngr
-   git -C .external_worktrees/mngr checkout -b <branch-name> origin/main
-   ```
-
-   Name the branch after the current workspace branch when that makes sense,
-   and NEVER leave the checkout sitting on `main` -- mngr's committed
-   code-guardian policy applies to it as a normal mngr clone, including
-   merge-and-push on stop. The path must be exactly `.external_worktrees/mngr`:
-   that is the directory `.reviewer/settings.json` lists under
-   `stop_hook.additional_git_directories`, so the stop hook reviews work there
-   alongside the workspace once it exists.
-
-3. Carry your changes over. Diff the vendored tree against the last sync
-   commit (whose message records the mngr sha it vendored):
-
-   ```bash
-   sync_commit=$(git log -1 --format=%H --grep 'refresh from mngr' -- system/vendor/mngr)
-   git diff "$sync_commit" HEAD -- system/vendor/mngr > /tmp/mngr-changes.patch
-   git -C .external_worktrees/mngr apply -p4 -3 /tmp/mngr-changes.patch
-   ```
-
-   (`-p4` strips `a/system/vendor/mngr/`; `-3` falls back to a three-way merge
-   when mngr main has moved past the vendored base. Include uncommitted vendor
-   edits with an extra `git diff -- system/vendor/mngr` if you have any.)
-   Review the applied result -- you are reconstructing intent, not blindly
-   porting bytes.
-
-4. Commit in the checkout and follow mngr's own conventions from there (its
-   CLAUDE.md governs; unlike this repo, mngr expects a draft PR on the mngr
-   repo, and the code-guardian gates on the checkout will hold the stop until
-   the branch is pushed and reviewed).
+What an agent in this workspace does with a needed mngr change: describe it (what,
+where in mngr, why the template needs it) in the workspace's own PR or ticket, and
+build the template side against the current pin. The pin bump follows the mngr PR:
+in the mngr repo, `just pin-template-mngr` resolves a merged mngr commit to its
+public-mirror commit and rewrites every `rev` under `[tool.uv.sources]` here (all of
+them carry the same commit; `uv` refuses to mix commits across packages from one
+repo), relocks, and commits.

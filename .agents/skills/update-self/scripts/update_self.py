@@ -10,31 +10,27 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
-    tag (semver-sorted, ``-rc``/prerelease excluded) that is **not newer than the
-    minds app driving this workspace**; an explicit override may name a specific
-    tag, ``main``, or any other ref, and is reported back as exceeding the
-    ceiling when it cannot be proven to sit at or below it.
+    Resolve the ref to update to. Default is the release the minds app driving
+    this workspace was built against -- the ``minds-v*`` tag it names, and only
+    that one; an explicit override may name a specific tag, ``main``, or any
+    other ref, and is reported back as exceeding the ceiling when it cannot be
+    proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, ``mngr``), so updating past
     the app's own release would leave the workspace speaking a protocol its app
     does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
-    cannot be read the command **fails** rather than silently updating uncapped.
-
-    The output also carries ``held_back_by_ceiling`` -- whether the ceiling, and
-    not the user, is why a newer release was not taken -- alongside
-    ``latest_available``, the newest stable tag upstream *ignoring* the ceiling
-    (``null`` if there is none) and so the release that flag names.
+    cannot be read, or names a release the upstream does not carry, the command
+    **fails** rather than choosing some other release: that pairing was never
+    verified, and which way out is right is the skill's call. Releases above the
+    app's are treated as absent: only an ``--override`` naming one puts it in
+    the output.
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
     than spending a backup, a worker, and a validation run on a merge that changes
-    nothing. This is what makes the ceiling bite for a workspace sitting *at* it:
-    with a newer release upstream the refusal names the app as the reason it
-    cannot be had, and without one it is a plain "already up to date". A workspace
-    *behind* the ceiling still updates to it.
+    nothing. A workspace *behind* the ceiling still updates to it.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
@@ -60,12 +56,12 @@ belong in tested code rather than agent prose:
     the worker's "what's new" report.
 
 ``surface-chat-tab``
-    Open this run's own chat tab in the workspace UI, so a user sent into the
+    Open this run's own chat window in the workspace UI, so a user sent into the
     workspace by the minds app lands on the conversation performing the update.
-    The interface can only place a tab in front of a client that is connected,
+    The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
-    and returns at once; the open is a no-op on a tab that is already there.
+    and returns at once; the open focuses a window that is already there.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
@@ -85,7 +81,7 @@ belong in tested code rather than agent prose:
     Land a prepared merge and make the live workspace consistent with it, as
     one atomic, idempotent, rollback-on-failure motion inside a single
     near-OOM-exempt process: merge (fast-forward for update-self, ordinary for
-    update-system-interface), pre-apply state snapshots, dependency refresh,
+    the careful flow for a critical app), pre-apply state snapshots, dependency refresh,
     provisioner run, frontend build (or the worker's already-built bundle),
     pre-flight, restart, health probes, the VERSION_HISTORY.md ledger entry,
     and ``env-converge upgrade``. On any failure it reverts the entire merge
@@ -139,7 +135,7 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from update_apply import apply_update, recover
+from update_apply import apply_update, confirm_last, recover, rollback_last
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
@@ -155,12 +151,11 @@ from update_environment import default_sweep_homes
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
-    CeilingUnavailableError,
+    AppVersionNotReleasedError,
+    AppVersionUnavailableError,
     NoUpdateTargetError,
     already_current_message,
     fetch_app_template_ref,
-    is_held_back_by_ceiling,
-    pick_latest_stable_tag,
     resolve_target,
 )
 
@@ -224,32 +219,19 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
-    latest_available = pick_latest_stable_tag(tags)
-    is_held_back = is_held_back_by_ceiling(
-        resolved_ref=target.ref,
-        latest_available=latest_available,
-        ceiling=target.ceiling,
-        has_override=args.override is not None,
-    )
+    app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
+    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
-        raise NoUpdateTargetError(
-            already_current_message(
-                target.ref, latest_available, target.ceiling, is_held_back
-            )
-        )
+        raise NoUpdateTargetError(already_current_message(target.ref))
     print(
         json.dumps(
             {
                 "ref": target.ref,
                 "kind": target.kind,
-                "ceiling": target.ceiling,
+                "ceiling": target.app_version,
                 "exceeds_ceiling": target.exceeds_ceiling,
-                "latest_available": latest_available,
-                "held_back_by_ceiling": is_held_back,
             }
         )
     )
@@ -343,9 +325,9 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     return 0
 
 
-# How long the detached helper keeps trying to place the tab. Generous enough
+# How long the detached helper keeps trying to open the window. Generous enough
 # to cover a user arriving after a stopped machine's cold boot; past it the
-# app's own copy naming the tab is the fallback.
+# app's own copy naming the window is the fallback.
 SURFACE_CHAT_TAB_DEADLINE_SECONDS = 600.0
 
 SURFACE_CHAT_TAB_RETRY_SECONDS = 5.0
@@ -360,7 +342,7 @@ def wait_and_open_chat_tab(
 ) -> bool:
     """Call ``try_open`` until it succeeds or the deadline passes; whether it did.
 
-    Stops on the first success: a tab is surfaced once, and re-opening it later
+    Stops on the first success: a window is surfaced once, and re-opening it later
     would yank a user who has since moved on back to it.
     """
     started_at = monotonic()
@@ -372,13 +354,16 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
-def _try_open_chat_tab(repo_root: Path, chat_id: str) -> bool:
-    result = subprocess.run(
+def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
+    """One attempt at opening the chat's window through the desktop's ``open`` op; whether the shell took it."""
+    result = runner.run(
         [
             sys.executable,
             "system/scripts/layout.py",
             "open",
-            f"app:chat?instance={chat_id}",
+            "chat",
+            "--path",
+            f"/?chat={chat_id}",
         ],
         cwd=repo_root,
         capture_output=True,
@@ -392,7 +377,7 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         return (
             0
             if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.chat_id),
+                lambda: _try_open_chat_tab(repo_root, args.chat_id, Runner()),
                 deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
                 retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
             )
@@ -513,6 +498,13 @@ def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
+    if args.ff_only and args.keep_rollback_point:
+        # rollback-last reverts the kept point with `git revert -m 1`, which only a merge
+        # commit takes; a fast-forward lands none, so the point could never be taken back.
+        raise SystemExit(
+            "error: --keep-rollback-point needs an ordinary merge to roll back later; "
+            "it cannot be combined with --ff-only."
+        )
     return apply_update(
         args.merge_ref,
         _repo_root(args).resolve(),
@@ -523,7 +515,16 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         http=HttpClient(),
         spawner=Spawner(),
         sweep_homes=default_sweep_homes(),
+        keep_rollback_point=args.keep_rollback_point,
     )
+
+
+def _cmd_rollback_last(args: argparse.Namespace) -> int:
+    return rollback_last(_repo_root(args).resolve(), runner=Runner(), http=HttpClient())
+
+
+def _cmd_confirm_last(args: argparse.Namespace) -> int:
+    return confirm_last(_repo_root(args).resolve())
 
 
 def _cmd_run_status_start(args: argparse.Namespace) -> int:
@@ -680,10 +681,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Read already-fetched local tags instead of querying the remote.",
     )
     resolve_parser.add_argument(
+        "--app-version",
         "--ceiling",
+        dest="app_version",
         default=None,
-        help="Newest template ref to allow (default: ask the running minds app). "
-        "A non-release ref (e.g. a branch) imposes no ceiling.",
+        help="The release to update to, standing in for the running minds app's "
+        "own (default: ask the app). A ref that is not a release tag is a fault: "
+        "pass --override to say what to take instead.",
     )
     resolve_parser.set_defaults(func=_cmd_resolve_target)
 
@@ -719,7 +723,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     surface_parser = sub.add_parser(
         "surface-chat-tab",
-        help="Open this run's own chat tab once a workspace client can show it.",
+        help="Open this run's own chat window once a workspace client can show it.",
         parents=[common],
     )
     surface_parser.add_argument(
@@ -771,7 +775,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Require a fast-forward landing (the update-self flow; the worker "
         "branched off this HEAD). Default is an ordinary merge "
-        "(update-system-interface).",
+        "(the careful flow for a critical app).",
     )
     apply_parser.add_argument(
         "--worker-bundle",
@@ -791,7 +795,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         "`env-converge upgrade`, and refuses a merge ref that re-merges this "
         "target after a rollback of it without reverting the rollback first.",
     )
+    apply_parser.add_argument(
+        "--keep-rollback-point",
+        action="store_true",
+        help="Keep the pre-apply copies and record what the apply touched (the "
+        "careful flow for a critical app): the shell raises a notice offering "
+        "the previous version back until a person confirms the update, and the "
+        "next apply replaces the point.",
+    )
     apply_parser.set_defaults(func=_cmd_apply)
+
+    rollback_parser = sub.add_parser(
+        "rollback-last",
+        help="Take the kept rollback point back: forward-revert the merge, restore "
+        "the copies, restart only the touched programs, and record the outcome in "
+        "the notice.",
+        parents=[common],
+    )
+    rollback_parser.set_defaults(func=_cmd_rollback_last)
+
+    confirm_parser = sub.add_parser(
+        "confirm-last",
+        help="Close the notice: drop the rollback-point record, and the kept copies "
+        "with it unless a rollback already ran on the point (it discarded them if it "
+        "worked, and kept them for an agent if it did not).",
+        parents=[common],
+    )
+    confirm_parser.set_defaults(func=_cmd_confirm_last)
 
     recover_parser = sub.add_parser(
         "recover",
@@ -919,7 +949,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (CeilingUnavailableError, NoUpdateTargetError, ApplyPreconditionError) as e:
+    except (
+        AppVersionNotReleasedError,
+        AppVersionUnavailableError,
+        NoUpdateTargetError,
+        ApplyPreconditionError,
+    ) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it
         # and read as a crash rather than a refusal.
@@ -955,7 +990,7 @@ def _shed_protection_target(argv: Sequence[str]) -> Path | None:
         if subcommand is None and not token.startswith("-"):
             subcommand = token
         index += 1
-    if subcommand in ("apply", "recover"):
+    if subcommand in ("apply", "recover", "rollback-last"):
         return repo_root
     return None
 

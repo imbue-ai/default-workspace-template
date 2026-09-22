@@ -198,3 +198,15 @@ def test_worker_template_installs_no_worker_skill_and_keeps_venv_and_plugins() -
     )
     assert plugin_positions[0] > sync_position
     assert "MNGR_AGENT_ROLE=worker" in result["env"]
+
+
+def test_chat_template_marks_the_agent_role() -> None:
+    """The finish-notification hooks gate positively on `MNGR_AGENT_ROLE=chat`.
+
+    They stay silent for anything else, so a chat that stopped carrying the
+    role would simply never remind its agent to tell the user it finished --
+    a silent loss, which is what this pins. The role also has to survive the
+    `welcome` and `fast` templates the chat app stacks on top.
+    """
+    assert "MNGR_AGENT_ROLE=chat" in _apply(("chat",))["env"]
+    assert "MNGR_AGENT_ROLE=chat" in _apply(("chat", "welcome", "fast"))["env"]

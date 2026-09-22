@@ -1,10 +1,12 @@
 import gzip
+import importlib.resources
 import shlex
 import zlib
 from pathlib import Path
 from typing import Final
 
 from imbue.imbue_common.pure import pure
+from imbue.mngr_ttyd import resources as ttyd_resources
 from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
@@ -72,52 +74,26 @@ _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # Attach to (or create) a named, in-memory tmux terminal session.
 #
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
-#   $1 = session name (e.g. "terminal-1"), the terminal's key
-#   $2 = tab id       (per-tab id used to map this ttyd client's pty back to
-#                      the dockview tab for live tab-title tracking; may be "")
-#   $3 = working directory to anchor a newly-created session in (may be "")
+#   $1 = session name (e.g. "terminal-1"), the terminal's name
+#   $2 = working directory to anchor a newly-created session in (may be "")
 #
 # The terminal app records the tmux session id and creation time of every
-# terminal it created under the sessions directory, named by key; attaching by
-# that id keeps the tab on its session even after someone renamed the session
-# inside tmux. When the id file is missing or lacks the id or the creation
-# time, or the session under that id is gone or was created at another time (a
-# container restart cleared the tmux server, whose successor hands the same ids
-# out again), `tmux new-session -A` attaches when a session of that name exists
-# and creates it otherwise, so the tab comes back as a fresh shell. A created
-# session runs the login shell through the memory-shedding tag, as the app's
-# own creates do.
+# terminal it created under the sessions directory, named by terminal; attaching
+# by that id keeps the window on its session even after someone renamed the
+# session inside tmux. When the id file is missing or lacks the id or the
+# creation time, or the session under that id is gone or was created at another
+# time (a container restart cleared the tmux server, whose successor hands the
+# same ids out again), `tmux new-session -A` attaches when a session of that
+# name exists and creates it otherwise, so the window comes back as a fresh
+# shell. A created session runs the login shell through the memory-shedding
+# tag, as the app's own creates do.
 set -euo pipefail
 SESSION_NAME="${1:-}"
-TAB_ID="${2:-}"
-WORKDIR="${3:-}"
+WORKDIR="${2:-}"
 unset TMUX
 
 if [ -z "$SESSION_NAME" ]; then
     exec bash
-fi
-
-# Record this connection's pty under the tab id so the tmux
-# client-session-changed / session-renamed hooks can map a live client back
-# to the dockview tab that owns it (best-effort; never fatal).
-if [ -n "$TAB_ID" ]; then
-    CLIENTS_DIR="{clients_dir}"
-    mkdir -p "$CLIENTS_DIR"
-    MY_TTY="$(tty 2>/dev/null || true)"
-    if [ -n "$MY_TTY" ]; then
-        # This pty now authoritatively belongs to this tab id. Drop any
-        # stale mapping that still points at the same pty: Linux reuses a pty
-        # number after a client disconnects, so a since-closed tab's leftover
-        # file could otherwise shadow this one and misroute title updates to a
-        # closed tab (the resolver returns the first matching entry).
-        for existing in "$CLIENTS_DIR"/*; do
-            [ -f "$existing" ] || continue
-            if [ "$(cat "$existing" 2>/dev/null)" = "$MY_TTY" ]; then
-                rm -f "$existing"
-            fi
-        done
-        printf '%s\\n' "$MY_TTY" > "$CLIENTS_DIR/$TAB_ID" 2>/dev/null || true
-    fi
 fi
 
 # The id file holds the session id and its creation time: tmux reuses ids across servers, so
@@ -172,6 +148,15 @@ def render_workdir_script() -> str:
     return _WORKDIR_SCRIPT
 
 
+def warn_if_oom_tag_script_is_missing(oom_tag_script: Path) -> None:
+    """Every session's shell runs through the tag wrapper, so a missing one exits every pane at once."""
+    if not oom_tag_script.is_file():
+        logger.warning(
+            "The memory-shedding tag wrapper {} does not exist; terminal sessions will not start a shell",
+            oom_tag_script,
+        )
+
+
 @pure
 def build_session_command(oom_tag_script: Path) -> list[str]:
     """The command a terminal session runs: the login shell, tagged into the terminal-session band first."""
@@ -184,14 +169,10 @@ def build_session_command(oom_tag_script: Path) -> list[str]:
 
 
 @pure
-def render_session_script(
-    clients_dir: Path, sessions_dir: Path, oom_tag_script: Path
-) -> str:
-    """The named-session dispatch script: pty records under ``clients_dir``, session ids under ``sessions_dir``, and the tagged shell."""
-    return (
-        _SESSION_SCRIPT_TEMPLATE.replace("{clients_dir}", _shell_verbatim_path(clients_dir))
-        .replace("{sessions_dir}", _shell_verbatim_path(sessions_dir))
-        .replace("{session_command}", " ".join(build_session_command(oom_tag_script)))
+def render_session_script(sessions_dir: Path, oom_tag_script: Path) -> str:
+    """The named-session dispatch script: session ids under ``sessions_dir``, and the tagged shell."""
+    return _SESSION_SCRIPT_TEMPLATE.replace("{sessions_dir}", _shell_verbatim_path(sessions_dir)).replace(
+        "{session_command}", " ".join(build_session_command(oom_tag_script))
     )
 
 
@@ -213,34 +194,43 @@ def install_dispatch_scripts(paths: TerminalPaths, oom_tag_script: Path) -> None
     if not workdir_script.exists():
         _write_executable(workdir_script, render_workdir_script())
     _write_executable(
-        paths.commands_dir / SESSION_SCRIPT_FILENAME,
-        render_session_script(paths.clients_dir, paths.sessions_dir, oom_tag_script),
+        paths.commands_dir / SESSION_SCRIPT_FILENAME, render_session_script(paths.sessions_dir, oom_tag_script)
     )
 
 
-def install_ttyd_web_client(compressed_client: Path, destination: Path) -> bool:
-    """Decompress the vendored OSC 52-capable ttyd web client to ``destination``, reporting whether it is there to serve.
+TTYD_WEB_CLIENT_RESOURCE: Final[str] = "ttyd_index.html.gz"
 
-    The stock ttyd client drops the OSC 52 escapes tmux emits on copy, so the patched client
-    vendored with the mngr_ttyd plugin is served instead; when the asset is missing or will
-    not decompress, ttyd falls back to its stock client so the terminal still starts.
+
+def load_ttyd_web_client(override: Path | None) -> bytes | None:
+    """The gzip-compressed OSC 52-capable ttyd web client: ``override`` when given, else the one the imbue-mngr-ttyd package ships.
+
+    The stock ttyd client drops the OSC 52 escapes tmux emits on copy, so the patched client the
+    mngr_ttyd plugin carries is served instead. ``None`` when ``override`` names a file that is not
+    there, so ttyd falls back to its stock client and the terminal still starts.
     """
-    if not compressed_client.is_file():
+    if override is None:
+        return importlib.resources.files(ttyd_resources).joinpath(TTYD_WEB_CLIENT_RESOURCE).read_bytes()
+    if not override.is_file():
         logger.warning(
             "Skipped installing the ttyd web client: {} is missing; using the stock client",
-            compressed_client,
+            override,
         )
-        return False
+        return None
+    return override.read_bytes()
+
+
+def install_ttyd_web_client(compressed_client: bytes, destination: Path) -> bool:
+    """Decompress the ttyd web client to ``destination``, reporting whether it is there to serve.
+
+    When the archive will not decompress, ttyd falls back to its stock client so the terminal
+    still starts.
+    """
     # gzip.decompress raises EOFError for a truncated stream and zlib.error for corrupt data; a
-    # file that is not gzip at all is a BadGzipFile, which is an OSError.
+    # stream that is not gzip at all is a BadGzipFile, which is an OSError.
     try:
-        destination.write_bytes(gzip.decompress(compressed_client.read_bytes()))
+        destination.write_bytes(gzip.decompress(compressed_client))
     except (OSError, EOFError, zlib.error) as e:
-        logger.warning(
-            "Failed to decompress the ttyd web client at {}: {}; using the stock client",
-            compressed_client,
-            e,
-        )
+        logger.warning("Failed to decompress the ttyd web client: {}; using the stock client", e)
         destination.unlink(missing_ok=True)
         return False
     return True

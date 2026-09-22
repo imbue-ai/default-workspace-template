@@ -1,4 +1,12 @@
-FROM python:3.12-slim-trixie
+# Pinned by index digest, not by tag: every apt operation in the image resolves
+# against the frozen archive at .mngr/apt-snapshot-timestamp, and apt refuses to
+# downgrade, so the base's own package versions must exist in that snapshot (a
+# floating tag can move to a newer Debian point release than the snapshot). Bump
+# this digest together with the snapshot timestamp, never alone; the release
+# runbook in the mngr monorepo (apps/minds/docs/deploy/ops/app-release.md, step
+# 0) and its release test check that the pair still agrees. Resolve a tag's
+# current index digest with `docker buildx imagetools inspect python:3.12-slim-trixie`.
+FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 # /root/.local/bin holds uv + claude (installed by system/scripts/setup_system.sh); put
 # it on PATH for every build layer and at runtime.
@@ -73,27 +81,6 @@ COPY system/services/share_gateway/pyproject.toml /home/user/workspace/system/se
 COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/github_sync/pyproject.toml
 COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/apps/system_interface/pyproject.toml
 COPY system/apps/chat/pyproject.toml /home/user/workspace/system/apps/chat/pyproject.toml
-
-# system/vendor/mngr path-dependency manifests. The root pyproject.toml's
-# [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
-# imbue-mngr-codex, imbue-mngr-pi-coding,
-# resource-guards, and concurrency-group at
-# system/vendor/mngr/libs/<pkg>; uv needs each pyproject.toml present to
-# resolve the workspace. mngr_modal and mngr_wait are also workspace members
-# whose transitive deps benefit from pre-warming even though only mngr_wait
-# is registered post-COPY (as a mngr plugin, not a tool install).
-COPY system/vendor/mngr/libs/imbue_common/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/imbue_common/pyproject.toml
-COPY system/vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_claude/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_codex/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_codex/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_opencode/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_opencode/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_antigravity/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_antigravity/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
-COPY system/vendor/mngr/libs/mngr_autocompact/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_autocompact/pyproject.toml
-COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml
-COPY system/vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/concurrency_group/pyproject.toml
 
 # Frontend npm manifests (the workspace root's lockfile + package.json, and each member's
 # package.json) -- install needs only these.

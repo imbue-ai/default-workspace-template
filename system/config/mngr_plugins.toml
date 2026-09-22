@@ -1,38 +1,50 @@
 # The mngr plugins this workspace registers, and which tool environment each
-# one goes into: ``mngr`` is the vendored mngr CLI's tool; any other entry is an
-# app's manifest name (``system/apps/<package>/app.toml``), whose own tool
-# environment gets the plugin as an editable extra. Read at image build by
+# one goes into: ``mngr`` is the mngr CLI's tool; any other entry is an app's
+# manifest name (``system/apps/<package>/app.toml``), whose own tool environment
+# gets the plugin as an extra. Read at image build by
 # system/scripts/build_workspace.sh and again by the update-self apply after a
 # merge, so a release that ships a new plugin registers it in the workspace
-# being updated rather than only in freshly built images. Paths are relative
-# to the workspace root.
+# being updated rather than only in freshly built images.
+#
+# Every plugin is installed from the public mngr repo at the one commit
+# pyproject.toml's [tool.uv.sources] pins imbue-mngr to; system/test_mngr_pin.py holds
+# every source and every locked package to that commit. Each entry names the package and
+# its subdirectory in the mngr repo. mngr_modal is intentionally not registered
+# (providers.modal.is_enabled=false).
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_claude"
+package = "imbue-mngr-claude"
+subdirectory = "libs/mngr_claude"
 tools = ["mngr", "chat"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_codex"
+package = "imbue-mngr-codex"
+subdirectory = "libs/mngr_codex"
 tools = ["mngr", "chat"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_pi_coding"
+package = "imbue-mngr-pi-coding"
+subdirectory = "libs/mngr_pi_coding"
 tools = ["mngr", "chat"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_opencode"
+package = "imbue-mngr-opencode"
+subdirectory = "libs/mngr_opencode"
 tools = ["mngr", "chat"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_antigravity"
+package = "imbue-mngr-antigravity"
+subdirectory = "libs/mngr_antigravity"
 tools = ["mngr", "chat"]
 
 # The wait plugin only adds a CLI command, so no app's tool has a use for it.
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_wait"
+package = "imbue-mngr-wait"
+subdirectory = "libs/mngr_wait"
 tools = ["mngr"]
 
 [[plugins]]
-path = "system/vendor/mngr/libs/mngr_autocompact"
+package = "imbue-mngr-autocompact"
+subdirectory = "libs/mngr_autocompact"
 tools = ["mngr"]
 

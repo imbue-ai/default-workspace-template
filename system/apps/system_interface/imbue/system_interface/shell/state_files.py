@@ -13,7 +13,7 @@ from loguru import logger
 
 from imbue.system_interface.shell.errors import ShellStateError
 
-# Where the shell keeps its state (contracts.md section 7), relative to the workspace root the
+# Where the shell keeps its state (desktop contracts.md section 4), relative to the workspace root the
 # supervised process runs from; ``main.py`` takes ``--state-dir`` so a test can point elsewhere.
 DEFAULT_STATE_DIRECTORY: Final[Path] = Path("data/.state/system_interface")
 

@@ -1,0 +1,23 @@
+Phases 6 and 7 of the desktop interface (`docs/system/blueprint/desktop-interface/plan-desktop-interface.md`), the parts outside any one app:
+
+- `system/scripts/layout.py` is rewritten around the desktop's verbs (`context`, `desktops`, `list`, `load`, `open`, `focus`, `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `refresh`, `shortcuts`, `shortcut set|move|remove`, `wallpaper`); it names apps and windows (`win-<hex>`, `self`, or an app name), opens at `--path` or a launch path (`--launch`, `--param`), targets one client (`--client`, else the client that last messaged the requester, else the one connected client), and refuses the tabbed shell's `app:`/`chat:`/`terminal:` addresses and its retired verbs with a pointer to the replacement. The read verbs print the shell's inventory document.
+
+- The `app_instances` library (instance records, the JSON store, the blueprint, the nudge, the sidecar) is deleted, as is `system/scripts/migrate_workspace_layouts.py`.
+
+- The shared contract module (`system/libs/workspace_ui/src/app_contract.ts`) loses `open(address)` and the handshake's `deviceKind`, `address`, `tabId`, and `viewId`; the handshake is `{clientId, windowId, desktopId, path}`. `ClientIdentity` keeps the active desktop id beside the client id (`getActiveDesktopId`, `adoptClientIdentity({clientId, desktopId})`). `addresses.ts` and `views.ts` are deleted, and the stale dockview comments in the library describe the desktop.
+
+- `system/scripts/forward_port.py --manifest` copies `display_name`, `critical`, `priority`, `program`, `internal`, `launcher_rank`, `default_shortcut` (which now needs `launch` and `mode`), and `launch_paths` onto the row; the tabbed shell's `instances`, `instances_url`, and `actions` keys are no longer read, and a re-registration strips them from a row an earlier release wrote (a `CLEANUP:` note says when that can go).
+
+- The files app's supervisord program runs dufs directly after registering the app; the root `pyproject.toml` no longer lists the deleted packages, and `uv.lock` follows.
+
+- The auto-open in `.mngr/settings.toml` posts the desktop's `open` of the chat at `/?chat=<id>`.
+
+- Docs: `docs/system/README.md` points at the desktop plan as the current direction; the plan records that every phase has landed; `contracts.md` describes the contract module without `open(address)`; `system/apps/README.md` and `system/libs/README.md` describe the desktop-era layout.
+
+- Adds the spec `docs/system/specs/window-bound-resources.md`: every seeded shortcut opens a new window of its app (the chat's is its chat list), a terminal and the one browser live as long as a window shows them and are collected by their own apps, and agents open a window for what they use.
+
+- `forward_port.py` copies `window_closed_path` onto the registry row; `layout.py open --minimized`, an `open` with no client landing unplaced, and the retired `delete` verb's advice naming the apps' own collection. The desktop-interface contracts, plan, and concepts record the window-bound-resources design (`docs/system/specs/window-bound-resources.md`, now implemented).
+
+- `docs/system/specs/window-bound-resources.md` and the contracts record that an app takes the close hint's `path` as proof a window showed the resource it names, closing the gap where a resource closed within its first sweep interval was never collected.
+
+- The desktop-interface blueprint records that the tray ships the Desktops widget alone; the Running apps widget is gone.

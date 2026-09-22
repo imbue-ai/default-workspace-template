@@ -54,12 +54,11 @@ class WebSocketBroadcaster(MutableModel):
     # successful enqueue. A client is only disconnected once its counter reaches
     # ``_MAX_CONSECUTIVE_QUEUE_FULL`` -- a brief stall is tolerated.
     _consecutive_queue_full_by_id: dict[int, int] = PrivateAttr(default_factory=dict)
-    # Self-reported identity of each connected client (client_id, active view,
-    # device kind), keyed by ``id(queue)``. Populated when the client sends its
-    # ``client_state`` registration over the WebSocket; absent for clients that
-    # have not registered (yet). Entries die with the connection, so "connected
-    # client on view X" means exactly "an open, registered WebSocket whose latest
-    # report named X".
+    # Self-reported identity of each connected client (client_id, active desktop),
+    # keyed by ``id(queue)``. Populated when the client sends its ``client_state``
+    # registration over the WebSocket; absent for clients that have not registered
+    # (yet). Entries die with the connection, so "connected client on desktop X"
+    # means exactly "an open, registered WebSocket whose latest report named X".
     _client_info_by_queue_id: dict[int, dict[str, str]] = PrivateAttr(default_factory=dict)
 
     def register(self) -> queue.Queue[str | None]:
@@ -80,21 +79,14 @@ class WebSocketBroadcaster(MutableModel):
             except ValueError:
                 pass
 
-    def set_client_info(
-        self,
-        client_queue: queue.Queue[str | None],
-        client_id: str,
-        active_view: str,
-        device_kind: str,
-    ) -> None:
-        """Record (or update) the self-reported identity of one connected client."""
+    def set_client_info(self, client_queue: queue.Queue[str | None], client_id: str, active_desktop: str) -> None:
+        """Record (or update) the self-reported identity of one connected client: its id and the desktop it is on."""
         with self._lock:
             if client_queue not in self._client_queues:
                 return
             self._client_info_by_queue_id[id(client_queue)] = {
                 "client_id": client_id,
-                "active_view": active_view,
-                "device_kind": device_kind,
+                "active_desktop": active_desktop,
             }
 
     def get_connected_client_infos(self) -> list[dict[str, str]]:
@@ -150,8 +142,7 @@ class WebSocketBroadcaster(MutableModel):
 
         Drains the queue and pushes the shutdown sentinel so the handler thread,
         blocked on ``client_queue.get(...)``, wakes, sees ``None``, and exits its
-        loop (closing its socket). This is the thread-based replacement for the
-        old asyncio task cancellation.
+        loop (closing its socket).
         """
         self._consecutive_queue_full_by_id.pop(id(dead_queue), None)
         self._client_info_by_queue_id.pop(id(dead_queue), None)
@@ -170,39 +161,45 @@ class WebSocketBroadcaster(MutableModel):
         )
 
     def broadcast_apps_updated(self, apps: Sequence[Mapping[str, Any]]) -> None:
-        """Broadcast the whole inventory (contracts.md section 8): every app with its instances."""
+        """Broadcast every app after a registry or liveness change (desktop contracts.md section 6)."""
         self.broadcast({"type": "apps_updated", "apps": apps})
 
-    def broadcast_projects_updated(self, projects: Sequence[Mapping[str, Any]]) -> None:
-        """Broadcast every project after a project write (contracts.md section 8)."""
-        self.broadcast({"type": "projects_updated", "projects": projects})
+    def broadcast_desktops_updated(self, desktops: Sequence[Mapping[str, Any]]) -> None:
+        """Broadcast every desktop after a write of ``desktops.json`` (desktop contracts.md section 6)."""
+        self.broadcast({"type": "desktops_updated", "desktops": desktops})
 
-    def broadcast_tab_rebound(self, client_id: str, view_id: str, tab_id: str, address: str) -> None:
-        """Tell the owning client that one of its tabs now shows another instance (the tab route)."""
+    def broadcast_placements_updated(self, desktop_id: str, client_id: str, save_id: str) -> None:
+        """A client's layout of a desktop was written (a browser's save or the shell's own edit); the owning windows refetch."""
         self.broadcast(
             {
-                "type": "tab_rebound",
-                "client_id": client_id,
-                "view_id": view_id,
-                "tab_id": tab_id,
-                "address": address,
-            }
-        )
-
-    def broadcast_layout_updated(self, view_id: str, client_id: str, save_id: str) -> None:
-        """A client layout was written (a browser's save or the shell's own edit); the owning windows refetch it."""
-        self.broadcast(
-            {
-                "type": "layout_updated",
-                "view_id": view_id,
+                "type": "placements_updated",
+                "desktop_id": desktop_id,
                 "client_id": client_id,
                 "save_id": save_id,
             }
         )
 
-    def broadcast_active_view_changed(self, client_id: str, view_id: str) -> None:
-        """A client's stored active view moved; its other windows switch to it."""
-        self.broadcast({"type": "active_view_changed", "client_id": client_id, "view_id": view_id})
+    def broadcast_avatar_status(self, status: Mapping[str, Any]) -> None:
+        """The avatar's mood or staleness changed (pinned-taskbar-entries plan section 4.6); every window redraws it."""
+        self.broadcast({"type": "avatar_status", **status})
+
+    def broadcast_avatar_selection_changed(self, design: str) -> None:
+        """The workspace's avatar design was written; every window draws it."""
+        self.broadcast({"type": "avatar_selection_changed", "design": design})
+
+    def broadcast_client_entries_changed(self, client_id: str, entries: Mapping[str, Any]) -> None:
+        """A client's presentation of its pinned entries was written; its own windows take it."""
+        self.broadcast_to_client(
+            {"type": "client_entries_changed", "client_id": client_id, "entries": entries}, client_id
+        )
+
+    def broadcast_active_desktop_changed(self, client_id: str, desktop_id: str) -> None:
+        """A client's stored active desktop moved; its other windows switch to it."""
+        self.broadcast({"type": "active_desktop_changed", "client_id": client_id, "desktop_id": desktop_id})
+
+    def broadcast_update_notice_changed(self, notice: Mapping[str, Any] | None) -> None:
+        """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""
+        self.broadcast({"type": "update_notice_changed", "notice": dict(notice) if notice is not None else None})
 
     def broadcast_layout_op(
         self,
@@ -211,12 +208,11 @@ class WebSocketBroadcaster(MutableModel):
         requester: str = "",
         target_client_id: str | None = None,
     ) -> None:
-        """Send a transient ``layout_op`` (maximize, restore, refresh, the interface reload) to the browser.
+        """Send a transient ``layout_op`` (refresh, the interface reload) to the browser (desktop contracts.md section 8).
 
-        ``requester`` is the address of the instance that invoked ``system/scripts/layout.py``
-        (its own instance); the frontend resolves the ``self`` address with it.
-        ``target_client_id`` names the client whose windows apply the op; None reaches every
-        window (``refresh`` of a whole app, ``reload_system_interface``).
+        ``requester`` is the app and marker of the chat that invoked ``system/scripts/layout.py``, spelled
+        ``<app>:<marker>``. ``target_client_id`` names the client whose windows apply the op; None reaches
+        every window (``refresh`` of a whole app, ``reload_system_interface``).
         """
         message = {
             "type": "layout_op",
