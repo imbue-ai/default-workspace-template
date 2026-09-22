@@ -1812,7 +1812,9 @@ metered the trial), so a trial that timed out still accounts for what it consume
 price map, at the moment it builds a report. Both halves of that split matter: a provider changing a
 price cannot rewrite trial data, and the same run checked again after a price change reports different
 money from the same tokens -- which is why `check-run`'s two summaries name the map that priced them
-(`priced by litellm 1.93.0 (remote price map)`). The Slack report does not carry the figures yet.
+(`priced by litellm 1.93.0 (remote price map)`). The [Slack report](#results) carries the same
+figures in the same spelling: the agent's half per trial in a grid cell, and both halves summed over
+the message's trials on its pair line.
 
 The workspace agent's block is a breakdown per model over four non-overlapping token buckets
 (uncached input, output, cache read, cache write) that Anthropic prices differently, with the portion
@@ -2056,8 +2058,8 @@ whole spend is priced from come from the last step that wrote one -- or, for a t
 before harbor archived anything, from the copy still at the trial root; the evidence manifest and `reward-details.json` are
 step-local, so **every** step's are read and a gate that failed -- or an entry left unmeasured -- on
 any step fails the trial. An errored entry id, a criterion score and a dimension score each carry the
-step they came from (`build/http_0_root_0`; `amend/conciseness` as a Slack column and
-`amend/quality: conciseness` in the summary's criteria cell; `build/quality`), and the
+step they came from (`build/http_0_root_0`; `amend/quality: conciseness` in the summary's criteria
+cell, and a `step` column of its own in the Slack report's scoring reply; `build/quality`), and the
 `completed` cell says how many steps a pass covers (`pass (3 steps)`). A trial that ran fewer steps
 than its task declared is **not** complete even when its last step finished: harbor abandons the
 remaining steps when one misses its `min_reward` and records no exception for it, and since
@@ -2692,8 +2694,8 @@ run.
   [self-diagnostic families](#checking-a-diagnostic-run) beside `evaluate`. They check the eval
   itself -- its readers, collectors and verifier -- rather than the product. They belong to the pair
   rather than to one of its eval configs, so they ride on the pair's first message. See below.
-- **`notify`** posts one Slack message per pair and eval config through `minds-evals ci-report`, and
-  writes the same reports to the run summary.
+- **`notify`** renders one Slack thread per pair and eval config with `minds-evals ci-report`, posts
+  them with `minds-evals post-slack-report`, and writes the same reports to the run summary.
 
 `minds-evals check-run` decides both passes: it passes only when every trial completed, no trial
 carries a harness `error` status, the structural gates hold, and no trial that asked for a model is
@@ -2759,7 +2761,7 @@ The job artifacts exclude `agent/snapshots/`, as a cell's do.
 `configs/diagnostics/live_invariants.json` declares them. Every live cell is read against that table
 in the same step as `check-run`, off the same job directory, and writes
 `live-invariants-<pair>-<config>.{md,json}` beside its own summary. The read **gates nothing**: its
-exit code is discarded, and a miss is named in the cell's details in the Slack report. The cell's
+exit code is discarded, and a miss is named in the Slack report's diagnostics reply. The cell's
 trials run one case against one table, so the line names each missed invariant once with the trials
 that missed it (`live invariants missed: prep.stage_reached (3 of 3 trials)`) rather than repeating
 a trial's whole list per trial; a cell that missed none has no line. That is what turns "the readers
@@ -2837,15 +2839,21 @@ never a harness config name, which is what keeps an oracle pass's artifacts from
 cells' of the same suite. The `-jobs-` artifacts hold the full job directories minus
 `agent/snapshots/` -- the workspace tarball is ~90 MB of a trial's ~92 MB.
 
-The `notify` job posts **one Slack message per pair and eval config**, rendered by
+The `notify` job posts **one Slack thread per pair and eval config**, rendered by
 `minds-evals ci-report` -- the pairs answer different questions ("is what we are about to ship
 healthy?" and "is what users are running healthy?"), the suites measure different things, and a
-reader acts on one of them at a time. A message opens with a header naming the pair, the config and
-their verdict (passed, failed, skipped, not evaluated, or broken: the worst of that suite's oracle
-pass and its cells), then a line carrying the pair's refs, SHAs and oracle verdict beside the run's
-duration and trigger. A pair the run skipped whole, or whose refs did not resolve, has no suite to
-report and gets a single message of its own. It posts under `:big_brain:` when every arm it reports
-came out green -- every cell passed, every cell was skipped as already green, or an
+reader acts on one of them at a time. The thread's message answers "is this arm healthy, and what
+did it cost?"; everything a reader only goes looking for once that answer is no is a reply under it.
+
+A message opens with a header naming the pair, the config and their verdict (passed, failed,
+skipped, not evaluated, or broken: the worst of that suite's oracle pass and its cells), then a line
+carrying the pair's refs, SHAs and oracle verdict, and under it the run's duration and trigger
+followed by what the message's own graded trials spent -- `agent spend $23.68+ over 2 trials, 1
+unknown; harness spend $0.35 over 2 trials`, in the wording and with the marks
+[the run's markdown summary](#what-the-reports-do-with-it) uses, and left out entirely where no
+trial in the message recorded spend. A pair the run skipped whole, or whose refs did not resolve,
+has no suite to report and gets a single thread of its own. It posts under `:big_brain:` when every
+arm it reports came out green -- every cell passed, every cell was skipped as already green, or an
 oracle-only run's oracle passed -- and under `:brainless:` for anything else, so the verdict reads
 off the channel list before the message is opened. The icon answers "are the arms good?", so a run
 whose arms all passed but whose job went red keeps `:big_brain:`; the warning in the message itself
@@ -2853,53 +2861,74 @@ is what says the job broke.
 
 Under that is the **grid**: one column per harness config, in matrix order, and one row per case. A
 grid cell places the trial's reward on the absolute 0..1 scale as a coloured square -- red under
-0.25, orange under 0.50, yellow under 0.75, green at or above it -- followed by the reward itself
+0.25, orange under 0.50, yellow under 0.75, green at or above it -- then the reward itself, then in
+italics what the trial's workspace agent spent and how long its conversation took (`$1.23 9m05s`),
 and, where the trial did not pass, a bold cross. The cross covers every way a trial can fail: it did
 not complete, a gate failed, evidence went unmeasured, or it answered on the wrong model. The colour
 therefore means one thing throughout and never competes with the verdict, and a legend under the
-grid states the bands and the cross, derived from the bands themselves so the words cannot drift
-from the cells. A suite of a running pair whose every cell is already green reads as
-`skipped (already green)` and keeps its columns: the run buys an oracle pass only where a cell gates
-on one, so there is no oracle verdict to report for it, and that is what most nights of a settled
-matrix look like. `:heavy_minus_sign:` is a pass that was never attempted, skipped because it is
-already green or gated off by a failed oracle, and `:grey_question:` a cell with no reward to
-place: a pass whose story cannot be told, with no summary at all because the job died before grading
-or one that could not be read, a case a graded column has no trial for, or a trial that was never
-graded. An oracle-only run has a single `oracle` column, and a pair that graded nothing -- skipped,
-unresolved, or broken throughout -- has no grid.
+grid states the bands, the cross and the two figures, derived from the bands themselves so the words
+cannot drift from the cells. The cost is the agent's half alone, since the harness's half is what
+running the eval costs whichever arm it ran; it reads `$12.50+` where the figure holds less than
+the trial spent, `$?` where a model it ran on carries no price, `<$0.01` for real money too small to
+show, and nothing at all where the trial recorded no spend. The time is the conversation rather than
+the whole trial, because workspace creation is the harness's own time and much the same on every
+arm. Every column is left-aligned: a cell is a run of elements of different widths, so right-aligning
+it would line the crosses up rather than the rewards.
+
+A suite of a running pair whose every cell is already green reads as `skipped (already green)` and
+keeps its columns: the run buys an oracle pass only where a cell gates on one, so there is no oracle
+verdict to report for it, and that is what most nights of a settled matrix look like.
+`:heavy_minus_sign:` is a pass that was never attempted, skipped because it is already green or
+gated off by a failed oracle, and `:grey_question:` a cell with no reward to place: a pass whose
+story cannot be told, with no summary at all because the job died before grading or one that could
+not be read, a case a graded column has no trial for, or a trial that was never graded. An
+oracle-only run has a single `oracle` column, and a pair that graded nothing -- skipped, unresolved,
+or broken throughout -- has no grid.
 
 Under the grid, **the trials that did not pass** are listed in a table of config, case and the
 reason `check-run` recorded. It is drawn only when something failed: a heading over an empty table
 reads as a measurement that went missing rather than as a night with nothing to report.
 
-Below that, one collapsed container, `judge scores`, holds every graded trial of the pair in a
-single table -- config, case, reward, a column per judge criterion, then what became of the trial --
-rather than a table per harness config, so a criterion can be compared straight down its own column.
-The judges' criteria alone have columns here; the programmatic checks a trial was also scored on are
-in the run's own summary. Each cell is rewardkit's normalized 0-1 score (`0.78`), not the judge's
-1-10 likert answer, which stays in the trial's `reward-details.json`; the legend above the table says
-the scale. The criteria are the union across every arm: a criterion only one config was scored on
-still gets a column, and the arms that were not scored on it print `-` rather than a zero. A column
-is headed with the bare criterion name -- qualified by its step on a stepped case
-(`build/conciseness`), so three steps stay three columns -- and with `<dimension>: <criterion>` only
-where two dimensions scored criteria of the same name; which dimension scored which criteria is
-stated once in a legend above the table (`criteria by dimension, each scored 0.00-1.00: quality:
-conciseness; outcome: works_as_expected`), because the dimension is what says whether a score is
-about the product or about the harness that drove it.
-
-Slack refuses the whole message over 20 cells in a table row or 10,000 characters across the cells
-of all its tables, so the message keeps itself under both. Every cell is clamped to 120 characters
-first -- a case id and an incompletion reason are both unbounded -- then a pair scored on more than
-16 criteria keeps the first 16, and the judge table, the only part that grows with cases times
-configs times criteria, is cut to whole rows of whatever budget the grid and the failures table left
-it. Each cut says so out loud: in the legend above the table, or, where no row fit at all, in a line
-where the container would have gone.
-
 A **details** block follows with whatever belongs to no arm's own row: one line per skipped, broken
-or not-evaluated cell, one per failing trial of a pass with no grid column of its own (a failed
-oracle on a pair whose cells ran), and one per passing trial whose requested model nothing confirmed.
-It is budgeted at 2900 characters, under the 3000 a Slack section holds, and cut on a line boundary
-when it overruns. Links to the run's logs and artifacts close the message.
+or not-evaluated cell, one per diagnose job that left no summary or trial that measured nothing, the
+behaviour cells the pair cannot run, one per failing trial of a pass with no grid column of its own
+(a failed oracle on a pair whose cells ran), and one per passing trial whose requested model nothing
+confirmed. It is budgeted at 2900 characters, under the 3000 a Slack section holds, and cut on a
+line boundary when it overruns. Links to the run's logs and artifacts close the message.
+
+**The first reply carries every scoring input behind the grid**, as two tables: `outcome` and
+`quality` in the first, `harness_quality` and `gates` in the second, since a row holding every
+dimension's criteria is far past what a Slack table row takes and the split is where the reader's
+question changes from "how good is what it built?" to "did the harness do its job?". A row is one
+graded trial, or one step of a [stepped](#stepped-cases) one -- scored against that step's own
+expectations, so three steps are three rows, and the `step` column is drawn only where some row has
+one. Each row leads with its config and case, so a criterion can be compared straight down its own
+column across every arm the message reports. Each dimension is a bold super-column carrying that
+dimension's own score, followed by one column per criterion under it -- programmatic checks and
+judges alike, since the judges alone are not the scoring input. Every cell is rewardkit's normalized
+0-1 score (`0.78`), not a judge's 1-10 likert answer, which stays in the trial's
+`reward-details.json`; the line above each table says the scale. The criteria are the union across
+the rows: one a single case was scored on still gets a column, and the rows that were not print `-`
+rather than a zero they did not earn. A `gates` cell is a mark rather than a number -- `✓` where the
+gate held and the red `:x:` where it did not -- because a gate is a property a trial either has or
+has not, and marking only the failures keeps a table read for its numbers in black and white. A
+dimension nothing in the message scored is left out, and a table left with no dimensions is not
+drawn; a suite that graded nothing gets no scoring reply.
+
+**The second reply carries the diagnostics detail**, under a `diagnostics detail` heading and
+budgeted like the details block: every known failure with the issue or reason it gives, every
+compliance fact an agent did not follow, and the live invariants each cell's own trials missed. It
+is posted only where there is something to say.
+
+Slack refuses the whole message over 20 cells in a table row, 100 rows in a table, 10,000 characters
+across the cells of all its tables, or 120 characters in one cell. Every cell, headings included, is
+clamped to that 120 first -- a case id, a criterion name and an incompletion reason are all
+unbounded. The grid itself is drawn whole, since the matrix bounds it: a run of more than 19 harness
+configs or more than 99 cases has its blocks refused and is read as the plain text every message
+carries. What is cut is what the matrix does not bound -- the failures table takes whatever the grid
+leaves it, and in the scoring reply the criterion columns past what a row fits are dropped from the
+end, the rows past the ninety-ninth go, and whole rows come off the longer of the two tables until
+both fit the character budget. Each cut says so out loud in the line above the table it happened to.
 
 **Diagnostics** are reported for every pair the run decided them for, a pair whose every cell was
 skipped included, and not at all on a run that stopped after the oracle. The pair's opening line
@@ -2912,35 +2941,54 @@ one passed, with any unsupported cell in brackets after it. A **`failed`** diagn
 made it. Each failing fact is a row of the failed-trials table, with `diagnose fixture` or
 `diagnose behaviour <harness>` in the config column and `<fact> [<step>]: <recorded> vs expected
 <matcher>` as the note (prefixed `unexpectedly passing:` for a strict known failure whose defect was
-not recorded). The details block names a diagnose job that left no summary, then each not-measured
-trial's reason and each not-followed trial's missed compliance facts, the behaviour cells the pair
-cannot run at all, the **live invariants** each cell's own trials missed, and, last, every known
-failure with the issue or reason it gives. A diagnostic fails every fact of a broken reader, so the
-failures table keeps to Slack's 100-row cap and the table character budget, whole rows first-come,
-and says how many rows it dropped. A red diagnose job whose summary explains it -- a failed or a
-broken diagnostic -- does not raise the warning for a job that went red with every arm green.
+not recorded). A diagnostic fails every fact of a broken reader, so the failures table keeps to
+Slack's 100-row cap and the table character budget, whole rows first-come, and says how many rows it
+dropped. A red diagnose job whose summary explains it -- a failed or a broken diagnostic -- does not
+raise the warning for a job that went red with every arm green.
 
-Only the blocks an incoming webhook accepts are used, which is what `table` and `container` are
-doing the work of. A webhook refuses `data_table` outright -- a minimal one is answered with
-`400 invalid_blocks` -- so the sorting and paging a data table would bring are unavailable until the
-notify job posts as an app with a bot token rather than through a webhook, and `markdown` is refused
-as well.
+`minds-evals post-slack-report --payloads <file> --channel <C-id>` is what posts the threads
+`ci-report` wrote. It posts through `chat.postMessage` with the bot token in
+`SLACK_MINDS_EVALS_BOT_TOKEN`, which `notify` fetches from Vault at
+`mngr/ci/SLACK_MINDS_EVALS_BOT_TOKEN`: that call answers with the posted message's id, which is what
+a reply is threaded under. The app that token belongs to needs `chat:write`, `chat:write.customize`
+(every payload carries the name and avatar the report posts under) and membership of the channel it
+posts to. Without a token it falls back to the incoming webhook in
+`SLACK_MINDS_EVALS_WEBHOOK` (`mngr/ci/SLACK_MINDS_EVALS_WEBHOOK`), which answers with no message id
+and therefore **cannot thread**: such a run gets the top messages alone, and a warning naming the
+replies it skipped. With neither, the command warns and the run summary is the whole report. The
+channel is the workflow's own plain value (`C0BUFUVU0T0`) rather than a secret -- an id names a
+channel and grants nothing -- and a `U` id is refused outright: Slack delivers to a person through
+its system user and will not thread under what it delivered.
+
+The report never turns a run red. Every refusal Slack answers with is a `::warning::` line and the
+next thread is still posted, a message whose blocks Slack will not render is reposted as its own
+text, and the exit code is zero once posting has begun. A rate-limited message -- `chat.postMessage`
+allows about one a second per channel, and a thread's message and replies go out back to back -- is
+posted again after the `Retry-After` Slack named, one second where it named none and thirty at the
+most, up to three attempts before it is warned about like any other refusal. A message whose plain
+text runs past the 40,000 characters `chat.postMessage` takes -- which a wide suite's scoring fence
+does, since a fence pads every cell out to its column -- is cut on a line boundary as it goes out
+and ends in a line saying so, and the run summary, written from what `ci-report` rendered rather
+than from what was posted, carries the whole of it. Only the blocks an
+incoming webhook accepts are used, which is what `table` is doing the work of: a webhook refuses
+`data_table` outright -- a minimal one is answered with `400 invalid_blocks` -- and `markdown` with
+it, and `table` is also the only one of the two that takes a `rich_text` header cell, which the
+scoring reply's bold dimension super-columns need.
 
 The report covers the run as a whole, not only the trials: a run whose every cell passed but whose
 jobs went red or were cancelled -- a cleanup that could not delete the run's Modal environments, say
 -- is flagged rather than reported as a clean success, and a run that resolved nothing at all gets a
 single `broken` message naming the three job results instead of pairs.
 
-Every message also carries a plain-text rendering of itself, with the grid, the failures and the
-judge table each as a fixed-width fence. The grid's fence says `ok`, `FAIL`, `-` and `?` in place of
-the square, because Slack renders no emoji inside a fence, and the judge fence carries the same
-dimension legend on the line above it. `notify` writes that
-into the run summary and posts it on its own, with a warning, if Slack refuses the message's blocks.
-It reads the webhook from Vault at `mngr/ci/SLACK_MINDS_EVALS_WEBHOOK`; without it the job warns and
-the run summary is the whole report. Either way the run is never red because of its notification.
+Every message also carries a plain-text rendering of itself, with the grid, the failures and each
+scoring table as a fixed-width fence. The grid's fence says `ok`, `FAIL`, `-` and `?` in place of
+the square, because Slack renders no emoji inside a fence, and carries the same cost and time the
+blocks show. `notify` writes every thread into the run summary -- each message, and its replies
+indented under it -- and the poster posts a message's text on its own, with a warning, if Slack
+refuses its blocks. Either way the run is never red because of its notification.
 
 Every job fetches the credentials it needs and no others, from the same Vault role as the other CI
-jobs. `resolve` needs none and `notify` only the webhook above; `mngr/ci/ANTHROPIC_API_KEY` and the
+jobs. `resolve` needs none and `notify` only the two Slack credentials above; `mngr/ci/ANTHROPIC_API_KEY` and the
 `mngr/ci/MODAL_TOKEN_ID` / `mngr/ci/MODAL_TOKEN_SECRET` pair go to every job that runs a pass, the
 oracle and the cells: the judges spend the Anthropic key on every pass and the decider on every live
 one, and CI writes the Modal tokens into a throwaway `~/.modal.toml` because the driver parses one.

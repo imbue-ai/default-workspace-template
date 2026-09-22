@@ -114,6 +114,24 @@ class ScriptedFlowActionError(MindsEvalsError, ValueError):
     ...
 
 
+class SlackPostError(MindsEvalsError, RuntimeError):
+    """Raised when Slack will not take a message: it refused it, or it could not be reached at all.
+
+    Carries the code Slack named rather than only the sentence, because two of them are answered by
+    posting again rather than by giving up: a block type the workspace will not render goes again
+    without its blocks, and a rate limit goes again after a wait. Every other one is the end of that
+    message. The code is empty where the refusal came with none.
+
+    The wait is the one Slack asked for in its `Retry-After` header, and is None for every refusal
+    that named none -- a rate limit included, since Slack does not always send the header.
+    """
+
+    def __init__(self, slack_error: str, message: str, retry_after_seconds: float | None = None) -> None:
+        self.slack_error = slack_error
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
+
 class ExpectedFactsTableError(MindsEvalsError, ValueError):
     """Raised when a self-diagnostic expected-facts table cannot be read, or states an expectation that
     cannot be checked: an unknown key, a matcher count other than one, or a reference to a fact it
