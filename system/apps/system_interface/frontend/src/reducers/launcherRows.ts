@@ -53,7 +53,7 @@ export interface TextRow {
   readonly label: string;
   /** The trimmed text the row would send. */
   readonly text: string;
-  /** Why the row stands down (over the path bound, or nothing to send), or null while it can run. */
+  /** Why the row stands down (the text over the path bound), or null while it can run. */
   readonly disabledReason: string | null;
 }
 
