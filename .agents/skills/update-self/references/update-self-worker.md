@@ -144,6 +144,10 @@ update reached it.
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 MERGE=$(git log --format=%H --grep='^update-self: merge upstream template' -1)
 [ -n "$MERGE" ] || { echo "no update-self merge commit on this branch" >&2; exit 1; }
+UPDATE_BASE="$MERGE^1"
+if git log -1 --format=%s "$MERGE^1" | grep -q '^Revert "Roll back update apply'; then
+    UPDATE_BASE="$MERGE^1^"
+fi
 rm -rf data/.tasks/update-self/scopes
 mkdir -p data/.tasks/update-self/scopes
 for manifest in system/apps/*/app.toml; do
@@ -152,7 +156,7 @@ for manifest in system/apps/*/app.toml; do
         --diff-base "$TARGET_REF" --diff-ref "$MERGE^1" \
         --out "data/.tasks/update-self/scopes/$package.local.json" || exit 1
     uv run --frozen --package app-manifest app-manifest footprint "$manifest" \
-        --diff-base "$MERGE^1" --diff-ref "$MERGE" \
+        --diff-base "$UPDATE_BASE" --diff-ref "$MERGE" \
         --out "data/.tasks/update-self/scopes/$package.update.json" || exit 1
 done
 ```
@@ -161,10 +165,14 @@ The ranges are pinned to the merge commit rather than to `HEAD`, so a fix you
 commit on top of it, and any rerun, reads the same two sides: the local range
 runs from the fork point with the target to the pre-merge local commit (the
 three-dot diff finds that fork point from `$TARGET_REF`), and the update range
-from that commit to the merge. `--package app-manifest` installs the library
-from the merged tree, which a workspace from before the app model has none of
-(the root project does not depend on it), and `--frozen` keeps the command
-from re-locking the merged tree before 4b's environment gate has checked it.
+from that commit to the merge. On a retry, that commit is Step 1's revert of
+the rollback, which already carries the landed release, so the update range
+starts at the rollback instead: the tree the live workspace runs, against
+which the whole update is a change. `--package app-manifest` installs the
+library from the merged tree, which a workspace from before the app model has
+none of (the root project does not depend on it), and `--frozen` keeps the
+command from re-locking the merged tree before 4b's environment gate has
+checked it.
 
 `<package>.local.json`'s `diff.inside_footprint` is the creation's own
 content: every file of its footprint in which the workspace differs from the
