@@ -39,7 +39,7 @@ _WORKSPACE_ROOT = _SCRIPTS_DIR.parents[3]
 _MODULE_PATH = _SCRIPTS_DIR / "update_self.py"
 
 
-# pick_latest_stable_tag / resolve_target
+# resolve_target
 
 
 def test_resolve_target_takes_the_release_the_app_names() -> None:
