@@ -61,10 +61,11 @@ or a provisional milestone merge:
 
 1. **Wait out the foreground lease (apps and services only).** If the creation is
    an app or service and another agent holds its editing lease (an open/in-progress
-   `editing service <name>` ticket in `tk ready` -- see `update-app`'s
-   "One editor at a time"), do not merge or refresh mid-edit. Re-check about
-   once a minute until the lease is released, then continue -- their edit
-   will usually make your pass stale anyway, which the next check catches.
+   `editing service <name>` ticket in `tk ready`, or `editing critical app <name>`
+   for a critical app -- see `update-app`'s "One editor at a time"), do not merge
+   or refresh mid-edit. Re-check about once a minute until the lease is
+   released, then continue -- their edit will usually make your pass stale
+   anyway, which the next check catches.
 
 2. **Freshness check.** The pass is mergeable only if the creation has not
    changed since the worker branched. The paths to diff are the creation's

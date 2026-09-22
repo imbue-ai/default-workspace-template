@@ -99,7 +99,7 @@ things in), but one suffices if the emergency scenarios (E15) are run last.
   chat previews open on it. Note the shell's, chat's, and terminal's supervisord pids.
 - **S0.4 Clean state.** No `data/.state/update-apply/last-good.json`, no `marker.json`,
   no `emergency.json`, nothing under `data/.state/isolated-instances/`. `git status`
-  clean. No `editing critical apps` lease in `tk ready`.
+  clean. No `editing critical app <name>` lease in `tk ready`.
 - **S0.5 A built worktree.** Provision one as the reference says (the slug `tp1`):
 
   ```bash
@@ -466,7 +466,7 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
 These compose the component checks in the order `references/critical-app.md` prescribes.
 Run them after sections A to F pass, in a clean workspace state (S0.4).
 
-- **X1 Chat change, full loop.** Lease (`tk create "editing critical apps"`), worktree,
+- **X1 Chat change, full loop.** Lease (`tk create "editing critical app chat"`), worktree,
   composer edit, C1 boot, open, C11 refresh round, commit, D2's teardown and worker launch
   on the branch, worker `done` (or a stand-in that commits a test and reports), optional
   final preview from the worker's `work_dir`, E1 freshness, E2 apply with the worker's

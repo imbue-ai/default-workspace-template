@@ -1,0 +1,1 @@
+The critical-app-editing spec and test plan describe the per-app `editing critical app <name>` leases that replace the single `editing critical apps` lease, and the spec describes a secondary chat's OOM prioritizer as inert (no writer) rather than handed a refusing one.

@@ -401,10 +401,12 @@ path below instead.
 `system/apps/chat/`, `system/apps/terminal/`), `system/libs/workspace_ui/`, or
 `system/package.json` / `system/package-lock.json` at all** (the trees the
 critical bundles are built from, the same set the careful flow's freshness
-check names), also take the `editing critical apps` lease through the apply, as
-`update-app/references/critical-app.md` does: check `tk ready` for a foreign one
-(surface instead of proceeding), then `tk create "editing critical apps" -t
-chore` and `tk start` it, each as its own command. Release it afterwards.
+check names), also take the `editing critical app <name>` lease for each
+critical app it touches through the apply, as
+`update-app/references/critical-app.md` does (`workspace_ui` and the npm files
+count as both `system_interface` and `chat`): check `tk ready` for a foreign one
+(surface instead of proceeding), then `tk create "editing critical app <name>"
+-t chore` and `tk start` it, each as its own command. Release them afterwards.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
@@ -534,7 +536,7 @@ mngr stop update-self
 ```
 
 Release the leases and close the ticket last, each as its own tool call: `tk
-close` the `editing service system_interface` lease if 5b took one, then the
+close` each `editing critical app <name>` lease 5b took, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
 merged and applied."`.
