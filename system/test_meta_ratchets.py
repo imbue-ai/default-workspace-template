@@ -130,22 +130,23 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
 def _find_bash_scripts_without_strict_mode() -> list[str]:
     """Find bash scripts missing 'set -euo pipefail', excluding vendored code.
 
-    Only git-tracked files count, for the same reason :func:`_live_prose_files`
-    asks git: in a live workspace ``data/`` accumulates generated machine state,
-    and the terminal app writes shell scripts into it. Those are not the
-    template's code and their style is not this ratchet's business. Asking git
-    also drops the non-source trees that hold no template code (virtualenvs,
-    node_modules, git internals), all of which are gitignored.
+    Only scripts git would consider count (tracked, or untracked but not
+    ignored), for the same reason :func:`_live_prose_files` asks git: in a live
+    workspace ``data/`` accumulates generated machine state, and the terminal
+    app writes shell scripts into it. Those are gitignored, not the template's
+    code, and their style is not this ratchet's business. Asking git also drops
+    the non-source trees that hold no template code (virtualenvs, node_modules,
+    git internals), all of which are gitignored.
     """
-    tracked = subprocess.run(
-        ["git", "ls-files", "--", "*.sh"],
+    candidates = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.sh"],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
     violations: list[str] = []
-    for rel in tracked.stdout.splitlines():
+    for rel in candidates.stdout.splitlines():
         script = _REPO_ROOT / rel
         if _VENDORED_DIR in script.parents or not script.is_file():
             continue
