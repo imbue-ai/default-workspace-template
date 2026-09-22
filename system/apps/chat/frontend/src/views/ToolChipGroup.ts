@@ -198,7 +198,9 @@ export function formatToolInput(raw: string, omit?: string): string {
 
   const entries = Object.entries(parsed as Record<string, unknown>)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
-    .filter(([, value]) => !(omit !== undefined && omit !== "" && typeof value === "string" && noteEchoesValue(value, omit)))
+    .filter(
+      ([, value]) => !(omit !== undefined && omit !== "" && typeof value === "string" && noteEchoesValue(value, omit)),
+    )
     .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)] as const);
 
   if (entries.length === 0) return "";
