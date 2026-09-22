@@ -116,8 +116,8 @@ ones (`docs/system/avatar-designs.md`).
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
   `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`,
-  `show`, the shortcut and wallpaper edits) are applied to the files and announced as
-  `desktops_updated` and `placements_updated`; `context` answers every
+  `show`, the shortcut and wallpaper edits) are applied to the files and
+  announced as `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
   socket registrations, and `desktops` and `list` answer the inventory
   document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
@@ -152,7 +152,8 @@ The **inventory** (`shell/inventory.py`) watches the registry, probes each
 app's liveness (supervisord for rows with a `program`, a TCP connect
 otherwise) on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`. That is all it knows of an app: its row (display name,
-icon, launch paths, default shortcut, launcher rank, message handlers) and whether it is running.
+icon, launch paths, default shortcut, launcher rank, message handlers) and
+whether it is running.
 
 Stop and Start of the whole app act on its supervisord program and are refused
 for critical apps; the desktop offers them on the window menu

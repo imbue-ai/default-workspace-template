@@ -6,8 +6,9 @@ The models behind a workspace app's two descriptions:
   declarations (name, display name, icon, its memory-shedding priority, whether
   it is critical, its supervisord program, the launch paths the desktop opens
   windows at, the shortcut a new desktop is seeded with, the messages from the
-  minds chrome it takes, and what it owns outside its own directory). The schema is `contracts.md` section 2 of the
-  desktop interface (`docs/system/blueprint/desktop-interface/`), which carries
+  minds chrome it takes, and what it owns outside its own directory). The
+  schema is `contracts.md` section 2 of the desktop interface
+  (`docs/system/blueprint/desktop-interface/`), which carries
   section 2 of the workspace app model
   (`docs/system/blueprint/workspace-app-model/`) forward without its instance
   fields.

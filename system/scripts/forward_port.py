@@ -24,9 +24,10 @@ and copies its static fields onto the row: ``display_name``, ``critical``,
 ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 and the names of the params), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, and ``message_handlers`` (type and
-path); the icon is read from the file the manifest names, relative to the manifest. Every manifest field is authoritative
-on every call, so a re-registration with a changed manifest updates the row.
+default_mode when given), ``window_closed_path``, and ``message_handlers``
+(type and path); the icon is read from the file the manifest names, relative
+to the manifest. Every manifest field is authoritative on every call, so a
+re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
@@ -151,8 +152,9 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# structured keys (``default_shortcut``, ``launch_paths``, ``pin``, ``message_handlers``) are handled
-# on their own. ``program`` defaults to the name when the manifest omits it.
+# structured keys (``default_shortcut``, ``launch_paths``, ``pin``,
+# ``message_handlers``) are handled on their own. ``program`` defaults to the
+# name when the manifest omits it.
 _MANIFEST_STRING_KEYS = ("display_name", "priority", "program", "window_closed_path")
 _MANIFEST_BOOL_KEYS = ("critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
