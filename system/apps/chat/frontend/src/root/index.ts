@@ -352,11 +352,12 @@ function bootstrap(): void {
     return;
   }
   if (isSend) {
-    // The picker lists the chats; opened before they load it would offer nothing.
+    // The chats decide where the text goes (opened before they load, the picker would offer nothing), and with none
+    // the new chat it starts needs the accounts, as a create does.
     const text = sendTextFromSearch(window.location.search);
     const onceListedForSend = (): void => {
       removeChatsUpdatedListener(onceListedForSend);
-      takeSend(text);
+      void accountsLoaded.then(() => takeSend(text));
     };
     addChatsUpdatedListener(onceListedForSend);
     return;
