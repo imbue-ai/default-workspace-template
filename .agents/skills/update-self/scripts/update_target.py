@@ -16,6 +16,17 @@ from typing import NamedTuple, Sequence
 _TAG_RE = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
 
 
+class AppReleaseUnavailableError(Exception):
+    """Raised when the release this workspace's app was built against cannot be had.
+
+    A fault, unlike :class:`NoUpdateTargetError`: either the app named no release
+    at all, or it named one the template upstream does not carry. Both mean the
+    pair this workspace is supposed to run was never published as claimed, so the
+    skill reports it and lets the user decide, rather than quietly taking a
+    release nobody verified against this app.
+    """
+
+
 class NoUpdateTargetError(ValueError):
     """Raised when no ref to update to could be chosen.
 
@@ -62,11 +73,6 @@ class Version(NamedTuple):
     patch: int
     release_rank: int
     prerelease: tuple[tuple[int, int, str], ...]
-
-    @property
-    def is_stable(self) -> bool:
-        """Whether this is a released version rather than a prerelease of one."""
-        return not self.prerelease
 
 
 def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
@@ -117,37 +123,6 @@ def parse_version(tag: str) -> Version | None:
     )
 
 
-def pick_latest_stable_tag(
-    tags: Sequence[str], ceiling: str | None = None
-) -> str | None:
-    """Return the highest-versioned stable ``minds-v*`` tag, or ``None`` if none.
-
-    Prereleases (``minds-v*-rc*``) and non-matching tags are ignored. Selection is
-    by semantic version, not lexical order, so ``minds-v0.3.10`` beats
-    ``minds-v0.3.9``.
-
-    ``ceiling`` bounds the selection to tags at or below it, so a workspace never
-    picks a template newer than the app driving it. It is parsed with
-    :func:`parse_version`, so an app on a *prerelease* caps just as well as one on
-    a stable release; only a ceiling that is not a release tag at all (a dev app
-    reporting a branch) means no ceiling.
-
-    Candidates are still filtered to *stable* tags: capping by a prerelease does
-    not make one selectable.
-    """
-    ceiling_version = parse_version(ceiling) if ceiling is not None else None
-    stable = [
-        (version, tag)
-        for tag in tags
-        if (version := parse_version(tag)) is not None
-        and version.is_stable
-        and (ceiling_version is None or version <= ceiling_version)
-    ]
-    if not stable:
-        return None
-    return max(stable, key=lambda item: item[0])[1]
-
-
 def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
     """Whether ``ref`` is provably a release at or below ``ceiling``.
 
@@ -171,8 +146,11 @@ def resolve_target(
 ) -> ResolvedTarget:
     """Resolve the update target ref.
 
-    With no override, pick the latest stable ``minds-v*`` tag at or below
-    ``ceiling`` (raising if the upstream exposes none). An override of ``main``
+    With no override the target is the app's own release: the ``minds-v*`` tag
+    named by ``ceiling``, which must exist upstream. Anything else is a fault
+    for the skill to judge, not a thing to work around here -- picking some
+    other release would hand the workspace a template that no one verified
+    against this app. An override of ``main``
     selects the template's default branch, **remote-qualified** to
     ``<remote>/main`` -- a bare ``main`` would resolve to the *local* branch, which
     ``git fetch upstream`` never advances, so the pull would merge stale local
@@ -188,34 +166,27 @@ def resolve_target(
     confirmation before anything is merged.
     """
     if override is None:
-        latest = pick_latest_stable_tag(tags, ceiling=ceiling)
-        if latest is None:
-            raise NoUpdateTargetError(_no_target_message(tags, ceiling))
-        return ResolvedTarget(latest, "tag", ceiling, False)
+        if ceiling is None or parse_version(ceiling) is None:
+            raise AppReleaseUnavailableError(
+                f"this workspace's minds app reports {ceiling!r}, which is not a release "
+                f"tag, so there is no release to match. A dev build reports its branch "
+                f"this way. Decide what this workspace should take and pass it as "
+                f"--override, or update the app to a release."
+            )
+        if ceiling not in set(tags):
+            raise AppReleaseUnavailableError(
+                f"this workspace's minds app is {ceiling}, but the template upstream has no "
+                f"such tag, so the release this app was built against cannot be fetched. "
+                f"Something is wrong with that release, not with this workspace: report it "
+                f"rather than updating to a different version, unless the user names one."
+            )
+        return ResolvedTarget(ceiling, "tag", ceiling, False)
     exceeds = not _is_within_ceiling(override, ceiling)
     if override == "main":
         return ResolvedTarget(f"{remote}/{override}", "branch", ceiling, exceeds)
     if override in set(tags):
         return ResolvedTarget(override, "tag", ceiling, exceeds)
     return ResolvedTarget(override, "ref", ceiling, exceeds)
-
-
-def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
-    """Explain why no default target could be picked, never naming a release above the ceiling.
-
-    An upstream with no stable tag at all is a different refusal from one whose
-    every tag is above the ceiling: the app is not the reason, and an
-    ``--override`` is the only way forward, so that case keeps the generic line.
-    """
-    if ceiling is not None and pick_latest_stable_tag(tags) is not None:
-        return (
-            f"no stable minds-v* tag upstream is at or below this workspace's minds app "
-            f"({ceiling}); there is nothing it can update to"
-        )
-    return (
-        "no stable minds-v* tag found upstream; pass an explicit "
-        "--override (a tag, 'main', or a ref) to update anyway"
-    )
 
 
 def already_current_message(ref: str) -> str:

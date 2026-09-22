@@ -42,33 +42,46 @@ _MODULE_PATH = _SCRIPTS_DIR / "update_self.py"
 # pick_latest_stable_tag / resolve_target
 
 
-def test_pick_latest_stable_tag_ignores_prereleases() -> None:
-    tags = [
-        "minds-v0.3.5",
-        "minds-v0.3.7",
-        "minds-v0.3.7-rc1",
-        "minds-v0.3.6",
-    ]
-    assert update_target.pick_latest_stable_tag(tags) == "minds-v0.3.7"
+def test_resolve_target_takes_the_release_the_app_names() -> None:
+    # Not the newest tag upstream: the one this app was built against, even with
+    # newer releases sitting right beside it.
+    tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.4.0"]
+    result = update_target.resolve_target(None, tags, ceiling="minds-v0.3.7")
+    assert result == update_target.ResolvedTarget("minds-v0.3.7", "tag", "minds-v0.3.7", False)
 
 
-def test_pick_latest_stable_tag_uses_semver_not_lexical_order() -> None:
-    # Lexically "0.3.9" > "0.3.10"; semantically 0.3.10 is newer.
-    tags = ["minds-v0.3.9", "minds-v0.3.10", "minds-v0.4.0"]
-    assert update_target.pick_latest_stable_tag(tags) == "minds-v0.4.0"
-    tags_no_major = ["minds-v0.3.9", "minds-v0.3.10"]
-    assert update_target.pick_latest_stable_tag(tags_no_major) == "minds-v0.3.10"
+def test_resolve_target_takes_a_prerelease_app_to_its_own_prerelease_template() -> None:
+    # An rc build is a verified pair like any other, so its workspace runs the
+    # matching rc template rather than the stable release before it.
+    tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0"]
+    result = update_target.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
+    assert result.ref == "minds-v0.4.0-rc1"
 
 
-def test_pick_latest_stable_tag_returns_none_when_all_prerelease_or_empty() -> None:
-    assert update_target.pick_latest_stable_tag([]) is None
-    assert update_target.pick_latest_stable_tag(["minds-v0.3.7-rc1", "v1.2.3"]) is None
+def test_a_missing_app_release_is_a_fault_not_a_refusal() -> None:
+    # The app names a release the template upstream does not carry: that pairing
+    # was never published as claimed, so the skill is told, and no other release
+    # is quietly substituted.
+    try:
+        update_target.resolve_target(None, ["minds-v0.3.8", "minds-v0.4.0"], ceiling="minds-v0.3.9")
+    except update_target.AppReleaseUnavailableError as exc:
+        message = str(exc)
+        assert "minds-v0.3.9" in message
+        assert "no such tag" in message
+        assert not isinstance(exc, update_target.NoUpdateTargetError)
+    else:
+        raise AssertionError("expected a fault when the app's release is missing upstream")
 
 
-def test_resolve_target_defaults_to_latest_stable() -> None:
-    tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.3.7-rc1"]
-    result = update_target.resolve_target(None, tags)
-    assert result == update_target.ResolvedTarget("minds-v0.3.7", "tag")
+def test_an_app_naming_no_release_is_a_fault() -> None:
+    # A dev build reports its branch. There is no release to match, and which
+    # ref such a workspace should take is the skill's call, not this script's.
+    try:
+        update_target.resolve_target(None, ["minds-v0.3.9", "minds-v0.4.0"], ceiling="main")
+    except update_target.AppReleaseUnavailableError as exc:
+        assert "not a release tag" in str(exc)
+    else:
+        raise AssertionError("expected a fault when the app names no release")
 
 
 def test_resolve_target_override_main_is_remote_qualified_branch() -> None:
@@ -87,94 +100,6 @@ def test_resolve_target_override_known_tag_vs_arbitrary_ref() -> None:
     # An override git can validate later but that is not a known tag/main.
     passthrough = update_target.resolve_target("abc1234", tags)
     assert passthrough == update_target.ResolvedTarget("abc1234", "ref")
-
-
-def test_resolve_target_raises_when_no_stable_tag_and_no_override() -> None:
-    try:
-        update_target.resolve_target(None, ["minds-v0.3.7-rc1"])
-    except ValueError as exc:
-        assert "no stable minds-v* tag" in str(exc)
-    else:
-        raise AssertionError("expected ValueError when no stable tag and no override")
-
-
-# the app-version ceiling
-
-
-def test_ceiling_caps_selection_at_the_app_version() -> None:
-    # The headline case: upstream has moved past the app driving this workspace.
-    tags = ["minds-v0.3.8", "minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
-        == "minds-v0.3.9"
-    )
-    result = update_target.resolve_target(None, tags, ceiling="minds-v0.3.9")
-    assert result.ref == "minds-v0.3.9"
-    assert result.ceiling == "minds-v0.3.9"
-    assert result.exceeds_ceiling is False
-
-
-def test_ceiling_picks_the_newest_tag_below_it_when_the_exact_tag_is_absent() -> None:
-    # The app's own tag need not exist upstream (a release whose template tag was
-    # never cut); the newest tag below it is still safe to take.
-    tags = ["minds-v0.3.8", "minds-v0.4.0"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
-        == "minds-v0.3.8"
-    )
-
-
-def test_ceiling_compares_by_semver_not_lexically() -> None:
-    tags = ["minds-v0.3.9", "minds-v0.3.10"]
-    # Lexically "0.3.10" < "0.3.9", so a lexical cap would wrongly admit 0.3.10.
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
-        == "minds-v0.3.9"
-    )
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.10")
-        == "minds-v0.3.10"
-    )
-
-
-def test_non_release_ceiling_imposes_no_cap() -> None:
-    # A dev app reports its branch rather than a release tag; there is no version
-    # to compare, so the flow behaves exactly as it did before the ceiling.
-    tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    assert update_target.pick_latest_stable_tag(tags, ceiling="main") == "minds-v0.4.0"
-    result = update_target.resolve_target(None, tags, ceiling="main")
-    assert result.ref == "minds-v0.4.0"
-    assert result.ceiling == "main"
-
-
-def test_resolve_target_treats_tags_above_the_ceiling_as_absent() -> None:
-    # A release above the ceiling may not have reached this user's app channel
-    # yet, so the refusal neither names it nor offers a way past the app.
-    try:
-        update_target.resolve_target(None, ["minds-v0.4.0"], ceiling="minds-v0.3.9")
-    except update_target.NoUpdateTargetError as exc:
-        message = str(exc)
-        assert "at or below this workspace's minds app (minds-v0.3.9)" in message
-        assert "minds-v0.4.0" not in message
-        assert "--override" not in message
-    else:
-        raise AssertionError("expected a refusal when every tag is above the ceiling")
-
-
-def test_no_stable_tag_upstream_offers_the_override_even_under_a_ceiling() -> None:
-    # Nothing is above the ceiling here -- upstream carries no stable release at
-    # all -- so the refusal must not blame the app, and must keep the one way out.
-    try:
-        update_target.resolve_target(
-            None, ["minds-v0.4.0-rc1"], ceiling="minds-v0.3.9"
-        )
-    except update_target.NoUpdateTargetError as exc:
-        message = str(exc)
-        assert "no stable minds-v* tag found upstream" in message
-        assert "--override" in message
-        assert "minds-v0.3.9" not in message
-    else:
-        raise AssertionError("expected a refusal when upstream has no stable tag")
 
 
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
@@ -771,14 +696,14 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
     # the flag plumbing rather than that refusal.
     _init_workspace_repo(tmp_path, merged_tags=(), unmerged_tags=("minds-v0.1.0",))
 
-    # ``--ceiling main`` pins a non-release ceiling (i.e. no cap), so this test
-    # stays about the ``--repo-root`` plumbing and never reaches for the app.
+    # ``--ceiling`` names the tag in the tmp repo, so this test stays about the
+    # ``--repo-root`` plumbing and never reaches for the app.
     for argv in (
         [
             "resolve-target",
             "--local-tags",
             "--ceiling",
-            "main",
+            "minds-v0.1.0",
             "--repo-root",
             str(tmp_path),
         ],
@@ -788,7 +713,7 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
             "resolve-target",
             "--local-tags",
             "--ceiling",
-            "main",
+            "minds-v0.1.0",
         ],
     ):
         assert update_self.main(argv) == 0, argv
@@ -1116,41 +1041,6 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
 
 
 # a prerelease ceiling
-
-
-def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
-    """An app on a release candidate is a real app and must still cap its workspaces.
-
-    Parsing the ceiling as "not a stable tag, therefore no ceiling" would let a
-    workspace on an rc app update arbitrarily far past it.
-    """
-    tags = ["minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
-    # Semver: 0.4.0-rc1 precedes 0.4.0, so 0.4.0 itself is above this ceiling.
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc1")
-        == "minds-v0.3.9"
-    )
-    result = update_target.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
-    assert result.ref == "minds-v0.3.9"
-    assert result.ceiling == "minds-v0.4.0-rc1"
-
-
-def test_a_prerelease_ceiling_still_admits_its_own_earlier_releases() -> None:
-    tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.1-rc1")
-        == "minds-v0.4.0"
-    )
-
-
-def test_capping_by_a_prerelease_does_not_make_prereleases_selectable() -> None:
-    # The ceiling widening to prereleases must not widen *candidate* selection:
-    # the default target is still only ever a stable release.
-    tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0-rc2"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc2")
-        == "minds-v0.3.9"
-    )
 
 
 def test_parse_version_orders_prereleases_semver_style() -> None:
