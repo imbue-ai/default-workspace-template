@@ -1,0 +1,1 @@
+- Refreshed `system/vendor/mngr` from mngr `efdd183529` for the minds 0.7.0 release (`minds-v0.7.0`), carrying the changes since `minds-v0.6.2`.
