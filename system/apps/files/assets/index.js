@@ -116,8 +116,8 @@ const beforeUnloadHandler = (event) => {
 };
 
 // minds patch: the folder parameter. The shell opens a file viewer at the manifest's launch
-// path ``/`` with an optional ``path`` param, so a window asked to show a folder arrives at
-// ``/?path=/notes/``; dufs ignores the query, so the frame takes itself there. Only a rooted
+// path ``/data/`` with an optional ``path`` param, so a window asked to show a folder arrives at
+// ``/data/?path=/data/notes/``; dufs ignores the query, so the frame takes itself there. Only a rooted
 // path on this origin is honoured (one leading slash: ``//host`` and ``/\host`` would leave
 // the origin). The beacon below then reports the folder as the window's location.
 function rootedPathParam() {
@@ -365,6 +365,13 @@ Uploader.runQueue = async () => {
  */
 function addBreadcrumb(href, uri_prefix) {
   const $breadcrumb = document.querySelector(".breadcrumb");
+  // minds patch: Home stays with user files even though the viewer can browse the workspace.
+  const $workspace = document.createElement("a");
+  $workspace.href = uri_prefix;
+  $workspace.textContent = "Workspace";
+  $workspace.title = "Browse the workspace";
+  $workspace.className = "workspace-shortcut";
+  $breadcrumb.before($workspace);
   let parts = [];
   if (href === "/") {
     parts = [""];
@@ -383,7 +390,7 @@ function addBreadcrumb(href, uri_prefix) {
     }
     const encodedName = encodedStr(name);
     if (i === 0) {
-      $breadcrumb.insertAdjacentHTML("beforeend", `<a href="${path}" title="Root"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M6.5 14.5v-3.505c0-.245.25-.495.5-.495h2c.25 0 .5.25.5.5v3.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.146-.354L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.354 1.146a.5.5 0 0 0-.708 0l-6 6A.5.5 0 0 0 1.5 7.5v7a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5z"/></svg></a>`);
+      $breadcrumb.insertAdjacentHTML("beforeend", `<a href="${uri_prefix}data/" title="Home" aria-label="Home"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M6.5 14.5v-3.505c0-.245.25-.495.5-.495h2c.25 0 .5.25.5.5v3.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.146-.354L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.354 1.146a.5.5 0 0 0-.708 0l-6 6A.5.5 0 0 0 1.5 7.5v7a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5z"/></svg></a>`);
     } else if (i === len - 1) {
       $breadcrumb.insertAdjacentHTML("beforeend", `<b>${encodedName}</b>`);
     } else {
