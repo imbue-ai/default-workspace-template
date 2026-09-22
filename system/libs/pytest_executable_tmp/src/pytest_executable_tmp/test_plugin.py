@@ -32,8 +32,13 @@ def _run_inner_session(
     (project / "test_inner.py").write_text(_INNER_TEST)
     # An empty ini keeps the workspace's own pytest config (addopts, ignores) out of the inner run.
     (project / "pytest.ini").write_text("[pytest]\n")
-    env = {**os.environ, **env_overrides}
-    env.pop("PYTEST_ADDOPTS", None)
+    # The outer run's temp-root choice must not leak in: the inner plugin would read it as explicit.
+    inherited = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in ("PYTEST_ADDOPTS", "PYTEST_DEBUG_TEMPROOT")
+    }
+    env = {**inherited, **env_overrides}
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", str(project)],
         cwd=project,
