@@ -157,6 +157,19 @@ function renderPane(marker: string, text: string, extra = "", verb?: string): m.
   ]);
 }
 
+/** Whether `value` is the field the chip's note was made from. The note is not
+ *  the raw field: the backend runs it through a whitespace-collapse and an
+ *  80-char clip (see `stated_note`/`shorten`), so a raw description with a
+ *  newline, a doubled space, or more than 80 characters no longer equals its
+ *  note. Matching the same normalization -- and, for a clipped note (one that
+ *  ends in the ellipsis), its leading run -- drops the field the note came from
+ *  rather than leaving it to print a second time under the chip. */
+function noteEchoesValue(value: string, note: string): boolean {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed === note) return true;
+  return note.endsWith("…") && collapsed.startsWith(note.slice(0, -1));
+}
+
 /**
  * A tool's input as something a person reads, rather than the raw JSON object it
  * arrives as.
@@ -168,8 +181,8 @@ function renderPane(marker: string, text: string, extra = "", verb?: string): m.
  *
  * `omit` drops what the panel has already said. The chip is the agent's own note,
  * and that note IS one of these fields (a shell call's `description`), so leaving
- * it in would print it twice. Matched by value, so it only ever drops the field
- * the note actually came from.
+ * it in would print it twice. Matched by (normalized) value, so it only ever
+ * drops the field the note actually came from.
  *
  * An input that is not a JSON object at all -- codex's code-mode program, a bare
  * string -- is shown verbatim; there is nothing to unpack.
@@ -185,7 +198,7 @@ export function formatToolInput(raw: string, omit?: string): string {
 
   const entries = Object.entries(parsed as Record<string, unknown>)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
-    .filter(([, value]) => !(omit !== undefined && omit !== "" && value === omit))
+    .filter(([, value]) => !(omit !== undefined && omit !== "" && typeof value === "string" && noteEchoesValue(value, omit)))
     .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)] as const);
 
   if (entries.length === 0) return "";

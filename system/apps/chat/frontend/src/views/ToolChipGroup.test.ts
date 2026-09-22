@@ -257,6 +257,23 @@ describe("the input a panel shows", () => {
     expect(formatToolInput(raw, "Sweep the stylesheet")).toBe("rg -n 'font-size' src/style.css");
   });
 
+  it("still drops the note's field when the backend clipped the note to fit the chip", () => {
+    // A long description is shown on the chip as a shortened note (79 chars + an
+    // ellipsis), so it no longer equals the raw value -- but it is still the field
+    // the note came from, and printing it in full here would repeat the chip.
+    const description = "Run the full backend and frontend suites, then confirm the coverage threshold still holds fine";
+    const note = description.slice(0, 79) + "…";
+    const raw = JSON.stringify({ command: "uv run pytest", description });
+    expect(formatToolInput(raw, note)).toBe("uv run pytest");
+  });
+
+  it("still drops the note's field when the backend collapsed the value's whitespace", () => {
+    // The note is the description with its whitespace collapsed, so a raw value
+    // with a newline or a doubled space no longer matches it verbatim.
+    const raw = JSON.stringify({ command: "ls", description: "List   the\nfiles" });
+    expect(formatToolInput(raw, "List the files")).toBe("ls");
+  });
+
   it("keeps the note when it is not what the chip is showing", () => {
     const raw = JSON.stringify({ command: "ls", description: "List files" });
     expect(formatToolInput(raw, undefined)).toBe("command: ls\ndescription: List files");
