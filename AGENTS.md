@@ -185,6 +185,20 @@ If the user talks to you about files or directories on disk, assume (unless cont
 
 If the user asks you to read or act on something in a third-party tool they have an account with -- including a link they paste, such as a Notion page, Google Doc, or Slack thread -- run `latchkey services list --viable` before anything else, and use the `latchkey` skill for anything it lists (its names may differ from the product's, e.g. Notion is `notion-mcp`). That is how you reach the accounts the user connected in Minds; use the web tools or the browser only for tools latchkey does not cover.
 
+## Telling the user you finished
+
+**If you are a chat agent, end every turn in which you did work by sending a notification.** The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
+
+```
+python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is now done>"
+```
+
+Read the exit code -- when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance on what to write.
+
+"Did work" is the same line this file draws for step records: if the turn warranted a step, it warrants a notification. Skip it for chitchat, a single-line acknowledgement, a trivial answer, a turn that only asks a clarifying question, or a reply that is one quick file read. Never more than one per turn.
+
+**This is for chats only.** If you were launched by another agent -- a `launch-task` worker, or any other sub-agent -- never send one: your result reaches the user through the chat that launched you, and only chats appear in the app's feed.
+
 # Browser is available as a tool
 
 A stealth build of Chromium designed to look like an ordinary human browser is installed in this workspace and can be used to complete browser-related tasks. 

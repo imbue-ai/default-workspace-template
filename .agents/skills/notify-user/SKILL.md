@@ -1,6 +1,6 @@
 ---
 name: notify-user
-description: "Tell the user, through the Mind app's notification feed (bell, badge, toast, and a system banner when they are away), that a very long-running task in THIS CHAT has finished. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Use after a task that ran roughly ten minutes or more (a multi-step build, a migration, a long test run), at your own judgment, never after every turn."
+description: "Tell the user, through the Mind app's notification feed (bell, badge, toast, and a system banner when they are away), that work in THIS CHAT has finished. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Use at the end of every turn in which you actually did work, not only after long ones."
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD); python3 only.
 metadata:
   author: imbue
@@ -15,20 +15,29 @@ into that feed. Clicking the notification lands the user in this chat.
 
 ## When to use it
 
-Use it at your own judgment, for tasks that took long enough that the user
-plausibly walked away: roughly ten minutes or more. Examples: a multi-step
-build, a data migration, a long test run, a large download or export. One
-notification per finished task, once, when it is done (or when it failed and
-needs them).
+**At the end of every turn in which you actually did work.** Not only after
+long tasks: the user cannot tell from outside whether a turn took ten seconds
+or ten minutes, so anything they might have walked away from is worth one
+line. One notification per turn, sent once, when the work is done (or when it
+failed and needs them).
+
+"Did work" is the same line `AGENTS.md` draws for step records. Skip the
+notification for the turns that need no records: chitchat, a single-line
+acknowledgement, a trivial answer, a turn that only asks a clarifying question,
+or a reply that is one quick file read. If you opened a step, you finished
+something, and the user should hear about it.
 
 Do NOT use it:
 
-- after ordinary turns, or for anything the user is waiting on in this chat
-  right now -- the reply itself is the notification;
 - from a launch-task worker or any other sub-agent: a worker's results reach
   the user through the chat that launched it, and only chats show up in the
   app's feed;
-- as a progress ticker. Never more than one per task.
+- as a progress ticker. It goes out when the turn's work is done, never
+  partway through, and never more than once per turn.
+
+A Stop hook reminds you if a turn did work and no notification went out. It is
+a reminder, not a gate -- if one genuinely does not belong on this turn, say so
+and finish.
 
 ## How
 
