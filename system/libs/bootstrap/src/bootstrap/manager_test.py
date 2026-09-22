@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -391,7 +392,12 @@ def test_update_recovery_cron_entry_can_run_from_cron(tmp_path: Path) -> None:
     # Composed from the one constant that says where the script lives, so the
     # path cannot drift from the boot-time recovery's own invocation.
     assert str(UPDATE_APPLY_SCRIPT) in entry
-    assert "flock -n" in entry
+    # A tmpfs /run is mounted empty, so the lock may not sit in a subdirectory
+    # of it (the image's /var/lock -> /run/lock is one): flock cannot create
+    # the file, fails, and the guard never runs.
+    flock_match = re.search(r"flock -n (\S+)", entry)
+    assert flock_match is not None
+    assert Path(flock_match.group(1)).parent == Path("/run")
 
 
 def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
