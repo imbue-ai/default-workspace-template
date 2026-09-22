@@ -215,6 +215,8 @@ def build_test_state(
     broadcaster: WebSocketBroadcaster | None = None,
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
+    is_preview: bool = False,
+    repo_root: Path | None = None,
     template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
     static_directory: Path | None = None,
     agent_events_path: Path | None = None,
@@ -224,13 +226,15 @@ def build_test_state(
     The shell state is built but never started, so no registry watch or inventory sweep
     runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
-    and ``broadcaster`` the fan-out the inventory and the routes share. The template catalog
-    is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
-    the network for it; with one, the store fetches the config's URL through it.
-    ``static_directory`` replaces the package's built bundle directory (the frontend bundle
-    and the bundled wallpapers) with one the test fills itself. The avatar's catalog lives under the
-    state directory, and its mood is read from ``agent_events_path`` (a file under the state directory
-    by default, absent until a test writes it).
+    and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
+    the preview shell, which refuses the verbs that would reach the live workspace. ``repo_root`` is where the update notice reads its record
+    and finds the update-self script (a fresh temp directory by default, so no test reads the
+    real workspace's). The template catalog is disabled (no URL) unless a
+    ``template_catalog_fetcher`` is given, so no test reaches the network for it; with one, the
+    store fetches the config's URL through it. ``static_directory`` replaces the package's built
+    bundle directory (the frontend bundle and the bundled wallpapers) with one the test fills
+    itself. The avatar's catalog lives under the state directory, and its mood is read from
+    ``agent_events_path`` (a file under the state directory by default, absent until a test writes it).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_config = config if config is not None else Config()
@@ -244,6 +248,7 @@ def build_test_state(
         agent_events_path=agent_events_path
         if agent_events_path is not None
         else state_directory / "agent-events.jsonl",
+        repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
     )
     template_catalog = build_template_catalog_store(
         catalog_url=resolved_config.system_interface_template_catalog_url
@@ -256,6 +261,7 @@ def build_test_state(
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,
+        is_preview=is_preview,
         template_catalog=template_catalog,
         static_directory=resolved_static_directory,
     )

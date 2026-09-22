@@ -33,6 +33,8 @@ import type {
 } from "../model/records";
 import { isSameWindowPaths } from "../model/records";
 import { SaveIdMinter } from "../model/saveIds";
+import { isPreviewShell } from "../model/PreviewShell";
+import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
 import {
   MAXIMIZED_FRAME,
@@ -272,9 +274,10 @@ export class DesktopStore {
     return gridDimensions(this.backdrop, this.metrics);
   }
 
-  /** Whether the workspace can stop and start the app (supervised, not critical, not inside a critical program). */
+  /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
+   *  not from a preview shell, whose stop and start would reach the live workspace's supervisord. */
   canStopApp(app: AppRecord): boolean {
-    return isAppStoppable(this.state, app);
+    return !isPreviewShell() && isAppStoppable(this.state, app);
   }
 
   /** The rectangle a placement renders at, in backdrop pixels (the compact override and the fit applied). */
@@ -345,6 +348,8 @@ export class DesktopStore {
         this.avatarSelectionPushes += 1;
         this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null });
       },
+      onUpdateNoticeChanged: (wire) =>
+        this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
     });
     void this.loadAvatarSelection();

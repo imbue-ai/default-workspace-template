@@ -420,7 +420,16 @@ _SHELL_IDENTIFIER_SCAN_ROOTS = (
     Path("system/libs/workspace_ui/src"),
 )
 
-_SERVICE_IDENTIFIER_EXEMPT_TOKENS = frozenset({"HTTP_SERVICE_UNAVAILABLE"})
+_SERVICE_IDENTIFIER_EXEMPT_TOKENS = frozenset(
+    {
+        "HTTP_SERVICE_UNAVAILABLE",
+        # The update notice names the system-services agent, which a rollback
+        # cannot restart itself; that agent is not an app.
+        "needs_system_services_restart",
+        "needsSystemServicesRestart",
+        "SYSTEM_SERVICES_RESTART_DETAILS",
+    }
+)
 
 _SERVICE_IDENTIFIER_EXEMPT_FILENAMES = frozenset({"embed-contract.d.ts"})
 

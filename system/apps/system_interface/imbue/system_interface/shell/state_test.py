@@ -3,10 +3,10 @@
 from datetime import timedelta
 from pathlib import Path
 
-from imbue.imbue_common.model_update import to_update
-from imbue.mngr.utils.polling import wait_for
 from app_manifest.primitives import AppName
 
+from imbue.imbue_common.model_update import to_update
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
@@ -33,7 +33,9 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
 ) -> None:
     registry_path = write_two_app_registry(tmp_path)
     inventory = build_inventory(registry_path, broadcaster)
-    built = build_shell_state(tmp_path / "state", registry_path, broadcaster, inventory=inventory)
+    built = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=inventory, repo_root=tmp_path / "repo"
+    )
     shell = built.model_copy_update(to_update(built.field_ref().client_prune_interval_seconds, 0.05))
     stale_at = TEST_NOW - CLIENT_RETENTION - timedelta(days=1)
     (home,) = shell.list_desktops()
