@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Mind app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the release the running Mind app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -26,9 +26,9 @@ still wait for the user: an `--override` past the version ceiling (asked at
 launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
-The default target is the **latest stable `minds-v*` tag**, never newer than
-the Mind app driving this workspace (the template ships the code that app
-talks to); see `references/version-ceiling.md`. Once the target is resolved,
+The default target is **the release the Mind app driving this workspace was
+built against**, and only that one: the template ships the code that app talks
+to, and no other pairing was verified. See `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, so fixes
@@ -118,19 +118,24 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 `--local-tags` reads the tags the fetch just landed. To honor a user override,
 append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
-`kind`, `ceiling`, `exceeds_ceiling`, `latest_available` and
-`held_back_by_ceiling`; `main` resolves to `upstream/main`. Tell the user which
-version you are updating to.
+`kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
+Tell the user which version you are updating to, and never mention a release
+above `ceiling` that they did not ask for by name: the Mind app announces its
+own updates.
 
-**If the command exits non-zero, stop -- nothing is wrong with the workspace.**
-Its single `error:` line says why no target could be chosen (the Mind app
-could not be reached or is too old to report its version; every release is
-newer than the app; the workspace is already on the release it may take).
-Relay that line in plain terms and offer the next step; never resolve a ref by
-hand. Record the verdict first: `run-status verdict ALREADY_CURRENT` when the
-error says the workspace is current, else `run-status verdict REFUSED --detail
-"<the error line, in plain terms>"` (with `--in-place-compatible-ref` when the
-error names a release the workspace could still take).
+**If the command exits non-zero, stop.** Its single `error:` line says why no
+target could be chosen. Relay it in plain terms, offer the next step, and
+record the verdict it calls for -- never resolve a ref by hand:
+
+- **Already on the release it may take.** Nothing is wrong with the workspace:
+  `run-status verdict ALREADY_CURRENT`.
+- **A fault**: the app could not be reached, is too old to report its version,
+  named a release the upstream does not carry, or named none at all. Say so
+  plainly and record `run-status verdict STUCK --detail "<the error line, in
+  plain terms>"`. Do **not** pick another release; only a version the user
+  names becomes an `--override`, as an operator testing a dev build would.
+- **Anything else**: `run-status verdict REFUSED --detail "<the error line, in
+  plain terms>"`.
 
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it
@@ -183,12 +188,18 @@ cat /tmp/update-self-recheck.json
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
-`exceeds_ceiling` is `true` here and the user has not already confirmed an
-over-ceiling override, take that confirmation now as in Step 2, offering the
-capped ref (re-run without `--override` to learn it). If they take the capped
-ref, set `$REF` to it and **re-run §2a** before dispatching (the staged copy
-must match the target). If they decline every option, record `run-status
-verdict REFUSED --detail "..."` as in Step 2.
+`exceeds_ceiling` is `true` here, it matters who chose `$REF`.
+
+**Step 2 chose it, without `--override`:** the user never asked for it. Do not
+name it. Set `$REF` to the capped ref (re-run without `--override` to learn it;
+an error there is handled as in Step 2), tell the user that version is the one
+you are updating to -- an initiator too old to know the ceiling has already
+announced the other -- and **re-run §2a** before dispatching, so the staged copy
+matches the target.
+
+**The user named it:** take the confirmation now as in Step 2, offering the
+capped ref; if they take it, set `$REF` to it and re-run §2a the same way. If
+they decline every option, record `run-status verdict REFUSED --detail "..."`.
 
 ### 3b. Launch
 
