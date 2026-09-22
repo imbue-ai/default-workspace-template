@@ -11,6 +11,7 @@ import pytest
 from app_manifest.registry import ENV_APPS_FILE
 from getting_started.config import Config
 from getting_started.first_window import LEDGER_FILENAME
+from getting_started.first_window import OPENER_THREAD_NAME
 from getting_started.main import APP_NAME
 from getting_started.main import MANIFEST_PATH
 from getting_started.main import arguments_from_config
@@ -73,9 +74,7 @@ def test_an_unregistered_run_serves_the_page_but_neither_registers_nor_opens_the
     def observe_and_stop() -> int:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5) as response:
             seen["health_status"] = response.status
-        seen["opener_threads"] = [
-            thread.name for thread in threading.enumerate() if thread.name == "first-window-opener"
-        ]
+        seen["opener_threads"] = [thread.name for thread in threading.enumerate() if thread.name == OPENER_THREAD_NAME]
         return 130
 
     assert run_getting_started_app(arguments, observe_and_stop) == 130

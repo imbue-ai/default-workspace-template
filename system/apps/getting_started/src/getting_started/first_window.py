@@ -38,6 +38,9 @@ FIRST_WINDOW_PATH: Final[str] = "/"
 LEDGER_FILENAME: Final[str] = "first_window.json"
 _DELIVERED_KEY: Final[str] = "is_delivered"
 
+# The delivery thread's name, what a test looks for to tell a started opener from one left idle.
+OPENER_THREAD_NAME: Final[str] = "first-window-opener"
+
 # How often a held open is retried against the shell's client list while it is undelivered.
 POLL_INTERVAL_SECONDS: Final[float] = 3.0
 # One loopback request the shell answers without work.
@@ -260,7 +263,7 @@ class FirstWindowOpener(MutableModel):
         """Start the delivery thread, unless the ledger already says delivered. Idempotent."""
         if self._thread is not None or self.ledger.is_delivered():
             return
-        self._thread = threading.Thread(target=self._run, name="first-window-opener", daemon=True)
+        self._thread = threading.Thread(target=self._run, name=OPENER_THREAD_NAME, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
