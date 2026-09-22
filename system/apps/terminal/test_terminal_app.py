@@ -21,7 +21,9 @@ from app_manifest.registry import read_registry
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.polling import poll_until
 from pydantic import Field
-from terminal_app.data_types import TerminalPaths
+from terminal_app.data_types import TerminalPaths, TerminalSessionRecord
+from terminal_app.primitives import TmuxSessionId, TmuxSessionName
+from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
     ENV_FAKE_TMUX_DIR,
     ENV_FAKE_TTYD_DIR,
@@ -84,7 +86,7 @@ def _process_environment(environment: TerminalEnvironment, fake_tmux: FakeTmux) 
 
 
 def _prepare_app(
-    environment: TerminalEnvironment, fake_tmux: FakeTmux
+    environment: TerminalEnvironment, fake_tmux: FakeTmux, is_registered: bool = True
 ) -> _TerminalAppUnderTest:
     app_name = AppName(f"terminal-{uuid4().hex[:8]}")
     pages_port = free_port()
@@ -111,13 +113,14 @@ def _prepare_app(
             str(environment.scratch_dir / "state"),
             "--store",
             str(store_path),
+            *(() if is_registered else ("--no-register",)),
         ),
         environment=_process_environment(environment, fake_tmux),
     )
 
 
 def _prepare_pty(
-    environment: TerminalEnvironment, fake_tmux: FakeTmux
+    environment: TerminalEnvironment, fake_tmux: FakeTmux, is_registered: bool = True
 ) -> _TerminalPtyUnderTest:
     app_name = AppName(f"terminal-pty-{uuid4().hex[:8]}")
     ttyd_port = free_port()
@@ -150,6 +153,7 @@ def _prepare_pty(
             str(archive),
             "--ttyd",
             str(environment.scratch_dir / "fake-ttyd" / "bin" / "ttyd"),
+            *(() if is_registered else ("--no-register",)),
         ),
         environment={**_process_environment(environment, fake_tmux), ENV_FAKE_TTYD_DIR: str(ttyd_record_dir)},
     )
@@ -287,3 +291,46 @@ def test_terminal_pty_installs_dispatch_registers_and_becomes_ttyd(
         assert process.wait(timeout=_EXIT_TIMEOUT_SECONDS) == -signal.SIGTERM, _read_log(pty.log_path)
     finally:
         _kill_if_running(process)
+
+
+@pytest.mark.timeout(60)
+def test_an_unregistered_terminal_and_pty_serve_but_register_and_sweep_nothing(
+    terminal_environment: TerminalEnvironment, tmp_path: Path
+) -> None:
+    """A preview boots both programs on free ports beside the live ones: they must serve without
+    re-pointing the live rows, without the discovery event (a throwaway URL must not land in the
+    servers stream of the agent whose shell booted it), and without the window sweep, which would
+    read the live shell's windows and collect the terminals only the preview shows."""
+    fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
+    # A remembered terminal a window once showed: the live app's sweep would collect it, since no
+    # window of the shell shows it; an unregistered boot leaves it alone.
+    fake_tmux.set_sessions([make_tmux_session("terminal-1", "$6", datetime(2026, 9, 3, tzinfo=timezone.utc))])
+    app = _prepare_app(terminal_environment, fake_tmux, is_registered=False)
+    JsonTerminalSessionStore(store_path=app.store_path).save_record(
+        TerminalSessionRecord(
+            name=TmuxSessionName("terminal-1"), title=None, workdir=None, session_id=TmuxSessionId("$6"), is_window_seen=True
+        )
+    )
+    pty = _prepare_pty(terminal_environment, fake_tmux, is_registered=False)
+    app_process = _spawn(app.command, app.environment, app.log_path)
+    pty_process = _spawn(pty.command, pty.environment, pty.log_path)
+    try:
+        assert poll_until(
+            lambda: is_port_accepting(app.pages_port), timeout=_STARTUP_TIMEOUT_SECONDS, poll_interval=0.1
+        ), _read_log(app.log_path)
+        assert poll_until(
+            lambda: read_fake_ttyd_argv(pty.ttyd_record_dir) is not None,
+            timeout=_STARTUP_TIMEOUT_SECONDS,
+            poll_interval=0.1,
+        ), f"ttyd never started: {_read_log(pty.log_path)}"
+        pages_url = f"http://{LOOPBACK_HOST}:{app.pages_port}"
+        assert httpx.get(f"{pages_url}/api/health", timeout=5.0).json() == {"status": "ok"}
+        # A close hint is taken, but with no sweep running it collects nothing.
+        closed = httpx.post(f"{pages_url}/api/window-closed", json={"path": "/?session=terminal-1"}, timeout=5.0)
+        assert closed.status_code == 204
+        assert not terminal_environment.registry_path.exists()
+        assert not (app.agent_state_dir / "events" / "servers" / "events.jsonl").exists()
+        assert [session.name for session in fake_tmux.sessions()] == ["terminal-1"]
+    finally:
+        _kill_if_running(app_process)
+        _kill_if_running(pty_process)

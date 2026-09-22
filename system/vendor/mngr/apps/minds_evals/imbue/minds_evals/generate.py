@@ -1337,7 +1337,8 @@ def render_solve_script(template_text: str, case_config: CaseConfig) -> str:
         "test_state": "finished",
         "timed_out": False,
         "started_at": _ORACLE_TIMESTAMP,
-        "elapsed_seconds": 0.0,
+        # No duration at all: the oracle runs no conversation, so a figure here would print as a
+        # measured time where the run summary prints an absent one as unrecorded.
         "timeout_seconds": case_config.timeout_seconds,
     }
     return _substitute_template(

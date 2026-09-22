@@ -23,6 +23,7 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById } from "../models/Chats";
+import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import type { ChatFastModeState } from "../models/FastMode";
@@ -53,7 +54,7 @@ import {
   switchKind,
 } from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
-import { beginSwitchTo, openSwitchDialog } from "./SwitchDialog";
+import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -66,6 +67,7 @@ import {
   type MenuRow,
 } from "@imbue/workspace-ui/src/components/menu";
 import { accountRow, emptyAccountRowState } from "./accountRow";
+import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelProviderMenuStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
@@ -86,8 +88,21 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
   return (shown[0] ?? option.efforts[0]).level;
 }
 
-function capitalizeEffort(level: string): string {
-  return level.charAt(0).toUpperCase() + level.slice(1);
+/** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat
+ *  is not converging, the switch failed, or it picked no model, all of which leave the chip on the
+ *  live choice. A failed switch still carries its pick, for the retry to rerun the model step from,
+ *  but never applied it.
+ *
+ *  Named from the target harness's catalog, and by its raw id for a harness whose option set is per
+ *  agent (codex), which no catalog holds -- an id the user has not seen spelled that way, but the
+ *  model they picked, which is the point. */
+function convergingPickLabel(chat: ChatSnapshot): string | null {
+  const converging = chat.handoff;
+  const pick = converging?.model_pick ?? null;
+  if (converging === null || converging.phase === "failed" || pick === null) return null;
+  const options = getHarnessCatalog(converging.target_harness)?.options ?? [];
+  const option = options.find((each) => each.id === pick.model_id);
+  return modelPickLabel(option?.label ?? pick.model_id, pick.effort, pick.fast);
 }
 
 /** Past this many rows, a query rather than a scroll is the way to a model. */
@@ -568,11 +583,11 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           onclick: () => {
             menu.close();
             openProviderChooser({
+              ...(current !== null ? { unpickable: { accountId: current.id, reason: "current" as const } } : {}),
               onSignedIn: (accountId) => {
                 // Signed in from inside a chat: the new account is what the user switches this
                 // chat to next, so the switch begins on it.
-                const account = accountForAgent(accountId);
-                if (account !== null) beginSwitchTo(chatId, account);
+                beginSwitchToAccountId(chatId, accountId);
                 m.redraw();
               },
             });
@@ -702,10 +717,18 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       viewedChatId = chatId;
       viewedPickerIsFetched = searchable || dynamic;
 
-      // The account the next send switches the chat to, and the model picked for it: while a
+      // The account the next send switches the chat to, and the model it runs on there: while a
       // switch is armed the menu reads as the target, since that is what the next message runs on.
+      // With nothing picked, a rebind keeps the agent's model and a handoff's successor starts on
+      // its harness's default, which the menu has no name for.
       const pending = pendingSwitchTarget(chatId);
       const pendingPick = getPendingPick(chatId);
+      const isPendingRebind = pending !== null && switchKind(chat, pending) === "rebind";
+      const pendingModelLabel = pendingPick?.label ?? (isPendingRebind ? (matched?.label ?? null) : null);
+      // A page with no armed switch of its own can still be watching one: reloaded mid-switch, it
+      // has only what the chat carries. Read the same way, so the chip does not fall back to a live
+      // choice that cannot name the picked model until the harness has taken it.
+      const convergingLabel = pending !== null ? null : convergingPickLabel(chat);
 
       // The chip states the WHOLE choice, from the same three values the menu's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
@@ -720,9 +743,9 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           ...menu.triggerAttrs(),
           ...hoverTooltipAttrs("Change model or provider", "above"),
         },
-        pending !== null
+        pending !== null || convergingLabel !== null
           ? [
-              m("span", pendingPick?.label ?? pending.harness_label),
+              m("span", convergingLabel ?? pendingModelLabel ?? pending?.harness_label ?? ""),
               m("span", { class: `model-provider-menu-next-badge ${css.NEXT_BADGE} ml-1.5` }, "next"),
             ]
           : [
@@ -748,8 +771,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
 
       const rows: MenuRow[] = [];
       if (pending !== null) {
-        // The target's own rows. A handoff takes the model picked for it, which the Model row
-        // opens the dialog again to change; a rebind keeps the agent's model and has no row.
+        // The target's own rows: the account the next send moves the chat to and the model it
+        // runs on there, whose row opens the dialog again to change it.
         rows.push({
           kind: "submenu",
           key: "providers",
@@ -758,20 +781,18 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           sub: `${pending.harness_label}, next message`,
           content: () => providerSubmenu(chatId, account),
         });
-        if (switchKind(chat, pending) === "handoff") {
-          rows.push({ kind: "divider" });
-          rows.push({
-            kind: "custom",
-            key: "model",
-            render: () =>
-              pickerRow({
-                label: "Model",
-                value: pendingPick?.label ?? "Default model",
-                tooltip: "Change the model this chat switches to",
-                onOpen: () => openSwitchDialog(chatId, pending),
-              }),
-          });
-        }
+        rows.push({ kind: "divider" });
+        rows.push({
+          kind: "custom",
+          key: "model",
+          render: () =>
+            pickerRow({
+              label: "Model",
+              value: pendingModelLabel ?? (isPendingRebind ? "Current model" : "Default model"),
+              tooltip: "Change the model this chat switches to",
+              onOpen: () => openSwitchDialog(chatId, pending),
+            }),
+        });
       } else {
         rows.push({
           kind: "submenu",

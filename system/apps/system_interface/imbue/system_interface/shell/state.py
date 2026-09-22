@@ -75,8 +75,10 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
 from imbue.system_interface.shell.window_paths import WindowPathStore
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 CLIENT_ACTIVITY_EVENTS_PATH: Final[str] = "events/client_activity/events.jsonl"
@@ -85,7 +87,8 @@ CLIENT_PRUNE_INTERVAL_SECONDS: Final[float] = 24 * 60 * 60.0
 
 
 class ShellState(MutableModel):
-    """The shell's collaborators: the inventory, the desktop stores, the activity log, and the broadcaster."""
+    """The shell's collaborators: the inventory, the desktop stores, the activity log, the update notice, and the
+    broadcaster."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -111,6 +114,9 @@ class ShellState(MutableModel):
     avatar_status: AvatarStatusReader = Field(
         frozen=True, description="The avatar's mood, read from mngr's event file"
     )
+    update_notice: UpdateNoticeWatch = Field(
+        frozen=True, description="The kept rollback point of the last careful-flow apply, watched for the windows"
+    )
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
@@ -131,9 +137,11 @@ class ShellState(MutableModel):
         self._prune_thread = thread
         thread.start()
         self.inventory.start()
+        self.update_notice.start()
         self.avatar_status.start()
 
     def stop(self) -> None:
+        self.update_notice.stop()
         self._prune_stop.set()
         if self._prune_thread is not None:
             self._prune_thread.join(timeout=5)
@@ -486,10 +494,12 @@ def build_shell_state(
     wallpaper_files_directory: Path = DEFAULT_WALLPAPER_FILES_DIRECTORY,
     avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
     agent_events_path: Path | None = None,
+    repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests, and
     ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
-    environment names."""
+    environment names; ``repo_root`` (the workspace the update notice's record and script live under) is the
+    served tree by default."""
     return ShellState(
         state_directory=state_directory,
         inventory=inventory
@@ -508,4 +518,5 @@ def build_shell_state(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
             broadcaster=broadcaster,
         ),
+        update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),
     )

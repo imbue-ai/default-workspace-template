@@ -1019,9 +1019,11 @@ destroy-bugsink-instance instance_id:
 # shell's default node. Installs the pinned pnpm (engines.pnpm in
 # apps/minds/package.json) into that Node when missing or mismatched: npm
 # globals are per-Node-version under nvm, so a fresh Node install has no pnpm.
-# Run this once before `just minds-start`; `minds-start` points here when
-# node_modules is missing. Never installs Node itself (errors with a hint if
-# the pinned version isn't available via nvm).
+# `just minds-start` installs node_modules itself (via start-desktop.sh, which
+# refuses to install pnpm), so this recipe is for getting the pinned pnpm onto
+# a fresh machine and for the recipes that run pnpm directly
+# (minds-test-electron-menu, minds-build). Never installs Node itself (errors
+# with a hint if the pinned version isn't available via nvm).
 [group("minds install")]
 minds-install:
     #!/bin/bash
@@ -1123,34 +1125,17 @@ minds-start branch="" default_workspace_template="" debug_port="":
     echo "MINDS_WORKSPACE_BRANCH=$MINDS_WORKSPACE_BRANCH"
     echo "$$" > "$pid_file"
     trap 'rm -f "$pid_file"' EXIT
-    # Bail with a copy-pasteable install + build hint if the electron
-    # node_modules tree isn't there yet. `pnpm start` would otherwise
-    # die with a confusing "electron: not found" + WARN-about-missing-
-    # node_modules message.
-    if [ ! -x "apps/minds/node_modules/.bin/electron" ]; then
-        echo "" >&2
-        echo "error: minds desktop client isn't installed/built yet in this worktree." >&2
-        echo "       Run:" >&2
-        echo "         just minds-install" >&2
-        echo "       (~2 min on first run; subsequent rebuilds are seconds)." >&2
-        echo "       Then re-run \`just minds-start\`." >&2
-        exit 2
-    fi
     if [ -n "{{debug_port}}" ]; then
         # Read by electron/main.js, which appends Chromium's
         # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
         export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
         echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
     fi
-    # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
-    # engine-strict check passes regardless of the shell's default node.
-    . apps/minds/scripts/select_node_version.sh || exit 2
-    # Build the SPA the app server actually serves. `pnpm start` only builds
-    # the legacy JinjaX stylesheet; static/ui/ is produced at wheel-build time
-    # and is gitignored, so without this a dev run serves whatever bundle
-    # happened to be built last -- or 404s on a fresh worktree.
-    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
-    cd apps/minds && pnpm start
+    # The shared launcher selects the pinned Node, syncs the Electron deps, and
+    # runs `pnpm start` (whose prestart builds the UI bundle the app serves).
+    # Run as a child, not exec'd, so the EXIT trap above still removes the
+    # PID file when the app exits.
+    apps/minds/scripts/start-desktop.sh
 
 # Launch the minds desktop client (electron) in dev mode against the
 # activated env for testing the IMBUE_CLOUD provider against pre-baked pool
@@ -1207,26 +1192,15 @@ minds-start-cloud debug_port="":
     unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
     echo "$$" > "$pid_file"
     trap 'rm -f "$pid_file"' EXIT
-    if [ ! -x "apps/minds/node_modules/.bin/electron" ]; then
-        echo "" >&2
-        echo "error: minds desktop client isn't installed/built yet in this worktree." >&2
-        echo "       Run \`just minds-install\` first, then re-run \`just minds-start-cloud\`." >&2
-        exit 2
-    fi
     if [ -n "{{debug_port}}" ]; then
         # Read by electron/main.js, which appends Chromium's
         # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
         export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
         echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
     fi
-    # Put apps/minds's pinned Node (.nvmrc) first on PATH so pnpm's
-    # engine-strict check passes regardless of the shell's default node.
-    . apps/minds/scripts/select_node_version.sh || exit 2
-    # Build the SPA the app server actually serves, same as minds-start:
-    # `pnpm start` only launches electron, and static/ui/ is gitignored
-    # (produced at wheel-build time), so a fresh worktree would 404 without this.
-    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
-    cd apps/minds && pnpm start
+    # Same shared launcher as minds-start; a child rather than exec so the
+    # EXIT trap above still removes the PID file.
+    apps/minds/scripts/start-desktop.sh
 
 # Stop the minds desktop client started in this worktree by `just minds-start`
 # or `just minds-start-cloud` (both share this worktree-keyed PID file).

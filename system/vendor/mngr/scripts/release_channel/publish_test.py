@@ -6,13 +6,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 from click.testing import CliRunner
 
+from imbue.imbue_common.model_update import to_update
 from scripts.release_channel.manifest import FULL_ROLLOUT_PERCENTAGE
 from scripts.release_channel.manifest import Fetch
 from scripts.release_channel.manifest import MakeS3Client
 from scripts.release_channel.manifest import PUBLISHABLE_CHANNELS
+from scripts.release_channel.manifest import PUBLISHABLE_PLATFORMS
 from scripts.release_channel.manifest import PromotionError
 from scripts.release_channel.manifest import parse_manifest
 from scripts.release_channel.manifest import read_current_channel_manifest
@@ -54,7 +57,7 @@ LIMA_OK = json.dumps({"minds_version": "minds-v0.4.12", "entries": [{"arch": "AA
 
 def published_b1_at(percentage: int) -> str:
     """What promoting build b1 at `percentage` writes, to serve back as current state."""
-    return render(with_rollout_percentage(rewrite_manifest(TODESKTOP_MANIFEST, APP_ID), percentage))
+    return render(with_rollout_percentage(rewrite_manifest(TODESKTOP_MANIFEST, APP_ID, "mac"), percentage))
 
 
 # The state a re-run of that same promotion finds.
@@ -70,18 +73,38 @@ def _some_other_build_at(version: str) -> str:
     return CHANNEL_MANIFEST_AT.format(version=version)
 
 
-def _fetch(*, served: str | None, build: str = TODESKTOP_MANIFEST):
-    """Serve ToDesktop's build manifest, the Lima manifest, and the channel's current state."""
+def _fetch(
+    *,
+    served: str | None,
+    build: str = TODESKTOP_MANIFEST,
+    linux_build: str | None = None,
+    served_linux: str | None = None,
+):
+    """Serve ToDesktop's build manifests, the Lima manifest, and each platform's current state.
+
+    ``build`` is the mac manifest; ``linux_build`` the Linux one, absent (a 404,
+    which is what ToDesktop answers for a platform a build was not packaged
+    for) unless given. ``served`` / ``served_linux`` are what the feed serves
+    for each platform's channel file.
+    """
 
     def fetch(url: str) -> bytes:
         if "latest-mac-build-" in url:
             return build.encode()
+        if "latest-linux-build-" in url:
+            if linux_build is None:
+                raise _not_found(url)
+            return linux_build.encode()
         if "/manifests/" in url:
             return LIMA_OK
         if url.endswith("-mac.yml"):
             if served is None:
                 raise _not_found(url)
             return served.encode()
+        if url.endswith("-linux.yml"):
+            if served_linux is None:
+                raise _not_found(url)
+            return served_linux.encode()
         raise AssertionError(f"unexpected fetch: {url}")
 
     return fetch
@@ -98,6 +121,7 @@ def alpha_at(percentage: int) -> ChannelEntry:
         version="0.4.12",
         fallback_branch="minds-v0.4.12",
         rollout_percentage=percentage,
+        platforms=("mac",),
     )
 
 
@@ -129,18 +153,21 @@ def _apply(
     from_bucket: bool = False,
     make_client: MakeS3Client = _no_client,
 ) -> str:
-    return apply_entry(
-        entry,
-        app_id=APP_ID,
-        bucket="bucket",
-        feed_base_url=FEED,
-        lima_image_base_url=lima_image_base_url,
-        arches=("aarch64",),
-        cache_seconds=60,
-        dry_run=dry_run,
-        from_bucket=from_bucket,
-        fetch=fetch if fetch is not None else _fetch(served=served),
-        make_client=make_client,
+    """Every report line the entry produced, one per platform, joined for substring asserts."""
+    return "\n".join(
+        apply_entry(
+            entry,
+            app_id=APP_ID,
+            bucket="bucket",
+            feed_base_url=FEED,
+            lima_image_base_url=lima_image_base_url,
+            arches=("aarch64",),
+            cache_seconds=60,
+            dry_run=dry_run,
+            from_bucket=from_bucket,
+            fetch=fetch if fetch is not None else _fetch(served=served),
+            make_client=make_client,
+        )
     )
 
 
@@ -158,6 +185,7 @@ def test_the_shipped_file_parses_and_declares_only_known_channels() -> None:
         assert entry.channel in PUBLISHABLE_CHANNELS
         assert entry.build_id and entry.version and entry.fallback_branch
         assert 0 <= entry.rollout_percentage <= FULL_ROLLOUT_PERCENTAGE
+        assert entry.platforms and set(entry.platforms) <= set(PUBLISHABLE_PLATFORMS)
         # Checked here as well as in apply_entry so a stale tag fails the normal
         # test suite, not only the promote workflow.
         assert entry.fallback_branch == f"minds-v{entry.version}"
@@ -166,7 +194,8 @@ def test_the_shipped_file_parses_and_declares_only_known_channels() -> None:
 def test_stable_is_published_like_any_other_channel() -> None:
     """Stable moved onto our feed, so it is a pointer in this file like the rest."""
     entries = parse_channels(
-        '[channels.stable]\nbuild_id="b1"\nversion="0.4.12"\nfallback_branch="minds-v0.4.12"\nrollout_percentage=100\n'
+        '[channels.stable]\nbuild_id="b1"\nversion="0.4.12"\nfallback_branch="minds-v0.4.12"\n'
+        'rollout_percentage=100\nplatforms=["mac"]\n'
     )
     assert [entry.channel for entry in entries] == ["stable"]
 
@@ -199,7 +228,7 @@ def test_a_padded_string_field_is_stripped() -> None:
     """`build_id` reaches a URL, so the value that is kept has to be the one that was checked."""
     (entry,) = parse_channels(
         '[channels.alpha]\nbuild_id=" b1 "\nversion="\t0.4.12"\n'
-        'fallback_branch="minds-v0.4.12 "\nrollout_percentage=100\n'
+        'fallback_branch="minds-v0.4.12 "\nrollout_percentage=100\nplatforms=["mac"]\n'
     )
     assert (entry.build_id, entry.version, entry.fallback_branch) == ("b1", "0.4.12", "minds-v0.4.12")
 
@@ -254,7 +283,14 @@ def test_a_version_that_disagrees_with_the_build_is_rejected() -> None:
     """The file is what the reviewer reads, so it must say what it does."""
     with pytest.raises(PromotionError, match="says version 0.9.9, but build b1 is version 0.4.12"):
         assert_version_matches_build(
-            ChannelEntry(channel="alpha", build_id="b1", version="0.9.9", fallback_branch="t", rollout_percentage=100),
+            ChannelEntry(
+                channel="alpha",
+                build_id="b1",
+                version="0.9.9",
+                fallback_branch="t",
+                rollout_percentage=100,
+                platforms=("mac",),
+            ),
             "0.4.12",
         )
 
@@ -333,6 +369,7 @@ def test_a_prerelease_build_version_is_refused_before_the_upload() -> None:
         version="0.5.0-alpha.1",
         fallback_branch="minds-v0.5.0-alpha.1",
         rollout_percentage=100,
+        platforms=("mac",),
     )
     with pytest.raises(PromotionError, match="plain X.Y.Z"):
         _apply(entry, served=None, lima_image_base_url=None, fetch=_fetch(served=None, build=prerelease))
@@ -345,7 +382,12 @@ def test_a_fallback_branch_left_on_the_previous_release_is_rejected() -> None:
     clients ask for the tag the binary ships, 404, and silently build in-VM.
     """
     stale = ChannelEntry(
-        channel="alpha", build_id="b1", version="0.4.12", fallback_branch="minds-v0.4.11", rollout_percentage=100
+        channel="alpha",
+        build_id="b1",
+        version="0.4.12",
+        fallback_branch="minds-v0.4.11",
+        rollout_percentage=100,
+        platforms=("mac",),
     )
     with pytest.raises(PromotionError, match="says fallback_branch minds-v0.4.11.*clones minds-v0.4.12"):
         _apply(stale, served=None)
@@ -361,7 +403,7 @@ def test_a_channel_the_file_no_longer_declares_is_reported_as_still_serving() ->
     reports = undeclared_channel_reports((), **_feed_reads(PUBLISHED_B1))
     assert len(reports) == len(PUBLISHABLE_CHANNELS)
     assert all("still serving 0.4.12" in report for report in reports)
-    assert any(report.startswith("alpha:") for report in reports)
+    assert any(report.startswith("alpha (mac):") for report in reports)
 
 
 def test_a_channel_nobody_has_ever_published_to_is_not_reported() -> None:
@@ -371,7 +413,7 @@ def test_a_channel_nobody_has_ever_published_to_is_not_reported() -> None:
 
 def test_a_declared_channel_is_never_reported_as_undeclared() -> None:
     reports = undeclared_channel_reports((ALPHA,), **_feed_reads(PUBLISHED_B1))
-    assert not any(report.startswith("alpha:") for report in reports)
+    assert not any(report.startswith("alpha (") for report in reports)
 
 
 def test_a_refused_promotion_exits_non_zero(tmp_path: Path) -> None:
@@ -417,13 +459,18 @@ def test_a_tier_with_no_image_store_publishes_without_the_image_gate() -> None:
 
     report = _apply(ALPHA, served=None, lima_image_base_url=None, fetch=refusing_image_fetch)
 
-    assert report == "alpha: would publish 0.4.12 to 100% (currently nothing)"
+    assert report == "alpha (mac): would publish 0.4.12 to 100% (currently nothing)"
 
 
 def test_the_version_check_runs_before_the_lima_gate() -> None:
     """A mismatched file should fail on the thing the reviewer can see, not a remote lookup."""
     wrong = ChannelEntry(
-        channel="alpha", build_id="b1", version="0.9.9", fallback_branch="minds-v0.4.12", rollout_percentage=100
+        channel="alpha",
+        build_id="b1",
+        version="0.9.9",
+        fallback_branch="minds-v0.4.12",
+        rollout_percentage=100,
+        platforms=("mac",),
     )
     with pytest.raises(PromotionError, match="says version 0.9.9"):
         _apply(wrong, served=None)
@@ -451,7 +498,7 @@ def test_a_credentialed_run_reads_the_bucket_through_the_client_it_was_handed(st
         )
         report = _apply(ALPHA, served=None, from_bucket=True, fetch=refusing_feed_fetch, make_client=lambda: client)
         stubber.assert_no_pending_responses()
-    assert report == "alpha: would publish 0.4.12 to 100% (currently 0.4.10 to 100% (declaring no rollout))"
+    assert report == "alpha (mac): would publish 0.4.12 to 100% (currently 0.4.10 to 100% (declaring no rollout))"
 
 
 def test_the_current_state_is_read_from_the_bucket_when_asked_for_it(stub_s3_client: Any) -> None:
@@ -469,6 +516,7 @@ def test_the_current_state_is_read_from_the_bucket_when_asked_for_it(stub_s3_cli
         )
         current = read_current_channel_manifest(
             "alpha",
+            "mac",
             bucket="bucket",
             feed_base_url=FEED,
             from_bucket=True,
@@ -487,6 +535,7 @@ def test_the_current_state_falls_back_to_the_feed_without_a_credential() -> None
     """
     current = read_current_channel_manifest(
         "alpha",
+        "mac",
         bucket="bucket",
         feed_base_url=FEED,
         from_bucket=False,
@@ -508,7 +557,7 @@ def test_a_misspelled_field_is_named_beside_the_one_it_should_have_been() -> Non
     ):
         parse_channels(
             '[channels.alpha]\nbuild_id="b1"\nversion="0.4.12"\n'
-            'fallback_branch="minds-v0.4.12"\nrollout_percentge=10\n'
+            'fallback_branch="minds-v0.4.12"\nrollout_percentge=10\nplatforms=["mac"]\n'
         )
 
 
@@ -524,7 +573,8 @@ def test_a_rollout_of_zero_is_a_value_and_not_an_absence() -> None:
     largest possible rollout.
     """
     entries = parse_channels(
-        '[channels.alpha]\nbuild_id="b1"\nversion="0.4.12"\nfallback_branch="minds-v0.4.12"\nrollout_percentage=0\n'
+        '[channels.alpha]\nbuild_id="b1"\nversion="0.4.12"\nfallback_branch="minds-v0.4.12"\n'
+        'rollout_percentage=0\nplatforms=["mac"]\n'
     )
     assert entries[0].rollout_percentage == 0
     assert read_rollout_percentage(parse_manifest(published_b1_at(0), "x"), "x") == 0
@@ -606,3 +656,196 @@ def test_a_served_rollout_the_reader_refuses_stops_the_promotion_before_the_uplo
     served = _some_other_build_at("0.4.10") + "stagingPercentage: ten\n"
     with pytest.raises(PromotionError, match="alpha-mac.yml declares stagingPercentage 'ten'"):
         _apply(ALPHA, served=served, dry_run=False, make_client=_no_client)
+
+
+# ToDesktop's Linux manifest for the same build: what an entry listing linux
+# publishes beside the mac one.
+TODESKTOP_LINUX_MANIFEST = """version: 0.4.12
+files:
+  - url: minds-0.4.12-build-b1-x86_64.AppImage
+    sha512: lin==
+    size: 2
+  - url: minds-0.4.12-build-b1-amd64.deb
+    sha512: deb==
+    size: 3
+path: minds-0.4.12-build-b1-x86_64.AppImage
+sha512: lin==
+"""
+
+
+def _both_platforms(entry: ChannelEntry) -> ChannelEntry:
+    return entry.model_copy_update(to_update(entry.field_ref().platforms, ("mac", "linux")))
+
+
+def test_an_entry_listing_linux_publishes_a_manifest_per_platform() -> None:
+    """One entry, one report line per platform, each naming its own platform."""
+    report = _apply(
+        _both_platforms(ALPHA), served=None, fetch=_fetch(served=None, linux_build=TODESKTOP_LINUX_MANIFEST)
+    )
+    lines = report.splitlines()
+    assert lines == [
+        "alpha (mac): would publish 0.4.12 to 100% (currently nothing)",
+        "alpha (linux): would publish 0.4.12 to 100% (currently nothing)",
+    ]
+
+
+def test_a_listed_platform_with_no_manifest_refuses_the_whole_entry(stub_s3_client: Any) -> None:
+    """A build ToDesktop never packaged for Linux has no Linux manifest.
+
+    Listing linux for it must publish nothing at all -- not the mac
+    half -- so a half-applied entry cannot be reported as a promotion.
+    """
+    client = stub_s3_client
+    with Stubber(client):
+        with pytest.raises(PromotionError, match="No ToDesktop linux manifest for build b1"):
+            _apply(_both_platforms(ALPHA), served=None, dry_run=False, make_client=lambda: client)
+        # No put_object was stubbed, so a mac upload would have raised on the stub.
+
+
+def test_a_served_rollout_the_reader_refuses_on_a_later_platform_uploads_nothing() -> None:
+    """The served rollout of every platform is read before the first upload, not as each platform's turn comes.
+
+    Otherwise a linux channel file the reader refuses would be found only after
+    the mac manifest had already been published: exactly the half-applied entry.
+    `_no_client` is what proves nothing was written.
+    """
+    served_linux = _some_other_build_at("0.4.10") + "stagingPercentage: ten\n"
+    fetch = _fetch(
+        served=_some_other_build_at("0.4.10"), linux_build=TODESKTOP_LINUX_MANIFEST, served_linux=served_linux
+    )
+    with pytest.raises(PromotionError, match="alpha-linux.yml declares stagingPercentage 'ten'"):
+        _apply(_both_platforms(ALPHA), served=None, dry_run=False, fetch=fetch, make_client=_no_client)
+
+
+def test_a_real_run_uploads_one_object_per_listed_platform(stub_s3_client: Any) -> None:
+    client = stub_s3_client
+    linux_manifest = with_rollout_percentage(
+        rewrite_manifest(TODESKTOP_LINUX_MANIFEST, APP_ID, "linux"), FULL_ROLLOUT_PERCENTAGE
+    )
+    with Stubber(client) as stubber:
+        for key, body in (("alpha-mac.yml", PUBLISHED_B1), ("alpha-linux.yml", render(linux_manifest))):
+            stubber.add_response(
+                "put_object",
+                {},
+                expected_params={
+                    "Bucket": "bucket",
+                    "Key": key,
+                    "Body": body.encode("utf-8"),
+                    "ContentType": "text/yaml",
+                    "CacheControl": "public, max-age=60",
+                },
+            )
+        report = _apply(
+            _both_platforms(ALPHA),
+            served=None,
+            dry_run=False,
+            fetch=_fetch(served=None, linux_build=TODESKTOP_LINUX_MANIFEST),
+            make_client=lambda: client,
+        )
+        stubber.assert_no_pending_responses()
+    assert "alpha (mac): published 0.4.12" in report
+    assert "alpha (linux): published 0.4.12" in report
+
+
+def test_a_platforms_failed_upload_does_not_hide_the_line_of_the_one_published_before_it(
+    stub_s3_client: Any,
+) -> None:
+    """The mac object is in R2 by the time the linux upload fails, so its line must already be out.
+
+    The release workflow records every line the publish printed, and a line that
+    only exists once the whole entry succeeded would leave a real write unrecorded.
+    """
+    client = stub_s3_client
+    with Stubber(client) as stubber:
+        stubber.add_response(
+            "put_object",
+            {},
+            expected_params={
+                "Bucket": "bucket",
+                "Key": "alpha-mac.yml",
+                "Body": PUBLISHED_B1.encode("utf-8"),
+                "ContentType": "text/yaml",
+                "CacheControl": "public, max-age=60",
+            },
+        )
+        stubber.add_client_error("put_object", service_error_code="InternalError", http_status_code=500)
+        reports = apply_entry(
+            _both_platforms(ALPHA),
+            app_id=APP_ID,
+            bucket="bucket",
+            feed_base_url=FEED,
+            lima_image_base_url="https://images.example.com",
+            arches=("aarch64",),
+            cache_seconds=60,
+            dry_run=False,
+            from_bucket=False,
+            fetch=_fetch(served=None, linux_build=TODESKTOP_LINUX_MANIFEST),
+            make_client=lambda: client,
+        )
+        assert "alpha (mac): published 0.4.12" in next(reports)
+        with pytest.raises(ClientError):
+            next(reports)
+        stubber.assert_no_pending_responses()
+
+
+def test_a_platform_whose_served_state_cannot_be_read_stops_the_entry_before_any_upload(
+    stub_s3_client: Any,
+) -> None:
+    """Both platforms' channel files are read before either is written.
+
+    Read per platform right before its own upload, a feed outage on the linux
+    half would land after the mac object was already written -- the half-applied
+    entry the gates exist to prevent. No put_object is stubbed, so an upload
+    would raise on the stub.
+    """
+    both = _fetch(served=None, linux_build=TODESKTOP_LINUX_MANIFEST)
+
+    def fetch(url: str) -> bytes:
+        if url.endswith("-linux.yml"):
+            raise urllib.error.HTTPError(url, 503, "unavailable", Message(), BytesIO(b""))
+        return both(url)
+
+    client = stub_s3_client
+    with Stubber(client):
+        with pytest.raises(
+            PromotionError, match="Cannot read the current alpha version: .*alpha-linux.yml returned 503"
+        ):
+            _apply(_both_platforms(ALPHA), served=None, dry_run=False, fetch=fetch, make_client=lambda: client)
+
+
+def test_a_platform_no_entry_lists_is_reported_as_still_serving() -> None:
+    """Dropping `linux` from an entry withdraws nothing, exactly like dropping the entry."""
+    reports = undeclared_channel_reports(
+        (ALPHA,),
+        bucket="bucket",
+        feed_base_url=FEED,
+        from_bucket=False,
+        fetch=_fetch(served=None, served_linux=_some_other_build_at("0.4.10")),
+    )
+    assert [report.split(":")[0] for report in reports] == ["stable (linux)", "beta (linux)", "alpha (linux)"]
+    assert all("still serving 0.4.10" in report for report in reports)
+
+
+@pytest.mark.parametrize(
+    ("declared", "fault"),
+    [
+        ("[]", "must list at least one"),
+        ('["windows"]', "names unknown platform"),
+        ('["mac", "mac"]', "lists a platform twice"),
+        ('"mac"', "input should be a valid tuple"),
+    ],
+)
+def test_a_malformed_platforms_list_is_refused_by_name(declared: str, fault: str) -> None:
+    with pytest.raises(PromotionError, match=f"\\[channels.alpha\\] platforms .*{fault}"):
+        parse_channels(
+            '[channels.alpha]\nbuild_id="b1"\nversion="0.4.12"\nfallback_branch="minds-v0.4.12"\n'
+            f"rollout_percentage=100\nplatforms={declared}\n"
+        )
+
+
+def test_a_missing_platforms_list_is_refused_because_absence_would_mean_every_platform() -> None:
+    """Every build before Linux packaging carries a Linux manifest with arm64 tools inside."""
+    with pytest.raises(PromotionError, match="platforms field required"):
+        parse_channels(
+            '[channels.alpha]\nbuild_id="b1"\nversion="0.4.12"\nfallback_branch="minds-v0.4.12"\nrollout_percentage=100\n'
+        )

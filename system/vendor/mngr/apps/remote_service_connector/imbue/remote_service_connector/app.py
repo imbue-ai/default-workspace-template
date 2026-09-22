@@ -64,6 +64,8 @@ from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth_proxy import EnsureAsgiRootPathMiddleware
 from imbue.remote_service_connector.auth_proxy import PartitionedCookieMiddleware
 from imbue.remote_service_connector.auth_proxy import init_supertokens
+from imbue.remote_service_connector.deploy_constants import API_MAX_CONCURRENT_INPUTS
+from imbue.remote_service_connector.deploy_constants import API_TARGET_CONCURRENT_INPUTS
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
 from imbue.remote_service_connector.lease_records import run_lease_record_sweep
@@ -114,10 +116,11 @@ _MIN_CONTAINERS = read_min_containers("MINDS_CONNECTOR_MIN_CONTAINERS")
 # ``[scaledown_window].connector`` from its committed ``deploy.toml`` here
 # at ``modal deploy`` time. Dev tiers set this high (~10 min) so the
 # no-warm-pool connector stays hot across a dev session instead of
-# cold-booting on every request; staging / production leave it unset and
-# rely on ``min_containers`` instead. None (from the unset/0 default, the
-# ci/test tier) means "don't pin it" -- the function falls back to Modal's
-# own default scaledown window.
+# cold-booting on every request; staging / production set the same window
+# so a container the autoscaler added for a burst is not retired with
+# requests still in flight. None (from the unset/0 default, the ci/test tier)
+# means "don't pin it" -- the function falls back to Modal's own default
+# scaledown window.
 _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
 
 # Modal custom domains for the web function (the tier's user-facing accounts +
@@ -214,16 +217,16 @@ def _connector_secrets() -> list[modal.Secret]:
     # US-only scheduling for the one function the desktop client waits on; the
     # crons below stay unpinned (see WEB_FUNCTION_REGION).
     region=WEB_FUNCTION_REGION,
-    # Warm-pool size driven by ``_MIN_CONTAINERS`` at the top of this
-    # module: defaults to 1 for production / staging (avoid cold-boot
-    # penalty on auth / lease / share hits from the desktop client) and
-    # 0 for dev (per-developer envs sit idle most of the time). Override
-    # at deploy time with ``MINDS_CONNECTOR_MIN_CONTAINERS=<n>``. Mirrors the
-    # equivalent block in apps/modal_litellm/app.py.
+    # Warm-pool size driven by ``_MIN_CONTAINERS`` at the top of this module,
+    # i.e. the tier's ``[min_containers].connector``: tiers the desktop client
+    # hits keep containers warm so auth / lease / share calls never cold-boot,
+    # and production keeps more than one so a recycled container is never the
+    # whole fleet. Override at deploy time with
+    # ``MINDS_CONNECTOR_MIN_CONTAINERS=<n>``. Mirrors the equivalent block in
+    # apps/modal_litellm/app.py.
     min_containers=_MIN_CONTAINERS,
     # Idle-before-scaledown window driven by ``_SCALEDOWN_WINDOW`` (already
-    # None when unset, so Modal uses its own default); dev pins this high so
-    # the no-warm-pool connector stays hot across a dev session.
+    # None when unset, so Modal uses its own default).
     scaledown_window=_SCALEDOWN_WINDOW,
 )
 # Without this, Modal delivers ONE request per container at a time, so a
@@ -236,10 +239,9 @@ def _connector_secrets() -> list[modal.Secret]:
 # lease selection uses ``FOR UPDATE SKIP LOCKED``, the shared Cloudflare
 # ``httpx.Client`` is thread-safe, and the remaining module-level mutable
 # state (the paid-status and ping-decision caches) is lock-guarded.
-# ``max_inputs`` is kept modest because each concurrent request holds one
-# Neon connection and one threadpool thread for its duration (the pool's
-# idle capacity matches this cap).
-@modal.concurrent(max_inputs=8)
+# The cap and the autoscaler's target live in deploy_constants; the DB pool's
+# idle capacity (db.py) and the sync-route thread limit are sized from them.
+@modal.concurrent(max_inputs=API_MAX_CONCURRENT_INPUTS, target_inputs=API_TARGET_CONCURRENT_INPUTS)
 @modal.asgi_app(custom_domains=_CUSTOM_DOMAINS)
 def fastapi_app() -> FastAPI:
     # JSON log lines (so every line carries its level into the log store),

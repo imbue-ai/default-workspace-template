@@ -9,7 +9,7 @@
 
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
-import { DRAFT_PARAM, launchPathOf, launchPathWithParams } from "../model/launch";
+import { DRAFT_PARAM, chatPath, launchPathOf, launchPathWithParams } from "../model/launch";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -33,6 +33,8 @@ import type {
 } from "../model/records";
 import { isSameWindowPaths } from "../model/records";
 import { SaveIdMinter } from "../model/saveIds";
+import { isPreviewShell } from "../model/PreviewShell";
+import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
 import {
   MAXIMIZED_FRAME,
@@ -54,6 +56,7 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  chatApp,
   draftTargetOf,
   effectiveWindow,
   effectiveWindowTitle,
@@ -65,6 +68,7 @@ import {
   pinnedWindowOf,
   reduceDesktopState,
   renderedState,
+  windowShowingChat,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState } from "../reducers/desktopState";
 import { cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
@@ -270,9 +274,10 @@ export class DesktopStore {
     return gridDimensions(this.backdrop, this.metrics);
   }
 
-  /** Whether the workspace can stop and start the app (supervised, not critical, not inside a critical program). */
+  /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
+   *  not from a preview shell, whose stop and start would reach the live workspace's supervisord. */
   canStopApp(app: AppRecord): boolean {
-    return isAppStoppable(this.state, app);
+    return !isPreviewShell() && isAppStoppable(this.state, app);
   }
 
   /** The rectangle a placement renders at, in backdrop pixels (the compact override and the fit applied). */
@@ -321,6 +326,13 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
   }
 
+  /** Resolves once the app list has landed. It arrives only over the socket, so ``start`` resolving
+   *  does not imply it: a caller that needs the apps (which app holds chats, which window is pinned)
+   *  waits on this too. */
+  whenAppsLoaded(): Promise<void> {
+    return this.appsLoaded;
+  }
+
   /** Read this client's record, pick the desktop (a deep link's first), connect, fetch the layout, and
    *  honour the deep link's open or launch. */
   async start(deepLink: DeepLink): Promise<void> {
@@ -336,6 +348,8 @@ export class DesktopStore {
         this.avatarSelectionPushes += 1;
         this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null });
       },
+      onUpdateNoticeChanged: (wire) =>
+        this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
     });
     void this.loadAvatarSelection();
@@ -512,6 +526,27 @@ export class DesktopStore {
     const path = launchPathWithParams(target.launchPath, { [DRAFT_PARAM]: text });
     const isTaken = await this.navigateOwnWindow(target.window.id, path);
     this.restoreWindow(target.window.id);
+    return isTaken;
+  }
+
+  /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window already showing it is
+   *  switched to and raised, wherever it is; otherwise this client's view of the chat app's pinned
+   *  window is pointed at the chat, as a draft is, so the chat lands where this viewer reads chats;
+   *  with no pinned window to take it, the chat opens in a window of its own. False when nothing
+   *  showed it -- this machine has no app that holds chats, or the shell refused the ask. */
+  async focusChat(chatId: string): Promise<boolean> {
+    const shown = windowShowingChat(this.state, chatId);
+    if (shown !== null) {
+      if (shown.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(shown.desktop.id);
+      this.restoreWindow(shown.window.id);
+      return true;
+    }
+    const app = chatApp(this.state);
+    if (app === null) return false;
+    const pinned = pinnedWindowOf(this.state, app.name);
+    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), null, "focus")) !== null;
+    const isTaken = await this.navigateOwnWindow(pinned.id, chatPath(chatId));
+    this.restoreWindow(pinned.id);
     return isTaken;
   }
 

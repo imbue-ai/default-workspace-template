@@ -23,6 +23,9 @@ from imbue.imbue_common.pure import pure
 from imbue.minds.errors import MindError
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import DATA_DISK_BASE_GIB
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import DATA_DISK_SYSTEM_RESERVE_GIB
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_gen1_migrated_data_disk_gib
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_machine_data_disk_gib
 from imbue.mngr_latchkey.remote.provisioning import MACHINE_LATCHKEY_GATEWAY_REQUIRED_TMPFS_FILENAMES
 from imbue.mngr_latchkey.remote.provisioning import REMOTE_LATCHKEY_DIR_NAME
 from imbue.mngr_latchkey.remote.provisioning import SUPERVISOR_CONFD_DIR
@@ -213,6 +216,27 @@ class TemplateReplayInputs(FrozenModel):
             "(the slice provider's volume_home_path setting)"
         )
     )
+    template_program_names: tuple[str, ...] = Field(
+        description=(
+            "The supervisord programs the release template ships (its supervisord.conf and drop-ins): the ones "
+            "the health probe requires to run; a program the owner added is reported, never a failure"
+        )
+    )
+
+
+class HealthProbeFindings(FrozenModel):
+    """One health pass over a replayed workspace: what blocks the migration, and what is only reported."""
+
+    blocking: tuple[str, ...] = Field(
+        description="Findings that fail the probe: the container, a template program, the UI or the VM gateway"
+    )
+    user_program_notes: tuple[str, ...] = Field(
+        description="Owner-added supervisord programs that are not running (the owner's to fix; e.g. gVisor refuses them)"
+    )
+
+    @property
+    def is_healthy(self) -> bool:
+        return not self.blocking
 
 
 class SavedProductArtifact(FrozenModel):
@@ -260,6 +284,13 @@ class CutoverWorkspaceState(FrozenModel):
     gen1_data_disk_virtual_gib: int = Field(description="The gen-1 data disk's qcow2 virtual size in GiB")
     gen1_data_disk_format: str = Field(description="The gen-1 data disk's image format as qemu-img reports it")
     migrated_data_disk_gib: int = Field(description="The gen-2 data disk size (the row's disk_gb, gen-1 + 16)")
+    origin_disk_gb: int | None = Field(
+        default=None,
+        description=(
+            "The row's disk_gb before the migrate shrank an oversized gen-1 disk to the default size "
+            "(a rollback stamps it back); None when the disk kept its size"
+        ),
+    )
     memory_units: int = Field(description="The machine's size in units (the default 8 for every gen-1 row)")
     saved_artifact: SavedProductArtifact | None = Field(
         default=None, description="The product stop artifact, saved once the stop finished"
@@ -559,3 +590,36 @@ def restamped_gen1_disk_gb_or_none(data_disk_virtual_gib: int, row_disk_gb: int)
     if gen1_data_disk_size_error_or_none(data_disk_virtual_gib, row_disk_gb) is None:
         return None
     return data_disk_virtual_gib + DATA_DISK_BASE_GIB
+
+
+@pure
+def shrunk_gen1_disk_gib_or_none(*, data_disk_virtual_gib: int, memory_units: int) -> int | None:
+    """The default-size gen-2 disk an oversized gen-1 data disk is transplanted into, or None when it is not oversized.
+
+    A gen-1 slice's data disk was sized by its box (an 8 TB box carved 216 GiB
+    per slice), so migrating it as it is would charge the target's disk
+    budget for capacity the workspace never had a use for. When the operator
+    asks for it, such a disk shrinks to the size a gen-2 carve grants the
+    machine's units; a disk at or below that size keeps its own.
+    """
+    default_gib = compute_machine_data_disk_gib(memory_units)
+    if compute_gen1_migrated_data_disk_gib(data_disk_virtual_gib) <= default_gib:
+        return None
+    return default_gib
+
+
+@pure
+def shrink_fit_error_or_none(*, data_disk_used_gib: int, shrunk_gib: int) -> str | None:
+    """Why the gen-1 disk's contents cannot be transplanted into ``shrunk_gib``, or None when they fit.
+
+    The gen-2 disk also holds the container engines' roots (the base) and the
+    system reserve, so the home data must fit in what is left of the shrunk
+    disk after both.
+    """
+    home_capacity_gib = shrunk_gib - DATA_DISK_BASE_GIB - DATA_DISK_SYSTEM_RESERVE_GIB
+    if data_disk_used_gib <= home_capacity_gib:
+        return None
+    return (
+        f"data disk holds {data_disk_used_gib} GiB, more than the {home_capacity_gib} GiB a {shrunk_gib} GiB "
+        "gen-2 disk leaves for the home tree; migrate it at its own size"
+    )

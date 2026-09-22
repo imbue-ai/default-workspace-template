@@ -138,6 +138,11 @@ https://minds.imbue.com/download?platform=mac
 
 - `platform=mac` (or the precise `mac-arm64`): 302 to the macOS arm64
   `.dmg` the stable release channel serves, read from `stable-mac.yml`.
+- `platform=linux` (or the precise `linux-deb-x64`) and
+  `platform=linux-appimage-x64`: 302 to the x86_64 `.deb` or AppImage the
+  stable release channel serves, read from `stable-linux.yml`. Until stable
+  lists `linux`, these answer 404 and record no event, so keep the Linux
+  buttons off the site until the connector confirms stable serves it.
 - `platform=source`: 302 to https://github.com/imbue-ai/mngr, the escape
   hatch for platforms without builds.
 - Unknown or missing `platform`: 404. Coordinate new platform values with

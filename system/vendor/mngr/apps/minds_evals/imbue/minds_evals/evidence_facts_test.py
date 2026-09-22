@@ -443,7 +443,6 @@ def _timed_state(**overrides: Any) -> dict[str, Any]:
                 "agent_message_count": 1,
                 "message_count": 1,
                 "tokens": {"input": 10, "output": 20, "cache_read": 0, "cache_write": 0},
-                "cost_usd": 0.01,
             }
         ],
         "elapsed_seconds": 900.0,
@@ -490,6 +489,30 @@ def test_a_case_that_declares_no_timing_block_records_none_of_it(tmp_path: Path)
     facts = _flat_trial_facts(tmp_path, diagnostic_step())
 
     assert not [name for name in facts.values if name.startswith("timing.")]
+
+
+def test_a_turn_record_from_an_older_driver_still_times_the_goal(tmp_path: Path) -> None:
+    """A state file is written by whichever driver version produced the trial, and the record models
+    forbid extra keys, so a key a later driver stopped writing -- `cost_usd`, which a turn carried
+    until pricing moved to check time -- would otherwise make every record of that trial unparseable
+    and leave the whole conversation unread."""
+    retired = [{**turn, "cost_usd": 0.01} for turn in _timed_state()["turns"]]
+
+    facts = _flat_trial_facts(tmp_path, _timed_step(_timed_state(turns=retired)))
+
+    assert facts.values["timing.turn_index"] == 1
+    assert facts.values["timing.agrees_with_feed"] is True
+
+
+def test_a_turn_record_whose_own_field_is_unreadable_leaves_the_goal_untimed(tmp_path: Path) -> None:
+    """Only keys the model no longer declares are dropped. A declared field carrying something the
+    model refuses is a record this side cannot read, and reading it as a turn that simply took no
+    time would be worse than recording nothing."""
+    broken = [{**turn, "reply_seconds": "twelve"} for turn in _timed_state()["turns"]]
+
+    facts = _flat_trial_facts(tmp_path, _timed_step(_timed_state(turns=broken)))
+
+    assert facts.values["timing.turn_index"] is NOT_RECORDED
 
 
 def test_a_state_that_recorded_no_turns_cannot_time_the_goal(tmp_path: Path) -> None:

@@ -1,0 +1,1 @@
+Comment-only: the LiteLLM proxy entrypoint's note on the scaledown window now reflects that staging and production set `[scaledown_window].litellm_proxy = 600` in their `deploy.toml` (previously only dev tiers did), so burst-added proxy containers are not retired 60 s later with requests in flight (imbue-ai/mngr-internal#1158).

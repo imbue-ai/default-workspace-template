@@ -315,6 +315,7 @@ def resolve_deploy_strategy(
 # NeonProjectRecord``.
 CreateNeonProjectFn = Callable[[DevEnvName, str, SecretStr, ConcurrencyGroup], NeonProjectRecord]
 DeleteNeonProjectFn = Callable[[DevEnvName, str, SecretStr], None]
+NeonProjectExistsFn = Callable[[DevEnvName, str, SecretStr], bool]
 CreateSuperTokensAppFn = Callable[[DevEnvName, str, SecretStr], SuperTokensAppRecord]
 DeleteSuperTokensAppFn = Callable[[DevEnvName, str, SecretStr], None]
 ModalEnvOpFn = Callable[[DevEnvName, ConcurrencyGroup], None]
@@ -423,6 +424,7 @@ ReadPerEnvSecretValuesFn = Callable[[str, str, dict[str, str], bool, Concurrency
 # backing volume, targeting the one exact container by name. No-op when
 # there is no Docker daemon. Real impl lives in ``envs.docker_cleanup``.
 CleanupStateContainerFn = Callable[[DevEnvName, ConcurrencyGroup], None]
+TearDownPoolSlicesFn = Callable[[DevEnvName], None]
 # (storage_vault_values, prefix) -> deleted object count. Deletes every
 # workspace stop/start artifact under the env's key prefix in the tier's
 # storage bucket. Used by tier destroys; real impl lives in
@@ -450,6 +452,9 @@ class Providers(FrozenModel):
     )
     delete_neon_project: DeleteNeonProjectFn = Field(
         description="Delete the per-dev-env Neon project (atomic teardown of all its DBs / roles / endpoints).",
+    )
+    neon_project_exists: NeonProjectExistsFn = Field(
+        description="(name, org_id, api_token) -> whether the per-dev-env Neon project exists.",
     )
     create_supertokens_app: CreateSuperTokensAppFn = Field(description="Create the per-dev-env SuperTokens app.")
     delete_supertokens_app: DeleteSuperTokensAppFn = Field(description="Delete the per-dev-env SuperTokens app.")
@@ -571,6 +576,12 @@ class Providers(FrozenModel):
         description=(
             "(storage_vault_values, prefix) -> deleted object count. Deletes the env's "
             "workspace stop/start artifacts from the tier's storage bucket at destroy."
+        ),
+    )
+    tear_down_pool_slices: TearDownPoolSlicesFn = Field(
+        description=(
+            "(name,) -> destroy the env's unleased pool slice VMs on their bare-metal boxes and "
+            "drop their rows from the env's pool DB. Raises when a box cannot be reached."
         ),
     )
     cleanup_state_container: CleanupStateContainerFn = Field(
@@ -1621,6 +1632,9 @@ def destroy_env(
 
     Steps, in order, for every env type:
 
+    0. Tear down the env's unleased pool slice VMs, before step 3 deletes
+       the pool DB rows that record them. Skipped for a dev env whose Neon
+       project is already gone (a re-run after a partial destroy).
     1. ``mngr destroy`` every agent under ``~/.minds-<name>/mngr/agents/``
        so their cloud resources (Docker containers, pool hosts) stop
        cleanly before being torn down. Skipped when ``keep_agents=True``.
@@ -1665,6 +1679,18 @@ def destroy_env(
     lifecycle = deploy_config.lifecycle
     tier_vault_prefix = str(deploy_config.vault_path_prefix).rstrip("/")
     modal_env_for_tier_ops = _resolve_modal_env(name=name, lifecycle=lifecycle, deploy_config=deploy_config)
+
+    # Step 0: unleased pool slices, while the pool DB still records which VMs
+    # exist (leased ones go with their agents in step 1). A dev env whose Neon
+    # project is already gone -- a prior destroy got past step 3 and failed
+    # later -- has no slice rows left, so there is nothing to tear down.
+    if lifecycle.creates_resources and not providers.neon_project_exists(
+        name, credentials.neon_org_id, credentials.neon_api_token
+    ):
+        logger.info("Neon project for env {!r} is already gone; skipping pool slice teardown", str(name))
+    else:
+        with info_span("Tearing down unleased pool slices for env {!r}", str(name)):
+            providers.tear_down_pool_slices(name)
 
     # Step 1: mngr agents first, so their docker containers / pool
     # hosts stop cleanly before we tear down the cloud

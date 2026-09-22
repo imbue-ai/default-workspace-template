@@ -3,7 +3,7 @@
 
 Mngr reads ``MNGR_HOST_DIR``/``MNGR_PREFIX`` and the profile settings.toml at module import time (plugin manager construction, config discovery).
 Both the env-var translation and the settings reconciliation must therefore run before any ``imbue.mngr.*`` import, which is why they run as import-time side effects here -- ordered strictly *before* the cli import that transitively loads mngr.
-This mirrors ``imbue.minds.main`` (the same activation env vars select the same per-env mngr data root), and is why E402 (import-not-at-top) is disabled for this file.
+This follows ``imbue.minds.main`` (the same activation env vars select the same per-env mngr data root) except that it never seeds ``MINDS_ROOT_NAME`` to production: an unset var must stay unset so ``env deploy`` / ``env destroy`` can refuse to run against an unactivated shell. It is also why E402 (import-not-at-top) is disabled for this file.
 """
 
 import sys

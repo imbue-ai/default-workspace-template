@@ -112,8 +112,8 @@ _KINDS: Final[dict[str, BucketKind]] = {kind.name: kind for kind in (LIMA_IMAGES
 # account, and the same pair for either kind. Both publishers read before they
 # write, so a write-only token serves neither: `lima_image/publish.py` probes
 # each chunk to skip the ones already there, and `release_channel/publish.py`
-# reads `<channel>-mac.yml` out of the bucket to check the move is not
-# backwards.
+# reads each `<channel>-<platform>.yml` out of the bucket to check the move is
+# not backwards.
 _R2_BUCKET_ITEM_READ = "6a018a9f2fc74eb6b293b0c548f38b39"
 _R2_BUCKET_ITEM_WRITE = "2efd5506f9c8494dacb1fa10a3e7d5b6"
 
