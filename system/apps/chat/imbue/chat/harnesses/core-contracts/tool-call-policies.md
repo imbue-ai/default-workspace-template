@@ -111,28 +111,27 @@ before the next turn, at stop, or riding a tool result -- because harnesses diff
 those can reach the model at all. The invariant is only that an agent with open steps is told
 about them before it does more work.
 
-### P8. A chat agent is asked, every turn, to tell the user it is finished
-`agent_notify_user_stop_nudge.sh` -- **soft reminder.**
+### P8. A chat agent tells the user when it is finished
+**Prose-only** (`AGENTS.md` and the `notify-user` skill); no hook on any harness.
 
 The user may have walked away the moment they sent the message, and nothing about a finished
-turn reaches them on its own. At the end of every turn a chat agent is asked to send one
-(`.agents/skills/notify-user`), so the app's feed -- and its banner, when the user is looking
-elsewhere -- can bring them back to the chat.
+turn reaches them on its own. At the end of every turn in which it did work a chat agent sends
+one notification (`.agents/skills/notify-user`), so the app's feed -- and its banner, when the
+user is looking elsewhere -- can bring them back to the chat.
 
 **The judgement stays with the agent.** Whether a given turn is worth a notification is not
 decidable from outside: a step record is a decent proxy and still wrong on the turns that
-matter. So the reminder is unconditional and the *message* carries the way out -- output
-nothing at all and stop. That costs one short continuation on a turn that wants no
-notification, which is cheaper than being wrong about which turns those are. The agent must
-not narrate the decision: the user never saw the question.
+matter. The agent decides as it finishes, and never narrates the decision.
+
+**Why there is no hook.** A Stop hook reaches the model only by refusing the stop; claude then
+injects the hook's text as a user message and runs a further assistant turn, which the chat
+renders as a "Stop hook feedback" chip followed by a duplicated reply. An unconditional
+per-turn ask therefore doubled every chat turn in the minds-v0.7.0 staging rehearsal
+(2026-09-22) and was removed. pi and agy have no stop channel that reaches the model at all.
 
 **Chats only.** A worker's result reaches the user through the chat that launched it, and only
-chats appear in the feed, so it gates on `MNGR_AGENT_ROLE=chat`.
-
-**Ending the asking is the delivery channel's problem.** A Stop hook reaches the model only by
-refusing the stop, so the harness must also offer a way to recognise the continuation it
-caused; without one the reminder is an endless loop rather than a suggestion. A harness that
-cannot do both carries this rule in `AGENTS.md` alone.
+chats appear in the feed; `MNGR_AGENT_ROLE=chat` (set by the `chat` create template) is how a
+chat is told apart.
 
 ## The rule that keeps this honest
 
