@@ -142,14 +142,14 @@ def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     return "" if raw is None else str(raw)
 
 
-def _tk_output_text(output: str) -> str:
-    """Unwrap code-mode command results for decoration, keeping raw detail unchanged.
+def _unwrap_command_result_envelopes(output: str) -> str:
+    """Unwrap code-mode command results for the structured facts, keeping raw detail unchanged.
 
     ``text(result)`` prints a JSON envelope; ``text(result.output)`` prints plain stdout.
     Adjacent calls can concatenate envelopes on one line. Decode only complete command
     result envelopes, never arbitrary JSON embedded in prose or a command's stdout.
     """
-    if "-step-" not in output:
+    if '"chunk_id"' not in output:
         return output
     decoder = json.JSONDecoder()
     lines: list[str] = []
@@ -607,7 +607,8 @@ def parse_lines(
         # The structured facts lifted from the full output, which itself stays off the
         # event (the payload-free wire contract): the permission-request object the card
         # renders from, the tk stamp the step view reads, and the error snippet.
-        permission_request = find_permission_request(raw_output)
+        unwrapped_output = _unwrap_command_result_envelopes(raw_output)
+        permission_request = find_permission_request(unwrapped_output)
         # A failed code-mode script writes output starting with "Script failed".
         is_error = raw_output.startswith("Script failed")
         event: dict[str, Any] = {
@@ -626,7 +627,7 @@ def parse_lines(
         snippet = error_snippet(raw_output) if is_error else ""
         if snippet:
             event["error_snippet"] = snippet
-        stamped_tk = tk_stamp(_tk_output_text(raw_output))
+        stamped_tk = tk_stamp(unwrapped_output)
         if stamped_tk:
             event["tk_stamp"] = stamped_tk
         return [event]
