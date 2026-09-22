@@ -2791,12 +2791,14 @@ version = "0.1.0"
 source = { editable = "system/libs/pytest_executable_tmp" }
 dependencies = [
     { name = "imbue-common" },
+    { name = "pydantic" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
 ]
 
