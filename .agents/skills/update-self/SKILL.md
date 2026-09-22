@@ -398,7 +398,8 @@ stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
 **When the update touches a critical app (`system/apps/system_interface/`,
-`system/apps/chat/`, `system/apps/terminal/`), `system/libs/workspace_ui/`, or
+`system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
+`system/libs/workspace_ui/`, or
 `system/package.json` / `system/package-lock.json` at all** (the trees the
 critical bundles are built from, the same set the careful flow's freshness
 check names), also take the `editing critical app <name>` lease for each
