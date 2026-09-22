@@ -41,6 +41,12 @@ params = [
     {name = "message", label = "First message", required = false},
 ]
 
+# The Mind app's ask to show a chat (its chat notifications): the shell posts it here, and this app asks the
+# shell's ``show`` op for the window (desktop-interface contracts.md section 8).
+[[message_handlers]]
+type = "minds:focus-chat"
+path = "/api/focus-chat"
+
 # A chat preview is a secondary chat: it follows the live observer and reads the
 # live accounts, but writes nothing the live chat owns. It opens on the chat list
 # with the conversation the user is in selected ({key} is a chat id).
