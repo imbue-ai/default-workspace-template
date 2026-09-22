@@ -21,10 +21,9 @@ the tag stays the operator's job (see apps/minds/docs/deploy/ops/pool-hosts.md).
 
 This module is deliberately self-contained: it names, reads and writes its own
 object with the stable primitives of ``manifest.py`` rather than its channel
-read/upload helpers. CLEANUP: fold the web platform into the per-platform
-publishing machinery that mngr/linux-packaging (imbue-ai/mngr-internal#943)
-adds to ``manifest.py`` / ``publish.py`` once both that branch and this one
-are on main -- owed by whichever of the two merges second.
+read/upload helpers, written that way while the per-platform publishing in
+``manifest.py`` / ``publish.py`` lived on its own branch. CLEANUP: fold the
+web platform into that machinery now that both are on main.
 """
 
 import functools

@@ -46,6 +46,7 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds.errors import MindError
+from imbue.minds_admin.primitives import derive_user_id_prefix
 from imbue.mngr_imbue_cloud.r2_objects import R2ObjectDeletionError
 from imbue.mngr_imbue_cloud.r2_objects import derive_s3_secret_from_token_value
 from imbue.mngr_imbue_cloud.r2_objects import empty_bucket_via_s3
@@ -234,26 +235,16 @@ def collect_live_owner_prefixes(credentials: SuperTokensCoreCredentials) -> froz
     These are the accounts that still exist, so their buckets are never
     sweepable.
     """
-    return frozenset(bucket_owner_prefix_for_user(user.user_id) for user in list_core_users(credentials))
+    return frozenset(derive_user_id_prefix(user.user_id) for user in list_core_users(credentials))
 
 
 def collect_owner_emails_by_prefix(credentials: SuperTokensCoreCredentials) -> dict[str, str]:
     """The email of every account on the core, keyed by its 16-hex prefix (the key pool rows carry)."""
     return {
-        bucket_owner_prefix_for_user(user.user_id): user.email
+        derive_user_id_prefix(user.user_id): user.email
         for user in list_core_users(credentials)
         if user.email is not None
     }
-
-
-def bucket_owner_prefix_for_user(user_id: str) -> str:
-    """Derive a user's bucket-owner prefix exactly as the connector does.
-
-    The connector authenticates a SuperTokens JWT into a ``UserAuth`` whose
-    ``user_id_prefix`` is the hyphen-stripped first 16 characters of the user
-    id, and names buckets ``<user_id_prefix>--<slug>``.
-    """
-    return user_id.replace("-", "")[:16]
 
 
 def find_sweepable_buckets(

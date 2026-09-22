@@ -54,8 +54,12 @@ _PARK_POOL_HOST_SQL: Final[str] = (
 # Correct a gen-1 row's ``disk_gb`` from 039's unmeasured fallback to its
 # measured data disk plus the base (see ``restamped_gen1_disk_gb_or_none``); the
 # WHERE pins the fallback value so a concurrent change is never overwritten.
-_RESTAMP_UNMEASURED_GEN1_DISK_GB_SQL: Final[str] = (
+_RESTAMP_LEASED_GEN1_DISK_GB_SQL: Final[str] = (
     "UPDATE pool_hosts SET disk_gb = %s WHERE id = %s AND disk_gb = %s AND box_generation < 2 AND status = 'leased'"
+)
+
+_ROLLBACK_RESTORE_DISK_GB_SQL: Final[str] = (
+    "UPDATE pool_hosts SET disk_gb = %s WHERE id = %s AND disk_gb = %s AND box_generation < 2"
 )
 
 _FINISH_RESTORE_POOL_HOST_SQL: Final[str] = (
@@ -237,13 +241,22 @@ def park_pool_host(conn: Any, row_id: str) -> bool:
     return is_parked
 
 
-def restamp_unmeasured_gen1_disk_gb(conn: Any, row_id: str, *, unmeasured_disk_gb: int, disk_gb: int) -> bool:
-    """Replace a leased gen-1 row's unmeasured ``disk_gb`` stamp with ``disk_gb``; True when this call changed it."""
+def restamp_leased_gen1_disk_gb(conn: Any, row_id: str, *, expected_disk_gb: int, disk_gb: int) -> bool:
+    """Replace a leased gen-1 row's ``disk_gb`` (currently ``expected_disk_gb``) with ``disk_gb``; True when this call changed it."""
     with conn.cursor() as cur:
-        cur.execute(_RESTAMP_UNMEASURED_GEN1_DISK_GB_SQL, (disk_gb, row_id, unmeasured_disk_gb))
+        cur.execute(_RESTAMP_LEASED_GEN1_DISK_GB_SQL, (disk_gb, row_id, expected_disk_gb))
         is_restamped = cur.rowcount == 1
     conn.commit()
     return is_restamped
+
+
+def rollback_restore_disk_gb(conn: Any, row_id: str, *, expected_disk_gb: int, disk_gb: int) -> bool:
+    """Put a rolled-back gen-1 row's pre-shrink ``disk_gb`` back (from the shrunk ``expected_disk_gb``); True when changed."""
+    with conn.cursor() as cur:
+        cur.execute(_ROLLBACK_RESTORE_DISK_GB_SQL, (disk_gb, row_id, expected_disk_gb))
+        is_restored = cur.rowcount == 1
+    conn.commit()
+    return is_restored
 
 
 def rollback_park_pool_host(conn: Any, row_id: str, *, memory_units: int) -> bool:

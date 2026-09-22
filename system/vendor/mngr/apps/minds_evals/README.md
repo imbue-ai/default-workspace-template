@@ -559,7 +559,7 @@ structural gates, and the message-length guard read its ATIF steps, and the judg
 Nothing at grade time knows the workspace UI feed exists.
 
 Two transcripts of the workspace agent exist: the workspace UI feed (`/api/chats/<chat_id>/events`),
-which the driver polls to detect each reply and price its usage, and mngr's own **common
+which the driver polls to detect each reply and account for its tokens, and mngr's own **common
 transcript** (the ATIF-shaped `header`/`step`/`observation` stream at full fidelity, see
 `specs/atif-transcript-alignment/spec.md`). The trajectory comes from the latter whenever the
 workspace can provide it:
@@ -723,9 +723,9 @@ not until the box clones it inside every trial.
   conversation budget. On a flat case the two agree.
 - `turns` in `state.json` records each *answered* client message as
   `{index, entry_index, exchange, sent_at, replied_at, reply_seconds, agent_message_count,
-  message_count, tokens, cost_usd}`: when the message reached the workspace, when its reply was
+  message_count, tokens}`: when the message reached the workspace, when its reply was
   first seen complete, how long that took, how many agent messages the reply was made of, and what
-  the agent spent answering it (`message_count` being how many of that turn's messages carried
+  the agent consumed answering it (`message_count` being how many of that turn's messages carried
   usage at all). `conversation_seconds` spans the first message to the last answered reply, which
   is narrower than `elapsed_seconds` -- that one also holds workspace creation, sign-in and the
   welcome turn -- and is `0.0` until a turn has been answered. Between them they are what a "how
@@ -1429,7 +1429,7 @@ words in the driver log, in the manifest entry's detail, and on a `(no usable ac
 flow log that shows the page the decision was made on.
 
 The verification agent's spend is reported as `metadata.verifier_agent_usage`, beside
-`decider_usage` and never folded into the agent's own cost fields. It runs on the decider's model by
+`decider_usage` and never folded into the agent's own token fields. It runs on the decider's model by
 default; `--ak verifier_model=...` overrides it.
 
 **Trial time records completion, never achievement.** A flow whose declared actions the agent
@@ -1804,48 +1804,136 @@ its structural gates fail.
 
 ## Token and cost accounting
 
-A trial's cost is derived from the transcript the driver already collects (or from the in-box proxy's
-log when one metered the trial), so a trial that timed out still accounts for what it spent. `agent/usage.json` carries the workspace agent's and the decider's
-breakdowns, per model, over four non-overlapping token buckets (uncached input, output, cache read,
-cache write) that Anthropic prices differently. The verification agent's and the transcript's own
-figures are trial metadata only, not in that file.
+**A trial records tokens; a report prices them.** No account a trial writes carries money. The driver
+derives its account from the transcript it already collects (or from the in-box proxy's log when one
+metered the trial), so a trial that timed out still accounts for what it consumed, and
+`agent/usage.json` carries one block per spender -- `workspace_agent`, `decider` and
+`verifier_agent` -- in tokens and model ids. `check-run` turns those into dollars, from litellm's
+price map, at the moment it builds a report. Both halves of that split matter: a provider changing a
+price cannot rewrite trial data, and the same run checked again after a price change reports different
+money from the same tokens -- which is why `check-run`'s two summaries name the map that priced them
+(`priced by litellm 1.93.0 (remote price map)`). The [Slack report](#results) carries the same
+figures in the same spelling: the agent's half per trial in a grid cell, and both halves summed over
+the message's trials on its pair line.
+
+The workspace agent's block is a breakdown per model over four non-overlapping token buckets
+(uncached input, output, cache read, cache write) that Anthropic prices differently, with the portion
+served in fast mode carried as a *subset* of each; the two harness blocks are one model's call counts
+with its input and output tokens, since neither harness caller caches. Every block covers the whole
+trial: on a multi-step trial `verifier_agent` is summed over the steps that ran a verification phase,
+and it is `null` where no step ran one -- a different claim from a file written before the block
+existed. The transcript's own figures are trial metadata only, not in that file.
 
 **`per_turn` breaks the same file down by client message.** Each answered turn carries its token
-buckets and its cost beside the times it took (the same records `state.json` publishes as `turns`;
-see [Eval config](#eval-config)), so "what did the reply that presented a mock cost" is answerable
+buckets beside the times it took (the same records `state.json` publishes as `turns`; see
+[Eval config](#eval-config)), so "what did the reply that presented a mock consume" is answerable
 without re-deriving anything from the transcript. These are always the *transcript's* account,
 whatever sourced the totals above them: the proxy log records requests with no way back to the
 message that provoked them, so it cannot be split per turn. So a per-turn figure carries the
-transcript's caveats -- no delegated or worker spend, everything priced at the standard rate
-whatever tier served it, and `cost_usd: null` on a codex turn, whose stream reports no usage at all.
-The per-turn figures are a floor on the trial's spend rather than a partition of it, so they do not
-sum to the totals above: the welcome turn happens before the first record, a record is taken as soon
-as the agent reports WAITING so the workspace's turn-end flow can spend past it, and a proxy-metered
-trial's totals come from another source entirely.
+transcript's caveats -- no delegated or worker spend, and every bucket `0` on a codex turn, whose
+stream reports no usage at all. The per-turn figures are a floor on the trial's rather than a
+partition of it, so they do not sum to the totals above: the welcome turn happens before the first
+record, a record is taken as soon as the agent reports WAITING so the workspace's turn-end flow can
+spend past it, and a proxy-metered trial's totals come from another source entirely.
 
-**Whose spend is whose.** The workspace agent under test fills harbor's own fields:
-`n_input_tokens` (cache inclusive), `n_cache_tokens`, `n_output_tokens` and `cost_usd` on the
-trial's `agent_result`, plus the matching `final_metrics` on the ATIF trajectory -- both carry the
-same resolved usage, which is the proxy's figures whenever a proxy metered the trial. The harness's
-own models are reported separately and never folded into those fields -- the decider as
-`metadata.decider_usage`, the UI-flow verification agent as `metadata.verifier_agent_usage`.
 
-**Delegated work reaches transcript-sourced totals only when it was captured.** The events endpoint
+**Whose spend is whose.** The workspace agent under test fills harbor's own token fields:
+`n_input_tokens` (cache inclusive), `n_cache_tokens` and `n_output_tokens` on the trial's
+`agent_result`, plus the matching `final_metrics` on the ATIF trajectory -- both carry the same
+resolved usage, which is the proxy's figures whenever a proxy metered the trial. Harbor's `cost_usd`
+and ATIF's `total_cost_usd` are left unset, so the viewer shows no cost for a trial; `check-run` is
+where a figure exists. The harness's own models are reported separately and never folded into those
+fields -- the decider as `metadata.decider_usage`, the UI-flow verification agent as
+`metadata.verifier_agent_usage`, and both beside the workspace agent's own block in `usage.json`.
+
+### How a model is priced
+
+Prices come from litellm's `model_cost` map, the same table the LiteLLM proxy bills from. litellm
+loads it when it is imported: normally by fetching its own published map over the network, falling
+back to the copy bundled in its wheel when that fails. The two differ (1.93.0's bundled copy carries
+no `claude-opus-5` and no `openrouter/moonshotai/kimi-k2.6`), so the report records which answered --
+`remote` or `local` -- beside litellm's version. `check-run` reads the map once per report, so every
+figure in one report is priced at the one set of rates the report names.
+
+A reported model id is looked up under at most two keys, and never guessed at:
+
+| Reported id | Priced under |
+|---|---|
+| `claude-opus-4-8` (the claude harness) | `claude-opus-4-8` -- litellm keys claude models bare |
+| `anthropic/claude-opus-5` (a record that names Anthropic beside the model) | `claude-opus-5`, behind the stripped prefix |
+| `openai/gpt-5-mini` (pi, on an arm that asked for `openrouter/openai/gpt-5-mini`) | `openrouter/openai/gpt-5-mini`, the id the arm asked for |
+| anything else neither of those names | nothing: it is **unpriced** |
+
+pi tags a model with the provider whose key serves it and reports the tag minus its first segment, so
+what prices such an arm is the catalog id its [harness config](#harness-and-model-arms) asked for,
+read off `arm.harness_config.model` in the trial's state file -- the gateway's own rate, not the
+vendor's direct one. A row that tag does not account for stays unpriced: the OpenRouter lane's default
+greeting model (`moonshotai/kimi-k2.6`) is one, since nothing asked for it.
+
+**Unpriced** means the map holds no such key, or holds a placeholder row that prices neither an
+input nor an output token (`zai/glm-4.7-flash` is one, beside the priced
+`openrouter/z-ai/glm-4.7-flash`) -- reading one of those as free would report a real bill as nothing.
+A row that recorded fast-mode traffic on a model that cannot serve the tier is unpriced too, for the
+reason below. A spender with any unpriced model reports no figure at all rather than the part of it
+that could be priced, and the cell names the models responsible.
+
+Two more things decide a rate beyond the model id:
+
+- **The speed tier.** Fast mode bills the same tokens at twice the standard rate, across every bucket,
+  and only some models serve it (the two current Opus ids). The fast portion is priced at the fast
+  rate and the rest at the standard one, so a trial that ran half its output fast costs half as much
+  again. A fast-mode request on a model that cannot serve the tier is unpriced rather than silently
+  halved.
+- **The prompt-cache TTL.** Anthropic bills a cache write by how long it lives: 1.25x an input token
+  for five minutes, 2x for an hour. The claude harness (Claude Code) asks for the 1-hour cache, so a
+  trial it ran has its cache writes priced at litellm's `cache_creation_input_token_cost_above_1hr`;
+  every other harness is priced at the base rate. This is an **assumption about what the harness
+  requests**, read off `arm.harness_config.harness` -- no record a trial leaves carries the TTL of an
+  individual write.
+
+### What the reports do with it
+
+`check-run` reads `usage.json` per trial and reports every spender it finds, without gating on any of
+it: a cost is not a shortfall, and a run that went red for being expensive would be one nobody could
+interpret. The markdown summary splits the spend two ways -- the agent under test, which is what the
+eval measures, and the harness (the decider and the verification agent summed, which are one source:
+host-side calls priced the same way); the JSON summary leaves the halves to its reader and carries
+one entry per spender. The marks below qualify the figures the markdown summary prints in its cells;
+of them only the floor mark reaches its totals line, where a half nothing could price reads as the
+word `unknown` instead:
+
+| Mark | What it means |
+|---|---|
+| `-` | The trial recorded nothing for that spender -- an oracle trial, or one written before `usage.json` carried that block. Not a cost of zero. A trial that reached a workspace and ran no model still records the block, and reads `?`. |
+| `+` | The figure is a floor. On the agent's half: `is_cost_complete` is false (delegated calls the account does not hold) or `is_cost_rate_certain` is false (the speed tier was never observed, so fast-mode traffic is priced at the standard rate). On the harness's half: a decider fallback or a failed flow-agent call, which the provider may have billed for and which reports no tokens. |
+| `? unpriced: <models>` | No figure at all, because a model the spend ran on is unpriced. The models are named, so a reader knows which arm's figure is missing and why, rather than going looking for a broken trial. |
+| `?` | No figure either, and the record names nothing to blame for it: a trial that recorded no traffic to price, or a harness block carrying no token counts. Not a truncated cell. |
+
+A trial with any unpriced model is counted in a run's totals but contributes no figure to them, so a
+total is never a partial sum passed off as a complete one.
+
+The harness half is the harness spend this file records, not the whole of what a run costs: the
+rewardkit judges bill their own model calls in the verifier container and reach no block of
+`usage.json`, so they are in neither half. They belong in the harness's, and join it once they are
+recorded per spender like the other two.
+
+**Delegated work reaches transcript-sourced accounts only when it was captured.** The events endpoint
 serves main-session events only, so a subagent's turns never reach the transcript. Work handed to a
 launched worker agent does, once the evidence phase has captured that worker's stream: each captured
-worker is priced like the chat agent's own stream and summed into the transcript account
-(`worker_launch_count` launches found in the captured transcripts, the chat agent's and each captured
-worker's own, `worker_captured_count` of them brought out settled; a worker still running at capture
-time, or one whose state could not be established, is summed but not counted, so the account stays
-incomplete). A trial that delegated to a subagent, or launched a worker that could not be captured,
-is marked `is_cost_complete: false`. Treat a flagged trial's cost as a lower bound, and never compare
-it against an unflagged one.
+worker is summed into the transcript account (`worker_launch_count` launches found in the captured
+transcripts, the chat agent's and each captured worker's own, `worker_captured_count` of them brought
+out settled; a worker still running at capture time, or one whose state could not be established, is
+summed but not counted, so the account stays incomplete). A trial that delegated to a subagent, or
+launched a worker that could not be captured, is marked `is_cost_complete: false`. Treat a flagged
+trial's cost as a lower bound, and never compare it against an unflagged one.
 
 **`--ak proxy=true` closes that gap**, by routing the workspace through a LiteLLM proxy the driver
 runs inside the box, signed in with a per-trial key rather than the upstream credential. The
 workspace's claude agents share one credential, so every call crosses that boundary, delegated ones
 included: `agent/usage_proxy.jsonl` is the complete account and becomes the source for harbor's
-fields, with the transcript's own figures kept in `metadata.transcript_usage`.
+fields, with the transcript's own figures kept in `metadata.transcript_usage`. Each of its records
+also carries litellm's own `cost_usd` for that one request, priced inside the box and always at the
+standard rate; that is the proxy's observation of what it served, and nothing sums it.
 
 The log also records every request the proxy failed, as a record with `"outcome": "failed"`, the
 model, `status_code` (null when litellm reported none) and `error_class`, and zero in every token
@@ -1856,33 +1944,33 @@ stream that breaks after billing some tokens is recorded as a failure with zero 
 partial spend is not in the total.
 
 **The proxy meters the `anthropic` lane only.** Its address reaches the workspace through the
-`ANTHROPIC_BASE_URL` line of the claude sign-in and nowhere else, and its model list is
-Anthropic-only, so on any other [lane](#harness-and-model-arms) `--ak proxy=true` is refused at
-construction rather than starting a proxy nothing would call. Non-Anthropic trials are priced from
-the transcript, which is the path above: their `is_speed_observed` stays `false` and their
-`is_cost_complete` follows the transcript rules.
+`ANTHROPIC_BASE_URL` line of the claude sign-in and nowhere else, and it routes `claude-*` and nothing
+else, so on any other [lane](#harness-and-model-arms) `--ak proxy=true` is refused at construction
+rather than starting a proxy nothing would call. Non-Anthropic trials are priced from the transcript,
+which is the path above: their `is_speed_observed` stays `false` and their `is_cost_complete` follows
+the transcript rules.
 
 **A codex trial's cost is unknown, because there is nothing to price.** The workspace reports no
 token count for a codex turn: its chat app stamps `usage` on a claude message and leaves it null on
 a codex one, and this driver skips a message that reports no usage rather than counting it as zero.
-So the workspace agent's every token bucket in `usage.json` is `0` while its `cost_usd` is `null` --
-unknown, not free, which is the distinction that keeps a codex arm out of a cost comparison instead
-of dragging its average down. `is_cost_complete` is not the field that says so: it asks only whether
-delegated and worker traffic is accounted for, so it stays `true` on a codex trial. `cost_usd` being
-`null` is the whole signal, and a filter that reads `is_cost_complete` alone takes a codex trial for
-a complete measurement. Nothing in the trial is wrong, and the proxy that would meter the lane
+So the workspace agent's block in `usage.json` records no model at all -- an empty `per_model` and a
+`message_count` of `0`, with every token bucket `0` -- and `check-run` reports that as no figure
+rather than as `$0.00`: unknown, not free, which is the distinction that keeps a codex arm out of a
+cost comparison instead of dragging its average down. `is_cost_complete` is not the field that says
+so: it asks only whether delegated and worker traffic is accounted for, so it stays `true` on a codex
+trial. The reported figure is the whole signal, and a filter that reads `is_cost_complete` alone
+takes a codex trial for a complete measurement. Nothing in the trial is wrong, and the proxy that would meter the lane
 instead is refused there (see above). Read a codex trial for its conversation and its outcome
 scores, never for its spend. The decider's and the verification agent's own figures are unaffected:
 they call the Anthropic API directly and are metered by that client.
 
 **Fast mode changes the price, not the token counts.** Minds runs its claude chat agent in fast mode
-by default, and fast mode bills the same tokens at twice the standard rate. That default is what the
-default [harness config](#harness-and-model-arms) leaves in place; a config that names a model runs
-standard unless it asks for `fast`, and pi-coding runs standard whatever the config. Fast mode is chosen per
-request, so a model id alone does not determine a price, and only the proxy sees which tier served
-one:
+by default. That default is what the default [harness config](#harness-and-model-arms) leaves in
+place; a config that names a model runs standard unless it asks for `fast`, and pi-coding runs
+standard whatever the config. The tier is chosen per request, so a model id alone does not determine a
+price, and only the proxy sees which tier served one:
 
-| `is_speed_observed` | `fast_message_count` | What `cost_usd` means |
+| `is_speed_observed` | `fast_message_count` | What a figure derived from it means |
 |---|---|---|
 | `true` | `0` | Exact: every request ran standard and is priced standard. |
 | `true` | `> 0` | Exact: that many requests are priced at the fast-mode rate. |
@@ -1890,29 +1978,14 @@ one:
 
 The table describes the two whole-log cases. `is_speed_observed` is true only when *every* record
 carries the tier, so a proxy log that recorded it for some requests reads `false` with
-`fast_message_count > 0` -- those requests are still priced fast, and the total is a floor only for
-the rest. And "exact" assumes each request's model can serve the tier it asked for: a fast request
-against a model outside `FAST_MODE_MODELS` is reported unpriced (`cost_usd: null`) rather than
-silently halved.
+`fast_message_count > 0` -- those requests are still priced fast, and the figure is a floor only for
+the rest.
 
 `is_cost_rate_certain` reports that distinction as one boolean, on a separate axis from
-`is_cost_complete`: that one asks whether all the traffic is in the total, this one whether the
-traffic in it is priced at the rate it was billed at. **Fast mode is Opus-only**, and switching tier
-invalidates the prompt cache, so a per-model comparison left at the default tier is not comparing
-like with like.
-
-**Pricing caveats.** Prices come from `mngr_usage`'s table, which `proxy_config.build_model_list`
-also derives the in-box proxy's config from.
-
-- `litellm_pricing_test` pins the four flat per-token buckets against litellm's own price map. The
-  fast-mode multiplier is not in that map's shape: `mngr_usage`'s own `pricing_test` pins its 2x
-  effect across every bucket, but nothing pins it against litellm.
-- Every prompt-cache write is priced at the 5-minute rate, so a trial whose agent asks for the
-  1-hour cache understates that bucket by 37.5%.
-- The per-request `cost_usd` in `usage_proxy.jsonl` is always a standard-rate figure; only the
-  trial's totals are tier-aware.
-- An unpriced model, and a fast-mode request on a model that cannot serve fast mode, report
-  `cost_usd: null` rather than a misleading `0`.
+`is_cost_complete`: that one asks whether all the traffic is in the account, this one whether what is
+in it can be priced at the rate it was billed at. **Fast mode is Opus-only**, and switching tier
+invalidates the prompt cache, so a per-model comparison left at the default tier is not comparing like
+with like.
 
 ## Modal environments, and what a run leaves behind
 
@@ -1978,23 +2051,74 @@ passed. A trial passes when all four hold:
   it is what the driver writes whenever it cannot tell, and a config that named no model is never
   judged on this.
 
-**Judge scores are reported, never gated.** They are statistical and drift between runs; gating on
-them would make the scheduled job fail for reasons a code change cannot fix.
+**A [stepped case](#stepped-cases) is read from its steps.** Harbor moves `agent/` and `verifier/`
+into `steps/<name>/` after each step, so each artifact is read where that artifact means something.
+The driver's `state.json` and `usage.json` are cumulative, so the trial's completion and the tokens its
+whole spend is priced from come from the last step that wrote one -- or, for a trial that died mid-step
+before harbor archived anything, from the copy still at the trial root; the evidence manifest and `reward-details.json` are
+step-local, so **every** step's are read and a gate that failed -- or an entry left unmeasured -- on
+any step fails the trial. An errored entry id, a criterion score and a dimension score each carry the
+step they came from (`build/http_0_root_0`; `amend/quality: conciseness` in the summary's criteria
+cell, and a `step` column of its own in the Slack report's scoring reply; `build/quality`), and the
+`completed` cell says how many steps a pass covers (`pass (3 steps)`). A trial that ran fewer steps
+than its task declared is **not** complete even when its last step finished: harbor abandons the
+remaining steps when one misses its `min_reward` and records no exception for it, and since
+`result.json` lists only the steps that ran, `step_count` in the driver's state file -- the count
+the task declared -- is what tells that trial from one that ran them all.
+
+**Every scoring input is reported, and none of it is gated.** Beside the composed `reward` the
+summary carries what each dimension scored and what each criterion under it scored -- programmatic
+checks and judges alike, each criterion naming the kind that produced it (`programmatic`, `llm` or
+`agent`). Judge scores are statistical and drift between runs, so gating on them would make the
+scheduled job fail for reasons a code change cannot fix. Every value is
+rewardkit's normalized 0-1 score, the judges' included: the raw 1-10 likert stays in the trial's own
+`reward-details.json` and is recoverable from the normalization (`raw = 9 * normalized + 1`), and a
+report that mixed the two scales would put numbers on one scale beside numbers on another with
+nothing in a figure saying which.
 
 `--summary-md <path>` writes a GitHub step-summary table -- one row per trial with its case, arm,
-completion, gates, errored evidence, reward, judge scores, Modal environment, and the mngr and dwt
-SHAs. The `arm` cell holds the harness half of the arm, with the pair in the mngr and dwt columns
+completion, gates, errored evidence, reward, agent cost, harness cost, dimensions, criteria, time,
+Modal environment, and the mngr and dwt SHAs. The `arm` cell holds the harness half of the arm, with the pair in the mngr and dwt columns
 beside it: the wrong-model reason when there is one, `-` when the trial recorded no arm at all, and
 otherwise the lane, the requested model (the word `default` when it asked for none) and, when one
 was requested, `confirmed` or `unconfirmed` -- or `not observable` on a lane whose harness names no
 model on a transcript step, where nothing could ever confirm one: `anthropic haiku confirmed`,
 `api-key anthropic/claude-haiku-4-5 unconfirmed`, `openai gpt-5.6-sol not observable`,
-`anthropic default`. `--summary-json <path>` writes
+`anthropic default`.
+
+The two cost columns are priced here from the tokens each trial recorded, and marked as
+[Token and cost accounting](#token-and-cost-accounting) describes: `agent cost` is the workspace
+agent under test and `harness cost` is the decider and the verification agent summed. Above the
+table is one totals line for the run -- `agent spend $23.68+ over 2 trials, 1 unknown; harness spend
+$0.35 over 2 trials` -- naming what the sum covers, with the half omitted entirely where no trial
+recorded it and the word `unknown` in place of the figure where no trial in it could be priced. A
+second line beside it names the price map the figures came from (`priced by litellm 1.93.0 (remote
+price map)`), since the trials hold tokens and a figure says nothing about what priced it; both lines
+are left out of a run that recorded no spend at all. Under the table, only where a `+` or a `?`
+appears, one line says what those marks mean.
+
+The `dimensions` cell holds what each dimension scored (`gates 1.00, quality 0.80, reward 0.75`)
+and the `criteria` cell every criterion grouped under the dimension that scored it (`gates:
+not_timed_out 1.00; quality: conciseness 0.78`), both a dash where the trial was never graded.
+The `time` cell holds the three spans a trial times itself over -- `elapsed 612s / conversation 545s
+/ replies 320s` -- which are the whole trial including workspace creation, the first client message
+to the last reply, and the sum of the recorded turns' own reply times; a span the trial's records do
+not carry reads as `-`, and a trial that recorded none of them reads as `-` altogether. All three are
+cumulative over a stepped trial's steps, and the replies are a floor on the conversation: a turn
+earns a record only once its reply has arrived.
+
+`--summary-json <path>` writes
 the same rows as JSON with `is_passed`, `job_name`, `modal_environment_names` (exactly the list the
-cleanup below acts on), and the harness half as its own fields (`lane`, `requested_model`,
-`is_model_confirmed`, `wrong_model_reason`). An oracle run
-(`harbor run -a oracle`) is checkable the same way: it writes a `state.json` and a reward, and its
-fabricated evidence carries no `error` entries.
+cleanup below acts on), the harness half as its own fields (`lane`, `requested_model`,
+`is_model_confirmed`, `wrong_model_reason`), a `pricing` block naming the map the figures were
+computed from (`source`, `version`, `map_source`), a `spend` list per trial: one entry per
+spender, carrying `spender`, `cost_usd`, `is_complete`, `is_rate_certain` and `unpriced_models`, and
+per trial `step_count` and `completed_step_count` -- the steps the task declared and the steps harbor
+ran, both `0` on a flat trial -- a `criterion_scores` list (`step`, `dimension`, `criterion`, `kind`,
+`value`), a `dimension_scores` list (`step`, `dimension`, `value`) and the three durations
+(`elapsed_seconds`, `conversation_seconds`, `reply_seconds`, each `null` where the trial's records do
+not say). An oracle run (`harbor run -a oracle`) is checkable the same way: it writes a `state.json`
+and a reward, and its fabricated evidence carries no `error` entries.
 
 ### Checking a diagnostic run
 
@@ -2398,7 +2522,9 @@ files a trial writes.
   directory survived. It reads each trial's `state.json` on its own and skips, with a warning, a
   trial it cannot read -- deliberately more forgiving than `check-run`, which refuses a job it
   cannot parse: a trial truncated by the crash being cleaned up after must not take the other
-  trials' environments down with it.
+  trials' environments down with it. A stepped trial's state file is under
+  `steps/<name>/agent/state.json`, and it is resolved the same way `check-run` resolves it, so such a
+  trial's environment is deleted rather than quietly left up.
 - `--sweep-prefix <prefix> --older-than-hours N` is the backstop for a run whose job directory did
   not. It lists the workspace's environments through the Modal SDK, keeps names starting with the
   prefix whose embedded `ci-<YYYYMMDDtHHMMSSz>` stamp is older than the cutoff, and deletes those.
@@ -2568,8 +2694,8 @@ run.
   [self-diagnostic families](#checking-a-diagnostic-run) beside `evaluate`. They check the eval
   itself -- its readers, collectors and verifier -- rather than the product. They belong to the pair
   rather than to one of its eval configs, so they ride on the pair's first message. See below.
-- **`notify`** posts one Slack message per pair and eval config through `minds-evals ci-report`, and
-  writes the same reports to the run summary.
+- **`notify`** renders one Slack thread per pair and eval config with `minds-evals ci-report`, posts
+  them with `minds-evals post-slack-report`, and writes the same reports to the run summary.
 
 `minds-evals check-run` decides both passes: it passes only when every trial completed, no trial
 carries a harness `error` status, the structural gates hold, and no trial that asked for a model is
@@ -2635,7 +2761,7 @@ The job artifacts exclude `agent/snapshots/`, as a cell's do.
 `configs/diagnostics/live_invariants.json` declares them. Every live cell is read against that table
 in the same step as `check-run`, off the same job directory, and writes
 `live-invariants-<pair>-<config>.{md,json}` beside its own summary. The read **gates nothing**: its
-exit code is discarded, and a miss is named in the cell's details in the Slack report. The cell's
+exit code is discarded, and a miss is named in the Slack report's diagnostics reply. The cell's
 trials run one case against one table, so the line names each missed invariant once with the trials
 that missed it (`live invariants missed: prep.stage_reached (3 of 3 trials)`) rather than repeating
 a trial's whole list per trial; a cell that missed none has no line. That is what turns "the readers
@@ -2713,15 +2839,21 @@ never a harness config name, which is what keeps an oracle pass's artifacts from
 cells' of the same suite. The `-jobs-` artifacts hold the full job directories minus
 `agent/snapshots/` -- the workspace tarball is ~90 MB of a trial's ~92 MB.
 
-The `notify` job posts **one Slack message per pair and eval config**, rendered by
+The `notify` job posts **one Slack thread per pair and eval config**, rendered by
 `minds-evals ci-report` -- the pairs answer different questions ("is what we are about to ship
 healthy?" and "is what users are running healthy?"), the suites measure different things, and a
-reader acts on one of them at a time. A message opens with a header naming the pair, the config and
-their verdict (passed, failed, skipped, not evaluated, or broken: the worst of that suite's oracle
-pass and its cells), then a line carrying the pair's refs, SHAs and oracle verdict beside the run's
-duration and trigger. A pair the run skipped whole, or whose refs did not resolve, has no suite to
-report and gets a single message of its own. It posts under `:big_brain:` when every arm it reports
-came out green -- every cell passed, every cell was skipped as already green, or an
+reader acts on one of them at a time. The thread's message answers "is this arm healthy, and what
+did it cost?"; everything a reader only goes looking for once that answer is no is a reply under it.
+
+A message opens with a header naming the pair, the config and their verdict (passed, failed,
+skipped, not evaluated, or broken: the worst of that suite's oracle pass and its cells), then a line
+carrying the pair's refs, SHAs and oracle verdict, and under it the run's duration and trigger
+followed by what the message's own graded trials spent -- `agent spend $23.68+ over 2 trials, 1
+unknown; harness spend $0.35 over 2 trials`, in the wording and with the marks
+[the run's markdown summary](#what-the-reports-do-with-it) uses, and left out entirely where no
+trial in the message recorded spend. A pair the run skipped whole, or whose refs did not resolve,
+has no suite to report and gets a single thread of its own. It posts under `:big_brain:` when every
+arm it reports came out green -- every cell passed, every cell was skipped as already green, or an
 oracle-only run's oracle passed -- and under `:brainless:` for anything else, so the verdict reads
 off the channel list before the message is opened. The icon answers "are the arms good?", so a run
 whose arms all passed but whose job went red keeps `:big_brain:`; the warning in the message itself
@@ -2729,48 +2861,74 @@ is what says the job broke.
 
 Under that is the **grid**: one column per harness config, in matrix order, and one row per case. A
 grid cell places the trial's reward on the absolute 0..1 scale as a coloured square -- red under
-0.25, orange under 0.50, yellow under 0.75, green at or above it -- followed by the reward itself
+0.25, orange under 0.50, yellow under 0.75, green at or above it -- then the reward itself, then in
+italics what the trial's workspace agent spent and how long its conversation took (`$1.23 9m05s`),
 and, where the trial did not pass, a bold cross. The cross covers every way a trial can fail: it did
 not complete, a gate failed, evidence went unmeasured, or it answered on the wrong model. The colour
 therefore means one thing throughout and never competes with the verdict, and a legend under the
-grid states the bands and the cross, derived from the bands themselves so the words cannot drift
-from the cells. A suite of a running pair whose every cell is already green reads as
-`skipped (already green)` and keeps its columns: the run buys an oracle pass only where a cell gates
-on one, so there is no oracle verdict to report for it, and that is what most nights of a settled
-matrix look like. `:heavy_minus_sign:` is a pass that was never attempted, skipped because it is
-already green or gated off by a failed oracle, and `:grey_question:` a cell with no reward to
-place: a pass whose story cannot be told, with no summary at all because the job died before grading
-or one that could not be read, a case a graded column has no trial for, or a trial that was never
-graded. An oracle-only run has a single `oracle` column, and a pair that graded nothing -- skipped,
-unresolved, or broken throughout -- has no grid.
+grid states the bands, the cross and the two figures, derived from the bands themselves so the words
+cannot drift from the cells. The cost is the agent's half alone, since the harness's half is what
+running the eval costs whichever arm it ran; it reads `$12.50+` where the figure holds less than
+the trial spent, `$?` where a model it ran on carries no price, `<$0.01` for real money too small to
+show, and nothing at all where the trial recorded no spend. The time is the conversation rather than
+the whole trial, because workspace creation is the harness's own time and much the same on every
+arm. Every column is left-aligned: a cell is a run of elements of different widths, so right-aligning
+it would line the crosses up rather than the rewards.
+
+A suite of a running pair whose every cell is already green reads as `skipped (already green)` and
+keeps its columns: the run buys an oracle pass only where a cell gates on one, so there is no oracle
+verdict to report for it, and that is what most nights of a settled matrix look like.
+`:heavy_minus_sign:` is a pass that was never attempted, skipped because it is already green or
+gated off by a failed oracle, and `:grey_question:` a cell with no reward to place: a pass whose
+story cannot be told, with no summary at all because the job died before grading or one that could
+not be read, a case a graded column has no trial for, or a trial that was never graded. An
+oracle-only run has a single `oracle` column, and a pair that graded nothing -- skipped, unresolved,
+or broken throughout -- has no grid.
 
 Under the grid, **the trials that did not pass** are listed in a table of config, case and the
 reason `check-run` recorded. It is drawn only when something failed: a heading over an empty table
 reads as a measurement that went missing rather than as a night with nothing to report.
 
-Below that, one collapsed container, `judge scores`, holds every graded trial of the pair in a
-single table -- config, case, reward, a column per judge criterion, then what became of the trial --
-rather than a table per harness config, so a criterion can be compared straight down its own column.
-The criteria are the union across every arm: a criterion only one config was scored on still gets a
-column, and the arms that were not scored on it print `-` rather than a zero. A column is headed
-with the bare criterion name, and with `<dimension>: <criterion>` only where two dimensions scored
-criteria of the same name; which dimension scored which criteria is stated once in a legend above
-the table (`quality: conciseness`, `outcome: works_as_expected`), because the dimension is what says
-whether a score is about the product or about the harness that drove it.
-
-Slack refuses the whole message over 20 cells in a table row or 10,000 characters across the cells
-of all its tables, so the message keeps itself under both. Every cell is clamped to 120 characters
-first -- a case id and an incompletion reason are both unbounded -- then a pair scored on more than
-16 criteria keeps the first 16, and the judge table, the only part that grows with cases times
-configs times criteria, is cut to whole rows of whatever budget the grid and the failures table left
-it. Each cut says so out loud: in the legend above the table, or, where no row fit at all, in a line
-where the container would have gone.
-
 A **details** block follows with whatever belongs to no arm's own row: one line per skipped, broken
-or not-evaluated cell, one per failing trial of a pass with no grid column of its own (a failed
-oracle on a pair whose cells ran), and one per passing trial whose requested model nothing confirmed.
-It is budgeted at 2900 characters, under the 3000 a Slack section holds, and cut on a line boundary
-when it overruns. Links to the run's logs and artifacts close the message.
+or not-evaluated cell, one per diagnose job that left no summary or trial that measured nothing, the
+behaviour cells the pair cannot run, one per failing trial of a pass with no grid column of its own
+(a failed oracle on a pair whose cells ran), and one per passing trial whose requested model nothing
+confirmed. It is budgeted at 2900 characters, under the 3000 a Slack section holds, and cut on a
+line boundary when it overruns. Links to the run's logs and artifacts close the message.
+
+**The first reply carries every scoring input behind the grid**, as two tables: `outcome` and
+`quality` in the first, `harness_quality` and `gates` in the second, since a row holding every
+dimension's criteria is far past what a Slack table row takes and the split is where the reader's
+question changes from "how good is what it built?" to "did the harness do its job?". A row is one
+graded trial, or one step of a [stepped](#stepped-cases) one -- scored against that step's own
+expectations, so three steps are three rows, and the `step` column is drawn only where some row has
+one. Each row leads with its config and case, so a criterion can be compared straight down its own
+column across every arm the message reports. Each dimension is a bold super-column carrying that
+dimension's own score, followed by one column per criterion under it -- programmatic checks and
+judges alike, since the judges alone are not the scoring input. Every cell is rewardkit's normalized
+0-1 score (`0.78`), not a judge's 1-10 likert answer, which stays in the trial's
+`reward-details.json`; the line above each table says the scale. The criteria are the union across
+the rows: one a single case was scored on still gets a column, and the rows that were not print `-`
+rather than a zero they did not earn. A `gates` cell is a mark rather than a number -- `✓` where the
+gate held and the red `:x:` where it did not -- because a gate is a property a trial either has or
+has not, and marking only the failures keeps a table read for its numbers in black and white. A
+dimension nothing in the message scored is left out, and a table left with no dimensions is not
+drawn; a suite that graded nothing gets no scoring reply.
+
+**The second reply carries the diagnostics detail**, under a `diagnostics detail` heading and
+budgeted like the details block: every known failure with the issue or reason it gives, every
+compliance fact an agent did not follow, and the live invariants each cell's own trials missed. It
+is posted only where there is something to say.
+
+Slack refuses the whole message over 20 cells in a table row, 100 rows in a table, 10,000 characters
+across the cells of all its tables, or 120 characters in one cell. Every cell, headings included, is
+clamped to that 120 first -- a case id, a criterion name and an incompletion reason are all
+unbounded. The grid itself is drawn whole, since the matrix bounds it: a run of more than 19 harness
+configs or more than 99 cases has its blocks refused and is read as the plain text every message
+carries. What is cut is what the matrix does not bound -- the failures table takes whatever the grid
+leaves it, and in the scoring reply the criterion columns past what a row fits are dropped from the
+end, the rows past the ninety-ninth go, and whole rows come off the longer of the two tables until
+both fit the character budget. Each cut says so out loud in the line above the table it happened to.
 
 **Diagnostics** are reported for every pair the run decided them for, a pair whose every cell was
 skipped included, and not at all on a run that stopped after the oracle. The pair's opening line
@@ -2783,35 +2941,54 @@ one passed, with any unsupported cell in brackets after it. A **`failed`** diagn
 made it. Each failing fact is a row of the failed-trials table, with `diagnose fixture` or
 `diagnose behaviour <harness>` in the config column and `<fact> [<step>]: <recorded> vs expected
 <matcher>` as the note (prefixed `unexpectedly passing:` for a strict known failure whose defect was
-not recorded). The details block names a diagnose job that left no summary, then each not-measured
-trial's reason and each not-followed trial's missed compliance facts, the behaviour cells the pair
-cannot run at all, the **live invariants** each cell's own trials missed, and, last, every known
-failure with the issue or reason it gives. A diagnostic fails every fact of a broken reader, so the
-failures table keeps to Slack's 100-row cap and the table character budget, whole rows first-come,
-and says how many rows it dropped. A red diagnose job whose summary explains it -- a failed or a
-broken diagnostic -- does not raise the warning for a job that went red with every arm green.
+not recorded). A diagnostic fails every fact of a broken reader, so the failures table keeps to
+Slack's 100-row cap and the table character budget, whole rows first-come, and says how many rows it
+dropped. A red diagnose job whose summary explains it -- a failed or a broken diagnostic -- does not
+raise the warning for a job that went red with every arm green.
 
-Only the blocks an incoming webhook accepts are used, which is what `table` and `container` are
-doing the work of. A webhook refuses `data_table` outright -- a minimal one is answered with
-`400 invalid_blocks` -- so the sorting and paging a data table would bring are unavailable until the
-notify job posts as an app with a bot token rather than through a webhook, and `markdown` is refused
-as well.
+`minds-evals post-slack-report --payloads <file> --channel <C-id>` is what posts the threads
+`ci-report` wrote. It posts through `chat.postMessage` with the bot token in
+`SLACK_MINDS_EVALS_BOT_TOKEN`, which `notify` fetches from Vault at
+`mngr/ci/SLACK_MINDS_EVALS_BOT_TOKEN`: that call answers with the posted message's id, which is what
+a reply is threaded under. The app that token belongs to needs `chat:write`, `chat:write.customize`
+(every payload carries the name and avatar the report posts under) and membership of the channel it
+posts to. Without a token it falls back to the incoming webhook in
+`SLACK_MINDS_EVALS_WEBHOOK` (`mngr/ci/SLACK_MINDS_EVALS_WEBHOOK`), which answers with no message id
+and therefore **cannot thread**: such a run gets the top messages alone, and a warning naming the
+replies it skipped. With neither, the command warns and the run summary is the whole report. The
+channel is the workflow's own plain value (`C0BUFUVU0T0`) rather than a secret -- an id names a
+channel and grants nothing -- and a `U` id is refused outright: Slack delivers to a person through
+its system user and will not thread under what it delivered.
+
+The report never turns a run red. Every refusal Slack answers with is a `::warning::` line and the
+next thread is still posted, a message whose blocks Slack will not render is reposted as its own
+text, and the exit code is zero once posting has begun. A rate-limited message -- `chat.postMessage`
+allows about one a second per channel, and a thread's message and replies go out back to back -- is
+posted again after the `Retry-After` Slack named, one second where it named none and thirty at the
+most, up to three attempts before it is warned about like any other refusal. A message whose plain
+text runs past the 40,000 characters `chat.postMessage` takes -- which a wide suite's scoring fence
+does, since a fence pads every cell out to its column -- is cut on a line boundary as it goes out
+and ends in a line saying so, and the run summary, written from what `ci-report` rendered rather
+than from what was posted, carries the whole of it. Only the blocks an
+incoming webhook accepts are used, which is what `table` is doing the work of: a webhook refuses
+`data_table` outright -- a minimal one is answered with `400 invalid_blocks` -- and `markdown` with
+it, and `table` is also the only one of the two that takes a `rich_text` header cell, which the
+scoring reply's bold dimension super-columns need.
 
 The report covers the run as a whole, not only the trials: a run whose every cell passed but whose
 jobs went red or were cancelled -- a cleanup that could not delete the run's Modal environments, say
 -- is flagged rather than reported as a clean success, and a run that resolved nothing at all gets a
 single `broken` message naming the three job results instead of pairs.
 
-Every message also carries a plain-text rendering of itself, with the grid, the failures and the
-judge table each as a fixed-width fence. The grid's fence says `ok`, `FAIL`, `-` and `?` in place of
-the square, because Slack renders no emoji inside a fence, and the judge fence carries the same
-dimension legend on the line above it. `notify` writes that
-into the run summary and posts it on its own, with a warning, if Slack refuses the message's blocks.
-It reads the webhook from Vault at `mngr/ci/SLACK_MINDS_EVALS_WEBHOOK`; without it the job warns and
-the run summary is the whole report. Either way the run is never red because of its notification.
+Every message also carries a plain-text rendering of itself, with the grid, the failures and each
+scoring table as a fixed-width fence. The grid's fence says `ok`, `FAIL`, `-` and `?` in place of
+the square, because Slack renders no emoji inside a fence, and carries the same cost and time the
+blocks show. `notify` writes every thread into the run summary -- each message, and its replies
+indented under it -- and the poster posts a message's text on its own, with a warning, if Slack
+refuses its blocks. Either way the run is never red because of its notification.
 
 Every job fetches the credentials it needs and no others, from the same Vault role as the other CI
-jobs. `resolve` needs none and `notify` only the webhook above; `mngr/ci/ANTHROPIC_API_KEY` and the
+jobs. `resolve` needs none and `notify` only the two Slack credentials above; `mngr/ci/ANTHROPIC_API_KEY` and the
 `mngr/ci/MODAL_TOKEN_ID` / `mngr/ci/MODAL_TOKEN_SECRET` pair go to every job that runs a pass, the
 oracle and the cells: the judges spend the Anthropic key on every pass and the decider on every live
 one, and CI writes the Modal tokens into a throwaway `~/.modal.toml` because the driver parses one.

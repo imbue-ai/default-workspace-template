@@ -38,13 +38,22 @@ build_id = "260801n4rh5zv5d"
 version = "0.3.11"
 fallback_branch = "minds-v0.3.11"
 rollout_percentage = 30
+platforms = ["mac"]
 
 [channels.alpha]
-build_id = "260814ybsmu8m14"
-version = "0.3.12"
-fallback_branch = "minds-v0.3.12"
+build_id = "260911t1b5nk9mp"
+version = "0.5.2"
+fallback_branch = "minds-v0.5.2"
 rollout_percentage = 100
+platforms = ["mac", "linux"]
 ```
+
+`platforms` names which of ToDesktop's per-platform manifests the entry
+publishes, one `<channel>-<platform>.yml` each: electron-updater on Linux asks
+the feed for `<channel>-linux.yml`, on macOS for `<channel>-mac.yml`. It is
+required rather than defaulted because every build made before Linux packaging
+landed has a Linux manifest whose tools cannot run on Linux; listing `linux`
+for such a build refuses the whole entry.
 
 The file's `[web_channels.<channel>]` entries (`template_ref = "minds-vX.Y.Z"`)
 publish to the same bucket as `<channel>-web.json`: the template tag the

@@ -15,8 +15,9 @@ forwarding logic lives in the ``mngr_forward`` plugin now; this command:
 
 Agents reach the Minds API via the latchkey gateway's bundled
 ``minds-api-proxy`` extension rather than over a per-agent reverse SSH
-tunnel; the supervisor handles the reverse SSH tunnel used to expose
-the gateway itself into each agent's container.
+tunnel; the supervisor wires a gateway into each agent's container (the
+desktop gateway reverse-tunneled in, or the VPS-resident gateway
+provisioned where the container reaches it over its docker bridge).
 """
 
 import os
@@ -42,7 +43,9 @@ from imbue.minds.config.data_types import DEFAULT_DESKTOP_CLIENT_HOST
 from imbue.minds.config.data_types import DEFAULT_DESKTOP_CLIENT_PORT
 from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.config.data_types import MNGR_BINARY
+from imbue.minds.config.loader import EnvConfigError
 from imbue.minds.config.loader import load_client_config
+from imbue.minds.config.loader import resolve_client_config_path
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clones
 from imbue.minds.desktop_client.api_key_store import generate_api_key
@@ -183,11 +186,11 @@ MINDS_API_PROXY_KEY_ENV_VAR: Final[str] = "LATCHKEY_EXTENSION_MINDS_API_KEY"
     default=None,
     envvar="MINDS_CLIENT_CONFIG_PATH",
     help=(
-        "Path to the per-env client config TOML. Falls back to the "
-        "MINDS_CLIENT_CONFIG_PATH env var (set by `minds-admin env activate <name>`); "
-        "no implicit default beyond that. Refuses to start when neither is set "
-        '-- run `eval "$(minds-admin env activate <name>)"` first. Bundled Electron '
-        "builds pass this flag explicitly from MINDS_CLIENT_CONFIG_BUNDLE."
+        "Path to the per-env client config TOML. Falls back to the MINDS_CLIENT_CONFIG_PATH "
+        "env var, then to the in-repo production config when no other env is active "
+        "(MINDS_ROOT_NAME unset or `minds`). Refuses to start when MINDS_ROOT_NAME names "
+        "another env and neither is set. Bundled Electron builds pass this flag explicitly "
+        "from MINDS_CLIENT_CONFIG_BUNDLE."
     ),
 )
 @click.pass_context
@@ -199,12 +202,10 @@ def run(
     config_file: Path | None,
 ) -> None:
     """Run the minds bare-origin server with `mngr forward` as a subprocess."""
-    if config_file is None:
-        raise click.ClickException(
-            "No client config file is set. Activate an env first: "
-            '`eval "$(uv run minds-admin env activate <name>)"` (e.g. '
-            "`dev-<your-user>`, `staging`, or `production`), then re-run."
-        )
+    try:
+        client_config_path = resolve_client_config_path(config_file)
+    except EnvConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
     root_name = resolve_minds_root_name()
     data_directory = minds_data_dir_for(root_name)
     minds_config = MindsConfig(data_dir=data_directory)
@@ -220,11 +221,11 @@ def run(
     # read live, so a change takes effect without restarting. Manual bug reports are always sent (with
     # full diagnostics) regardless of ``report_unexpected_errors``.
     #
-    # The activated minds env (from `minds-admin env activate`) selects the Sentry DSN and, for
-    # production/staging, which S3 attachment bucket: production and staging each get their own, while
-    # every other env (dev-*, ci-*, or no activated env) reports to the dev project. We treat "not
-    # activated" as dev so an un-activated `minds run` never accidentally reports to the production
-    # project; development never uploads attachments regardless. The release id (desktop app version)
+    # The minds env selects the Sentry DSN and, for production/staging, which S3 attachment bucket:
+    # production and staging each get their own, while every other env (dev-*, ci-*) reports to the
+    # dev project; development never uploads attachments regardless. A bare `minds run` with nothing
+    # exported is production (main.py seeds MINDS_ROOT_NAME before the bootstrap), the same target
+    # the Electron launcher and a packaged build export explicitly. The release id (desktop app version)
     # and git sha come from the Electron launcher via env vars, falling back to the in-repo
     # package.json / "unknown" for bare source runs (see imbue.minds.build_info).
     # The anonymous user id (no PII) is persisted per install and attached to every event so Sentry
@@ -248,7 +249,6 @@ def run(
         discovery_events_dir=get_discovery_events_dir(MngrConfig(default_host_dir=mngr_host_dir)),
         mngr_cli_events_dir=get_default_cli_events_log_dir(mngr_host_dir),
     )
-    client_config_path = config_file
     client_env_config = load_client_config(client_config_path)
     connector_url_str = str(client_env_config.connector_url).rstrip("/")
     output_format: OutputFormat = ctx.obj.get("output_format", OutputFormat.HUMAN)
@@ -270,13 +270,7 @@ def run(
 
     auth_store = FileAuthStore(data_directory=paths.auth_dir)
     is_electron = os.getenv("MINDS_ELECTRON") == "1"
-    # The master notifications toggle is read live on every dispatch, so a
-    # Settings change silences (or re-enables) every producer without a
-    # restart -- agent-sent notifications and backup failures included.
-    notification_dispatcher = NotificationDispatcher.create(
-        is_electron=is_electron,
-        is_enabled_provider=minds_config.get_notifications_enabled,
-    )
+    notification_dispatcher = NotificationDispatcher(is_electron=is_electron)
     backend_resolver = MngrCliBackendResolver(
         last_good_agents_path=paths.data_dir / "last_good_agent_topology.json",
     )
@@ -687,7 +681,6 @@ def run(
         imbue_cloud_cli=imbue_cloud_cli,
         latchkey=latchkey,
         root_concurrency_group=root_concurrency_group,
-        notification_dispatcher=notification_dispatcher,
         mngr_forward_port=mngr_forward_port,
         mngr_forward_preauth_cookie=preauth_cookie,
         system_interface_health_tracker=system_interface_health_tracker,

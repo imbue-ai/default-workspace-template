@@ -19,7 +19,6 @@ from loguru import logger
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ProcessError
-from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
@@ -27,6 +26,7 @@ from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import DockerBuilder
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import LogLevel
+from imbue.mngr.primitives import OUTER_HOST_HOSTNAME_IN_CONTAINER
 from imbue.mngr.providers.ssh_host_setup import build_add_authorized_keys_command
 from imbue.mngr.providers.ssh_host_setup import build_add_known_hosts_command
 from imbue.mngr.providers.ssh_host_setup import build_check_and_install_packages_command
@@ -36,6 +36,7 @@ from imbue.mngr.providers.ssh_host_setup import build_start_sshd_command
 from imbue.mngr.providers.ssh_utils import clear_host_from_known_hosts
 from imbue.mngr.utils.git_utils import rsync_worktree_over_clone
 from imbue.mngr.utils.ssh import quote_ssh_option_value_for_shell
+from imbue.mngr.utils.thread_cleanup import mngr_executor
 from imbue.mngr_vps.data_types import ContainerFile
 from imbue.mngr_vps.errors import ContainerSetupError
 from imbue.mngr_vps.errors import VpsProvisioningError
@@ -50,6 +51,13 @@ LABEL_TAGS: Final[str] = f"{LABEL_PREFIX}tags"
 
 # Default image when no user customization
 DEFAULT_IMAGE: Final[str] = "debian:bookworm-slim"
+
+# The ``docker run`` mapping that makes the container resolve its outer host by
+# name. ``host-gateway`` is the docker daemon's placeholder for its bridge
+# address, so the mapping needs no address known ahead of time. mngr_latchkey
+# relies on the name to point a VPS-gateway agent at the gateway its outer host
+# runs.
+OUTER_HOST_ADD_HOST_ARGS: Final[tuple[str, str]] = ("--add-host", f"{OUTER_HOST_HOSTNAME_IN_CONTAINER}:host-gateway")
 
 # Path inside the agent container where the unified host volume is mounted.
 # The container sees three top-level entries under this mount: host_state.json,
@@ -516,7 +524,7 @@ def provision_snapshot_helper_on_outer(
         translate_outer_concurrency_errors("provision the snapshot helper on the host"),
         log_span("Provisioning snapshot helper on outer (host_id={})", host_id),
     ):
-        with ConcurrencyGroupExecutor(
+        with mngr_executor(
             parent_cg=cg,
             name="snapshot_helper_phase_a",
             max_workers=5,
@@ -549,7 +557,7 @@ def provision_snapshot_helper_on_outer(
         for future in phase_a_futures:
             future.result()
 
-        with ConcurrencyGroupExecutor(
+        with mngr_executor(
             parent_cg=cg,
             name="snapshot_helper_phase_b",
             max_workers=2,
@@ -855,8 +863,14 @@ def run_container(
     extra_args: Sequence[str],
     entrypoint_cmd: str,
 ) -> str:
-    """Run a detached docker container on outer. Returns the container id."""
-    args: list[str] = ["run", "-d", "--name", name]
+    """Run a detached docker container on outer. Returns the container id.
+
+    Every container is created with the ``--add-host`` mapping that makes
+    :data:`OUTER_HOST_HOSTNAME_IN_CONTAINER` resolve to the outer's docker
+    bridge address, so services the outer binds there (the VPS-resident latchkey
+    gateway) are reachable from inside by a constant name.
+    """
+    args: list[str] = ["run", "-d", "--name", name, *OUTER_HOST_ADD_HOST_ARGS]
     for host_bind, container_port in port_mappings.items():
         args.extend(["-p", f"{host_bind}:{container_port}"])
     for vol in volumes:

@@ -12,6 +12,7 @@ from scripts.release_channel.manifest import Manifest
 from scripts.release_channel.manifest import PromotionError
 from scripts.release_channel.manifest import assert_lima_image_published
 from scripts.release_channel.manifest import assert_plain_release_version
+from scripts.release_channel.manifest import channel_filename
 from scripts.release_channel.manifest import fetch_build_manifest
 from scripts.release_channel.manifest import is_a_version_decrease
 from scripts.release_channel.manifest import parse_manifest
@@ -68,11 +69,11 @@ def _raising(code: int):
 
 def _rolled_out_at(percentage: int) -> Manifest:
     """The real build's channel manifest, declaring `percentage`."""
-    return with_rollout_percentage(rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID), percentage)
+    return with_rollout_percentage(rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac"), percentage)
 
 
 def test_rewrite_makes_every_artifact_absolute_to_todesktop() -> None:
-    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
+    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac")
     urls = [line.split(": ", 1)[1] for line in render(manifest).splitlines() if ": http" in line]
     assert len(urls) == 5, "four files plus the legacy top-level path"
     assert all(url.startswith(f"https://download.todesktop.com/{APP_ID}/") for url in urls)
@@ -81,7 +82,7 @@ def test_rewrite_makes_every_artifact_absolute_to_todesktop() -> None:
 def test_rewrite_preserves_everything_but_the_artifact_references() -> None:
     """The whole point is that the promoted artifacts are the ones ToDesktop signed."""
     original = yaml.safe_load(REAL_TODESKTOP_MANIFEST)
-    published = yaml.safe_load(render(rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)))
+    published = yaml.safe_load(render(rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac")))
     assert published.keys() == original.keys(), "a key ToDesktop set was dropped"
     assert published["version"] == original["version"]
     assert published["releaseDate"] == original["releaseDate"]
@@ -92,14 +93,14 @@ def test_rewrite_preserves_everything_but_the_artifact_references() -> None:
 
 
 def test_rewrite_percent_encodes_spaces_so_the_url_resolves() -> None:
-    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
+    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac")
     assert "Minds%200.3.11%20-%20Build%20260801n4rh5zv5d-arm64-mac.zip" in render(manifest)
     assert "Minds 0.3.11 - Build" not in render(manifest)
 
 
 def test_rewrite_keeps_the_extension_electron_updater_selects_on() -> None:
     """MacUpdater picks the zip by URL pathname extension, so it must survive."""
-    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
+    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac")
     zips = [line for line in render(manifest).splitlines() if line.strip().endswith("-mac.zip")]
     assert len(zips) == 3, "two per-arch zips plus the top-level path"
 
@@ -112,17 +113,17 @@ def test_rewrite_refuses_a_url_that_lost_its_extension() -> None:
     """
     manifest = "version: 0.4.0\nfiles:\n  - url: https://dl.todesktop.com/app/builds/b1/mac/zip/arm64\n"
     with pytest.raises(PromotionError, match="URL extension"):
-        rewrite_manifest(manifest, APP_ID)
+        rewrite_manifest(manifest, APP_ID, "mac")
 
 
 def test_rewrite_leaves_already_absolute_urls_alone() -> None:
     manifest = "version: 0.4.0\nfiles:\n  - url: https://cdn.example/Minds-arm64-mac.zip\n"
-    assert "https://cdn.example/Minds-arm64-mac.zip" in render(rewrite_manifest(manifest, APP_ID))
+    assert "https://cdn.example/Minds-arm64-mac.zip" in render(rewrite_manifest(manifest, APP_ID, "mac"))
 
 
 def test_rewrite_rejects_a_manifest_with_no_artifacts() -> None:
     with pytest.raises(PromotionError, match="no artifacts"):
-        rewrite_manifest("version: 0.4.0\nfiles:\n", APP_ID)
+        rewrite_manifest("version: 0.4.0\nfiles:\n", APP_ID, "mac")
 
 
 def test_parsing_reads_the_version_from_the_real_manifest() -> None:
@@ -131,10 +132,10 @@ def test_parsing_reads_the_version_from_the_real_manifest() -> None:
 
 def test_a_manifest_with_no_version_names_which_manifest_it_was() -> None:
     """Otherwise "pick another build" and "our bucket holds junk" read identically."""
-    with pytest.raises(PromotionError, match="ToDesktop's build manifest has no"):
-        rewrite_manifest("files:\n  - url: Minds-arm64-mac.zip\n", APP_ID)
+    with pytest.raises(PromotionError, match="ToDesktop's mac build manifest has no"):
+        rewrite_manifest("files:\n  - url: Minds-arm64-mac.zip\n", APP_ID, "mac")
     with pytest.raises(PromotionError, match="https://releases.test/alpha-mac.yml has no"):
-        read_channel_manifest_from_feed("https://releases.test", "alpha", fetch=_serving(b"files:\n"))
+        read_channel_manifest_from_feed("https://releases.test", "alpha", "mac", fetch=_serving(b"files:\n"))
 
 
 def test_a_document_that_is_not_a_manifest_at_all_names_which_one_it_was() -> None:
@@ -144,28 +145,28 @@ def test_a_document_that_is_not_a_manifest_at_all_names_which_one_it_was() -> No
     a truncated object fails the loader outright -- so neither can be read past
     into a `manifest["version"]`.
     """
-    with pytest.raises(PromotionError, match="ToDesktop's build manifest is not valid YAML"):
-        rewrite_manifest("version: [0.4.0\n", APP_ID)
+    with pytest.raises(PromotionError, match="ToDesktop's mac build manifest is not valid YAML"):
+        rewrite_manifest("version: [0.4.0\n", APP_ID, "mac")
     with pytest.raises(PromotionError, match="https://releases.test/alpha-mac.yml is not a YAML mapping"):
         read_channel_manifest_from_feed(
-            "https://releases.test", "alpha", fetch=_serving(b"<html>404 Not Found</html>\n")
+            "https://releases.test", "alpha", "mac", fetch=_serving(b"<html>404 Not Found</html>\n")
         )
 
 
 def test_fetch_build_manifest_names_the_build_when_it_is_missing() -> None:
-    with pytest.raises(PromotionError, match="No ToDesktop manifest for build nope"):
-        fetch_build_manifest(APP_ID, "nope", fetch=_raising(404))
+    with pytest.raises(PromotionError, match="No ToDesktop mac manifest for build nope"):
+        fetch_build_manifest(APP_ID, "nope", "mac", fetch=_raising(404))
 
 
 def test_a_channel_that_was_never_published_reads_as_none() -> None:
-    assert read_channel_manifest_from_feed("https://releases.test", "alpha", fetch=_raising(404)) is None
+    assert read_channel_manifest_from_feed("https://releases.test", "alpha", "mac", fetch=_raising(404)) is None
 
 
 def test_reading_a_channel_yields_the_whole_manifest_not_just_its_version() -> None:
     """Two builds share a version between cuts, so only the whole document tells them apart."""
-    served = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
+    served = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac")
     current = read_channel_manifest_from_feed(
-        "https://releases.test", "alpha", fetch=_serving(render(served).encode())
+        "https://releases.test", "alpha", "mac", fetch=_serving(render(served).encode())
     )
     assert current == served
 
@@ -173,7 +174,7 @@ def test_reading_a_channel_yields_the_whole_manifest_not_just_its_version() -> N
 def test_reading_a_channel_propagates_errors_that_are_not_absence() -> None:
     """A 503 must not be mistaken for "never published" and silently overwritten."""
     with pytest.raises(PromotionError, match="returned 503"):
-        read_channel_manifest_from_feed("https://releases.test", "alpha", fetch=_raising(503))
+        read_channel_manifest_from_feed("https://releases.test", "alpha", "mac", fetch=_raising(503))
 
 
 def test_moving_forward_or_standing_still_is_not_a_decrease() -> None:
@@ -215,12 +216,12 @@ def test_an_unreachable_lima_image_store_blocks_the_promotion() -> None:
 def test_an_unreachable_feed_is_not_mistaken_for_an_unpublished_channel() -> None:
     """Otherwise a network blip would read as "nothing there" and overwrite unguarded."""
     with pytest.raises(PromotionError, match="Cannot reach"):
-        read_channel_manifest_from_feed("https://nope.invalid", "alpha", fetch=_unreachable)
+        read_channel_manifest_from_feed("https://nope.invalid", "alpha", "mac", fetch=_unreachable)
 
 
 def test_an_unreachable_todesktop_blocks_the_promotion() -> None:
     with pytest.raises(PromotionError, match="Cannot reach"):
-        fetch_build_manifest(APP_ID, "b1", fetch=_unreachable)
+        fetch_build_manifest(APP_ID, "b1", "mac", fetch=_unreachable)
 
 
 def test_a_missing_lima_image_blocks_the_promotion() -> None:
@@ -261,7 +262,7 @@ def test_the_published_object_is_the_one_clients_fetch(stub_s3_client: Any) -> N
     still reports success. The TTL is the promotion latency, so it is pinned to
     what the caller asked for rather than to the default.
     """
-    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
+    manifest = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac")
     client = stub_s3_client
     with Stubber(client) as stubber:
         stubber.add_response(
@@ -279,6 +280,7 @@ def test_the_published_object_is_the_one_clients_fetch(stub_s3_client: Any) -> N
             manifest,
             bucket="minds-update-feed-production",
             channel="alpha",
+            platform="mac",
             cache_seconds=30,
             make_client=lambda: client,
         )
@@ -313,7 +315,7 @@ def test_the_current_manifest_can_be_read_from_the_bucket_rather_than_the_cdn(st
             expected_params={"Bucket": "minds-update-feed-production", "Key": "alpha-mac.yml"},
         )
         current = read_channel_manifest_from_bucket(
-            "minds-update-feed-production", "alpha", make_client=lambda: client
+            "minds-update-feed-production", "alpha", "mac", make_client=lambda: client
         )
         stubber.assert_no_pending_responses()
     assert current is not None
@@ -325,7 +327,7 @@ def test_a_channel_with_no_object_yet_reads_as_never_published(stub_s3_client: A
     client = stub_s3_client
     with Stubber(client) as stubber:
         stubber.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
-        assert read_channel_manifest_from_bucket("bucket", "beta", make_client=lambda: client) is None
+        assert read_channel_manifest_from_bucket("bucket", "beta", "mac", make_client=lambda: client) is None
 
 
 def test_a_bucket_read_that_is_not_a_missing_object_refuses_the_promotion(stub_s3_client: Any) -> None:
@@ -339,7 +341,7 @@ def test_a_bucket_read_that_is_not_a_missing_object_refuses_the_promotion(stub_s
     with Stubber(client) as stubber:
         stubber.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
         with pytest.raises(PromotionError, match="Cannot read the current alpha version"):
-            read_channel_manifest_from_bucket("bucket", "alpha", make_client=lambda: client)
+            read_channel_manifest_from_bucket("bucket", "alpha", "mac", make_client=lambda: client)
 
 
 def test_the_rollout_is_declared_where_electron_updater_reads_it() -> None:
@@ -350,7 +352,7 @@ def test_the_rollout_is_declared_where_electron_updater_reads_it() -> None:
 
 def test_declaring_a_rollout_leaves_the_artifacts_untouched() -> None:
     """The bytes a channel serves stay the ones ToDesktop signed."""
-    rewritten = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID)
+    rewritten = rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "mac")
     published = with_rollout_percentage(rewritten, 30)
     assert yaml.safe_load(render(published))["files"] == yaml.safe_load(render(rewritten))["files"]
     assert version_of(published) == version_of(rewritten)
@@ -365,7 +367,7 @@ def test_a_rollout_arriving_from_upstream_is_replaced_rather_than_joined(declare
     into a failed check for every install on the channel -- so a stray key in
     ToDesktop's manifest would take the channel down rather than be ignored.
     """
-    published = with_rollout_percentage(rewrite_manifest(f"{declared}\n" + REAL_TODESKTOP_MANIFEST, APP_ID), 10)
+    published = with_rollout_percentage(rewrite_manifest(f"{declared}\n" + REAL_TODESKTOP_MANIFEST, APP_ID, "mac"), 10)
     assert render(published).count("stagingPercentage") == 1
     assert yaml.safe_load(render(published))["stagingPercentage"] == 10
 
@@ -429,3 +431,64 @@ def test_a_published_manifest_with_an_out_of_range_rollout_is_refused_as_such(de
     """
     with pytest.raises(PromotionError, match="input should be (less|greater) than or equal to"):
         read_rollout_percentage(parse_manifest(f"version: 0.3.11\nstagingPercentage: {declared}\n", "x"), "x")
+
+
+# Captured verbatim from
+# https://download.todesktop.com/26032588hqdzk/latest-linux-build-260911t1b5nk9mp.yml
+# on 2026-09-11, the first build made with both Linux targets enabled: the
+# AppImage carries an embedded blockmap, the .deb does not.
+REAL_TODESKTOP_LINUX_MANIFEST = """version: 0.5.2
+files:
+  - url: minds-0.5.2-build-260911t1b5nk9mp-x86_64.AppImage
+    sha512: usjQXlCoUnc2sd4oosQeT0UrFXLZwODdiDnRev5oxwCMQxrVnIstrheEUXQkLzoVXoMeB4CSaInl0NUNuAbQzg==
+    size: 300071679
+    blockMapSize: 314131
+  - url: minds-0.5.2-build-260911t1b5nk9mp-amd64.deb
+    sha512: kkZVMxL8WR/WhKT76HwpchqIekrhJp+TTs58cNvHglbjEehVyk1Vp+8ZGI4rYYwzRCgbaquV5ya0cfPo6wB3Dg==
+    size: 187091042
+path: minds-0.5.2-build-260911t1b5nk9mp-x86_64.AppImage
+sha512: usjQXlCoUnc2sd4oosQeT0UrFXLZwODdiDnRev5oxwCMQxrVnIstrheEUXQkLzoVXoMeB4CSaInl0NUNuAbQzg==
+releaseDate: '2026-09-11T17:48:04.770Z'
+"""
+
+
+def test_the_linux_rewrite_keeps_the_extensions_both_linux_updaters_select_on() -> None:
+    """AppImageUpdater picks by `.AppImage`, DebUpdater by `.deb`; both must survive."""
+    manifest = rewrite_manifest(REAL_TODESKTOP_LINUX_MANIFEST, APP_ID, "linux")
+    urls = [line.split(": ", 1)[1] for line in render(manifest).splitlines() if ": http" in line]
+    assert len(urls) == 3, "two files plus the legacy top-level path"
+    assert all(url.startswith(f"https://download.todesktop.com/{APP_ID}/") for url in urls)
+    assert any(url.endswith(".AppImage") for url in urls)
+    assert any(url.endswith(".deb") for url in urls)
+    assert manifest["files"][0]["blockMapSize"] == 314131
+
+
+def test_a_platform_refuses_the_other_platforms_artifacts() -> None:
+    """A mac manifest published as linux would serve zips no Linux updater selects."""
+    with pytest.raises(PromotionError, match=r"must end in one of \('.appimage', '.deb'\)"):
+        rewrite_manifest(REAL_TODESKTOP_MANIFEST, APP_ID, "linux")
+    with pytest.raises(PromotionError, match=r"must end in one of \('.zip', '.dmg'\)"):
+        rewrite_manifest(REAL_TODESKTOP_LINUX_MANIFEST, APP_ID, "mac")
+
+
+def test_each_platform_has_its_own_channel_file_and_build_manifest() -> None:
+    """electron-updater asks a generic feed for `<channel>-linux.yml` on Linux, `-mac.yml` on macOS."""
+    assert channel_filename("alpha", "mac") == "alpha-mac.yml"
+    assert channel_filename("alpha", "linux") == "alpha-linux.yml"
+    with pytest.raises(PromotionError, match="Unknown platform 'windows'"):
+        channel_filename("alpha", "windows")
+
+    seen: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        seen.append(url)
+        return REAL_TODESKTOP_LINUX_MANIFEST.encode()
+
+    fetch_build_manifest(APP_ID, "b1", "linux", fetch=fetch)
+    assert seen == [f"https://download.todesktop.com/{APP_ID}/latest-linux-build-b1.yml"]
+
+
+def test_a_missing_linux_manifest_names_the_platform() -> None:
+    """A build ToDesktop never packaged for Linux has no Linux manifest; the refusal must say which."""
+    with pytest.raises(PromotionError, match="No ToDesktop linux manifest for build b1"):
+        fetch_build_manifest(APP_ID, "b1", "linux", fetch=_raising(404))

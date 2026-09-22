@@ -66,7 +66,8 @@ export const DesktopsWidget: m.Component<DesktopsWidgetAttrs> = {
           variant: "ghost",
           icon: true,
           sm: true,
-          extra: "desktops-menu min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
+          extra: "min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
+          // The hook everything addresses the button by; `.desktops-menu` names the menu it opens.
           "data-desktops-menu": "",
           "aria-label": "Desktop options",
           "aria-haspopup": "menu",

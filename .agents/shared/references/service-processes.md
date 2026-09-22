@@ -85,6 +85,13 @@ to a provider account on its `mngr create`, and a create that names no account
 gets the workspace's default one from `.mngr/settings.local.toml`, which the
 chat app maintains; `~/.claude` holds no credential.)
 
+One built-in program has no app directory and no manifest: `agent-observer`
+runs `mngr observe --quiet` from the primary agent's work dir and writes the
+agent lifecycle event file under `MNGR_HOST_DIR` that every chat instance
+follows. There is exactly one per workspace (it holds mngr's single-writer
+lock); a chat never starts its own, and `supervisorctl restart agent-observer`
+is how to bounce it.
+
 ## OOM priority (memory-pressure shedding)
 
 A background `earlyoom` daemon sheds processes when the container runs low on

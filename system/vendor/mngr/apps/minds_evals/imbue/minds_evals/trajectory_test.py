@@ -6,6 +6,7 @@ from imbue.minds_evals.data_types import ArmRecord
 from imbue.minds_evals.data_types import DeciderTurn
 from imbue.minds_evals.data_types import HarnessConfigRecord
 from imbue.minds_evals.data_types import StepBoundary
+from imbue.minds_evals.data_types import TokenSnapshot
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import UsageSource
@@ -35,7 +36,6 @@ from imbue.minds_evals.trajectory import parse_worker_document
 from imbue.minds_evals.trajectory import scan_skill_invocations
 from imbue.minds_evals.trajectory import scan_worker_launches
 from imbue.minds_evals.usage import TrialUsage
-from imbue.mngr_usage.data_types import TokenSnapshot
 
 
 def _provenance() -> TrajectoryProvenance:
@@ -80,9 +80,7 @@ def _usage(message_count: int) -> TrialUsage:
     return TrialUsage(
         per_model=(),
         tokens=TokenSnapshot(input=10, output=5, cache_read=100, cache_creation=20),
-        cost_usd=0.25,
         message_count=message_count,
-        unpriced_models=(),
         delegated_call_count=0,
         worker_launch_count=0,
     )
@@ -133,12 +131,13 @@ def test_workspace_trajectory_carries_the_resolved_usage_and_leaves_the_rest_alo
     ).to_json_dict()
 
     # The trial's resolved account replaces the document's own per-step sums, cache-inclusive as ATIF
-    # defines prompt tokens, while the step count stays the document's.
+    # defines prompt tokens, while the step count stays the document's. ATIF's cost field is left out
+    # of the document altogether: a trial records tokens and prices nothing, so a figure here would be
+    # one frozen into the record.
     assert built["final_metrics"] == {
         "total_prompt_tokens": 130,
         "total_completion_tokens": 5,
         "total_cached_tokens": 100,
-        "total_cost_usd": 0.25,
         "total_steps": 2,
     }
     assert built["extra"] == {"workspace_note": "kept", "minds_evals": {"source": "workspace", **_EXPECTED_EXTRA}}

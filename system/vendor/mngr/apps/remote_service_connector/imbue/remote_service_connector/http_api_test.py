@@ -7,6 +7,7 @@ from imbue.remote_service_connector.errors import ConnectorError
 from imbue.remote_service_connector.errors import R2BucketNotFoundError
 from imbue.remote_service_connector.errors import R2EnforcementLeaseLostError
 from imbue.remote_service_connector.errors import R2EnforcementLeaseUnavailableError
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 from imbue.remote_service_connector.http_api import INTERNAL_ERROR_MESSAGE
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.http_api import handle_unexpected_exception
@@ -120,3 +121,12 @@ def test_enforcement_lease_lost_maps_to_retryable_503() -> None:
         raise_as_http(R2EnforcementLeaseLostError("user-1"))
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail["code"] == "enforcement_interrupted"
+
+
+def test_supertokens_core_unavailable_maps_to_retryable_503() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        raise_as_http(SuperTokensCoreUnavailableError(path="/recipe/session/verify", status_code=502))
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "auth_upstream_unavailable"
+    assert "502" in exc_info.value.detail["message"]
+    assert "/recipe/session/verify" in exc_info.value.detail["message"]

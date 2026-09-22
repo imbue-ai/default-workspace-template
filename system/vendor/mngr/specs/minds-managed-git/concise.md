@@ -16,7 +16,7 @@
   - Zero prerequisites for end users; no Xcode CLT dependency at build or run time.
   - The bundled git is visible only to the app's backend subprocess tree (the existing `PATH` prepend in `apps/minds/electron/backend.js`); it never shadows the user's own git or rewrites their config.
   - Acquisition fails loudly on hash mismatch or unknown target; there is no silent fallback to a machine-provided git.
-  - Acquisition is data-driven (a JSON manifest) plus one download function, decoupled from ToDesktop specifics, so future build-process changes (`ELECTRON_BUNDLING_AUDIT.md` remediation) consume the same manifest without rework. The FCT container build work (`specs/faster-minds-build/concise.md`) is unaffected: agent-side git remains the container image's concern.
+  - Acquisition is data-driven (a JSON manifest) plus one download function, decoupled from ToDesktop specifics, so future build-process changes consume the same manifest without rework. The FCT container build work (`specs/faster-minds-build/concise.md`) is unaffected: agent-side git remains the container image's concern.
 - Empirical facts this design relies on (verified 2026-07-06 by downloading and running `v2.53.0-3` payloads):
   - Published `.sha256` values match independently recomputed hashes for darwin-arm64 and linux-x64.
   - macOS binaries link only system libraries (`/usr/lib/libz`, `libiconv`, `libcurl`, `libexpat`, system frameworks) -- fully relocatable, no Homebrew/CLT dependencies. Linux binaries are dynamically linked against glibc (fine for mainstream desktop distros; musl is out of scope).

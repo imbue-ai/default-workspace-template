@@ -95,10 +95,11 @@ or a provisional milestone merge:
    them.
    A creation with no manifest is diffed at its own path: a standalone service
    under `system/services/<package>/` (plus `system/supervisord.conf.d/<name>.conf`), a shared
-   script or reference at its path, the system interface at
-   `system/apps/system_interface/` (that creation's merge lives in
-   `update-system-interface` Step 4, which applies this same check). Empty
-   output means fresh: merge normally. Any output means the base moved under
+   script or reference at its path. A critical app's merge lives in
+   `update-app/references/critical-app.md` step 4, which applies this same
+   check over its `system/apps/<package>/` together with
+   `system/libs/workspace_ui/`, `system/package.json`, and
+   `system/package-lock.json`. Empty output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; supersede it (below).
 
    No shared *authored* file remains in that footprint -- a creation's

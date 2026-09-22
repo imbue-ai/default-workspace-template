@@ -89,6 +89,12 @@ Vocabulary we inherit from the framework, with what it maps to here.
 
 - **reward**: the trial's composed score on 0..1, written by `finalize.py`; see [Grading](#grading).
 
+- **criterion score**: what one criterion scored on one trial, as `check-run` reports it (`CriterionScore`).
+  Rewardkit's normalized 0..1 value, with the step it was scored on and the kind that produced it (`programmatic`, `llm`, `agent`); a judge's own 1-10 likert answer stays in the trial's `reward-details.json`.
+
+- **dimension score**: what one dimension scored on one trial, or on one of its steps, as `check-run` reports it (`DimensionScore`).
+  Read from harbor's `result.json` rather than recomposed, and the composed `reward` is among them.
+
 - **trajectory** (ATIF document): harbor's transcript format, `agent/trajectory.json`.
   The trial's only conversation record and the one every grade-time reader takes the conversation from; see [Expectations and evidence](#expectations-and-evidence) for how ours is built.
 
@@ -291,7 +297,7 @@ flowchart TB
 - **turn**: loosely, an exchange.
   In `state.json`, the legacy `num_turns` counts configured entries and `waits_done` counts messages actually sent; the two differ once a goal entry is involved.
 
-- **turn record** (`TurnRecord`, `turns` in `state.json`, `per_turn` in `agent/usage.json`): one answered client message's wall-clock (`sent_at`, `replied_at`, `reply_seconds`) and the tokens and cost the workspace agent spent answering it; `conversation_seconds` spans the first message to the last answered reply.
+- **turn record** (`TurnRecord`, `turns` in `state.json`, `per_turn` in `agent/usage.json`): one answered client message's wall-clock (`sent_at`, `replied_at`, `reply_seconds`) and the tokens the workspace agent consumed answering it; `conversation_seconds` spans the first message to the last answered reply.
   Observability only, and cumulative across a stepped case's steps, like `entries`. The per-turn spend is a floor on the trial's: the welcome turn, a worker's spend and anything spent past the poll that closed a turn are in no record.
 
 - **turn source** (`TurnSource`, `LiteralTurnSource`, `PersonaLLMTurnSource`, `GoalTurnSource`): the driver's seam between the conversation loop and the model calls.
@@ -318,6 +324,9 @@ flowchart TB
 
 - **step boundary** (`StepBoundary`, `trajectory.py`): the cosmetic `system` step (`Step: <name>`) the driver inserts into a cumulative trajectory where each harbor step began.
   No grade-time reader scores it.
+
+- **trial layout** (`trial_layout.py`, `TrialLayout`, `StepLayout`): which file each of one trial's artifacts is in, whether harbor ran the trial flat or as steps.
+  Harbor moves the contents of `agent/` and `verifier/` under `steps/<name>/` at the end of every step, so a reader of the trial root alone finds nothing on a stepped trial; `state.json` and `usage.json` accumulate across steps and are read from the last one that wrote them, while every other artifact is read per step. The run gate, the diagnostics checker and the environment cleanup all resolve their paths through it.
 
 ## Expectations and evidence
 
@@ -457,10 +466,16 @@ flowchart LR
 
 ## Usage and cost
 
-- **workspace agent** (`usage.py`, `agent/usage.json`): in usage records, the agent under test (the chat agent plus any captured workers), whose spend fills harbor's own token and cost fields.
+- **spender** (`Spender`, `SpenderCost`, the block keys of `agent/usage.json`): who spent money during a trial -- `workspace_agent`, `decider`, `verifier_agent`.
+  A report prices each separately and sums the agent's apart from the harness's two, because a figure that mixed them answers neither question; `SpenderCost` is one spender's figure on one trial with the flags that say how far it can be read.
+
+- **price map** (`pricing.py`, `PriceMap`, `PricingSource`, `resolve_price_entry`): the token-to-USD table a report is priced from, read from litellm's own `model_cost` once at the moment the report is built and carried from there, so one report is one map.
+  Nothing a trial records is priced, so the same tokens re-priced after a price change give a different figure; `PricingSource` -- the `pricing` block of the JSON summary and the `priced by ...` line of the markdown one -- names which copy of the map answered.
+
+- **workspace agent** (`usage.py`, `agent/usage.json`): in usage records, the agent under test (the chat agent plus any captured workers), whose spend fills harbor's own token fields (its cost field is left unset: a trial records tokens and `check-run` prices them).
   Four non-overlapping token buckets per model: uncached input, output, cache read, cache write; see [Token and cost accounting](../README.md#token-and-cost-accounting).
 
-- **harness spend** (`DeciderUsage`, `VerifierUsage`): what the eval harness itself spent: `decider_usage` and `verifier_agent_usage`, reported as trial metadata and never folded into the agent's fields.
+- **harness spend** (`DeciderUsage`, `VerifierUsage`): what the eval harness itself spent: `decider_usage` and `verifier_agent_usage` in the trial metadata, and the `decider` and `verifier_agent` blocks of `agent/usage.json` that `check-run` prices; never folded into the agent's fields.
   Earmarked: to become *evals spend*.
 
 - **usage source** (`UsageSource`): where the trial's resolved usage came from: `transcript` (the workspace's message feed plus captured workers) or `proxy` (the in-box proxy's complete log).
@@ -468,7 +483,7 @@ flowchart LR
 - **published spend** (`PublishedSpend`): the per-step delta the driver reports to harbor on a stepped case, so that cumulative records do not multiply the trial's total.
 
 - **is_cost_complete**: whether all of the agent's traffic is in the total.
-  `false` when delegated calls or uncaptured workers escaped the transcript account; a codex trial's `cost_usd` is `null` for a separate reason and keeps this `true`.
+  `false` when delegated calls or uncaptured workers escaped the transcript account; a codex trial reports no model to price for a separate reason and keeps this `true`.
 
 - **is_speed_observed / is_cost_rate_certain**: whether the speed tier of every request was seen (only the proxy can see it), and so whether the total is priced at the rate billed rather than as a standard-rate floor.
 
@@ -491,6 +506,15 @@ flowchart LR
   A dispatch can name a `custom` pair instead.
 
 - **pass** (`PassReport`, `ci_report.py`): one oracle run or one cell's live run, each with its own summary artifact and a column of the Slack grid.
+
+- **report thread** (`SlackThread`, `ci_report.py`): what one pair and eval config gets in Slack: a message carrying the grid and the trials that failed, and the replies posted under it.
+  See [Results](../README.md#results).
+
+- **scoring reply** (`ScoringTable`, `render_scoring_reply`): the first reply of a thread, holding every score behind its grid as two tables -- `outcome` and `quality`, then `harness_quality` and `gates` -- a row per graded trial or per step of one, each dimension a super-column over the criteria that make it up.
+
+- **diagnostics reply** (`render_diagnostics_reply`): the reply posted wherever there is something to say: the known failures and the facts an agent did not follow, which are the pair's and so ride under its first message, and the live invariants the message's own cells missed, which any of the pair's messages can carry.
+
+- **poster** (`SlackPoster`, `slack_post.py`): how a run posts its report -- as the app the bot token belongs to, which answers with the message id a reply is threaded under, or through the incoming webhook, which does not and so gets the top messages alone.
 
 - **green marker** (`ci_matrix.cache_key_for`): the `actions/cache` entry recording that an exact arm passed end to end, keyed on the pair's SHAs, the eval config and the harness config.
   A green cell is skipped the next night.

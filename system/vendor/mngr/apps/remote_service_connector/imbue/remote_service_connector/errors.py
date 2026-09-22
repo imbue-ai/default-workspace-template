@@ -362,6 +362,23 @@ class MissingAuthWebsiteDomainError(ConnectorError, RuntimeError):
     """Raised when the required AUTH_WEBSITE_DOMAIN secret is not set."""
 
 
+class SuperTokensCoreUnavailableError(ConnectorError, RuntimeError):
+    """Raised when the SuperTokens core answered 5xx (or could not be reached) for a call a request depends on.
+
+    The SDK's querier raises a bare ``Exception`` for these, which would
+    otherwise fall through to the 500 handler; ``auth.call_supertokens_core``
+    recognizes that exception, retries once, and raises this instead. Mapped
+    to a structured, retryable 503 (``code: auth_upstream_unavailable``).
+    ``status_code`` is None when the core was unreachable rather than erroring.
+    """
+
+    def __init__(self, path: str | None, status_code: int | None) -> None:
+        self.path = path
+        self.status_code = status_code
+        upstream = f"answered {status_code} for {path}" if status_code is not None else "could not be reached"
+        super().__init__(f"The authentication service {upstream}; retry shortly.")
+
+
 class MissingStorageConfigError(ConnectorError, RuntimeError):
     """Raised when a workspace stop/start needs storage config the deployment lacks."""
 

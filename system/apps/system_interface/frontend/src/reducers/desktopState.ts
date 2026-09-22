@@ -24,7 +24,8 @@ import type {
   WindowState,
 } from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
-import { DRAFT_PARAM } from "../model/launch";
+import type { UpdateNotice } from "../model/UpdateNotice";
+import { DRAFT_PARAM, isPathShowingChat, launchTilesOf, promptTargetOfTiles } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -59,6 +60,8 @@ export interface DesktopState {
   readonly entries: Readonly<Record<string, EntryPresentation>>;
   /** The avatar every window of the workspace draws (pinned-taskbar-entries plan section 4.6). */
   readonly avatar: AvatarState;
+  /** The rollback point the last update-app careful-flow apply kept, until a person closes its notice. */
+  readonly updateNotice: UpdateNotice | null;
 }
 
 /** The avatar as this window draws it: the workspace's design, the design a failed load falls back to, and
@@ -93,6 +96,7 @@ export function initialDesktopState(clientId: string, modes: RenderModes): Deskt
     modes,
     entries: {},
     avatar: INITIAL_AVATAR_STATE,
+    updateNotice: null,
   };
 }
 
@@ -131,7 +135,9 @@ export type DesktopEvent =
   /** The ``avatar_status`` the shell pushed. */
   | { readonly type: "avatar_status_updated"; readonly status: AvatarStatus }
   /** The workspace's design, as the catalog or an ``avatar_selection_changed`` says. */
-  | { readonly type: "avatar_selection_updated"; readonly design: string; readonly defaultDesign: string | null };
+  | { readonly type: "avatar_selection_updated"; readonly design: string; readonly defaultDesign: string | null }
+  /** The ``update_notice_changed`` the shell pushed (and its seed on connect); null once the record is cleared. */
+  | { readonly type: "update_notice_changed"; readonly notice: UpdateNotice | null };
 
 /** Whether a gesture has changed the layout since the last save wrote it. */
 export function isLayoutDirty(state: DesktopState): boolean {
@@ -277,6 +283,8 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
           defaultDesign: event.defaultDesign ?? state.avatar.defaultDesign,
         },
       };
+    case "update_notice_changed":
+      return { ...state, updateNotice: event.notice };
   }
 }
 
@@ -328,6 +336,30 @@ export function findWindow(state: DesktopState, windowId: string): { desktop: De
   for (const desktop of state.desktops) {
     const window = desktop.windows.find((candidate) => candidate.id === windowId);
     if (window !== undefined) return { desktop, window };
+  }
+  return null;
+}
+
+/** The app that holds chats: the one that can start one, which is the one declaring a launch path
+ *  that takes a ``message``. The shell names no app. Null when this machine has no such app. */
+export function chatApp(state: DesktopState): AppRecord | null {
+  return promptTargetOfTiles(launchTilesOf(state.apps))?.app ?? null;
+}
+
+/** A window showing the chat ``chatId``, with the desktop it is on, or null when none is.
+ *  The active desktop's windows are read as this client sees them; every other desktop's are read
+ *  as the shared record, since an independent window's path is this client's own and only the
+ *  active desktop's layout is loaded. */
+export function windowShowingChat(
+  state: DesktopState,
+  chatId: string,
+): { desktop: Desktop; window: WindowRecord } | null {
+  for (const desktop of state.desktops) {
+    const isActive = desktop.id === state.activeDesktopId;
+    for (const window of desktop.windows) {
+      const seen = isActive ? effectiveWindow(state, window) : window;
+      if (isPathShowingChat(seen.path, chatId)) return { desktop, window };
+    }
   }
   return null;
 }
