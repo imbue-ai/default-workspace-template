@@ -193,7 +193,7 @@ This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
 `exceeds_ceiling` is `true` here and Step 2 chose `$REF` without `--override`,
 the user never asked for it: do not name it, set `$REF` to the capped ref
-(re-run without `--override` to learn it; a refusal there is handled as in
+(re-run without `--override` to learn it; an error there is handled as in
 Step 2), tell the user that capped version is the one you are updating to --
 an initiator too old to know the ceiling has already announced the other one --
 and **re-run §2a** before dispatching (the staged copy must match the target). If the user named it and has not already confirmed it, take that

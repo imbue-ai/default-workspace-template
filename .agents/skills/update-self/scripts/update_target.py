@@ -98,14 +98,12 @@ def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
 def parse_version(tag: str) -> Version | None:
     """Return the :class:`Version` of any ``minds-v*`` tag, prerelease included.
 
-    Prereleases parse because a *ceiling* is a different question from a
-    *candidate*: an app on ``minds-v0.4.0-rc1`` has a real version and should cap
-    its workspaces. Candidate selection asks the separate question via
-    :attr:`Version.is_stable`, so a prerelease still never wins the default
-    "latest stable" pick.
+    Prereleases parse because an app on ``minds-v0.4.0-rc1`` has a real version:
+    it names that template as its target like any other release, and it vouches
+    for an override the same way.
 
-    Ordering follows semver: a prerelease sorts below its own release, so a ceiling
-    of ``minds-v0.4.0-rc1`` admits ``minds-v0.3.9`` but not ``minds-v0.4.0``.
+    Ordering follows semver: a prerelease sorts below its own release, so an
+    override of ``minds-v0.4.0`` under a ``minds-v0.4.0-rc1`` app exceeds it.
 
     Returns ``None`` only for something that is not a release tag at all (a
     branch name, a bare commit) -- there is genuinely no version to compare.
