@@ -35,6 +35,8 @@ export class FakeDesktopApi implements DesktopApi {
   /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
   readonly windowPaths = new Map<string, StoredWindowPath>();
   readonly calls: string[] = [];
+  /** Every message relayed for the minds chrome, in order. */
+  readonly relayedMessages: { type: string; clientId: string; payload: Readonly<Record<string, unknown>> }[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
   /** While set, the client records, a layout, and the catalog answer only once this settles: a test holds
@@ -332,6 +334,16 @@ export class FakeDesktopApi implements DesktopApi {
     this.refuse();
     if (!this.avatars.designs.some((candidate) => candidate.id === design)) throw new Error(`No design ${design}`);
     this.avatars = { ...this.avatars, selected: design };
+  }
+
+  async relayEmbedderMessage(
+    type: string,
+    clientId: string,
+    payload: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    this.calls.push(`relayEmbedderMessage:${type}:${clientId}`);
+    this.refuse();
+    this.relayedMessages.push({ type, clientId, payload });
   }
 }
 

@@ -44,6 +44,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     default_shortcut: { launch: "new", mode: "focus" },
     launcher_rank: null,
     pin: null,
+    message_handlers: [],
     is_running: true,
     ...overrides,
   };

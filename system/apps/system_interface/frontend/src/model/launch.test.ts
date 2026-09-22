@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  chatPath,
-  isPathShowingChat,
   launchPathOf,
   launchPathWithParams,
   launchRowLabel,
@@ -50,18 +48,5 @@ describe("launch paths of an app", () => {
     expect(launchPathWithParams(launchPathRecord(), { message: "hi there", account_id: "a/1" })).toBe(
       "/new?message=hi+there&account_id=a%2F1",
     );
-  });
-});
-
-describe("the path a chat is shown at", () => {
-  it("reads the chat's own page and its subagent views as showing it, and nothing else", () => {
-    expect(chatPath("chat-7")).toBe("/chat-7");
-    expect(isPathShowingChat("/chat-7", "chat-7")).toBe(true);
-    expect(isPathShowingChat("/chat-7.agent-2.sess-3", "chat-7")).toBe(true);
-    expect(isPathShowingChat("/chat-7?draft=hi", "chat-7")).toBe(true);
-    // The chat list, another chat, and a chat whose id merely starts with this one are not it.
-    expect(isPathShowingChat("/", "chat-7")).toBe(false);
-    expect(isPathShowingChat("/chat-8", "chat-7")).toBe(false);
-    expect(isPathShowingChat("/chat-70", "chat-7")).toBe(false);
   });
 });
