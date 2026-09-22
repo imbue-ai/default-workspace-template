@@ -123,9 +123,8 @@ workspace's `agent_id` appears once `mngr create` finishes, so you **poll the
 typed operation route** until it's done:
 
 ```bash
-# The release the running Mind app supports -- the version to build from. An
-# app too old for this route answers 403/404, and `jq -e` catches that (and an
-# unreachable gateway) rather than posting "null" or an empty branch.
+# The release this app supports. `jq -e` fails on the 403/404 an app too old
+# for the route answers, rather than posting an empty branch.
 REF=$(latchkey curl .../api/v1/app/version | jq -er .workspace_template_ref) || exit 1
 
 OP=$(latchkey curl -XPOST .../api/v1/workspaces \
@@ -140,26 +139,13 @@ latchkey curl -N .../api/v1/workspaces/operations/create/$OP/logs
 
 `git_url` is required (typically the template repo a fresh mind is built from).
 
-**Creating from the workspace template: always send `branch`, taken from `GET
-/api/v1/app/version`.** Never the newest tag upstream: a release the app has not
-been updated to yet speaks a protocol it does not know, and the app caps
-`update-self` at its own version for exactly that reason. An omitted `branch`
-means the repository's own default branch -- on a local create no app version
-fills it in for you -- so leaving it out makes the new workspace whatever that
-branch holds that day: unreleased code, stamped with the app's release anyway,
-because the version a create records falls back to the app's own when no branch
-was named. Only an `imbue_cloud` create escapes that, and only because leasing a
-pre-baked host makes it resolve a release of its own.
-
-**If that read fails, do not create the workspace.** An app that cannot say
-which release it supports cannot be handed one it understands, and a fallback
-here lands the user in exactly the unreleased-code case above. Tell them the
-Mind app needs updating (or restarting, if the gateway was simply unreachable)
-and stop.
-
-**Any other repository takes its own refs.** A `minds-v*` release exists only in
-the workspace template, so send a ref that repo actually has, or omit `branch`
-and take its default branch.
+**From the workspace template, always send `branch`, read from `GET
+/api/v1/app/version`** -- the release this app was built against. Omitted, the
+new workspace takes the template's default branch: unreleased code, which the
+create records as the app's release anyway. Never send the newest tag upstream
+instead, which may be a release this app does not support. If the read fails,
+say so and create nothing. From any other repository, send a ref that repo has,
+or omit `branch` for its default branch.
 
 Many other optional fields exist (`host_name`, `launch_mode`, `account_id`,
 `region`, `backup_*`) -- see `CreateWorkspaceRequest` in the schema. A `400`

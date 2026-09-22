@@ -3,36 +3,29 @@
 The default update target **is** the release the **Mind app driving this
 workspace** was built against, which `resolve-target` reads from the app itself
 (`GET /api/v1/app/version` through the latchkey gateway; `ceiling` in the
-output). The template carries the code the app talks to -- the system interface
-and `mngr` -- so only that pairing was ever verified: a newer template speaks a
-protocol the app does not know, and an older one is a release nobody shipped
-with this app.
+output). The template carries the code that app talks to, so only that pairing
+was ever verified.
 
-Three things make that release unavailable, and all three are **faults** rather
-than refusals -- `resolve-target` fails, and what to do next is your call with
-the user, not a version the script picks:
+Three things leave that release out of reach, and all three are **faults**, not
+refusals: `resolve-target` fails, and what to do next is your call with the
+user, never a version the script picks.
 
-- the app cannot be reached, or is too old to report a version at all;
-- it names a release the upstream does not carry, which means that release was
-  never published as the app claims;
-- it names no release at all (a dev build reports its branch), so there is
-  nothing to match.
+- The app cannot be reached, or is too old to report a version.
+- It names a release the upstream does not carry -- so that release was never
+  published as the app claims.
+- It names no release at all; a dev build reports its branch. The operator
+  running one knows which ref they want: take it from them as an `--override`.
 
-In the last case an operator testing a dev build knows which ref they want:
-take it from them and pass it as `--override`. Never choose one for them.
-
-Releases above the ceiling are treated as if they do not exist: never name one
-the user did not ask for by name, or suggest updating the app to reach it. The
-Mind app announces its own updates, on the user's release channel. A version
-the user does name is an override, covered below.
+Releases above the app's are treated as if they do not exist: never name one
+the user did not ask for, or suggest updating the app to reach it. The Mind app
+announces its own updates, on the user's release channel.
 
 ## At the ceiling vs behind it
 
-A workspace already sitting *at* the app's release gets a refusal rather than a
-pass: the target is the release it is already on, so there is nothing to merge,
-and `resolve-target` says so instead of spending a backup, a worker and a
-validation run on a no-op. A workspace *behind* it still updates to it. The two
-are distinguished by whether the resolved ref is already an ancestor of `HEAD`.
+A workspace already *at* the app's release is refused rather than passed: there
+is nothing to merge, so `resolve-target` says so instead of spending a backup, a
+worker and a validation run on a no-op. One *behind* it updates to it. The two
+are told apart by whether the resolved ref is already an ancestor of `HEAD`.
 
 ## Overrides past the ceiling
 
