@@ -3,10 +3,12 @@
  * one-row text area whose focus opens the menu and whose typing filters it. Shift+Enter breaks
  * the line and the field grows with its text (to a cap, then scrolls), so a longer message can be
  * written here; with a line break in it the text is a message, and the menu offers the free-text
- * rows alone. Its keys are the menu's (plan section 4.8): the arrows move the highlight (the caret,
- * once the text has lines), Enter runs the highlight, Ctrl+Enter (Cmd+Enter on a Mac) runs the
- * secondary text action, and Escape clears the text, then closes. In compact mode it collapses to
- * an icon that expands over the taskbar's entries while the menu is open.
+ * rows alone. The field grows upward out of a one-row footprint in the taskbar, over the backdrop,
+ * and tells its owner how far it rose so the menu can sit above it. Its keys are the menu's (plan
+ * section 4.8): the arrows move the highlight (the caret, once the text has lines), Enter runs the
+ * highlight, Ctrl+Enter (Cmd+Enter on a Mac) runs the secondary text action, and Escape clears the
+ * text, then closes. In compact mode it collapses to an icon that expands over the taskbar's
+ * entries while the menu is open.
  */
 
 import m from "mithril";
@@ -32,6 +34,8 @@ export interface LauncherFieldAttrs {
   readonly onRunHighlight: () => void;
   /** Run the secondary text action, whatever is highlighted. */
   readonly onRunSecondary: () => void;
+  /** How far the field stands above its one-row height, in px, each time that changes. */
+  readonly onRise: (risePx: number) => void;
 }
 
 /** Whether a key press is the secondary action's chord: Enter with Ctrl, or with Cmd on a Mac. */
@@ -46,17 +50,31 @@ export function isLineBreakChord(
   return event.key === "Enter" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
 }
 
-/** Size the text area to its text: one line until it has more, and at most MAX_FIELD_LINES before it scrolls. */
-function fitField(field: HTMLTextAreaElement): void {
+/** Size the text area to its text: one line until it has more, and at most MAX_FIELD_LINES before it scrolls.
+ *  Answers how far it stands above one row, in px; 0 where nothing can be measured (a DOM without layout). */
+function fitField(field: HTMLTextAreaElement): number {
   field.style.height = "";
   const lineHeight = Number.parseFloat(getComputedStyle(field).lineHeight);
-  if (field.scrollHeight === 0 || Number.isNaN(lineHeight)) return;
-  const padding = field.offsetHeight - field.clientHeight + (field.clientHeight - lineHeight);
-  const cap = lineHeight * MAX_FIELD_LINES + Math.max(0, padding);
-  field.style.height = `${Math.min(field.scrollHeight, cap)}px`;
+  if (field.scrollHeight === 0 || Number.isNaN(lineHeight)) return 0;
+  // With no height set, the one-row text area is its line plus its padding.
+  const oneRowHeight = field.offsetHeight;
+  const cap = lineHeight * MAX_FIELD_LINES + Math.max(0, oneRowHeight - lineHeight);
+  const height = Math.min(Math.max(field.scrollHeight, oneRowHeight), cap);
+  field.style.height = `${height}px`;
+  return height - oneRowHeight;
 }
 
 export function LauncherField(): m.Component<LauncherFieldAttrs> {
+  // The rise last told to the owner, told again only when it changes (a redraw follows each telling).
+  let reportedRise = 0;
+
+  function fit(area: HTMLTextAreaElement, attrs: LauncherFieldAttrs): void {
+    const rise = fitField(area);
+    if (rise === reportedRise) return;
+    reportedRise = rise;
+    attrs.onRise(rise);
+  }
+
   return {
     view(vnode) {
       const { query, isOpen, isCompact, onOpen, onClose, onQuery } = vnode.attrs;
@@ -74,14 +92,14 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
           m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
         );
       }
-      return m(
+      const field = m(
         "div",
         {
           "data-launcher-field": "",
           class:
-            "launcher-field flex min-h-9 items-end gap-2 rounded-lg border bg-surface px-2.5 " +
+            "launcher-field absolute bottom-0 flex min-h-9 items-end gap-2 rounded-lg border bg-surface px-2.5 " +
             (isOpen ? "border-accent " : "border-default ") +
-            (isCompact ? "absolute inset-x-2 bottom-0 z-(--z-content)" : "w-72 max-w-[40vw] shrink-0"),
+            (isCompact ? "inset-x-2 z-(--z-content)" : "inset-x-0"),
         },
         [
           m(
@@ -98,15 +116,21 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
               "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-2 leading-5 " +
               "text-(length:--font-size-row) text-primary outline-none placeholder:text-faint",
             oncreate: (created: m.VnodeDOM) => {
-              fitField(created.dom as HTMLTextAreaElement);
+              fit(created.dom as HTMLTextAreaElement, vnode.attrs);
               if (isCompact) (created.dom as HTMLTextAreaElement).focus();
             },
             // A row that ran closed the menu under a focused field: the focus goes with it, so the next keys do not
             // land in the field, and a click on the field (already focused, so no focus event) opens the menu again.
             onupdate: (updated: m.VnodeDOM) => {
-              fitField(updated.dom as HTMLTextAreaElement);
+              fit(updated.dom as HTMLTextAreaElement, vnode.attrs);
               if (!vnode.attrs.isOpen && document.activeElement === updated.dom)
                 (updated.dom as HTMLTextAreaElement).blur();
+            },
+            // The compact field collapses with the menu, and nothing stands above one row then.
+            onremove: () => {
+              if (reportedRise === 0) return;
+              reportedRise = 0;
+              vnode.attrs.onRise(0);
             },
             onfocus: onOpen,
             onclick: onOpen,
@@ -166,6 +190,10 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
               ),
         ],
       );
+      if (isCompact) return field;
+      // In the taskbar's flow the field keeps a one-row footprint and grows upward out of it, so the taskbar's
+      // height and its entries' places hold whatever the text's length.
+      return m("div", { class: "launcher-field-slot relative h-9 w-72 max-w-[40vw] shrink-0" }, field);
     },
   };
 }

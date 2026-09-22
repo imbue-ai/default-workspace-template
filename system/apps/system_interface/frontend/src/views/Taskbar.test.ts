@@ -54,6 +54,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
       onMoveHighlight: vi.fn(),
       onRunHighlight: vi.fn(),
       onRunSecondary: vi.fn(),
+      onRise: vi.fn(),
     },
     tray: {
       desktops: [desktopRecord("home"), desktopRecord("work")],
@@ -166,6 +167,7 @@ describe("Taskbar", () => {
           onMoveHighlight: vi.fn(),
           onRunHighlight: vi.fn(),
           onRunSecondary: vi.fn(),
+          onRise: vi.fn(),
         },
       });
       const input = taskbar.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;

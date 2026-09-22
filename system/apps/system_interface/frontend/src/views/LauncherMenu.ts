@@ -31,6 +31,8 @@ export interface LauncherMenuAttrs {
   readonly isCompact: boolean;
   /** Whether the secondary action's key reads as Cmd+Enter rather than Ctrl+Enter. */
   readonly isApplePlatform: boolean;
+  /** How far above the backdrop's foot the card's foot sits, in px: the field's rise above its one row. */
+  readonly bottomOffsetPx: number;
   readonly onRun: (row: LauncherRow) => void;
   readonly onHighlight: (index: number) => void;
 }
@@ -156,8 +158,10 @@ export function LauncherMenu(): m.Component<LauncherMenuAttrs> {
           "data-launcher-overlay": "",
           role: "menu",
           class: menuCardClass(
-            "launcher-menu absolute bottom-0 left-2 w-(--desk-launcher-menu-width) max-h-[85%] overflow-y-auto",
+            "launcher-menu absolute left-2 w-(--desk-launcher-menu-width) max-h-[85%] overflow-y-auto",
           ),
+          // Anchored above the field (plan section 4.2): the card rises with a field that grew past one row.
+          style: { bottom: `${attrs.bottomOffsetPx}px` },
         },
         [
           m(

@@ -37,6 +37,7 @@ function render(
     highlightIndex: defaultHighlightIndex(menu.rows),
     isCompact: false,
     isApplePlatform: false,
+    bottomOffsetPx: 0,
     onRun: vi.fn(),
     onHighlight: vi.fn(),
     ...overrides,
@@ -63,6 +64,14 @@ describe("the launcher menu", () => {
     expect(root.querySelector('[data-text-action="secondary"]')).toBeNull();
     expect(root.querySelector("[data-launcher-window]")).toBeNull();
     expect(root.querySelector(".launcher-no-matches")).toBeNull();
+  });
+
+  it("sits above the field: its foot is lifted by the field's rise", () => {
+    const grounded = render(launcherRowsOf(stateWithWindows(), ""));
+    expect((grounded.root.querySelector("[data-launcher-overlay]") as HTMLElement).style.bottom).toBe("0px");
+    unmountViews();
+    const lifted = render(launcherRowsOf(stateWithWindows(), ""), { bottomOffsetPx: 140 });
+    expect((lifted.root.querySelector("[data-launcher-overlay]") as HTMLElement).style.bottom).toBe("140px");
   });
 
   it("the Enter caption follows a moved highlight; the secondary row always wears its chord", () => {
