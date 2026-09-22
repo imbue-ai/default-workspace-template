@@ -404,8 +404,9 @@ path below instead.
 critical bundles are built from, the same set the careful flow's freshness
 check names), also take the `editing critical app <name>` lease for each
 critical app it touches through the apply, as
-`update-app/references/critical-app.md` does (`workspace_ui` and the npm files
-count as both `system_interface` and `chat`): check `tk ready` for a foreign one
+`update-app/references/critical-app.md` does (`<name>` is the app's `app.toml`
+name, so `system/apps/terminal_pty/` is `terminal-pty`; `workspace_ui` and the
+npm files count as both `system_interface` and `chat`): check `tk ready` for a foreign one
 (surface instead of proceeding), then `tk create "editing critical app <name>"
 -t chore` and `tk start` it, each as its own command. Release them afterwards.
 
