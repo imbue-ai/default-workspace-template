@@ -151,12 +151,13 @@ export function isMessageText(text: string): boolean {
   return text.includes("\n");
 }
 
-/** The menu for the field's ``text`` (plan section 3.5): window rows appear only while typing; the free-text rows
- *  stand alone for a text with a line break. */
+/** The menu for the field's ``query`` (plan section 3.5): window rows appear only while typing; the free-text rows
+ *  stand alone for a text with a line break. The line break is read off the field's text as typed, as the field
+ *  reads it for the arrows, so a break just typed already makes a message; the rows send the trimmed text. */
 export function launcherRowsOf(state: DesktopState, query: string): LauncherMenuRows {
   const text = query.trim();
   const apps = openableApps(state);
-  const isMessage = isMessageText(text);
+  const isMessage = isMessageText(query);
   const launchRows = isMessage ? [] : launchRowsOf(apps, text);
   const windowRows = text === "" || isMessage ? [] : windowRowsOf(state, text);
   const textRows = textRowsOf(apps, text);

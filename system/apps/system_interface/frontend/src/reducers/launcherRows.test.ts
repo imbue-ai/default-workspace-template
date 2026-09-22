@@ -79,6 +79,11 @@ describe("the launcher's rows", () => {
     expect(menu.isNoMatch).toBe(false);
     expect(menu.textRows[0].text).toBe("term\nand more");
     expect(defaultHighlightIndex(menu.rows)).toBe(0);
+    // The break just typed, with nothing after it yet, already makes the message; the rows send the trimmed text.
+    const justBroken = launcherRowsOf(state(), "term\n");
+    expect(keys(justBroken.rows)).toEqual(["text:chatty:new", "text:chatty:send"]);
+    expect(justBroken.isNoMatch).toBe(false);
+    expect(justBroken.textRows[0].text).toBe("term");
   });
 
   it("with a query keeps matching launch paths and windows across desktops, and the free-text rows always", () => {
