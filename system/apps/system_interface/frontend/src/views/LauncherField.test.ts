@@ -97,17 +97,18 @@ describe("the launcher field", () => {
     expect(lined.attrs.onClose).not.toHaveBeenCalled();
   });
 
-  it("in the taskbar's flow it grows out of a one-row slot; the compact field stands on the taskbar itself", () => {
+  it("grows out of a one-row slot, in the taskbar's flow and over the entries in compact mode alike", () => {
     const { root, attrs } = render({ query: "plan\nthe launch" });
     const slot = root.querySelector(".launcher-field-slot") as HTMLElement;
     expect(slot).not.toBeNull();
-    expect(slot.querySelector("[data-launcher-field]")).not.toBeNull();
+    expect(slot.querySelector("[data-launcher-field] textarea")).not.toBeNull();
     // Without layout nothing stands above one row, so no rise is told.
     expect(attrs.onRise).not.toHaveBeenCalled();
     unmountViews();
     const compact = render({ isCompact: true, isOpen: true });
-    expect(compact.root.querySelector(".launcher-field-slot")).toBeNull();
-    expect(compact.root.querySelector("[data-launcher-field] textarea")).not.toBeNull();
+    const compactSlot = compact.root.querySelector(".launcher-field-slot") as HTMLElement;
+    expect(compactSlot).not.toBeNull();
+    expect(compactSlot.querySelector("[data-launcher-field] textarea")).not.toBeNull();
   });
 
   it("typing reports the query and opens the menu", () => {

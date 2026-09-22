@@ -1675,6 +1675,9 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         menu_box = _box(phone_page.locator("[data-launcher-overlay]"))
         taskbar_box = _box(phone_page.locator("[data-taskbar]"))
         assert abs(menu_box["width"] - taskbar_box["width"]) <= _GRID_INSET, (menu_box, taskbar_box)
+        # The expanded field keeps the collapsed button's place, centred in the taskbar, over the entries.
+        field_box = _box(phone_page.locator("[data-launcher-field]"))
+        assert abs(_center(field_box)[1] - _center(taskbar_box)[1]) <= 2, (field_box, taskbar_box)
         phone_page.locator("[data-launcher-field] textarea").fill("stub")
         expect(phone_page.locator(f'[data-launcher-overlay] [data-launcher-window="{window_id}"]')).to_be_visible()
         phone_page.keyboard.press("Escape")
