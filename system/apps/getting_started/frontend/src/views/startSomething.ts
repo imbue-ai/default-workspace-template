@@ -11,8 +11,9 @@
  * The tile itself stays a white card; the hue shows in the glyph, drawn duotone off it: the hue
  * darkened for the stroke, a wash of it for the fill of whatever shapes the glyph closes.
  *
- * The grid shows START_PAGE_SIZE tiles at a time; "See more" reveals the next page and stays
- * until every tile is shown. The paging arithmetic and the search match are pure and tested.
+ * The grid shows START_PAGE_SIZE tiles at a time (two rows of two at the window's opening width);
+ * "See more" reveals the next page and stays until every tile is shown. The paging arithmetic and
+ * the search match are pure and tested.
  */
 
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
@@ -30,7 +31,7 @@ export interface StartOption {
   prompt: string | null;
 }
 
-export const START_PAGE_SIZE = 6;
+export const START_PAGE_SIZE = 4;
 
 export const START_OPTIONS: readonly StartOption[] = [
   {

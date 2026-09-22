@@ -2,4 +2,6 @@ A new built-in app, Getting Started (`getting-started`, port 8030, `launcher_ran
 
 The app fetches the template catalog itself (the shell's `template_catalog.py` moved here whole: the fetch from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`, the six-hour reuse, the last-good copy on disk, `GET /api/templates-catalog`), keeping its cache under `data/.state/getting-started/`.
 
-It opens its own window once per workspace: a poller watches the shell's connected clients and, for the first one, opens a Getting Started window on the first desktop through the op route (`open` with `if_present = focus`, then `place` at the frame `0.12,0.05,0.33,0.9`, to the left of the pinned chat), recording the delivery in `data/.state/getting-started/first_window.json` so no later client or restart opens it again.
+It opens its own window once per workspace: a poller watches the shell's connected clients and, for the first one, opens a Getting Started window on the first desktop through the op route (`open` with `if_present = focus`, then `place` at the frame `0.07,0.05,0.38,0.9`, to the left of the pinned chat and flush against it), recording the delivery in `data/.state/getting-started/first_window.json` so no later client or restart opens it again.
+
+The page lays its "Start something" tiles two to a row, shows four before "See more", and scrolls itself, since the shared base styles pin the body to the viewport.

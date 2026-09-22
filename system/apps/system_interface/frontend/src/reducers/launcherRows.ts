@@ -1,10 +1,11 @@
 /**
  * The launcher's rows (launcher-and-getting-started plan section 3.5) as pure functions over the
- * desktop's state and the field's query: the launch-path rows (every launch path of every openable
+ * desktop's state and the field's text: the launch-path rows (every launch path of every openable
  * app, less the free-text ones), the window rows (every window of every desktop, only while
- * typing), and the free-text rows (always, the first two bound to Enter and Ctrl+Enter), each
- * section kept in its order and narrowed by the query; and the highlight rule, with the arrow
- * keys' step through the enabled rows.
+ * typing), and the free-text rows (the primary always, the rest only with text to send; the first
+ * two bound to Enter and Ctrl+Enter), each section kept in its order and narrowed by the text; a
+ * text with a line break is a message, not a query, and keeps the free-text rows alone. Then the
+ * highlight rule, with the arrow keys' step through the enabled rows.
  */
 
 import type { AppRecord, LaunchPath, WindowRecord } from "../model/records";
@@ -68,9 +69,6 @@ export interface LauncherMenuRows {
   readonly isNoMatch: boolean;
 }
 
-/** Why the secondary text action stands down with nothing typed: it would send an empty message. */
-export const NOTHING_TO_SEND_REASON = "Type something to send";
-
 /** The ``data-launcher-row`` spelling of a launch-path or free-text row. */
 export function launchRowKey(kind: "launch" | "text", app: string, launch: string): string {
   return `${kind}:${app}:${launch}`;
@@ -129,12 +127,12 @@ function windowRowsOf(state: DesktopState, query: string): WindowRow[] {
 }
 
 function textRowsOf(apps: readonly AppRecord[], text: string): TextRow[] {
-  return freeTextRowsOf(apps).map(({ app, launchPath }, index) => {
+  // Empty text runs the primary action with no text param at all; every other row has nothing to send, so it is
+  // not offered.
+  const offered = text === "" ? freeTextRowsOf(apps).slice(0, 1) : freeTextRowsOf(apps);
+  return offered.map(({ app, launchPath }, index) => {
     const textAction: TextAction | null = index === 0 ? "primary" : index === 1 ? "secondary" : null;
     const target = textPathOf(launchPath, text);
-    // Empty text runs the primary action with no text param at all; every other row needs something to send.
-    const disabledReason =
-      target.kind === "disabled" ? target.reason : text === "" && index > 0 ? NOTHING_TO_SEND_REASON : null;
     return {
       kind: "text",
       key: launchRowKey("text", app.name, launchPath.id),
@@ -143,24 +141,31 @@ function textRowsOf(apps: readonly AppRecord[], text: string): TextRow[] {
       textAction,
       label: launchPath.label,
       text,
-      disabledReason,
+      disabledReason: target.kind === "disabled" ? target.reason : null,
     };
   });
 }
 
-/** The menu for ``query`` (plan section 3.5): window rows appear only while typing; free-text rows always. */
+/** Whether the field's text is a message rather than a query: it has a line break (plan section 4.1). */
+export function isMessageText(text: string): boolean {
+  return text.includes("\n");
+}
+
+/** The menu for the field's ``text`` (plan section 3.5): window rows appear only while typing; the free-text rows
+ *  stand alone for a text with a line break. */
 export function launcherRowsOf(state: DesktopState, query: string): LauncherMenuRows {
   const text = query.trim();
   const apps = openableApps(state);
-  const launchRows = launchRowsOf(apps, text);
-  const windowRows = text === "" ? [] : windowRowsOf(state, text);
+  const isMessage = isMessageText(text);
+  const launchRows = isMessage ? [] : launchRowsOf(apps, text);
+  const windowRows = text === "" || isMessage ? [] : windowRowsOf(state, text);
   const textRows = textRowsOf(apps, text);
   return {
     launchRows,
     windowRows,
     textRows,
     rows: [...launchRows, ...windowRows, ...textRows],
-    isNoMatch: text !== "" && launchRows.length === 0 && windowRows.length === 0,
+    isNoMatch: text !== "" && !isMessage && launchRows.length === 0 && windowRows.length === 0,
   };
 }
 

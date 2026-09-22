@@ -46,10 +46,10 @@ Built-in manifests:
 | `system_interface` | true | `system_interface` | | none | none; `internal = true` |
 | `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, params `draft` optional); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional, `text_param = "message"`); `send` ("Send to chat...", `/send`, param `message` optional, `text_param = "message"`) |
 | `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
-| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
+| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
-| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, params `path` optional) |
-| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Open Browser", `/new`, params `url` optional) |
+| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, params `path` optional) |
+| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
 

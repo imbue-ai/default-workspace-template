@@ -94,7 +94,7 @@ A shortcut's target is a tagged union with one V1 variant, a launch path, so a w
 
 ### 2.6 Launch path
 
-An app declares in its manifest the paths that start something: `New Chat` at `/new`, `New Terminal` at `/new`, with optional parameters the shell passes as query parameters.
+An app declares in its manifest the paths that start something: `New Chat` at `/new`, `Terminal` at `/new`, with optional parameters the shell passes as query parameters.
 A shortcut, a launcher tile, an agent's open, and a page's own request all open a window at a launch path.
 An app that declares none has one, `Open <display name>` at `/`.
 A launch path may name one of its parameters as its `text_param`: the launcher then offers it as a free-text row that sends whatever was typed into the field (launcher-and-getting-started plan section 3.1).

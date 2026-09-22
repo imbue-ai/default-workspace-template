@@ -49,25 +49,31 @@ function rowKeys(root: HTMLElement): string[] {
 }
 
 describe("the launcher menu", () => {
-  it("draws the launch-path rows then the free-text rows, the first highlighted, with its markers", () => {
+  it("draws the launch-path rows then the primary text row, the first highlighted and wearing Enter", () => {
     const { root } = render(launcherRowsOf(stateWithWindows(), ""));
     expect(root.querySelector("[data-launcher-overlay]")).not.toBeNull();
-    expect(rowKeys(root)).toEqual([
-      "launch:chatty:root",
-      "launch:terminal:new",
-      "text:chatty:new",
-      "text:chatty:send",
-    ]);
-    expect(root.querySelector('[data-launch="chatty:root"]')!.getAttribute("data-highlighted")).toBe("true");
+    expect(rowKeys(root)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
+    const first = root.querySelector('[data-launch="chatty:root"]')!;
+    expect(first.getAttribute("data-highlighted")).toBe("true");
+    expect(first.querySelector('[data-key="enter"]')!.textContent).toBe("Enter");
     expect(root.querySelector('[data-launch="terminal:new"]')!.getAttribute("data-highlighted")).toBe("false");
     expect(root.querySelector('[data-text-action="primary"]')!.getAttribute("data-launch")).toBe("chatty:new");
-    expect(root.querySelector('[data-text-action="primary"]')!.textContent).toContain("Enter");
-    // Nothing typed: the secondary stands down with its reason, and the window rows are absent.
-    const secondary = root.querySelector('[data-text-action="secondary"]')!;
-    expect(secondary.getAttribute("data-disabled")).toBe("true");
-    expect(secondary.textContent).toContain("Ctrl+Enter");
+    // The Enter caption is the highlight's alone; nothing typed, so no secondary row and no window rows.
+    expect(root.querySelectorAll('[data-key="enter"]')).toHaveLength(1);
+    expect(root.querySelector('[data-text-action="secondary"]')).toBeNull();
     expect(root.querySelector("[data-launcher-window]")).toBeNull();
     expect(root.querySelector(".launcher-no-matches")).toBeNull();
+  });
+
+  it("the Enter caption follows a moved highlight; the secondary row always wears its chord", () => {
+    const menu = launcherRowsOf(stateWithWindows(), "shell");
+    const { root } = render(menu, { highlightIndex: menu.rows.length - 1 });
+    const secondary = root.querySelector('[data-text-action="secondary"]')!;
+    expect(secondary.getAttribute("data-highlighted")).toBe("true");
+    expect(secondary.textContent).toContain("Ctrl+Enter");
+    expect(secondary.querySelector('[data-key="enter"]')).not.toBeNull();
+    expect(root.querySelector('[data-text-action="primary"]')!.querySelector('[data-key="enter"]')).toBeNull();
+    expect(root.querySelectorAll('[data-key="enter"]')).toHaveLength(1);
   });
 
   it("while typing shows the matching windows and repeats the text on the free-text rows; with no match, says so", () => {
@@ -92,11 +98,14 @@ describe("the launcher menu", () => {
     expect(attrs.onRun).toHaveBeenCalledWith(expect.objectContaining({ key: "launch:terminal:new" }));
     root.querySelector('[data-text-action="primary"]')!.dispatchEvent(new PointerEvent("pointerenter"));
     expect(attrs.onHighlight).toHaveBeenCalledWith(2);
-    const secondary = root.querySelector('[data-text-action="secondary"]') as HTMLElement;
-    secondary.click();
-    secondary.dispatchEvent(new PointerEvent("pointerenter"));
-    expect(attrs.onRun).toHaveBeenCalledTimes(1);
-    expect(attrs.onHighlight).toHaveBeenCalledTimes(1);
+    unmountViews();
+    const tooLong = render(launcherRowsOf(stateWithWindows(), "x".repeat(2100)));
+    const disabled = tooLong.root.querySelector('[data-text-action="secondary"]') as HTMLElement;
+    expect(disabled.getAttribute("data-disabled")).toBe("true");
+    disabled.click();
+    disabled.dispatchEvent(new PointerEvent("pointerenter"));
+    expect(tooLong.attrs.onRun).not.toHaveBeenCalled();
+    expect(tooLong.attrs.onHighlight).not.toHaveBeenCalled();
   });
 
   it("spells the secondary key for the platform and previews the first words of the text", () => {

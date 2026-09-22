@@ -24,9 +24,15 @@ describe("the Start something table", () => {
     }
   });
 
-  it("keeps the learn-about-Mind and edit-Mind tiles behind the first page", () => {
-    expect(START_OPTIONS.length).toBe(START_PAGE_SIZE + 2);
-    expect(START_OPTIONS.slice(START_PAGE_SIZE).map((option) => option.key)).toEqual(["learn", "edit-minds"]);
+  it("shows two rows of two first and keeps the other four tiles behind See more", () => {
+    expect(START_PAGE_SIZE).toBe(4);
+    expect(START_OPTIONS.length).toBe(START_PAGE_SIZE * 2);
+    expect(START_OPTIONS.slice(START_PAGE_SIZE).map((option) => option.key)).toEqual([
+      "delegate",
+      "make-sense",
+      "learn",
+      "edit-minds",
+    ]);
   });
 });
 
@@ -35,9 +41,9 @@ describe("paging", () => {
     expect(visibleStartOptions(START_OPTIONS, START_PAGE_SIZE).length).toBe(START_PAGE_SIZE);
     expect(visibleStartOptions(START_OPTIONS, 100).length).toBe(START_OPTIONS.length);
     expect(visibleStartOptions(START_OPTIONS, -3)).toEqual([]);
-    expect(nextStartCount(6, 7)).toBe(7);
-    expect(nextStartCount(6, 20)).toBe(12);
-    expect(hasMoreStartOptions(6, 7)).toBe(true);
+    expect(nextStartCount(4, 7)).toBe(7);
+    expect(nextStartCount(4, 20)).toBe(8);
+    expect(hasMoreStartOptions(4, 7)).toBe(true);
     expect(hasMoreStartOptions(7, 7)).toBe(false);
   });
 });

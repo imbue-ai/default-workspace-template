@@ -40,7 +40,7 @@ import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { sendMessage } from "../models/Response";
 import { ChatRail } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
-import { SendPicker } from "./SendPicker";
+import { SendPicker, pickableRows } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
@@ -159,17 +159,27 @@ function takeDraft(text: string, requestedChatId: string | null): void {
   draftInto(chatId, text);
 }
 
-/** The ``send`` launch path (launcher-and-getting-started plan section 4.5): the picker opens over the list with the
- *  text; picking a chat sends the text there through the ordinary send and selects it, dismissing reports the
- *  selection alone, and an empty text is a no-op that reports the selection. Either way the window's stored path
- *  goes back to the selection, so a reload sends nothing again. */
+/** The ``send`` launch path (launcher-and-getting-started plan section 4.5): with one chat to send to, the text goes
+ *  there at once; with more, the picker opens over the list with the text, and picking a chat sends the text there
+ *  through the ordinary send and selects it, while dismissing reports the selection alone. With no chat at all the
+ *  text starts a new one, and an empty text is a no-op that reports the selection. Either way the window's stored
+ *  path goes back to the selection, so a reload sends nothing again. */
 function takeSend(text: string): void {
   reportedLocation = null;
   if (text === "") {
     select(selectedChatId);
     return;
   }
+  const targets = pickableRows(rowsFromSnapshots(getChats(), getProvisionalChats()), "");
+  if (targets.length === 0) {
+    startNewChat("", text);
+    return;
+  }
   pendingSendText = text;
+  if (targets.length === 1) {
+    sendPendingTo(targets[0].chatId);
+    return;
+  }
   m.redraw();
 }
 

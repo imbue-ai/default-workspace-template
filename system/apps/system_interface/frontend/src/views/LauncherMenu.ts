@@ -4,6 +4,8 @@
  * then a divider and the window rows while typing, then a divider and the free-text rows; a
  * section with no rows draws nothing. The rows themselves come from ``reducers/launcherRows``;
  * this draws them and reports a hover (which moves the highlight) and a click (which runs a row).
+ * The highlighted row, whatever its kind, carries the ``Enter`` caption; the secondary text row
+ * carries its chord's.
  * Markers the tests use are data attributes (plan section 6.2): ``data-launcher-overlay`` on
  * the card, and on each row ``data-launcher-row``, ``data-launch``, ``data-launcher-window``,
  * ``data-text-action``, ``data-highlighted``, and ``data-disabled``.
@@ -50,6 +52,7 @@ const ROW_CLASS =
   "launcher-row flex h-9 w-full items-center gap-2 px-3 text-left text-(length:--font-size-row) " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ";
 const CAPTION_CLASS = "type-helper shrink-0 truncate text-faint";
+const ENTER_KEY_LABEL = "Enter";
 const NO_MATCH_CLASS = "launcher-no-matches m-0 px-3 py-1 text-(length:--font-size-row) text-faint";
 
 function rowAttrs(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.Attributes {
@@ -75,16 +78,23 @@ function glyphCell(markup: string): m.Vnode {
   return m("span", { class: "flex w-5 shrink-0 items-center justify-center text-faint" }, m.trust(markup));
 }
 
-function textRowCaption(row: TextRow, attrs: LauncherMenuAttrs): m.Children {
-  const key = row.textAction === "primary" ? "Enter" : secondaryKeyLabel(attrs.isApplePlatform);
-  const preview = textPreview(row.text);
+/** The key captions a row wears: the secondary text row's chord, and ``Enter`` on the highlighted row. */
+function keyCaptions(row: LauncherRow, isHighlighted: boolean, attrs: LauncherMenuAttrs): m.Children {
   return [
-    preview === "" ? null : m("span", { class: `${CAPTION_CLASS} max-w-1/3` }, `“${preview}”`),
-    row.textAction === null ? null : m("span", { class: CAPTION_CLASS }, key),
+    row.kind === "text" && row.textAction === "secondary"
+      ? m("span", { class: CAPTION_CLASS }, secondaryKeyLabel(attrs.isApplePlatform))
+      : null,
+    isHighlighted ? m("span", { class: CAPTION_CLASS, "data-key": "enter" }, ENTER_KEY_LABEL) : null,
   ];
 }
 
+function textRowCaption(row: TextRow): m.Children {
+  const preview = textPreview(row.text);
+  return preview === "" ? null : m("span", { class: `${CAPTION_CLASS} max-w-1/3` }, `“${preview}”`);
+}
+
 function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.Vnode {
+  const keys = keyCaptions(row, index === attrs.highlightIndex, attrs);
   switch (row.kind) {
     case "launch":
       return m(
@@ -94,6 +104,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.V
           glyphCell(appGlyph(row.app, GLYPH_SIZE)),
           m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
           row.caption === null ? null : m("span", { class: CAPTION_CLASS }, row.caption),
+          keys,
         ],
       );
     case "window":
@@ -109,6 +120,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.V
           m("span", { class: "min-w-0 flex-1 truncate" + (row.isMinimized ? " text-faint" : "") }, row.title),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),
           row.isOnActiveDesktop ? null : m("span", { class: CAPTION_CLASS }, row.desktopName),
+          keys,
         ],
       );
     case "text":
@@ -123,7 +135,8 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.V
         [
           glyphCell(glyph("plus", GLYPH_SIZE)),
           m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
-          textRowCaption(row, attrs),
+          textRowCaption(row),
+          keys,
         ],
       );
   }
