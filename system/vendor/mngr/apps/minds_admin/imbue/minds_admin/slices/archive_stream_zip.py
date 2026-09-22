@@ -31,8 +31,12 @@ from collections.abc import Sequence
 SUMMARY_MARKER = "MNGR_ARCHIVE_SUMMARY"
 # Deflate at the cheapest level: download convenience matters more than ratio.
 ZIP_COMPRESS_LEVEL = 1
-# The zip format cannot represent timestamps before 1980.
+# The zip format cannot represent timestamps before 1980, nor after 2107: the
+# DOS date field holds seven bits of years from 1980, and the stdlib packs a
+# later year into it unchecked, which fails the whole stream on one file with
+# a synthetic far-future mtime (a test fixture left under /tmp).
 MIN_ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+MAX_ZIP_DATE_TIME = (2107, 12, 31, 23, 59, 58)
 # How many skipped paths the summary names (the count is always complete).
 MAX_REPORTED_SKIPS = 50
 CHUNK_BYTES = 1024 * 1024
@@ -66,7 +70,11 @@ def zip_date_time(mtime: float) -> tuple[int, int, int, int, int, int]:
         parsed = time.localtime(mtime)[:6]
     except (OSError, ValueError, OverflowError):
         return MIN_ZIP_DATE_TIME
-    return parsed if parsed >= MIN_ZIP_DATE_TIME else MIN_ZIP_DATE_TIME
+    if parsed < MIN_ZIP_DATE_TIME:
+        return MIN_ZIP_DATE_TIME
+    if parsed > MAX_ZIP_DATE_TIME:
+        return MAX_ZIP_DATE_TIME
+    return parsed
 
 
 def relative_path_under(root: str, absolute_path: str) -> str:

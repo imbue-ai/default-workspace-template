@@ -1,7 +1,7 @@
 """Read one finished trial's job-directory files into the typed inputs the facts are computed from.
 
 `evidence_facts.py` states what a trial recorded; this module is the only place that opens a file to
-find out. Every reading is per step, over the layout `step_artifacts.py` resolves, and a record the
+find out. Every reading is per step, over the layout `trial_layout.py` resolves, and a record the
 step does not hold reads as None or as an empty value. Which of the three outcomes that is -- the
 record was never due, or was due and never written -- is the fact functions' to decide, since the
 case declaration they read is what says what the step owed.
@@ -44,8 +44,8 @@ from imbue.minds_evals.driver import INSTRUCTION_FILENAME
 from imbue.minds_evals.driver import TRAJECTORY_FILENAME
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.errors import InstructionParseError
-from imbue.minds_evals.step_artifacts import StepArtifactPaths
-from imbue.minds_evals.step_artifacts import resolve_step_artifact_paths
+from imbue.minds_evals.trial_layout import StepLayout
+from imbue.minds_evals.trial_layout import resolve_trial_layout
 
 # Where the driver keeps the workspace snapshots it pulled, under the step's agent dir.
 SNAPSHOTS_DIRNAME: Final[str] = "snapshots"
@@ -505,7 +505,7 @@ def _step_spend_input_tokens(result: TrialResult | None, step_index: int, step_n
 
 
 def load_step_fact_sources(
-    step_paths: StepArtifactPaths,
+    step_paths: StepLayout,
     step_index: int,
     step_names_so_far: Sequence[str],
     result: TrialResult | None,
@@ -603,7 +603,7 @@ def load_trial_fact_sources(trial_dir: Path) -> TrialFactSources:
     """
     result_path = TrialPaths(trial_dir=trial_dir).result_path
     result = load_trial_result(result_path)
-    all_step_paths = resolve_step_artifact_paths(trial_dir, result)
+    all_step_paths = resolve_trial_layout(trial_dir).steps
     steps: list[StepFactSources] = []
     previous_log_last_timestamp = ""
     for step_index, step_paths in enumerate(all_step_paths):

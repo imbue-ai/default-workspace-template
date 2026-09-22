@@ -27,7 +27,7 @@ Related:
   - [Capture: one exec per worker](#capture-one-exec-per-worker)
   - [Transfer: the workers directory](#transfer-the-workers-directory)
   - [Reconciliation: embedding under the launching call](#reconciliation-embedding-under-the-launching-call)
-  - [Usage: pricing the delegated work](#usage-pricing-the-delegated-work)
+  - [Usage: accounting for the delegated work](#usage-accounting-for-the-delegated-work)
   - [Bundle layout and metadata](#bundle-layout-and-metadata)
   - [What grading sees](#what-grading-sees)
 - [Failure modes](#failure-modes)
@@ -69,7 +69,7 @@ So the launch is visible in the chat agent's stream, the worker is a normal agen
 
 - Workers still running at collection time: their partial trajectories are captured as whatever the stream holds, but nothing waits for them, and no completeness claim is made about them.
   Their spend so far is folded into the transcript account, but they do not count toward `worker_captured_count`, so `is_cost_complete` stays false for the trial.
-- Proxy subagents (the `Agent` tool): mngr already embeds them; pricing their embedded steps is a separate follow-up.
+- Proxy subagents (the `Agent` tool): mngr already embeds them; accounting for their embedded steps is a separate follow-up.
 - Showing worker conversations to the judges: a worker talks to no client, and the grade-time readers keep rendering only the root document's steps.
 
 ## What a settled worker looks like
@@ -194,11 +194,12 @@ Either way the result is the same shape.
 What makes a worker recognisable is the `extra.worker` block on the embedded trajectory and `extra.worker_name` on the ref, so no new vocabulary is introduced.
 
 `final_metrics` stays the trial's resolved usage, which after this spec includes the workers (below).
-ATIF's own reading of `total_cost_usd` is "including cost for subagents", so the two agree.
+It carries token counts only: `total_cost_usd` is unset, because a trial prices nothing and
+`minds-evals check-run` prices its tokens when it builds a report.
 
 When the root document is the **hand-built** fallback (the workspace document was not captured), there is no launching step to graft onto; the workers stay in the bundle and in the metadata, and `trajectory.json` carries no `subagent_trajectories`.
 
-### Usage: pricing the delegated work
+### Usage: accounting for the delegated work
 
 `usage.summarize_workspace_usage` already reads ATIF `step` records with their `metrics`, which is exactly what a worker stream holds, so a worker's `TrialUsage` is `summarize_workspace_usage(worker_stream_records)` unchanged.
 
@@ -252,9 +253,9 @@ Nothing changes at grade time.
 | Task file names no `finish_report_path`, or is not there | `report: no_report_path` | trajectory captured, no report |
 | Reports directory missing (the worker never reported, or the lead deleted it) | `report: transcript_command_failed` with the copy's stderr | trajectory captured, no report |
 | Bridge or budget failure on the listing exec | logged; each worker is captured by name and records its own outcome, `state: unknown` unless a preserved directory names it | streams may still be captured; ids come from preserved names or stay empty; no lead work dir, so a nested worker's report is not found |
-| Rsync or download of the directory fails | every worker of the trial `pull_failed`/`download_failed` | nothing embedded; nothing priced |
+| Rsync or download of the directory fails | every worker of the trial `pull_failed`/`download_failed` | nothing embedded; nothing counted |
 | A worker document fails harbor validation host-side | recorded on the worker | rebuilt from the stream; if that fails too, ref omitted |
-| Root document is hand-built | n/a | workers captured and priced, not embedded |
+| Root document is hand-built | n/a | workers captured and counted, not embedded |
 
 Every failure is recorded on the worker's metadata entry and never raised.
 

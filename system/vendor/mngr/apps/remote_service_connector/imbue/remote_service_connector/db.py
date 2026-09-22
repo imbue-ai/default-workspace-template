@@ -25,15 +25,19 @@ import psycopg2
 import psycopg2.extensions
 from pydantic import BaseModel
 from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import PositiveInt
 from pydantic import PrivateAttr
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.modal_app_kit.metrics import emit_metric
+from imbue.remote_service_connector.deploy_constants import API_MAX_CONCURRENT_INPUTS
 
 # Upper bound on idle connections retained per container. Matches the web
-# function's ``@modal.concurrent(max_inputs=8)``: more than one connection per
-# concurrently-served request can never be warm-useful, and each retained
-# connection holds a slot on the Neon side.
-_MAX_IDLE_CONNECTIONS: Final[int] = 8
+# function's concurrency cap: more than one connection per concurrently-served
+# request can never be warm-useful, and each retained connection holds a slot
+# on the Neon side.
+_MAX_IDLE_CONNECTIONS: Final[int] = API_MAX_CONCURRENT_INPUTS
 
 # A connection idle longer than this is probed (``SELECT 1``) before it is
 # handed out. The failures the probe catches -- Neon suspending the compute,
@@ -44,22 +48,77 @@ _MAX_IDLE_CONNECTIONS: Final[int] = 8
 # dead connection to a request.
 _IDLE_PROBE_THRESHOLD_SECONDS: Final[float] = 60.0
 
+# A connection idle longer than this is closed instead of reused. The pool is
+# a LIFO stack, so its deepest entries can sit unused for hours, and probing
+# one that went half-open in that time can still stall the request for up to
+# the whole dead-peer detection window (POOL_CONNECTION_SOCKET_BOUNDS) before
+# it fails.
+_MAX_IDLE_AGE_SECONDS: Final[float] = 300.0
+
+
+class PoolConnectionSocketBounds(FrozenModel):
+    """libpq socket bounds applied to every pool connection.
+
+    psycopg2 has no read timeout, so without these a peer that vanished without
+    a FIN (a dropped NAT or tunnel flow) blocks the calling request until the
+    kernel's own retransmit limit, well past Modal's 300 s function timeout.
+    """
+
+    # Positive by type: libpq reads 0 as "disabled" or "system default" for
+    # every one of these, which would silently remove the bound.
+    connect_timeout_seconds: PositiveInt = Field(description="libpq connect_timeout")
+    keepalive_idle_seconds: PositiveInt = Field(description="Idle time before the first TCP keepalive probe")
+    keepalive_interval_seconds: PositiveInt = Field(description="Gap between unanswered keepalive probes")
+    keepalive_probe_count: PositiveInt = Field(description="Unanswered probes before the connection is declared dead")
+    unacknowledged_send_timeout_seconds: PositiveInt = Field(
+        description="tcp_user_timeout: how long sent data may stay unacknowledged before the connection is dropped"
+    )
+
+    def worst_case_dead_peer_detection_seconds(self) -> int:
+        """The longest any single stall can last before libpq raises: connect, idle probing, or an unacknowledged send."""
+        idle_detection_seconds = (
+            self.keepalive_idle_seconds + self.keepalive_interval_seconds * self.keepalive_probe_count
+        )
+        return max(self.connect_timeout_seconds, idle_detection_seconds, self.unacknowledged_send_timeout_seconds)
+
+
+# Sized so every stall surfaces well under the heartbeat timeout of the
+# workspaces' frpc: a stalled ping must fail (open) before the tunnel drops.
+# db_test pins that bound.
+POOL_CONNECTION_SOCKET_BOUNDS: Final[PoolConnectionSocketBounds] = PoolConnectionSocketBounds(
+    connect_timeout_seconds=10,
+    keepalive_idle_seconds=10,
+    keepalive_interval_seconds=5,
+    keepalive_probe_count=2,
+    unacknowledged_send_timeout_seconds=15,
+)
+
 
 def get_pool_db_connection() -> Any:
     """Open a new psycopg2 connection to the Neon pool database."""
     database_url = os.environ["DATABASE_URL"]
-    return psycopg2.connect(database_url)
+    bounds = POOL_CONNECTION_SOCKET_BOUNDS
+    return psycopg2.connect(
+        database_url,
+        connect_timeout=bounds.connect_timeout_seconds,
+        keepalives=1,
+        keepalives_idle=bounds.keepalive_idle_seconds,
+        keepalives_interval=bounds.keepalive_interval_seconds,
+        keepalives_count=bounds.keepalive_probe_count,
+        tcp_user_timeout=bounds.unacknowledged_send_timeout_seconds * 1000,
+    )
 
 
 class PooledConnectionAllocator(BaseModel):
     """Thread-safe free-list of reusable psycopg2 connections.
 
-    Deliberately simple: no liveness probe on checkout (a server-side-dropped
-    connection surfaces as an ``OperationalError`` on first use, is discarded
-    on check-in, and the caller's normal error handling applies -- the frps
-    Ping path fails open, everything else surfaces a retryable 5xx). Checkout
-    beyond the idle capacity just opens a fresh connection, so the allocator
-    can never deadlock or refuse a request.
+    A connection idle past the probe threshold is round-tripped before reuse,
+    one idle past the maximum age is closed, and one whose server side is gone
+    surfaces as an ``OperationalError`` on use, is discarded on check-in, and
+    leaves the caller's normal error handling to apply (the frps Ping path
+    fails open, everything else surfaces a retryable 5xx). Checkout beyond
+    the idle capacity just opens a fresh connection, so the allocator can
+    never deadlock or refuse a request.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -71,6 +130,8 @@ class PooledConnectionAllocator(BaseModel):
     is_poolable_connection: Callable[[Any], bool]
     # Idle age past which a checked-out connection is probed before reuse.
     idle_probe_threshold_seconds: float = _IDLE_PROBE_THRESHOLD_SECONDS
+    # Idle age past which a checked-out connection is closed instead of reused.
+    max_idle_age_seconds: float = _MAX_IDLE_AGE_SECONDS
     # Injected clock (monotonic seconds) so tests can age connections.
     monotonic: Callable[[], float] = time.monotonic
 
@@ -92,11 +153,16 @@ class PooledConnectionAllocator(BaseModel):
             return self._idle_connections.pop()
 
     def _is_ready_for_reuse(self, idle_entry: tuple[Any, float]) -> bool:
-        """Whether an idle connection can be handed out: open, and fresh or probed alive."""
+        """Whether an idle connection can be handed out: open, not aged out, and fresh or probed alive."""
         connection, idle_since = idle_entry
         if connection.closed:
             return False
-        if self.monotonic() - idle_since < self.idle_probe_threshold_seconds:
+        idle_seconds = self.monotonic() - idle_since
+        if idle_seconds >= self.max_idle_age_seconds:
+            emit_metric("db_pooled_connection_discarded", 1, {"reason": "idle_age"})
+            connection.close()
+            return False
+        if idle_seconds < self.idle_probe_threshold_seconds:
             return True
         return self._is_probe_passing(connection)
 

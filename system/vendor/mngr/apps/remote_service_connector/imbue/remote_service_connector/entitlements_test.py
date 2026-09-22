@@ -8,6 +8,7 @@ from imbue.remote_service_connector.testing import EXPLORER_PLAN_VALUES
 from imbue.remote_service_connector.testing import FREE_PLAN_VALUES
 from imbue.remote_service_connector.testing import InMemoryEntitlementsStore
 from imbue.remote_service_connector.testing import make_fake_entitlements_store
+from imbue.remote_service_connector.testing import make_supertokens_core_status_exception
 
 
 def test_initial_plan_pre_cutoff_paid_email_gets_ally() -> None:
@@ -32,6 +33,16 @@ def test_initial_plan_unpaid_email_gets_free() -> None:
         "user-1", "bob@gmail.com", time_joined_getter=lambda uid: 0, paid_checker=lambda email: False
     )
     assert plan == "free"
+
+
+def test_get_user_time_joined_ms_propagates_a_core_outage() -> None:
+    """A core 5xx on the user lookup must not read as "unknown timestamp" (which would create a row from a guess)."""
+
+    def _raise_502(_user_id: str) -> None:
+        raise make_supertokens_core_status_exception(method="GET", path="/user/id", status_code=502)
+
+    with pytest.raises(errors_mod.SuperTokensCoreUnavailableError):
+        entitlements_mod._get_user_time_joined_ms("user-1", user_getter=_raise_502)
 
 
 def test_ensure_account_entitlements_copies_plan_values_and_is_idempotent() -> None:

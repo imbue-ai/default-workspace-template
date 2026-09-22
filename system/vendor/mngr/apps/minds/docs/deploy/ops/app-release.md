@@ -322,6 +322,17 @@ are harmless. (Correcting a tag *nothing* has consumed yet is the one exception:
 `git tag -d "$VERSION"` then `git push --force ... refs/tags/"$VERSION"`, having
 confirmed no build or bake used it.)
 
+Pushing the mngr tag triggers the `Mirror tags` workflow (`.github/workflows/mirror-tags.yml`),
+which waits for the mirror push to export the tagged commit and then re-points the tag
+onto the public `imbue-ai/mngr`. `install-linux.sh --version latest` clones the public repo
+at the latest `minds-v*` tag, so the release is not installable that way until that run succeeds -- check
+it in Actions. A tag push runs the workflow file *at the tagged commit*, so a
+`$GREEN_MNGR_SHA` that predates `mirror-tags.yml` produces no run at all: dispatch
+`Mirror tags` by hand (it then reads the file from `main`) with the tag name, or with an
+empty tag to backfill every `minds-v*` tag the mirror lacks. After correcting a tag,
+dispatch it by hand with the tag name and `force=true`: the automatic run refuses to
+move a tag the mirror already has.
+
 ### 8. Close the loop: CI on the two tags
 
 Both refs = the tag, exercising the binary's baked `FALLBACK_BRANCH` end to end. Because the mngr tag is the step-4 SHA, `build` reuses the bundle you already verified:
@@ -368,9 +379,11 @@ build. Promotion is what reaches everyone else, and `allowDowngrade` is false, s
 a bad build cannot be recalled from installs that already took it.
 
 Point a channel at the build in `apps/minds/release-channels.toml` and merge; CI
-publishes the manifests. Every entry needs all four fields — a missing
+publishes the manifests. Every entry needs all five fields — a missing
 `rollout_percentage` is not a smaller rollout but the largest one, since a
-manifest declaring none is offered to everyone:
+manifest declaring none is offered to everyone, and `platforms` names which of
+ToDesktop's per-platform manifests the entry publishes (`mac`, `linux`), one
+`<channel>-<platform>.yml` each:
 
 ```toml
 [channels.alpha]
@@ -378,7 +391,14 @@ build_id = "<the build id from step 8's `build` job summary>"
 version = "0.5.0"
 fallback_branch = "minds-v0.5.0"
 rollout_percentage = 100
+platforms = ["mac", "linux"]
 ```
+
+Listing `linux` for a build ToDesktop never packaged for Linux refuses the whole
+entry, so the mac half is not published either. Stable stays `["mac"]` until a
+Linux build has passed the manual pass in
+[next_deploy.md](../next_deploy.md); dropping a platform from an entry withdraws
+nothing, exactly like dropping the entry.
 
 `version` must equal the ToDesktop build's own version and `fallback_branch` must
 be exactly `minds-v<version>`, or the publish refuses. Nothing checks the build's
@@ -403,6 +423,7 @@ unattended — the `minds-release` environment has no reviewers. Confirm after:
 
 ```bash
 curl -s https://updates.imbueminds.com/<channel>-mac.yml | grep -E 'version:|stagingPercentage:'
+curl -s https://updates.imbueminds.com/<channel>-linux.yml | grep -E 'version:|stagingPercentage:'
 ```
 
 ### 9b. Repoint the web channels
@@ -644,23 +665,33 @@ Drop `--dry-run` to write.
 ## The public download link
 
 `https://minds.imbue.com/download?platform=mac-arm64` is the link to hand anyone
-who wants minds. Name the architecture when you share it — minds ships Apple
-Silicon only. (`mac` resolves identically and is what the marketing site's
+who wants minds on a Mac. Name the architecture when you share it — minds ships
+Apple Silicon only. (`mac` resolves identically and is what the marketing site's
 buttons use, so it is not ours to remove; `accounts.imbue.com/download` also
 answers, but share the `minds` one.) It records a campaign-tagged download event
 via the `imbue_attribution` cookie, so a download can be tied to the account
 created later — the contract with the marketing site is
 `apps/remote_service_connector/docs/attribution-cookie-contract.md`.
 
-**Promoting stable moves the link by itself.** The connector reads the arm64
-`.dmg` out of `stable-mac.yml` and caches it for a minute, rather than having a
-value baked in at release time that would not reach the running service until
-someone redeployed.
+| `platform=` | Serves | Read from |
+|---|---|---|
+| `mac-arm64` (alias `mac`) | the arm64 `.dmg` | `stable-mac.yml` |
+| `linux-deb-x64` (alias `linux`) | the x86_64 `.deb` | `stable-linux.yml` |
+| `linux-appimage-x64` | the x86_64 AppImage | `stable-linux.yml` |
 
-If that read fails it falls back to `_DEFAULT_TARGET_BY_PLATFORM` in the
-connector, which is why promoting stable bumps that constant in the same PR. The
-bump reaches production at the next connector deploy, so the deployed value
-trails `main` — behind stable, which is the safe direction.
+**Promoting stable moves the link by itself.** The connector reads each
+platform's installer out of that platform's stable manifest and caches it for a
+minute, rather than having a value baked in at release time that would not reach
+the running service until someone redeployed.
+
+If the mac read fails it falls back to the URL pinned in
+`_RELEASE_CHANNEL_PLATFORMS` in the connector, which is why promoting stable
+bumps that constant in the same PR. The bump reaches production at the next
+connector deploy, so the deployed value trails `main` — behind stable, which is
+the safe direction. The Linux platforms pin no fallback: until stable's
+`platforms` lists `linux`, `stable-linux.yml` does not exist, and those links
+answer 404 without recording a download event. Once it does, pin a Linux
+fallback beside the mac one and delete the test that asserts there is none.
 
 To check the link tracks stable:
 
@@ -672,8 +703,13 @@ curl -s -o /dev/null -D - 'https://minds.imbue.com/download?platform=mac-arm64' 
 Agreement is not proof the feed was read — the pin names the same build. A
 *disagreement* right after a promotion is just the cache; later, it means the
 feed could not be read **and** the deployed pin is stale. The connector logs
-`Could not resolve the stable download link` when a read fails, and that log is
-what tells a resolved redirect from a fallback one.
+`Could not resolve the stable download link for <platform>` when a read fails,
+and that log is what tells a resolved redirect from a fallback one. A platform
+that pins no fallback and whose channel file the feed does not publish logs
+`Served no stable download link for <platform>: <channel file> is not published`
+at warning level instead;
+for a platform with a pinned fallback a missing channel file is a read failure
+like any other.
 
 ## Failure modes
 

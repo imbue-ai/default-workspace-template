@@ -19,10 +19,12 @@ from uuid import uuid4
 import psutil
 import pytest
 
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_latchkey.core import LatchkeyError
 from imbue.mngr_latchkey.forward_supervisor import LatchkeyForwardSupervisor
 from imbue.mngr_latchkey.forward_supervisor import _descendant_processes
 from imbue.mngr_latchkey.forward_supervisor import is_forward_owned_by
+from imbue.mngr_latchkey.forward_supervisor import live_forward_owner
 from imbue.mngr_latchkey.forward_supervisor import owning_forward_process
 from imbue.mngr_latchkey.store import LatchkeyForwardOwner
 from imbue.mngr_latchkey.store import acquire_forward_lock
@@ -33,54 +35,22 @@ from imbue.mngr_latchkey.store import forward_owner_path
 from imbue.mngr_latchkey.store import load_forward_owner
 from imbue.mngr_latchkey.store import plugin_data_dir
 from imbue.mngr_latchkey.store import update_forward_owner_gateway_port
+from imbue.mngr_latchkey.testing import PROCESS_WAIT_TIMEOUT_SECONDS
+from imbue.mngr_latchkey.testing import wait_for_process_exit
 
 _POLL_INTERVAL_SECONDS: Final[float] = 0.05
 
 
-# Upper bound for the process-state polls below. Purely a worst-case ceiling
-# (every poll returns as soon as its condition holds): spawning and tearing
-# down real subprocesses has been seen to exceed a 5s bound on a heavily
-# loaded machine, which is noise, not a bug in the code under test.
-_PROCESS_WAIT_TIMEOUT_SECONDS = 15.0
+def _is_process_alive(pid: int) -> bool:
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
 
 
-def _wait_for_process_exit(pid: int, timeout: float = _PROCESS_WAIT_TIMEOUT_SECONDS) -> bool:
-    """Poll until ``pid`` is gone or has become a zombie.
-
-    Zombies count as "exited" -- the subprocesses we spawn are children
-    of the test process and we never ``wait()`` on the underlying
-    ``Popen``, so a terminated child lingers in zombie state until the
-    test process itself exits. For the purpose of these tests that is
-    functionally equivalent to the process having exited.
-    """
-    poll_event = threading.Event()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            process = psutil.Process(pid)
-        except psutil.NoSuchProcess:
-            return True
-        try:
-            if process.status() == psutil.STATUS_ZOMBIE:
-                return True
-        except psutil.NoSuchProcess:
-            return True
-        poll_event.wait(timeout=_POLL_INTERVAL_SECONDS)
-    return False
-
-
-def _wait_for_process_alive(pid: int, timeout: float = _PROCESS_WAIT_TIMEOUT_SECONDS) -> bool:
+def _wait_for_process_alive(pid: int, timeout: float = PROCESS_WAIT_TIMEOUT_SECONDS) -> bool:
     """Poll until ``pid`` is a running process."""
-    poll_event = threading.Event()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            if psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass
-        poll_event.wait(timeout=_POLL_INTERVAL_SECONDS)
-    return False
+    return poll_until(lambda: _is_process_alive(pid), timeout=timeout, poll_interval=_POLL_INTERVAL_SECONDS)
 
 
 def _make_fake_mngr_binary(tmp_path: Path) -> Path:
@@ -206,7 +176,7 @@ def test_ensure_running_spawns_when_no_record_exists(tmp_path: Path) -> None:
         assert forward_log_path(supervisor.plugin_data_dir).is_file()
     finally:
         supervisor.stop()
-        assert _wait_for_process_exit(info.pid)
+        assert wait_for_process_exit(info.pid)
 
 
 def test_ensure_running_spawns_forward_in_configured_cwd(tmp_path: Path) -> None:
@@ -237,7 +207,7 @@ def test_ensure_running_spawns_forward_in_configured_cwd(tmp_path: Path) -> None
         assert Path(observed_cwd).resolve() == spawn_cwd.resolve()
     finally:
         supervisor.stop()
-        assert _wait_for_process_exit(info.pid)
+        assert wait_for_process_exit(info.pid)
 
 
 def test_bounce_starts_supervisor_when_none_running(tmp_path: Path) -> None:
@@ -273,7 +243,7 @@ def test_stop_terminates_running_supervisor_and_leaves_the_directory_unowned(tmp
     _wait_for_forward_record(supervisor.plugin_data_dir)
 
     supervisor.stop()
-    assert _wait_for_process_exit(info.pid)
+    assert wait_for_process_exit(info.pid)
     assert owning_forward_process(supervisor.plugin_data_dir) is None
 
 
@@ -331,7 +301,7 @@ def test_stop_terminates_a_forward_that_has_only_just_claimed_the_directory(tmp_
     )
     info = supervisor.ensure_running()
     supervisor.stop()
-    assert _wait_for_process_exit(info.pid)
+    assert wait_for_process_exit(info.pid)
 
 
 def test_restart_terminates_existing_and_spawns_fresh(tmp_path: Path) -> None:
@@ -361,13 +331,13 @@ def test_restart_terminates_existing_and_spawns_fresh(tmp_path: Path) -> None:
     info_new = supervisor_new.restart()
     try:
         assert info_new.pid != info_old.pid
-        assert _wait_for_process_exit(info_old.pid)
+        assert wait_for_process_exit(info_old.pid)
         assert _wait_for_process_alive(info_new.pid)
         new_record = _wait_for_forward_record(supervisor_new.plugin_data_dir)
         assert new_record.pid == info_new.pid
     finally:
         supervisor_new.stop()
-        assert _wait_for_process_exit(info_new.pid)
+        assert wait_for_process_exit(info_new.pid)
 
 
 def test_restart_is_a_clean_spawn_when_no_previous_supervisor(tmp_path: Path) -> None:
@@ -383,7 +353,7 @@ def test_restart_is_a_clean_spawn_when_no_previous_supervisor(tmp_path: Path) ->
         assert _wait_for_process_alive(info.pid)
     finally:
         supervisor.stop()
-        assert _wait_for_process_exit(info.pid)
+        assert wait_for_process_exit(info.pid)
 
 
 def test_get_forward_owner_returns_none_when_unstarted(tmp_path: Path) -> None:
@@ -419,10 +389,7 @@ def test_a_malformed_pre_lock_record_does_not_block_the_spawn(tmp_path: Path) ->
         assert not forward_info_path(plugin_dir).is_file()
     finally:
         supervisor.stop()
-        assert _wait_for_process_exit(info.pid)
-
-
-# -- extra_env propagation --------------------------------------------------
+        assert wait_for_process_exit(info.pid)
 
 
 def _make_env_dumping_mngr_binary(tmp_path: Path) -> Path:
@@ -510,7 +477,7 @@ def test_extra_env_reaches_spawned_forward_subprocess(tmp_path: Path) -> None:
         }
     finally:
         supervisor.stop()
-        assert _wait_for_process_exit(info.pid)
+        assert wait_for_process_exit(info.pid)
 
 
 def test_extra_env_defaults_to_empty_mapping(tmp_path: Path) -> None:
@@ -703,12 +670,12 @@ def test_restart_reaps_orphan_forwards_children_too(tmp_path: Path) -> None:
         )
         # ``restart`` is the verb that replaces a live owner; ``ensure_running`` adopts one.
         info = supervisor.restart()
-        assert _wait_for_process_exit(orphan.pid), "the orphan forward was not reaped"
-        assert _wait_for_process_exit(child_pid), "the orphan forward's child was not reaped"
+        assert wait_for_process_exit(orphan.pid), "the orphan forward was not reaped"
+        assert wait_for_process_exit(child_pid), "the orphan forward's child was not reaped"
     finally:
         if supervisor is not None and info is not None:
             supervisor.stop()
-            _wait_for_process_exit(info.pid)
+            wait_for_process_exit(info.pid)
         _terminate_orphan(orphan)
         if child_pid is not None:
             _terminate_pid_if_alive(child_pid)
@@ -741,8 +708,8 @@ def test_stop_terminates_descendants_of_wedged_supervisor(tmp_path: Path) -> Non
         assert psutil.pid_exists(child_pid)
 
         supervisor.stop()
-        assert _wait_for_process_exit(info.pid)
-        assert _wait_for_process_exit(child_pid), "the supervisor's child was not reaped by stop()"
+        assert wait_for_process_exit(info.pid)
+        assert wait_for_process_exit(child_pid), "the supervisor's child was not reaped by stop()"
     finally:
         if info is not None:
             _terminate_pid_if_alive(info.pid)
@@ -779,8 +746,8 @@ def test_stop_terminates_descendants_via_on_disk_record(tmp_path: Path) -> None:
             latchkey_directory=latchkey_directory,
         )
         fresh_supervisor.stop()
-        assert _wait_for_process_exit(info.pid)
-        assert _wait_for_process_exit(child_pid), "the supervisor's child was not reaped by stop()"
+        assert wait_for_process_exit(info.pid)
+        assert wait_for_process_exit(child_pid), "the supervisor's child was not reaped by stop()"
     finally:
         if info is not None:
             _terminate_pid_if_alive(info.pid)
@@ -809,7 +776,7 @@ def test_owning_forward_process_names_the_forward_holding_the_directory(tmp_path
         _terminate_orphan(forward)
     # The kernel drops the lock when the owner dies, so the recorded owner --
     # still on disk -- must read as gone rather than as live.
-    assert _wait_for_process_exit(forward.pid)
+    assert wait_for_process_exit(forward.pid)
     assert owning_forward_process(plugin_data_dir(own_directory)) is None
 
 
@@ -884,13 +851,13 @@ def test_restart_replaces_a_forward_that_predates_the_ownership_lock(tmp_path: P
         )
         info = supervisor.restart()
 
-        assert _wait_for_process_exit(pre_lock.pid), "the pre-lock forward outlived the update"
+        assert wait_for_process_exit(pre_lock.pid), "the pre-lock forward outlived the update"
         assert info.pid != pre_lock.pid
         assert _wait_for_forward_owner(latchkey_directory, info.pid), "the replacement never took the lock"
     finally:
         if supervisor is not None and info is not None:
             supervisor.stop()
-            _wait_for_process_exit(info.pid)
+            wait_for_process_exit(info.pid)
         _terminate_orphan(pre_lock)
 
 
@@ -984,7 +951,7 @@ def test_ensure_running_adopts_the_forward_that_won_a_spawn_race(tmp_path: Path)
         # finds it through the lock rather than through the returned record --
         # reaches it when ``ensure_running`` raised instead of naming it.
         supervisor.stop()
-    assert _wait_for_process_exit(info.pid)
+    assert wait_for_process_exit(info.pid)
 
 
 def test_owning_forward_process_reads_no_owner_when_the_stamp_never_lands(tmp_path: Path) -> None:
@@ -1064,6 +1031,34 @@ def test_owning_forward_process_ignores_an_owner_record_nobody_backs(tmp_path: P
         assert owning_forward_process(unowned_data_dir) is None
     finally:
         _terminate_orphan(forward)
+
+
+def test_live_forward_owner_reports_the_holders_record_and_nothing_once_it_departs(tmp_path: Path) -> None:
+    """The record comes back only while its forward still holds the directory.
+
+    This is what a consumer waiting for the gateway port reads, so a record
+    whose forward is gone must not answer at all: its port names a gateway that
+    no longer listens, and its absence is how a restart in flight is told from
+    a gateway that is up.
+    """
+    fake_binary = _make_fake_mngr_binary(tmp_path)
+    latchkey_directory = tmp_path / f"latchkey-{uuid4().hex}"
+    forward = _spawn_orphan_fake_forward(fake_binary, latchkey_directory)
+    data_dir = plugin_data_dir(latchkey_directory)
+    try:
+        _wait_for_forward_ready(data_dir, forward.pid)
+        update_forward_owner_gateway_port(data_dir, 54321)
+        owner = live_forward_owner(data_dir)
+        assert owner is not None
+        assert owner.pid == forward.pid
+        assert owner.gateway_port == 54321
+    finally:
+        # Returns once the forward has actually exited, so the kernel has
+        # dropped its lock by the time the reads below run.
+        _terminate_orphan(forward)
+    # The departed forward's record is still on disk, port and all.
+    assert load_forward_owner(data_dir) is not None
+    assert live_forward_owner(data_dir) is None
 
 
 def test_owning_forward_process_survives_a_directory_containing_a_space(tmp_path: Path) -> None:
@@ -1178,11 +1173,11 @@ def test_ensure_running_does_not_reap_forward_for_a_different_directory(tmp_path
         # ``ensure_running`` reaps synchronously, so by here any erroneous
         # signal would already have been sent: the other forward must be intact.
         assert psutil.pid_exists(other.pid)
-        assert not _wait_for_process_exit(other.pid, timeout=1.0)
+        assert not wait_for_process_exit(other.pid, timeout=1.0)
     finally:
         if supervisor is not None and info is not None:
             supervisor.stop()
-            _wait_for_process_exit(info.pid)
+            wait_for_process_exit(info.pid)
         _terminate_orphan(other)
 
 

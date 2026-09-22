@@ -13,8 +13,9 @@ The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 `chat-app`, the console script of this package, from its own uv tool environment
 (installed by `system/scripts/build_workspace.sh` with the mngr harness plugins
 `system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
-its manifest and port 8010 through `system/scripts/forward_port.py`, starts
-`mngr observe` for the workspace's agents, and serves:
+its manifest and port 8010 through `system/scripts/forward_port.py`, follows
+the agent lifecycle event file the workspace's `agent-observer` program (`mngr
+observe`, its own supervised service) writes, and serves:
 
 - `GET /`: the chat root, the built `root.html`: the chat list down the left
   (`frontend/src/root/`, grouped by the chat that started each helper and
@@ -50,10 +51,25 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   its last message as `last_messaged_at`, which the chat root's list orders on)
   and the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`).
-- `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
-  polls on the `--preflight` boot and on every critical app after the restart.
+- `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
+  the update apply polls on the `--preflight` boot and on every critical app
+  after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
+  whether lifecycle events are actually reaching this instance; `status` stays
+  `ok` either way.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
+
+## The agent observer
+
+The chat does not run an observer of its own. `agent-observer`
+(`system/supervisord.conf.d/agent-observer.conf`) runs `mngr observe --quiet`
+from the primary agent's work dir, and every chat instance follows the event
+file it writes through mngr's `ObserveEventFollower`. supervisord starts the two in no
+guaranteed order, so the chat starts without the observer: its instances API
+answers `503` until the observer's first full snapshot is folded, and
+`/api/health` reports the outage. When the observer dies mid-run the chat keeps
+serving its last known list and reports degraded; the returning observer's
+opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
 (`shell:open`, `shell:focused`, the handshake); the shell never calls the chat.
@@ -209,10 +225,10 @@ folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 at `data/.apps/chat/settings.json`; auto with a limit of 5 unless changed), and
 a chat whose mode calls for it launches through the `fast` create template, a
 handoff's successor included. The model picker's fast row states the chat's
-mode and opens a small chooser where the mode, auto's turn limit and the
-default for new chats are set; `/fast on` and `/fast off` typed in the
-composer choose the mode too. The first time auto switches a chat in a
-workspace, a one-time notice over the model bar explains it.
+mode and opens a submenu where the mode, auto's turn limit and the default for
+new chats are set; `/fast on` and `/fast off` typed in the composer choose the
+mode too. The first time auto switches a chat in a workspace, a one-time notice
+over the model bar explains it.
 
 ## Provider accounts
 
@@ -273,11 +289,21 @@ registry, for a throwaway boot on another port (`CHAT_PORT`).
 
 `--preflight` is the update apply's throwaway boot (`.agents/skills/update-self`):
 the app imports, builds, and serves `/api/health` but reconciles no accounts (the
-boot sweep reaps sign-in processes), starts no agent manager (so no `mngr observe`,
-session sweep, or memory prioritizer), and registers nothing.
-The apply boots the merged chat this way on a free port before restarting the live
+boot sweep reaps sign-in processes), starts no agent manager (so no follower of
+the observer, session sweep, or memory prioritizer), and registers nothing. The
+apply boots the merged chat this way on a free port before restarting the live
 services, since this is the process that imports mngr and the harness plugins, and
 refuses the update when it cannot come up.
+
+`--secondary` is a second chat beside the live one, the preview of a proposed
+change: it follows the same observer, reads the live accounts, and tracks every
+agent the live chat tracks, but reconciles no accounts, writes no memory scores,
+runs no automatic compaction, resumes no unfinished switch, opens no windows,
+reports no client activity to the shell, and registers nothing. Sends from it are
+real, but a switch to another account is refused, since it would write the chat's
+record into the scratch copy only. Point `CHAT_DATA_DIR` at a scratch copy of
+`data/.apps/chat/` so its writes (the message stamps, settings, and chat records)
+never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

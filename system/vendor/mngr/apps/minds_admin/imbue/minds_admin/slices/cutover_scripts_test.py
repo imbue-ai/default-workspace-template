@@ -3,8 +3,10 @@ import io
 import json
 import os
 import platform
+import shlex
 import subprocess
 import tarfile
+import tempfile
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
@@ -20,18 +22,22 @@ from imbue.minds_admin.slices.cutover_scripts import LATCHKEY_HARVEST_FILE_MARKE
 from imbue.minds_admin.slices.cutover_scripts import LATCHKEY_TMPFS_REPLAY_TAR_PATH
 from imbue.minds_admin.slices.cutover_scripts import TRANSPLANT_DONE_MARKER
 from imbue.minds_admin.slices.cutover_scripts import authorized_keys_without
+from imbue.minds_admin.slices.cutover_scripts import build_autostart_start_command
 from imbue.minds_admin.slices.cutover_scripts import build_banner_wait_command
 from imbue.minds_admin.slices.cutover_scripts import build_container_id_command
 from imbue.minds_admin.slices.cutover_scripts import build_container_key_harvest_command
 from imbue.minds_admin.slices.cutover_scripts import build_disk_materialize_command
 from imbue.minds_admin.slices.cutover_scripts import build_docker_create_args
 from imbue.minds_admin.slices.cutover_scripts import build_gen1_datadisk_info_command
+from imbue.minds_admin.slices.cutover_scripts import build_gen1_datadisk_used_bytes_command
 from imbue.minds_admin.slices.cutover_scripts import build_git_describe_command
 from imbue.minds_admin.slices.cutover_scripts import build_home_layout_probe_command
 from imbue.minds_admin.slices.cutover_scripts import build_image_load_command
 from imbue.minds_admin.slices.cutover_scripts import build_image_publish_command
+from imbue.minds_admin.slices.cutover_scripts import build_latchkey_curl_shim_command
 from imbue.minds_admin.slices.cutover_scripts import build_latchkey_replay_tar
 from imbue.minds_admin.slices.cutover_scripts import build_latchkey_tar_extract_command
+from imbue.minds_admin.slices.cutover_scripts import build_mngr_tool_resync_command
 from imbue.minds_admin.slices.cutover_scripts import build_replayed_container_files
 from imbue.minds_admin.slices.cutover_scripts import build_stage_replayed_container_files_command
 from imbue.minds_admin.slices.cutover_scripts import build_transplant_clear_command
@@ -49,6 +55,7 @@ from imbue.minds_admin.slices.cutover_scripts import cutover_transplant_dir
 from imbue.minds_admin.slices.cutover_scripts import extract_autostart_installer_commands
 from imbue.minds_admin.slices.cutover_scripts import extract_slice_volume_home_path
 from imbue.minds_admin.slices.cutover_scripts import extract_template_replay_inputs
+from imbue.minds_admin.slices.cutover_scripts import harvested_latchkey_curl_path_or_none
 from imbue.minds_admin.slices.cutover_scripts import home_layout_error_or_none
 from imbue.minds_admin.slices.cutover_scripts import latchkey_gateway_files_error_or_none
 from imbue.minds_admin.slices.cutover_scripts import latchkey_replay_detail
@@ -58,10 +65,14 @@ from imbue.minds_admin.slices.cutover_scripts import parse_docker_inspect
 from imbue.minds_admin.slices.cutover_scripts import parse_latchkey_harvest_output
 from imbue.minds_admin.slices.cutover_scripts import parse_marked_files
 from imbue.minds_admin.slices.cutover_scripts import parse_qemu_img_info
+from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_never_started
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_not_running
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_unhealthy
+from imbue.minds_admin.slices.cutover_scripts import parse_used_bytes
 from imbue.minds_admin.slices.cutover_scripts import render_gen2_disk_transplant_script
+from imbue.minds_admin.slices.cutover_scripts import render_mngr_tool_resync_script
 from imbue.minds_admin.slices.cutover_scripts import replayed_container_dirs
+from imbue.minds_admin.slices.cutover_scripts import split_unhealthy_by_template
 from imbue.minds_admin.slices.cutover_scripts import staged_container_dir_path
 from imbue.minds_admin.slices.cutover_scripts import staged_container_file_path
 from imbue.minds_admin.slices.cutover_scripts import tunnel_conf_container_ssh_port
@@ -208,6 +219,33 @@ def test_disk_materialize_and_unit_commands_target_the_slice_dir() -> None:
     assert wait.startswith("bash -c ")
     assert "/dev/tcp/127.0.0.1/22010" in wait
     assert "exit 7" in wait
+
+
+def test_autostart_start_command_starts_the_installed_unit_and_skips_a_vm_without_one() -> None:
+    command = build_autostart_start_command()
+    assert command == snapshot(
+        "if systemctl cat minds-autostart.service >/dev/null 2>&1; then systemctl start minds-autostart.service; fi"
+    )
+    # Exercised under a shell with a fake systemctl: a VM whose installer wrote
+    # the unit gets a blocking start; one without the unit runs nothing.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake_bin = Path(temp_dir) / "bin"
+        fake_bin.mkdir()
+        calls_path = Path(temp_dir) / "calls"
+        (fake_bin / "systemctl").write_text(
+            "#!/bin/sh\n"
+            f'echo "$@" >> {calls_path}\n'
+            'if [ "$1" = cat ]; then [ -e "$UNIT_INSTALLED" ]; exit $?; fi\n'
+            "exit 0\n"
+        )
+        (fake_bin / "systemctl").chmod(0o700)
+        unit_marker = Path(temp_dir) / "unit-installed"
+        env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "UNIT_INSTALLED": str(unit_marker)}
+        subprocess.run(["bash", "-c", command], env=env, check=True)
+        assert calls_path.read_text().splitlines() == ["cat minds-autostart.service"]
+        unit_marker.touch()
+        subprocess.run(["bash", "-c", command], env=env, check=True)
+        assert calls_path.read_text().splitlines()[-1] == "start minds-autostart.service"
 
 
 def test_image_publish_and_load_commands_source_the_transfer_env() -> None:
@@ -452,11 +490,56 @@ post_host_create_outer_command__extend = ["echo installer"]
 [providers.imbue_cloud_slice]
 volume_home_path = "/home/user"
 """
-    inputs = extract_template_replay_inputs(settings)
+    supervisord_conf = "[supervisord]\nnodaemon=true\n\n[program:system_interface]\ncommand=x\n\n[include]\nfiles = supervisord.conf.d/*.conf\n"
+    drop_in = "[program:host-backup]\ncommand=y\n[program: terminal ]\ncommand=z\n"
+    inputs = extract_template_replay_inputs(settings, [supervisord_conf, drop_in])
     assert inputs.installer_commands == ("echo installer",)
     assert inputs.container_home_path == "/home/user"
+    assert inputs.template_program_names == ("host-backup", "system_interface", "terminal")
     with pytest.raises(CutoverError, match="does not parse"):
-        extract_template_replay_inputs("= broken")
+        extract_template_replay_inputs("= broken", [supervisord_conf])
+    with pytest.raises(CutoverError, match="names no \\[program"):
+        extract_template_replay_inputs(settings, ["[supervisord]\nnodaemon=true\n"])
+
+
+def test_split_unhealthy_by_template_keeps_template_programs_and_complaints_blocking() -> None:
+    unhealthy = ["system_interface STARTING", "sg-download FATAL", "unix:///var/run/supervisor.sock no such file"]
+    split = split_unhealthy_by_template(unhealthy, frozenset({"system_interface", "host-backup"}), frozenset())
+    assert split.blocking == ("system_interface STARTING", "unix:///var/run/supervisor.sock no such file")
+    assert split.user_program_entries == ("sg-download FATAL",)
+    assert split.not_autostarted_template_entries == ()
+    # Unknown template: everything blocks.
+    unknown_template = split_unhealthy_by_template(unhealthy, None, frozenset({"system_interface"}))
+    assert unknown_template.blocking == tuple(unhealthy)
+    assert unknown_template.user_program_entries == ()
+    empty = split_unhealthy_by_template([], frozenset({"system_interface"}), frozenset())
+    assert empty.blocking == ()
+
+
+def test_split_unhealthy_by_template_reports_a_never_started_template_program_instead_of_blocking() -> None:
+    # A self-updated workspace whose own config no longer autostarts a template
+    # program (the browser service, from a later release than its version tag)
+    # comes back with it STOPPED "Not started": reported, never a parked row.
+    # The same state on a program the template still autostarts (stopped by
+    # hand before the move, so no "Not started") keeps blocking.
+    unhealthy = ["browser STOPPED", "terminal STOPPED", "bowei-dispatch STOPPED"]
+    split = split_unhealthy_by_template(
+        unhealthy, frozenset({"browser", "terminal", "chat"}), frozenset({"browser", "bowei-dispatch"})
+    )
+    assert split.blocking == ("terminal STOPPED",)
+    assert split.not_autostarted_template_entries == ("browser STOPPED",)
+    assert split.user_program_entries == ("bowei-dispatch STOPPED",)
+
+
+def test_parse_supervisorctl_never_started_names_only_the_not_started_stopped_programs() -> None:
+    output = (
+        "browser                          STOPPED   Not started\n"
+        "chat                             STOPPED   Sep 21 12:40 PM\n"
+        "terminal                         RUNNING   pid 44, uptime 0:10:00\n"
+        "unix:///var/run/supervisor.sock no such file\n"
+    )
+    assert parse_supervisorctl_never_started(output) == frozenset({"browser"})
+    assert parse_supervisorctl_never_started("") == frozenset()
 
 
 def test_transplant_rescue_moves_a_crashed_attempts_disk_back_only_when_the_transplant_dir_lacks_it() -> None:
@@ -850,3 +933,119 @@ def test_home_layout_error_accepts_only_the_home_layout() -> None:
     assert "repair-home-layout --host-id host-abc --migrate" in legacy
     unknown = home_layout_error_or_none("", "host-abc")
     assert unknown is not None and "unrecognized home layout" in unknown
+
+
+def test_gen1_datadisk_used_bytes_command_reads_the_disks_lima_mount_and_its_output_parses() -> None:
+    command = build_gen1_datadisk_used_bytes_command("mngr-slice-production-9b1978266c304e13-data")
+    assert "/mnt/lima-mngr-slice-production-9b1978266c304e13-data" in command
+    assert command.startswith("df -B1 --output=used ")
+    assert parse_used_bytes("       Used\n5476859904\n".split("\n")[-2] + "\n") == 5476859904
+    assert parse_used_bytes("5476859904\n") == 5476859904
+    with pytest.raises(CutoverError, match="no byte count"):
+        parse_used_bytes("df: /mnt/lima-x: No such file or directory\n")
+
+
+def test_mngr_tool_resync_command_runs_the_script_as_a_login_shell_in_the_container() -> None:
+    command = build_mngr_tool_resync_command("minds-slice-abc")
+    assert command.startswith("docker exec --workdir / minds-slice-abc bash -lc ")
+    assert "uv tool install -e system/vendor/mngr/libs/mngr" in command
+    assert "--reinstall" in command
+
+
+def test_mngr_tool_resync_script_reinstalls_the_manifest_plugins_for_the_mngr_tool_under_the_tool_home() -> None:
+    # Exercised under a shell with a fake uv: the manifest's mngr plugins (and
+    # only those) ride the one reinstall, pinned to the tool home's uv dirs.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        workspace = Path(temp_dir) / "workspace"
+        (workspace / "system" / "config").mkdir(parents=True)
+        (workspace / "system" / "config" / "mngr_plugins.toml").write_text(
+            "[[plugins]]\n"
+            'path = "system/vendor/mngr/libs/mngr_claude"\n'
+            'tools = ["mngr", "chat"]\n'
+            "[[plugins]]\n"
+            'path = "system/vendor/mngr/libs/mngr_wait"\n'
+            'tools = ["mngr"]\n'
+            "[[plugins]]\n"
+            'path = "system/apps/chat"\n'
+            'tools = ["chat"]\n'
+        )
+        fake_bin = Path(temp_dir) / "bin"
+        fake_bin.mkdir()
+        calls_path = Path(temp_dir) / "calls"
+        (fake_bin / "uv").write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo "HOME=$HOME UV_TOOL_DIR=$UV_TOOL_DIR UV_TOOL_BIN_DIR=$UV_TOOL_BIN_DIR" >> {shlex.quote(str(calls_path))}\n'
+            f'echo "$@" >> {shlex.quote(str(calls_path))}\n'
+        )
+        (fake_bin / "uv").chmod(0o755)
+        tool_home = Path(temp_dir) / "toolhome"
+        tool_home.mkdir()
+        result = subprocess.run(
+            ["bash", "-c", render_mngr_tool_resync_script(str(workspace))],
+            env={"PATH": f"{fake_bin}:{os.environ['PATH']}", "HOME": temp_dir, "TOOL_ENV_HOME": str(tool_home)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert calls_path.read_text().splitlines() == [
+            f"HOME={tool_home} UV_TOOL_DIR={tool_home}/.local/share/uv/tools UV_TOOL_BIN_DIR={tool_home}/.local/bin",
+            "tool install -e system/vendor/mngr/libs/mngr --with-editable system/vendor/mngr/libs/mngr_claude "
+            "--with-editable system/vendor/mngr/libs/mngr_wait --reinstall",
+        ]
+
+
+def test_mngr_tool_resync_script_refuses_a_checkout_without_the_plugin_manifest() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        result = subprocess.run(
+            ["bash", "-c", render_mngr_tool_resync_script(temp_dir)],
+            env={"PATH": os.environ["PATH"], "HOME": temp_dir},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 1
+        assert "no system/config/mngr_plugins.toml" in result.stderr
+
+
+def test_harvested_latchkey_curl_path_reads_the_run_script_export_and_is_none_without_one() -> None:
+    run_script = (
+        "#!/bin/sh\nset -e\nexport LATCHKEY_GATEWAY_LISTEN_PORT=1989\n"
+        "export LATCHKEY_CURL=/usr/local/bin/latchkey-curl-router\nexec latchkey gateway\n"
+    ).encode()
+    state = HarvestedLatchkeyState(
+        is_present=True,
+        disk_files=(
+            make_harvested_file(f"{VM_LATCHKEY_DIR}/config.json", b"{}\n", "0600"),
+            make_harvested_file(f"{VM_LATCHKEY_DIR}/gateway_run.sh", run_script, "0700"),
+        ),
+        supervisor_confs=(),
+        tmpfs_files=(),
+    )
+    assert harvested_latchkey_curl_path_or_none(state) == "/usr/local/bin/latchkey-curl-router"
+    # A run script without the export (an older desktop build), and a
+    # harvest without a run script at all, both name no curl.
+    without_export = state.model_copy_update(
+        to_update(
+            state.field_ref().disk_files,
+            (make_harvested_file(f"{VM_LATCHKEY_DIR}/gateway_run.sh", b"#!/bin/sh\nexec latchkey gateway\n", "0700"),),
+        )
+    )
+    assert harvested_latchkey_curl_path_or_none(without_export) is None
+    assert harvested_latchkey_curl_path_or_none(make_harvested_latchkey_state(LatchkeyReplayPlan.ABSENT)) is None
+
+
+def test_latchkey_curl_shim_command_links_a_missing_path_and_leaves_an_existing_one_alone() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        installed = Path(temp_dir) / "latchkey-curl-dispatch"
+        installed.write_text("#!/bin/sh\n")
+        expected = Path(temp_dir) / "latchkey-curl-router"
+        command = build_latchkey_curl_shim_command(str(expected), str(installed))
+        assert_valid_bash(command)
+        subprocess.run(["bash", "-c", command], check=True)
+        assert expected.is_symlink() and expected.resolve() == installed.resolve()
+        # A path that already exists (a real binary the desktop installed) is kept.
+        real = Path(temp_dir) / "present"
+        real.write_text("real\n")
+        subprocess.run(["bash", "-c", build_latchkey_curl_shim_command(str(real), str(installed))], check=True)
+        assert not real.is_symlink() and real.read_text() == "real\n"

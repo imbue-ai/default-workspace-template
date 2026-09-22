@@ -482,7 +482,7 @@ def _gen2_script(proxy_ips: tuple[str, ...] = ("203.0.113.10",)) -> str:
         wireguard_listen_port=51820,
         wireguard_operators=(
             WireguardOperatorConfig.model_validate(
-                {"name": "josh", "public_key": "opkeyjosh=", "address": "10.112.0.2"}
+                {"name": "josh", "public_key": "wee0+EFoclrCL2Pdf3oT3dKtL3Z2W2Tr9JsbvLzqwLc=", "address": "10.112.0.2"}
             ),
         ),
         overlay=management_overlay_for_tier("dev"),

@@ -31,11 +31,13 @@
  * leaves the document takes the bubble with it. A trigger must be IN the
  * document to be heard -- a detached tree never reaches the listeners.
  *
- * The one deliberate exception is the chat app's collapsed chat rail: a rail
- * row sits directly above the next chat someone is choosing between, so a
- * centered-below bubble covers exactly the row the tooltip is meant to help
- * them choose. ``placeTooltip`` takes an optional ``placement`` for that one
- * case, defaulting to the shared centered-below behavior everywhere else.
+ * The exceptions are both the same problem: a bubble under the trigger covers
+ * the thing the pointer is choosing between. The chat rail takes ``right``,
+ * because a rail row sits directly above the row it is being compared against;
+ * a list of rows that raise their own tooltips takes ``above``, because the
+ * rows below the pointer are what a bubble would cover. ``placeTooltip`` takes
+ * an optional ``placement`` for those, defaulting to the shared centered-below
+ * behavior everywhere else.
  */
 
 import type m from "mithril";
@@ -81,7 +83,7 @@ export interface TooltipPosition {
  * places the bubble beside the trigger instead, so it never covers the row
  * underneath.
  */
-export type TooltipPlacement = "below" | "right";
+export type TooltipPlacement = "below" | "above" | "right";
 
 /**
  * Where the bubble goes for the default ``"below"`` placement: centered under
@@ -95,6 +97,23 @@ function placeTooltipBelow(anchor: TooltipAnchor, bubble: TooltipSize, viewport:
   const above = anchor.top - bubble.height - TOOLTIP_GAP;
   const overflowsBottom = below + bubble.height > viewport.height - TOOLTIP_MARGIN;
   const top = overflowsBottom && above >= TOOLTIP_MARGIN ? above : below;
+  return {
+    left: Math.max(TOOLTIP_MARGIN, Math.min(centered, viewport.width - TOOLTIP_MARGIN - bubble.width)),
+    top: Math.max(TOOLTIP_MARGIN, top),
+  };
+}
+
+/**
+ * Where the bubble goes for ``"above"`` placement: the mirror of the default,
+ * centered OVER the trigger and flipped below on a top overflow.
+ */
+function placeTooltipAbove(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
+  const centered = anchor.left + anchor.width / 2 - bubble.width / 2;
+  const above = anchor.top - bubble.height - TOOLTIP_GAP;
+  const below = anchor.bottom + TOOLTIP_GAP;
+  const overflowsTop = above < TOOLTIP_MARGIN;
+  const fitsBelow = below + bubble.height <= viewport.height - TOOLTIP_MARGIN;
+  const top = overflowsTop && fitsBelow ? below : above;
   return {
     left: Math.max(TOOLTIP_MARGIN, Math.min(centered, viewport.width - TOOLTIP_MARGIN - bubble.width)),
     top: Math.max(TOOLTIP_MARGIN, top),
@@ -135,6 +154,8 @@ export function placeTooltip(
   switch (placement) {
     case "below":
       return placeTooltipBelow(anchor, bubble, viewport);
+    case "above":
+      return placeTooltipAbove(anchor, bubble, viewport);
     case "right":
       return placeTooltipRight(anchor, bubble, viewport);
   }

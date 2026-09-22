@@ -20,6 +20,14 @@ from imbue.imbue_common.ids import RandomId
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.primitives import PositiveInt
 
+# Hostname at which a container reaches its outer host (the machine running its
+# docker daemon). Docker's conventional name for the host: Docker Desktop
+# resolves it natively, and on Linux a container created with
+# ``--add-host host.docker.internal:host-gateway`` resolves it to the daemon's
+# bridge address. Shared by the provider that creates containers with that
+# mapping and the plugins that bind outer-host services at the bridge address.
+OUTER_HOST_HOSTNAME_IN_CONTAINER: Final[str] = "host.docker.internal"
+
 # === Enums ===
 
 
@@ -711,6 +719,25 @@ class DiscoveredHost(FrozenModel):
     )
 
 
+def read_checked_out_branch(agent_data: Mapping[str, Any]) -> str | None:
+    """The branch an agent's work_dir is on, read from its raw persisted record.
+
+    Every provider that builds ``AgentDetails`` by hand from ``data.json`` needs
+    this, and so does the agent class, so the fallback lives in one place rather
+    than being restated at each call site.
+
+    Falls back to ``created_branch_name`` for records written before
+    ``checked_out_branch_name`` existed: for those, a created branch is the only
+    branch we ever knew. It stays None for an agent that attached to a
+    pre-existing branch back then, which is simply unknowable in hindsight.
+    """
+    checked_out = agent_data.get("checked_out_branch_name")
+    if checked_out:
+        return str(checked_out)
+    created = agent_data.get("created_branch_name")
+    return str(created) if created else None
+
+
 class DiscoveredAgent(FrozenModel):
     """Lightweight agent data collected during discovery (without connecting to the host).
 
@@ -785,6 +812,23 @@ class DiscoveredAgent(FrozenModel):
                 return None
             case unexpected:
                 raise CertifiedDataError(f"Expected str or None for created_branch_name, got {type(unexpected)}")
+
+    @property
+    def checked_out_branch_name(self) -> str | None:
+        """Return the git branch this agent's work_dir is on, or None if not set.
+
+        Set whether the branch was created for the agent or already existed, unlike
+        ``created_branch_name``. Records written before this field existed -- and
+        records that stored it empty -- fall back to that one, matching what
+        :func:`read_checked_out_branch` does for the same data.
+        """
+        match self.certified_data.get("checked_out_branch_name"):
+            case str(value) if value:
+                return value
+            case str() | None:
+                return self.created_branch_name
+            case unexpected:
+                raise CertifiedDataError(f"Expected str or None for checked_out_branch_name, got {type(unexpected)}")
 
     @property
     def labels(self) -> dict[str, str]:

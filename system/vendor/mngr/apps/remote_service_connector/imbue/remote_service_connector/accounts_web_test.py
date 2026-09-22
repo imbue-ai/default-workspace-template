@@ -1,11 +1,15 @@
 """Tests for the hosted accounts surface (browser auth, device handoff, OAuth, attribution)."""
 
+import logging
 import re
 import secrets
 import tomllib
+import urllib.error
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import parse_qs
@@ -41,6 +45,7 @@ from imbue.remote_service_connector.testing import _make_accounts_web_test_clien
 from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import encode_attribution_cookie
 from imbue.remote_service_connector.testing import hold_stable_download_link
+from imbue.remote_service_connector.testing import make_supertokens_core_status_exception
 
 
 def _sign_in_browser(
@@ -179,6 +184,21 @@ def test_me_reports_signed_out_then_identity(monkeypatch: pytest.MonkeyPatch) ->
     }
 
 
+def test_me_answers_503_instead_of_signed_out_when_the_core_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A core outage during browser-session resolution must not read as "signed out" (a bounce to /login)."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _sign_in_browser(client, st_backend, verified=True)
+    st_backend.raise_on(
+        "sdk_get_browser_session",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/verify", status_code=502),
+    )
+
+    resp = client.get("/accounts/api/me")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "auth_upstream_unavailable"
+
+
 def test_me_rejects_and_revokes_a_session_past_the_max_age(monkeypatch: pytest.MonkeyPatch) -> None:
     client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
     _sign_in_browser(client, st_backend, verified=True)
@@ -194,6 +214,28 @@ def test_me_rejects_and_revokes_a_session_past_the_max_age(monkeypatch: pytest.M
     expired = client.get("/accounts/api/me")
     assert expired.status_code == 401
     assert session.access_token not in st_backend.sessions_by_access_token
+
+
+def test_me_still_rejects_an_over_max_age_session_when_the_core_fails_the_revoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A core 5xx on the revoke is a 401 like any other over-max-age session, not a 500; the next resolution re-revokes."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _sign_in_browser(client, st_backend, verified=True)
+    session = st_backend.last_browser_session
+    assert session is not None
+    session.access_token_payload[accounts_web_module._BROWSER_SESSION_STARTED_AT_CLAIM] = (
+        datetime.now(timezone.utc) - timedelta(days=31)
+    ).timestamp()
+    st_backend.raise_on(
+        "revoke_session",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/remove", status_code=502),
+    )
+
+    expired = client.get("/accounts/api/me")
+
+    assert expired.status_code == 401
+    assert session.access_token in st_backend.sessions_by_access_token
 
 
 def test_me_rejects_a_session_with_no_started_at_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,6 +372,22 @@ def test_browser_signout_answers_401_when_the_access_token_needs_a_refresh(
 
     assert resp.status_code == 401
     # Nothing was revoked: the session is still alive server-side.
+    assert st_backend.sessions_by_access_token
+
+
+def test_browser_signout_answers_503_when_the_core_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A core 5xx on the sign-out's session verify is the retryable 503, not a 500 (and not a false OK)."""
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    _sign_in_browser(client, st_backend)
+    st_backend.raise_on(
+        "sdk_get_browser_session",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/verify", status_code=502),
+    )
+
+    resp = client.post("/accounts/api/signout")
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "auth_upstream_unavailable"
     assert st_backend.sessions_by_access_token
 
 
@@ -1118,13 +1176,97 @@ def test_download_redirects_per_platform_and_404s_unknown(monkeypatch: pytest.Mo
     alias = client.get("/download?platform=mac", follow_redirects=False)
     assert alias.headers["location"] == mac.headers["location"]
 
-    # Only mac-arm64 resolves; every other platform keeps its declared target.
+    # A static platform keeps its declared target.
     source = client.get("/download?platform=source", follow_redirects=False)
     assert source.status_code == 302
     assert source.headers["location"] == "https://github.com/imbue-ai/mngr"
 
     assert client.get("/download?platform=windows", follow_redirects=False).status_code == 404
     assert client.get("/download", follow_redirects=False).status_code == 404
+
+
+def test_each_linux_package_downloads_what_stable_serves_for_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
+    hold_stable_download_link(_parse_manifest(_STABLE_LINUX_MANIFEST, ".deb"), accounts_web._LINUX_DEB_X64_PLATFORM)
+    hold_stable_download_link(
+        _parse_manifest(_STABLE_LINUX_MANIFEST, ".AppImage"), accounts_web._LINUX_APPIMAGE_X64_PLATFORM
+    )
+
+    deb = client.get("/download?platform=linux-deb-x64", follow_redirects=False)
+    assert deb.status_code == 302
+    assert deb.headers["location"] == _STABLE_DEB
+
+    appimage = client.get("/download?platform=linux-appimage-x64", follow_redirects=False)
+    assert appimage.status_code == 302
+    assert appimage.headers["location"] == _STABLE_APPIMAGE
+
+    # The friendly alias is the package most people want, not the AppImage.
+    alias = client.get("/download?platform=linux", follow_redirects=False)
+    assert alias.headers["location"] == _STABLE_DEB
+
+
+def test_a_linux_download_is_a_404_and_no_event_until_stable_serves_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """There is no pinned Linux fallback: nothing stable ever served is nothing to fall back to.
+
+    A download that goes nowhere must not count in the campaign funnel either.
+    """
+    client, st_backend, _codes = _make_accounts_web_test_client(monkeypatch)
+    # The autouse fixture holds "could not be read" for every platform.
+
+    for platform in ("linux", "linux-deb-x64", "linux-appimage-x64"):
+        resp = client.get(f"/download?platform={platform}&utm_source=launch-email", follow_redirects=False)
+        assert resp.status_code == 404, platform
+    assert st_backend.attribution_store.download_rows == []
+
+
+def test_a_channel_file_the_feed_does_not_publish_resolves_to_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    """Until stable lists linux, the feed answers 404 for stable-linux.yml -- expected, not an outage.
+
+    The same 404 for stable-mac.yml, which stable has always published (the mac
+    platform pins a fallback), is an outage and must be logged like one.
+    """
+    asked: list[str] = []
+
+    def fetch(channel_file: str) -> str:
+        asked.append(channel_file)
+        raise urllib.error.HTTPError(channel_file, 404, "not found", Message(), BytesIO(b""))
+
+    with caplog.at_level(logging.WARNING, logger=accounts_web.__name__):
+        assert accounts_web._resolve_stable_artifact_url(accounts_web._LINUX_DEB_X64_PLATFORM, fetch) is None
+        assert asked == ["stable-linux.yml"]
+        assert [record.levelno for record in caplog.records] == [logging.WARNING]
+        caplog.clear()
+
+        assert accounts_web._resolve_stable_artifact_url(accounts_web._MAC_ARM64_PLATFORM, fetch) is None
+        assert asked == ["stable-linux.yml", "stable-mac.yml"]
+        assert [record.levelno for record in caplog.records] == [logging.ERROR]
+
+
+@pytest.mark.parametrize(
+    ("failure", "is_retried"),
+    [
+        (urllib.error.HTTPError("stable-linux.yml", 404, "not found", Message(), BytesIO(b"")), False),
+        (urllib.error.HTTPError("stable-mac.yml", 403, "forbidden", Message(), BytesIO(b"")), False),
+        (urllib.error.HTTPError("stable-mac.yml", 503, "unavailable", Message(), BytesIO(b"")), True),
+        (OSError("connection reset"), True),
+        (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), True),
+    ],
+)
+def test_only_transient_manifest_read_failures_are_retried(failure: Exception, is_retried: bool) -> None:
+    """A 4xx is the feed's settled answer (stable-linux.yml is a 404 until stable ships Linux), so a
+    second request would only add a wait to the download route; every other read failure may clear."""
+    assert accounts_web._is_retryable_manifest_fetch_failure(failure) is is_retried
+
+
+def test_each_platform_is_read_from_its_own_channel_file() -> None:
+    def fetch(channel_file: str) -> str:
+        return {"stable-mac.yml": _STABLE_MANIFEST, "stable-linux.yml": _STABLE_LINUX_MANIFEST}[channel_file]
+
+    assert accounts_web._resolve_stable_artifact_url(accounts_web._MAC_ARM64_PLATFORM, fetch) == _STABLE_ARM64_DMG
+    assert accounts_web._resolve_stable_artifact_url(accounts_web._LINUX_DEB_X64_PLATFORM, fetch) == _STABLE_DEB
+    assert (
+        accounts_web._resolve_stable_artifact_url(accounts_web._LINUX_APPIMAGE_X64_PLATFORM, fetch) == _STABLE_APPIMAGE
+    )
 
 
 def test_download_records_an_event_tagged_from_the_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1198,33 +1340,69 @@ releaseDate: '2026-08-18T23:46:47.920Z'
 
 _STABLE_ARM64_DMG = "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
 
+# Shaped like the Linux manifest ToDesktop writes: both packages in one file,
+# so a resolver that takes any Linux artifact at all would be ambiguous.
+_STABLE_LINUX_MANIFEST = """version: 0.5.2
+files:
+  - url: https://download.todesktop.com/x/minds-0.5.2-build-b1-x86_64.AppImage
+    sha512: abc==
+    size: 300071679
+    blockMapSize: 314131
+  - url: https://download.todesktop.com/x/minds-0.5.2-build-b1-amd64.deb
+    sha512: def==
+    size: 187091042
+path: https://download.todesktop.com/x/minds-0.5.2-build-b1-x86_64.AppImage
+sha512: abc==
+releaseDate: '2026-09-11T17:48:04.770Z'
+"""
 
-def _parse_manifest(manifest: str) -> str:
-    return accounts_web._arm64_dmg_url_from(manifest)
+_ARM64_DMG_SUFFIX = "-arm64.dmg"
+_STABLE_DEB = "https://download.todesktop.com/x/minds-0.5.2-build-b1-amd64.deb"
+_STABLE_APPIMAGE = "https://download.todesktop.com/x/minds-0.5.2-build-b1-x86_64.AppImage"
+
+
+def _parse_manifest(manifest: str, artifact_suffix: str) -> str:
+    return accounts_web._artifact_url_from(manifest, artifact_suffix)
 
 
 def _hold_stable_download(manifest: str) -> None:
     """Seed what the route reads, so it stays off the network."""
-    hold_stable_download_link(_parse_manifest(manifest))
+    hold_stable_download_link(_parse_manifest(manifest, _ARM64_DMG_SUFFIX), accounts_web._MAC_ARM64_PLATFORM)
 
 
-def test_the_download_link_is_the_dmg_stable_serves() -> None:
-    assert _parse_manifest(_STABLE_MANIFEST) == _STABLE_ARM64_DMG
+def _mac_fallback() -> str:
+    fallback = accounts_web._RELEASE_CHANNEL_PLATFORMS[accounts_web._MAC_ARM64_PLATFORM].fallback_url
+    assert fallback is not None, "mac has always pinned a fallback"
+    return fallback
+
+
+@pytest.mark.parametrize(
+    ("manifest", "artifact_suffix", "expected_url"),
+    [
+        (_STABLE_MANIFEST, _ARM64_DMG_SUFFIX, _STABLE_ARM64_DMG),
+        (_STABLE_LINUX_MANIFEST, ".deb", _STABLE_DEB),
+        (_STABLE_LINUX_MANIFEST, ".AppImage", _STABLE_APPIMAGE),
+    ],
+)
+def test_each_platform_link_is_the_artifact_stable_serves(
+    manifest: str, artifact_suffix: str, expected_url: str
+) -> None:
+    assert _parse_manifest(manifest, artifact_suffix) == expected_url
 
 
 def test_a_manifest_naming_no_arm64_dmg_at_all_is_refused() -> None:
     """The link is only correct if the manifest names exactly one arm64 .dmg."""
     with pytest.raises(DownloadLinkError):
-        _parse_manifest("version: 0.4.1\nfiles: []\n")
+        _parse_manifest("version: 0.4.1\nfiles: []\n", _ARM64_DMG_SUFFIX)
 
 
 def test_the_route_reads_a_cached_link_rather_than_the_feed() -> None:
     """Otherwise every download click would put the feed in the request path."""
     seeded = "https://download.todesktop.com/x/Seeded-arm64.dmg"
-    hold_stable_download_link(seeded)
+    hold_stable_download_link(seeded, accounts_web._MAC_ARM64_PLATFORM)
 
-    assert accounts_web.stable_mac_arm64_url() == seeded
-    assert accounts_web.stable_mac_arm64_url() == seeded
+    assert accounts_web.stable_artifact_url(accounts_web._MAC_ARM64_PLATFORM) == seeded
+    assert accounts_web.stable_artifact_url(accounts_web._MAC_ARM64_PLATFORM) == seeded
 
 
 def test_download_serves_what_stable_serves_not_todesktops_own_latest(
@@ -1241,12 +1419,12 @@ def test_download_serves_what_stable_serves_not_todesktops_own_latest(
 
 def test_download_falls_back_when_stable_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _st, _codes = _make_accounts_web_test_client(monkeypatch)
-    hold_stable_download_link(None)
+    hold_stable_download_link(None, accounts_web._MAC_ARM64_PLATFORM)
 
     resp = client.get("/download?platform=mac", follow_redirects=False)
 
     assert resp.status_code == 302
-    assert resp.headers["location"] == accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM]
+    assert resp.headers["location"] == _mac_fallback()
 
 
 def test_the_same_url_named_twice_is_still_one_answer() -> None:
@@ -1259,7 +1437,7 @@ def test_the_same_url_named_twice_is_still_one_answer() -> None:
         "  - url: https://download.todesktop.com/x/Only-arm64.dmg\n"
         "    size: 1\n"
     )
-    assert _parse_manifest(repeated) == "https://download.todesktop.com/x/Only-arm64.dmg"
+    assert _parse_manifest(repeated, _ARM64_DMG_SUFFIX) == "https://download.todesktop.com/x/Only-arm64.dmg"
 
 
 def test_two_different_dmgs_are_ambiguous_and_refused() -> None:
@@ -1272,21 +1450,21 @@ def test_two_different_dmgs_are_ambiguous_and_refused() -> None:
         "    size: 2\n"
     )
     with pytest.raises(DownloadLinkError):
-        _parse_manifest(two)
+        _parse_manifest(two, _ARM64_DMG_SUFFIX)
 
 
 def test_a_dmg_hosted_anywhere_but_todesktop_is_not_a_candidate() -> None:
     """The feed says where to send people, so a compromised one must not be able to."""
     elsewhere = "version: 0.4.1\nfiles:\n  - url: https://evil.example/Minds-arm64.dmg\n    size: 1\n"
     with pytest.raises(DownloadLinkError):
-        _parse_manifest(elsewhere)
+        _parse_manifest(elsewhere, _ARM64_DMG_SUFFIX)
 
 
 def test_a_bare_filename_is_not_a_candidate() -> None:
     """electron-builder writes these; relative would resolve against the connector's own host."""
     relative = "version: 0.4.1\nfiles:\n  - url: Minds-0.4.1-arm64.dmg\n    size: 1\n"
     with pytest.raises(DownloadLinkError):
-        _parse_manifest(relative)
+        _parse_manifest(relative, _ARM64_DMG_SUFFIX)
 
 
 def test_the_download_fallback_names_the_build_stable_declares() -> None:
@@ -1297,7 +1475,7 @@ def test_the_download_fallback_names_the_build_stable_declares() -> None:
     """
     repo_root = Path(__file__).parents[4]
     declared = tomllib.loads((repo_root / "apps/minds/release-channels.toml").read_text())["channels"]["stable"]
-    fallback = unquote(accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM])
+    fallback = unquote(_mac_fallback())
 
     # The product name in the dmg filename is ToDesktop's (it changed from "Minds" to
     # "Mind" in 0.6.2), so the pin is the version and build id, not the name.
@@ -1319,7 +1497,7 @@ def test_the_download_fallback_names_the_todesktop_app_builds_are_served_from() 
     declared_app_id = re.search(r"^\s*id: '([^']+)',$", todesktop_config, re.MULTILINE)
     assert declared_app_id is not None, "apps/minds/todesktop.js no longer declares `id` as a quoted literal"
 
-    fallback = accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM]
+    fallback = _mac_fallback()
 
     assert fallback.startswith(f"{accounts_web._TODESKTOP_DOWNLOAD_PREFIX}{declared_app_id.group(1)}/"), (
         "the connector's download fallback names a different ToDesktop app than minds is built as"
@@ -1332,10 +1510,18 @@ def test_the_download_fallback_would_pass_the_rules_the_feed_is_held_to() -> Non
     The drift test above reads only the version and build id out of the name, so
     a mistyped host or suffix passes it.
     """
-    fallback = accounts_web._DEFAULT_TARGET_BY_PLATFORM[accounts_web._MAC_ARM64_PLATFORM]
+    mac = accounts_web._RELEASE_CHANNEL_PLATFORMS[accounts_web._MAC_ARM64_PLATFORM]
 
-    assert fallback.startswith(accounts_web._TODESKTOP_DOWNLOAD_PREFIX)
-    assert fallback.endswith(accounts_web._ARM64_DMG_SUFFIX)
+    assert _mac_fallback().startswith(accounts_web._TODESKTOP_DOWNLOAD_PREFIX)
+    assert _mac_fallback().endswith(mac.artifact_suffix)
+
+
+# CLEANUP: delete this test once stable's `platforms` list includes linux and a
+# Linux fallback is pinned beside the mac one in _RELEASE_CHANNEL_PLATFORMS.
+def test_every_linux_platform_pins_no_fallback_until_stable_serves_linux() -> None:
+    """Pinning one would hand out a build stable never published."""
+    for platform in (accounts_web._LINUX_DEB_X64_PLATFORM, accounts_web._LINUX_APPIMAGE_X64_PLATFORM):
+        assert accounts_web._RELEASE_CHANNEL_PLATFORMS[platform].fallback_url is None
 
 
 def test_a_manifest_nested_deep_enough_to_exhaust_the_stack_is_refused() -> None:
@@ -1346,7 +1532,7 @@ def test_a_manifest_nested_deep_enough_to_exhaust_the_stack_is_refused() -> None
     nested = "a: " + "[" * 2000 + "]" * 2000 + "\n"
 
     with pytest.raises(DownloadLinkError):
-        _parse_manifest(nested)
+        _parse_manifest(nested, _ARM64_DMG_SUFFIX)
 
 
 @pytest.mark.parametrize(
@@ -1367,7 +1553,7 @@ def test_a_scalar_that_resolves_but_will_not_convert_is_refused(unconvertible: s
     cache nothing, so every download would re-fetch and re-raise.
     """
     with pytest.raises(DownloadLinkError):
-        _parse_manifest(_STABLE_MANIFEST + unconvertible)
+        _parse_manifest(_STABLE_MANIFEST + unconvertible, _ARM64_DMG_SUFFIX)
 
 
 def test_an_arm64_dmg_under_another_key_is_not_an_artifact() -> None:
@@ -1379,7 +1565,10 @@ def test_an_arm64_dmg_under_another_key_is_not_an_artifact() -> None:
     """
     decoy = _STABLE_MANIFEST + "path: https://download.todesktop.com/x/Something-Else-arm64.dmg\n"
 
-    assert _parse_manifest(decoy) == "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
+    assert (
+        _parse_manifest(decoy, _ARM64_DMG_SUFFIX)
+        == "https://download.todesktop.com/x/Minds%200.4.1%20-%20Build%20b1-arm64.dmg"
+    )
 
 
 def test_browser_signin_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:

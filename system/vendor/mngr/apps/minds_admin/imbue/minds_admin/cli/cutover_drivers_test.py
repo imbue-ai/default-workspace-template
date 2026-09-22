@@ -21,6 +21,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.secret_wrapping import wrap_dek
 from imbue.minds_admin.cli.cutover_drivers import CutoverContext
 from imbue.minds_admin.cli.cutover_drivers import _S3_COPY_PART_BYTES
+from imbue.minds_admin.cli.cutover_drivers import _dry_run_migration_detail
 from imbue.minds_admin.cli.cutover_drivers import _migrate_workspace
 from imbue.minds_admin.cli.cutover_drivers import _render_migrate_reserve_script
 from imbue.minds_admin.cli.cutover_drivers import _repave_box
@@ -713,7 +714,9 @@ def test_failed_remigration_leaves_a_terminal_record_untouched(tmp_path: Path) -
             state=state_store,
             mngr_ctx=mngr_ctx,
         )
-        outcome = _migrate_workspace(ctx, unsized_target, row, is_keep_origin_vm=False, replay_inputs_cache={})
+        outcome = _migrate_workspace(
+            ctx, unsized_target, row, is_keep_origin_vm=False, is_shrink_oversized_disks=False, replay_inputs_cache={}
+        )
     assert outcome.stage == CutoverStage.FAILED
     assert outcome.detail is not None and "sizing is unusable" in outcome.detail
     record = state_store.read_workspace(row.id)
@@ -861,6 +864,22 @@ def _ordered_outer(**kwargs: Any) -> tuple[OuterHostInterface, OrderedStubOuter]
     return cast(OuterHostInterface, stub), stub
 
 
+def _running_container_results(supervisor_output: str | None = None) -> dict[str, CommandResult]:
+    """Stub answers for a running ``mngr-ws`` container with its UI up.
+
+    ``supervisor_output`` is the container's ``supervisorctl status`` (exiting
+    non-zero, as supervisorctl does when any program is not RUNNING); None
+    leaves it to the stub's default, an empty success.
+    """
+    results = {
+        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
+        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
+    }
+    if supervisor_output is not None:
+        results["mngr-ws supervisorctl status"] = CommandResult(stdout=supervisor_output, stderr="", success=False)
+    return results
+
+
 def _tar_member_names_and_contents(tar_bytes: bytes) -> dict[str, bytes]:
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as archive:
         contents: dict[str, bytes] = {}
@@ -952,10 +971,7 @@ def test_start_latchkey_gateway_never_writes_a_secret_when_the_dir_is_not_ram_ba
 
 
 def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed() -> None:
-    healthy_container = {
-        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
-        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
-    }
+    healthy_container = _running_container_results()
     vm_findings = {
         "supervisorctl status latchkey-gateway latchkey-tunnel": CommandResult(
             stdout="latchkey-gateway RUNNING pid 1\nlatchkey-tunnel BACKOFF Exited too quickly\n",
@@ -967,13 +983,16 @@ def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed(
     outer, stub = _ordered_outer(result_by_substring={**healthy_container, **vm_findings})
     # The in-container supervisorctl status answers through the stub's default
     # (an empty success), which parses as no programs at all.
-    warnings = probe_workspace_health(outer, "mngr-ws", is_latchkey_gateway_expected=True)
-    assert warnings == [
+    findings = probe_workspace_health(outer, "mngr-ws", is_latchkey_gateway_expected=True, template_program_names=None)
+    assert findings.blocking == (
         "latchkey program not running on the VM: latchkey-tunnel BACKOFF",
         "the latchkey gateway is not accepting connections on the VM loopback",
-    ]
+    )
+    assert not findings.is_healthy
     outer_without, stub_without = _ordered_outer(result_by_substring={**healthy_container, **vm_findings})
-    assert probe_workspace_health(outer_without, "mngr-ws", is_latchkey_gateway_expected=False) == []
+    assert probe_workspace_health(
+        outer_without, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
+    ).is_healthy
     assert not any("latchkey" in event for event in stub_without.events)
     assert any("supervisorctl status latchkey-gateway" in event for event in stub.events)
     healthy_vm = {
@@ -983,8 +1002,70 @@ def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed(
         "/dev/tcp/127.0.0.1/1989": CommandResult(stdout="", stderr="", success=True),
     }
     outer_healthy, stub_healthy = _ordered_outer(result_by_substring={**healthy_container, **healthy_vm})
-    assert probe_workspace_health(outer_healthy, "mngr-ws", is_latchkey_gateway_expected=True) == []
+    assert probe_workspace_health(
+        outer_healthy, "mngr-ws", is_latchkey_gateway_expected=True, template_program_names=None
+    ).is_healthy
     assert any("/dev/tcp/127.0.0.1/1989" in event for event in stub_healthy.events)
+
+
+def test_probe_workspace_health_reports_an_owner_added_program_without_blocking_and_blocks_a_template_one() -> None:
+    supervisor_output = (
+        "system_interface                 RUNNING   pid 1, uptime 0:10:00\n"
+        "host-backup                      RUNNING   pid 2, uptime 0:10:00\n"
+        "sg-download                      FATAL     Exited too quickly (process log may have details)\n"
+    )
+    container = _running_container_results(supervisor_output)
+    template_programs = frozenset({"system_interface", "host-backup"})
+    outer, _stub = _ordered_outer(result_by_substring=container)
+    findings = probe_workspace_health(
+        outer, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
+    )
+    assert findings.is_healthy
+    assert findings.user_program_notes == ("owner-added program not running: sg-download FATAL",)
+    # The same output with the template's own program down blocks, and an
+    # unknown template (the preflight) treats every program as blocking.
+    outer_template_down, _stub = _ordered_outer(
+        result_by_substring=_running_container_results(
+            supervisor_output.replace("host-backup                      RUNNING", "host-backup FATAL")
+        )
+    )
+    template_down = probe_workspace_health(
+        outer_template_down, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
+    )
+    assert template_down.blocking == ("supervisord not healthy: host-backup FATAL",)
+    assert template_down.user_program_notes == ("owner-added program not running: sg-download FATAL",)
+    outer_unknown, _stub = _ordered_outer(result_by_substring=container)
+    unknown = probe_workspace_health(
+        outer_unknown, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
+    )
+    assert unknown.blocking == ("supervisord not healthy: sg-download FATAL",)
+    assert unknown.user_program_notes == ()
+
+
+def test_probe_workspace_health_reports_a_template_program_the_config_does_not_autostart_without_blocking() -> None:
+    supervisor_output = (
+        "system_interface                 RUNNING   pid 1, uptime 0:10:00\n"
+        "browser                          STOPPED   Not started\n"
+        "chat                             STOPPED   Sep 21 12:40 PM\n"
+    )
+    container = _running_container_results(supervisor_output)
+    template_programs = frozenset({"system_interface", "browser", "chat"})
+    outer, _stub = _ordered_outer(result_by_substring=container)
+    findings = probe_workspace_health(
+        outer, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
+    )
+    # The never-started browser is the workspace's own config; the hand-stopped chat is not.
+    assert findings.blocking == ("supervisord not healthy: chat STOPPED",)
+    assert findings.user_program_notes == (
+        "template program not autostarted by the workspace's config: browser STOPPED",
+    )
+    # An unknown template (the preflight) still blocks on it.
+    outer_unknown, _stub = _ordered_outer(result_by_substring=container)
+    unknown = probe_workspace_health(
+        outer_unknown, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
+    )
+    assert unknown.blocking == ("supervisord not healthy: browser STOPPED", "supervisord not healthy: chat STOPPED")
+    assert unknown.user_program_notes == ()
 
 
 class _StopKindProbeClient(ImbueCloudConnectorClient):
@@ -1053,3 +1134,14 @@ def test_failed_transition_error_surfaces_only_a_row_back_on_its_fallback_with_a
     assert "without a message" in str(
         failed_transition_error_or_none("stopped", "stopped", TransitionFailure(count=2, error=None), baseline)
     )
+
+
+def test_dry_run_detail_names_the_shrink_only_for_an_oversized_disk_when_asked() -> None:
+    oversized = make_gen1_pool_row(status="leased", bare_metal_server_id=str(uuid4()), disk_gb=232)
+    default_sized = make_gen1_pool_row(status="leased", bare_metal_server_id=str(uuid4()), disk_gb=44)
+    target = str(uuid4())
+    assert "would shrink its 232 GiB disk" in _dry_run_migration_detail(
+        oversized, None, target, is_shrink_oversized_disks=True
+    )
+    assert "shrink" not in _dry_run_migration_detail(oversized, None, target, is_shrink_oversized_disks=False)
+    assert "shrink" not in _dry_run_migration_detail(default_sized, None, target, is_shrink_oversized_disks=True)

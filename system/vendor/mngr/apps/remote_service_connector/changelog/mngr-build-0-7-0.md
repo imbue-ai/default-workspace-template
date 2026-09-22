@@ -1,0 +1,1 @@
+- The 0.4.0 wire-compat snapshot now also covers the minds 0.7.0 client, whose strictly-parsed connector surface is unchanged since 0.6.2 (the only wire change is the new `retired` value of the optional `stop_kind` field, which a tolerant client reads as `unknown`), so its support window extends to 2026-10-21.

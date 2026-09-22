@@ -30,6 +30,7 @@ from imbue.remote_service_connector.testing import _SHARE_STUB_USER_ID
 from imbue.remote_service_connector.testing import _SHARE_STUB_USER_LABEL
 from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import make_fake_supertokens_backend
+from imbue.remote_service_connector.testing import make_supertokens_core_status_exception
 from imbue.remote_service_connector.web import web_app
 
 _TEST_BROKER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -318,6 +319,33 @@ def test_broker_authorize_requires_verified_email_and_sends_the_mail(monkeypatch
     assert continue_query["confirmed"] == ["1"]
     assert len(st_backend.sent_verification_emails) == 1
     # Definitely no handoff token was minted for the unverified visitor.
+    assert "_auth/callback" not in location
+
+
+def test_broker_authorize_still_bounces_to_check_inbox_when_the_core_fails_the_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The contextual send is best-effort: a core 5xx while sending is not a 500, the visitor still lands on /check-inbox."""
+    client, backend, st_backend = _make_broker_test_client(monkeypatch)
+    domain = _seed_active_share(backend)
+    signup = st_backend.sign_up(tenant_id="public", email="unverified-core-down@example.com", password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
+    session = st_backend.sdk_create_browser_session(None, signup.user.id)
+    client.cookies.set(FakeSuperTokensBackend.BROWSER_SESSION_COOKIE, session.access_token)
+    st_backend.raise_on(
+        "send_email_verification_email",
+        make_supertokens_core_status_exception(method="POST", path="/recipe/user/email/verify/token", status_code=502),
+    )
+
+    resp = client.get(
+        _authorize_url(domain, f"https://auth-x7k9q2w1.{domain}"),
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+    location = resp.headers["location"]
+    assert location.startswith("/check-inbox?next=")
+    assert st_backend.sent_verification_emails == []
     assert "_auth/callback" not in location
 
 

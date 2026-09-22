@@ -1152,7 +1152,7 @@ class GoalSatisfactionTiming(FrozenModel):
 class TokenBuckets(FrozenModel):
     """Non-overlapping token counts as every usage figure in the trial artifacts spells them.
 
-    ``cache_write`` is the name the artifacts use for what the pricing table calls a cache creation,
+    ``cache_write`` is the name the artifacts use for what ``TokenSnapshot`` calls a cache creation,
     and an unmetered count is a zero rather than an absence, so a reader summing across records never
     meets a null; whether anything metered a turn at all is what its ``message_count`` says.
     """
@@ -1195,10 +1195,6 @@ class TurnRecord(FrozenModel):
         "which is not agent_message_count: an unmetered turn reports zero here and still has a reply"
     )
     tokens: TokenBuckets = Field(description="Non-overlapping token buckets this turn consumed")
-    cost_usd: float | None = Field(
-        description="USD for this turn, or None when nothing priced it (an unpriced model, or a "
-        "stream carrying no usage at all)"
-    )
 
 
 # What a step name may be: it names a task subdirectory, a harbor step, and a verifier container
@@ -1480,15 +1476,149 @@ class DeciderResult(FrozenModel):
     is_fallback: bool = Field(description="Whether the literal fallback message was used")
 
 
-class JudgeScore(FrozenModel):
-    """One likert judge criterion's score on a trial. Reported for the record, never gated."""
+class CriterionKind(LowerCaseStrEnum):
+    """How rewardkit produced one reward: its own `kind`, as reward-details.json spells it.
 
+    LLM and AGENT are its two judge kinds and PROGRAMMATIC is a `.py` check. The kind is recorded
+    beside every score because a number a model gave and a number a check computed are read very
+    differently: only the first drifts between runs of the same code.
+    """
+
+    PROGRAMMATIC = auto()
+    LLM = auto()
+    AGENT = auto()
+
+    @property
+    def is_judge(self) -> bool:
+        """Whether a model answered this criterion rather than a check computing it."""
+        match self:
+            case CriterionKind.LLM | CriterionKind.AGENT:
+                return True
+            case CriterionKind.PROGRAMMATIC:
+                return False
+            case _ as unreachable:
+                assert_never(unreachable)
+
+
+class CriterionScore(FrozenModel):
+    """One criterion's score on one trial, whatever scored it. Reported for the record, never gated.
+
+    Every value is rewardkit's own normalized 0-1 score. A judge's 1-10 likert answer is not carried:
+    it is recoverable from the normalization (`raw = 9 * normalized + 1`) and it is in the trial's
+    own reward-details.json, while a report that mixed two scales would have criteria on one scale
+    next to criteria on another with nothing in a number saying which.
+    """
+
+    # The step is part of the criterion's identity: a stepped case is scored once per step against
+    # that step's own expectations, so the same criterion has one score per conversation.
+    step: str = Field(description="The step the criterion was scored on; empty for a flat trial")
     dimension: str = Field(description="The rewardkit dimension the criterion was scored under")
-    criterion: str = Field(description="The judge criterion's name, e.g. 'conciseness'")
-    # rewardkit normalizes a 1-10 likert to (raw - 1) / 9; both are carried so a reader can compare
-    # across runs without having to know which convention a number is in.
-    normalized_score: float = Field(description="The criterion's contribution to its dimension, 0-1")
-    raw_score: float = Field(description="The judge's own 1-10 likert answer")
+    criterion: str = Field(description="The criterion's name, e.g. 'conciseness'")
+    kind: CriterionKind = Field(description="How rewardkit produced the score: a judge, or a check")
+    value: float = Field(description="The criterion's contribution to its dimension, normalized 0-1")
+
+
+class DimensionScore(FrozenModel):
+    """What one dimension of one step scored, as harbor's own verifier result records it.
+
+    The dimensions are what the criteria above add up to, and the composed `reward` is what the
+    steps' floors and the trial's reward strategy are decided on, so both are reported: a criterion
+    that moved says nothing on its own about the score the run was gated on.
+    """
+
+    step: str = Field(description="The step the dimension was scored on; empty for a flat trial")
+    dimension: str = Field(description="A key of the verifier result's rewards, the composed `reward` included")
+    value: float = Field(description="What that key scored")
+
+
+class TokenSnapshot(FrozenModel):
+    """What one model consumed, in the four buckets a provider prices separately.
+
+    The buckets are **non-overlapping**: `input` counts only the input tokens served fresh, with cache
+    reads and cache writes kept beside it rather than inside it. Anthropic prices the three very
+    differently -- a cache read costs a tenth of a fresh input token and a cache write more than one
+    -- so an input count that included them cannot produce a correct cost, and collapsing them also
+    hides the cache behaviour that cache-aware compaction work needs to see. A source that reports
+    input inclusive of cache normalizes it before filling this in.
+
+    Every field is optional because a writer that reported no counter at all is not the same claim as
+    one that reported zero.
+    """
+
+    input: int | None = Field(default=None, description="Input tokens served fresh, cache buckets excluded")
+    output: int | None = Field(default=None, description="Output tokens, reasoning tokens included")
+    cache_read: int | None = Field(default=None, description="Input tokens served from the prompt cache")
+    # One bucket whatever the cache TTL, which the writers cannot see: the TTL is a property of the
+    # request, and pricing applies the rate the harness is assumed to ask for.
+    cache_creation: int | None = Field(default=None, description="Input tokens written to the prompt cache")
+
+    @property
+    def is_any_token_recorded(self) -> bool:
+        """Whether any bucket counted anything, which is what separates a turn that spent nothing from
+        one that reported nothing."""
+        return bool((self.input or 0) or (self.output or 0) or (self.cache_read or 0) or (self.cache_creation or 0))
+
+
+class PricingSource(FrozenModel):
+    """Which price map a report's cost figures were computed from.
+
+    Recorded beside the figures because nothing in a number says what priced it, and the trials it was
+    derived from carry tokens only: the same run re-checked after a price change reports different
+    money, and this is what tells the two reports apart.
+    """
+
+    source: str = Field(description="The library whose price map priced the run")
+    version: str = Field(description="That library's installed version")
+    map_source: str = Field(
+        description="Where that library got the map: 'remote' when it fetched its published one, 'local' for the "
+        "copy bundled in its wheel"
+    )
+
+
+class Spender(LowerCaseStrEnum):
+    """Who spent money during a trial. The values are the blocks `agent/usage.json` keys its
+    accounts by, so a record names its spender the way the artifact it was read from does.
+
+    WORKSPACE_AGENT is the agent under test, whose spend is the eval's subject; DECIDER and
+    VERIFIER_AGENT are the harness's own models, which measure what the eval costs to run. They are
+    kept apart because a figure that mixes them answers neither question.
+    """
+
+    WORKSPACE_AGENT = auto()
+    DECIDER = auto()
+    VERIFIER_AGENT = auto()
+
+
+class SpenderCost(FrozenModel):
+    """What one spender cost on one trial, with the flags that say how far the figure can be read.
+
+    Never collapsed into a single per-trial number: the flags belong to the spender that earned
+    them, and a total that dropped them would read as exact.
+    """
+
+    spender: Spender = Field(description="Whose spend this is")
+    cost_usd: float | None = Field(description="USD spent; None when a model it ran on carries no price")
+    is_complete: bool = Field(description="Whether all of this spender's traffic is in the total")
+    is_rate_certain: bool = Field(description="Whether the total is priced at the rate the traffic was billed at")
+    unpriced_models: tuple[str, ...] = Field(description="Models this spender ran on that carry no price")
+
+
+class SpendTotal(FrozenModel):
+    """One half of a run's spend -- the workspace agents' or the harnesses' -- summed over trials.
+
+    A trial whose figure is unknown is counted rather than dropped, so the sum is never read as
+    covering trials it could say nothing about.
+    """
+
+    cost_usd: float = Field(description="USD summed over the trials whose figure is known")
+    known_trial_count: int = Field(description="Trials whose spend for this half is a number")
+    unknown_trial_count: int = Field(description="Trials that recorded this half but priced no figure for it")
+    is_floor: bool = Field(description="Whether any trial in the sum is incomplete or priced at an uncertain rate")
+
+    @computed_field
+    @cached_property
+    def trial_count(self) -> int:
+        return self.known_trial_count + self.unknown_trial_count
 
 
 class TrialCheck(FrozenModel):
@@ -1498,10 +1628,45 @@ class TrialCheck(FrozenModel):
     case_id: str = Field(description="The persona case the trial ran; empty when it cannot be read")
     is_completed: bool = Field(description="Whether the trial ran to the end without erroring or timing out")
     incompletion_reason: str = Field(description="Why the trial did not complete; empty when it did")
+    # The two counts are separate because only the first of them can go unknown: harbor records a step
+    # result per step it ran, while what the task declared is the driver's to say. Both defaulted, and
+    # the defaulted fields below with them, for the same reason `RunCheck.pricing` is: a summary
+    # written before a field existed has to read back as a trial that recorded nothing for it, not as
+    # one that cannot be parsed at all. The defaults are what this side computes for such a trial
+    # anyway.
+    step_count: int = Field(
+        default=0, description="How many steps the task declared; 0 for a flat trial and where nothing says"
+    )
+    completed_step_count: int = Field(default=0, description="How many steps harbor ran; 0 for a flat trial")
     is_gates_passed: bool = Field(description="Whether every structural gate criterion scored above zero")
     error_entry_ids: tuple[str, ...] = Field(description="Evidence manifest entries the harness could not measure")
     reward: float | None = Field(description="The trial's final reward; None when it was never graded")
-    judge_scores: tuple[JudgeScore, ...] = Field(description="Every likert judge criterion the verifier recorded")
+    criterion_scores: tuple[CriterionScore, ...] = Field(
+        default=(),
+        description="Every criterion of every dimension of every step the verifier scored, judges and checks alike",
+    )
+    dimension_scores: tuple[DimensionScore, ...] = Field(
+        default=(), description="What every dimension of every step scored, the composed reward among them"
+    )
+    elapsed_seconds: float | None = Field(
+        default=None,
+        description="Wall-clock the whole trial took, workspace creation included and cumulative across a stepped "
+        "trial's steps; None when the driver's state record does not say",
+    )
+    conversation_seconds: float | None = Field(
+        default=None,
+        description="Wall-clock from the first client message to the last reply, cumulative across a stepped trial's "
+        "steps; None when the driver's state record does not say",
+    )
+    reply_seconds: float | None = Field(
+        default=None,
+        description="Wall-clock the replies themselves took, summed over every recorded turn and so cumulative "
+        "across a stepped trial's steps; None when the trial wrote no per-turn record at all, and 0.0 for a "
+        "conversation that drew no reply",
+    )
+    spend: tuple[SpenderCost, ...] = Field(
+        default=(), description="One entry per spender the trial's usage.json accounts for; empty when it wrote none"
+    )
     lane: str = Field(description="The provider lane the trial signed in on; empty when it recorded none")
     requested_model: str = Field(
         description="The catalog id the trial asked the chat to run on; empty when it asked for none"
@@ -1527,6 +1692,12 @@ class RunCheck(FrozenModel):
 
     job_name: str = Field(description="The job directory's name")
     trials: tuple[TrialCheck, ...] = Field(description="One entry per trial directory, in name order")
+    # Defaulted to a source that names nothing, which is what a summary written before the figures
+    # recorded their map says about itself.
+    pricing: PricingSource = Field(
+        default=PricingSource(source="", version="", map_source=""),
+        description="The price map every cost figure in this report was computed from",
+    )
 
     @computed_field
     @cached_property

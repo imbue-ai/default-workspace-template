@@ -1,10 +1,10 @@
 import json
 
-import pytest
-
 from imbue.minds_evals.data_types import DeciderResult
-from imbue.minds_evals.usage import canonical_model_key
+from imbue.minds_evals.data_types import TokenSnapshot
+from imbue.minds_evals.ui_flows import VerifierUsage
 from imbue.minds_evals.usage import combine_trial_usages
+from imbue.minds_evals.usage import combined_verifier_usage
 from imbue.minds_evals.usage import parse_proxy_usage_log
 from imbue.minds_evals.usage import resolve_workspace_usage
 from imbue.minds_evals.usage import summarize_decider_usage
@@ -12,7 +12,6 @@ from imbue.minds_evals.usage import summarize_proxy_usage
 from imbue.minds_evals.usage import summarize_turn_usage
 from imbue.minds_evals.usage import summarize_workspace_usage
 from imbue.minds_evals.usage import workspace_usage_metadata
-from imbue.mngr_usage.data_types import TokenSnapshot
 
 
 def _assistant_event(
@@ -57,20 +56,6 @@ def _atif_step_event(
     }
 
 
-def test_canonical_model_key_resolves_bare_claude_ids_to_anthropic() -> None:
-    assert canonical_model_key("claude-opus-4-8") == "anthropic/claude-opus-4-8"
-
-
-def test_canonical_model_key_passes_through_an_explicit_provider() -> None:
-    assert canonical_model_key("openai/gpt-5.2") == "openai/gpt-5.2"
-
-
-def test_canonical_model_key_refuses_to_guess_an_unknown_provider() -> None:
-    # Guessing here would price a model as some other provider's; None makes it visibly unpriced.
-    assert canonical_model_key("some-new-model") is None
-    assert canonical_model_key("") is None
-
-
 def test_summarize_workspace_usage_keeps_cache_buckets_separate() -> None:
     events = [
         _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100, cache_read_tokens=5_000),
@@ -84,23 +69,6 @@ def test_summarize_workspace_usage_keeps_cache_buckets_separate() -> None:
     assert usage.tokens.output == 150
     assert usage.tokens.cache_read == 5_000
     assert usage.tokens.cache_creation == 2_000
-
-
-def test_summarize_workspace_usage_prices_from_the_shared_table() -> None:
-    # Opus: input $5/M, output $25/M, cache read $0.50/M, cache write $6.25/M.
-    events = [
-        _assistant_event(
-            "claude-opus-4-8",
-            input_tokens=1_000_000,
-            output_tokens=1_000_000,
-            cache_read_tokens=1_000_000,
-            cache_write_tokens=1_000_000,
-        )
-    ]
-
-    usage = summarize_workspace_usage(events)
-
-    assert usage.cost_usd == 5.0 + 25.0 + 0.5 + 6.25
 
 
 def test_summarize_workspace_usage_reports_harbor_fields_with_cache_inclusive_input() -> None:
@@ -120,6 +88,8 @@ def test_summarize_workspace_usage_reports_harbor_fields_with_cache_inclusive_in
 
 
 def test_summarize_workspace_usage_groups_each_model_separately() -> None:
+    """Kept per model rather than summed, because what a token costs depends on which model spent it:
+    one total could not be priced afterwards at all."""
     events = [
         _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100),
         _assistant_event("claude-haiku-4-5", input_tokens=20, output_tokens=200),
@@ -129,15 +99,11 @@ def test_summarize_workspace_usage_groups_each_model_separately() -> None:
     usage = summarize_workspace_usage(events)
 
     by_model = {entry.model: entry for entry in usage.per_model}
-    opus_cost = by_model["claude-opus-4-8"].cost_usd
-    haiku_cost = by_model["claude-haiku-4-5"].cost_usd
-    assert opus_cost is not None and haiku_cost is not None
     assert by_model["claude-opus-4-8"].message_count == 2
     assert by_model["claude-opus-4-8"].tokens.output == 150
     assert by_model["claude-haiku-4-5"].message_count == 1
-    # Haiku is an order of magnitude cheaper, so the same tokens must not be priced identically.
-    assert opus_cost != haiku_cost
-    assert usage.cost_usd == opus_cost + haiku_cost
+    assert by_model["claude-haiku-4-5"].tokens.output == 200
+    assert usage.tokens.output == 350
 
 
 def test_summarize_workspace_usage_ignores_events_that_carry_no_usage() -> None:
@@ -154,7 +120,9 @@ def test_summarize_workspace_usage_ignores_events_that_carry_no_usage() -> None:
     assert usage.tokens.input == 7
 
 
-def test_summarize_workspace_usage_leaves_cost_unknown_when_a_model_is_unpriced() -> None:
+def test_summarize_workspace_usage_records_a_model_nothing_can_price_like_any_other() -> None:
+    """Whether a model has a price is not this side's question: the account records what every model
+    spent, and a reader that cannot price one of them says so about its own figure."""
     events = [
         _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100),
         _assistant_event("mystery-model-9", input_tokens=10, output_tokens=100),
@@ -162,21 +130,16 @@ def test_summarize_workspace_usage_leaves_cost_unknown_when_a_model_is_unpriced(
 
     usage = summarize_workspace_usage(events)
 
-    assert usage.unpriced_models == ("mystery-model-9",)
-    # A partial total would look complete while understating the real spend.
-    assert usage.cost_usd is None
-    # The priced model still reports its own cost, so nothing is lost.
-    priced = next(entry for entry in usage.per_model if entry.model == "claude-opus-4-8")
-    assert priced.cost_usd is not None
+    assert [entry.model for entry in usage.per_model] == ["claude-opus-4-8", "mystery-model-9"]
+    assert usage.message_count == 2
 
 
-def test_summarize_workspace_usage_without_any_usage_reports_unknown_not_zero() -> None:
+def test_summarize_workspace_usage_without_any_usage_records_no_model_at_all() -> None:
     usage = summarize_workspace_usage([{"type": "user_message", "content": "hi"}])
 
     assert usage.message_count == 0
+    # Nothing to price, which a reader must not read as a trial that cost nothing.
     assert usage.per_model == ()
-    # A trial we have no usage data for did not cost nothing.
-    assert usage.cost_usd is None
 
 
 def test_summarize_turn_usage_reads_only_the_events_the_turns_message_provoked() -> None:
@@ -194,13 +157,12 @@ def test_summarize_turn_usage_reads_only_the_events_the_turns_message_provoked()
     assert second_turn.tokens.input == 20
     assert second_turn.tokens.output == 50
     assert second_turn.tokens.cache_read == 2_000
-    assert second_turn.cost_usd is not None
     assert summarize_turn_usage(events, 0).tokens.output == 150
 
 
 def test_summarize_turn_usage_of_an_unmetered_turn_reports_unknown_not_zero() -> None:
     """A codex turn's reply carries no usage block at all, and a turn we have no figures for did not
-    cost nothing."""
+    consume nothing."""
     events = [
         _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100),
         {"type": "assistant_message", "text": "done, though nobody metered it"},
@@ -209,7 +171,7 @@ def test_summarize_turn_usage_of_an_unmetered_turn_reports_unknown_not_zero() ->
     turn = summarize_turn_usage(events, 1)
 
     assert turn.message_count == 0
-    assert turn.cost_usd is None
+    assert turn.tokens.is_any_token_recorded is False
 
 
 def test_workspace_usage_metadata_exposes_the_four_way_split() -> None:
@@ -221,7 +183,10 @@ def test_workspace_usage_metadata_exposes_the_four_way_split() -> None:
 
     assert metadata["tokens"] == {"input": 1, "output": 2, "cache_read": 3, "cache_write": 4}
     assert metadata["per_model"][0]["model"] == "claude-opus-4-8"
-    assert metadata["unpriced_models"] == []
+    # Tokens and the model that spent them, and no price anywhere: the artifact is what a reader
+    # prices, not a figure already priced.
+    assert "cost_usd" not in metadata
+    assert "cost_usd" not in metadata["per_model"][0]
 
 
 def test_summarize_workspace_usage_splits_atif_prompt_tokens_back_into_cache_buckets() -> None:
@@ -243,11 +208,12 @@ def test_summarize_workspace_usage_splits_atif_prompt_tokens_back_into_cache_buc
     assert usage.tokens.output == 100
     assert usage.tokens.cache_read == 700
     assert usage.tokens.cache_creation == 200
-    # The two vintages describing the same response must produce the same cost.
+    # The two vintages describing the same response must produce the same buckets, since the buckets
+    # are what a reader prices.
     legacy = summarize_workspace_usage(
         [_assistant_event("claude-opus-4-8", 10, 100, cache_read_tokens=700, cache_write_tokens=200)]
     )
-    assert usage.cost_usd == legacy.cost_usd
+    assert usage.per_model[0].tokens == legacy.per_model[0].tokens
     assert usage.n_input_tokens == 910
 
 
@@ -372,16 +338,17 @@ def test_summarize_decider_usage_totals_calls_and_counts_fallbacks() -> None:
     assert usage.fallback_count == 1
     assert usage.input_token_count == 100
     assert usage.output_token_count == 10
-    assert usage.cost_usd == 100 * 5e-6 + 10 * 25e-6
+    # The model the whole bucket is priced against is the configured one, not a fallback's empty id.
+    assert usage.model == "claude-opus-4-8"
 
 
-def test_summarize_decider_usage_with_no_calls_is_empty_but_priced_at_zero() -> None:
+def test_summarize_decider_usage_with_no_calls_records_no_tokens() -> None:
     # Unlike the workspace agent, a decider that made no calls really did spend nothing: the
     # literal-turn case has no LLM call to be uncertain about.
     usage = summarize_decider_usage([], "claude-opus-4-8")
 
     assert usage.call_count == 0
-    assert usage.cost_usd == 0.0
+    assert (usage.input_token_count, usage.output_token_count) == (0, 0)
 
 
 def test_summarize_workspace_usage_flags_a_trial_that_delegated_to_a_subagent() -> None:
@@ -465,7 +432,8 @@ def test_summarize_workspace_usage_counts_one_worker_launch_per_delegation() -> 
 
 def test_summarize_workspace_usage_ignores_zero_token_synthetic_messages() -> None:
     # Claude Code reports its pre-sign-in notice as a `<synthetic>` model with an all-zero usage
-    # block. It costs nothing, and must not make a priceable trial report an unknown cost.
+    # block. It costs nothing, and recording it would let a pseudo-model nothing can price void an
+    # otherwise complete trial figure.
     events = [
         _assistant_event("<synthetic>"),
         _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100),
@@ -473,8 +441,6 @@ def test_summarize_workspace_usage_ignores_zero_token_synthetic_messages() -> No
 
     usage = summarize_workspace_usage(events)
 
-    assert usage.unpriced_models == ()
-    assert usage.cost_usd is not None
     assert [entry.model for entry in usage.per_model] == ["claude-opus-4-8"]
     assert usage.message_count == 1
 
@@ -540,7 +506,6 @@ def test_summarize_proxy_usage_totals_every_request() -> None:
     assert usage.tokens.input == 12
     assert usage.tokens.cache_read == 5_000
     assert usage.tokens.cache_creation == 5_000
-    assert usage.cost_usd is not None
 
 
 def test_summarize_proxy_usage_is_always_complete() -> None:
@@ -565,35 +530,21 @@ def test_summarize_proxy_usage_attributes_fast_mode_tokens_as_a_subset() -> None
     assert usage.tokens.output == 107
 
 
-def test_summarize_proxy_usage_prices_fast_mode_at_the_fast_mode_rate() -> None:
-    # Fast mode bills the same tokens at twice the standard rate, so an identical request costs
-    # exactly double -- the point of recording the tier at all.
-    fast = summarize_proxy_usage([_proxy_record(speed="fast", input_tokens=1_000_000, output_tokens=1_000_000)])
-    standard = summarize_proxy_usage([_proxy_record(input_tokens=1_000_000, output_tokens=1_000_000)])
-
-    assert standard.cost_usd == pytest.approx(30.0)
-    assert fast.cost_usd == pytest.approx(60.0)
-
-
-def test_summarize_proxy_usage_prices_each_tier_separately_within_one_model() -> None:
+def test_summarize_proxy_usage_keeps_each_tiers_tokens_apart_within_one_model() -> None:
+    """Fast mode bills the same tokens at twice the standard rate, so a reader has to be able to price
+    the two portions separately: the fast counts ride as a subset of the totals, and what is left of
+    them is the standard portion."""
     usage = summarize_proxy_usage(
         [
             _proxy_record(speed="fast", input_tokens=1_000_000),
-            _proxy_record(input_tokens=1_000_000),
+            _proxy_record(input_tokens=400_000),
         ]
     )
 
-    # $10/MTok fast + $5/MTok standard, not both at either rate.
-    assert usage.cost_usd == pytest.approx(15.0)
+    (entry,) = usage.per_model
+    assert entry.tokens.input == 1_400_000
+    assert entry.fast_tokens.input == 1_000_000
     assert usage.is_cost_rate_certain is True
-
-
-def test_summarize_proxy_usage_refuses_a_standard_price_for_fast_mode_on_a_model_without_one() -> None:
-    # Sonnet cannot serve fast mode, so this should not happen -- but if it ever does, the standard
-    # rate is known to be the wrong one, and halving a real bill is worse than reporting nothing.
-    usage = summarize_proxy_usage([_proxy_record(model="claude-sonnet-4-6", speed="fast", input_tokens=1_000)])
-
-    assert usage.cost_usd is None
 
 
 def test_summarize_proxy_usage_certifies_the_rate_when_every_request_was_standard() -> None:
@@ -664,17 +615,16 @@ def test_summarize_proxy_usage_counts_failures_without_treating_them_as_usage() 
     assert [entry.model for entry in usage.per_model] == ["claude-opus-4-8"]
     assert usage.per_model[0].message_count == 1
     assert usage.tokens.output == 100
-    assert usage.cost_usd == summarize_proxy_usage([_proxy_record(input_tokens=10, output_tokens=100)]).cost_usd
+    assert usage.tokens == summarize_proxy_usage([_proxy_record(input_tokens=10, output_tokens=100)]).tokens
 
 
-def test_summarize_proxy_usage_of_only_failures_reports_no_usage_and_an_unknown_cost() -> None:
+def test_summarize_proxy_usage_of_only_failures_reports_no_usage() -> None:
     usage = summarize_proxy_usage([_failed_proxy_record(speed="fast")])
 
     assert usage.failed_request_count == 1
     assert usage.message_count == 0
     assert usage.per_model == ()
     assert usage.tokens == TokenSnapshot()
-    assert usage.cost_usd is None
     assert usage.fast_message_count == 0
     # Speed is observed through served requests; a log with none has observed no tier.
     assert usage.is_speed_observed is False
@@ -800,14 +750,10 @@ def test_combine_trial_usages_sums_per_model_and_carries_the_scans_worker_counts
     ]
     assert combined.message_count == 3
     assert combined.tokens.cache_read == 1_400
-    # An unpriced model in any stream leaves the whole account unpriced, as it does within one stream.
-    assert combined.unpriced_models == ("claude-sonnet-5",)
-    assert combined.cost_usd is None
     assert combined.is_cost_complete is True
 
-    priced = combine_trial_usages([chat, chat], worker_launch_count=0, worker_captured_count=0)
-    assert chat.cost_usd is not None
-    assert priced.cost_usd == pytest.approx(2 * chat.cost_usd)
+    doubled = combine_trial_usages([chat, chat], worker_launch_count=0, worker_captured_count=0)
+    assert doubled.per_model[0].tokens.input == 2 * (chat.per_model[0].tokens.input or 0)
 
 
 def test_a_launched_worker_that_was_not_captured_keeps_the_account_incomplete() -> None:
@@ -856,3 +802,20 @@ def test_a_running_workers_stream_is_summed_but_leaves_the_account_incomplete() 
     assert resolved.transcript.tokens.output == 70
     assert resolved.transcript.worker_captured_count == 0
     assert resolved.transcript.is_cost_complete is False
+
+
+def test_combined_verifier_usage_adds_up_the_steps_that_ran_a_verification_phase() -> None:
+    """Each step builds its own flow agent, so the trial's own record of that spend is the sum. A
+    record that carried one step's figure would understate a multi-step trial's harness cost."""
+    first = VerifierUsage(
+        model="claude-haiku-4-5", call_count=4, failed_call_count=1, input_token_count=9_000, output_token_count=600
+    )
+    second = VerifierUsage(
+        model="claude-haiku-4-5", call_count=3, failed_call_count=0, input_token_count=5_000, output_token_count=250
+    )
+
+    total = combined_verifier_usage(combined_verifier_usage(None, first), second)
+
+    assert total == VerifierUsage(
+        model="claude-haiku-4-5", call_count=7, failed_call_count=1, input_token_count=14_000, output_token_count=850
+    )
