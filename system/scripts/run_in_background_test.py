@@ -2,7 +2,8 @@
 
 The end-to-end tests start the real script as a subprocess, the way an agent's tool call does,
 and watch the ``fake_chat_app`` fixture for the report; the script's messenger is the real
-``message_chat.py`` beside it, which reads the fixture's registry.
+``message_chat.py`` beside it, which reads the fixture's registry. Its ``mngr message`` backoff
+reaches the ``fake_mngr`` fixture, never the real ``mngr``.
 """
 
 from __future__ import annotations
@@ -74,6 +75,7 @@ def _task_dir_from(stdout: str, cwd: Path) -> Path:
     return (cwd / output_line.removeprefix("Output: ")).parent
 
 
+@pytest.mark.usefixtures("fake_mngr")
 def test_the_command_runs_detached_and_its_result_is_posted_to_the_callers_chat(
     fake_chat_app: Any, tmp_path: Path
 ) -> None:
@@ -103,6 +105,7 @@ def test_the_command_runs_detached_and_its_result_is_posted_to_the_callers_chat(
     assert "the report" in (task_dir / "output.log").read_text()
 
 
+@pytest.mark.usefixtures("fake_mngr")
 def test_the_chat_app_stamped_chat_id_wins_over_the_agent_id(
     fake_chat_app: Any, tmp_path: Path
 ) -> None:
@@ -121,6 +124,7 @@ def test_the_chat_app_stamped_chat_id_wins_over_the_agent_id(
     assert "<summary>Say hello (finished)</summary>" in body["message"]
 
 
+@pytest.mark.usefixtures("fake_mngr")
 def test_the_report_still_arrives_after_the_callers_whole_process_group_is_killed(
     fake_chat_app: Any, tmp_path: Path
 ) -> None:
