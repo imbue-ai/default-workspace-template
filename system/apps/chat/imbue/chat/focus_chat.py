@@ -99,7 +99,17 @@ def focus_chat_endpoint() -> Response:
             detail,
         )
         return _error(f"The shell refused to show the chat ({answer.status_code}): {detail}", HTTP_BAD_GATEWAY)
-    shown = answer.json()
+    try:
+        shown = answer.json()
+    except ValueError:
+        shown = None
+    if not isinstance(shown, dict):
+        detail = answer.text.strip()[:_REFUSAL_DETAIL_LIMIT]
+        logger.warning(
+            "The shell answered the show of chat {} with something that is not an object: {}", chat_id, detail
+        )
+        return _error(f"The shell answered the show with something that is not an object: {detail}", HTTP_BAD_GATEWAY)
+    # Passed through as the shell spelled them: a ``shown`` this app does not know is the shell's to add.
     logger.info("Showed chat {} to client {} ({})", chat_id, focus_request.client_id, shown.get("shown"))
     return json_response({"shown": shown.get("shown"), "window_id": shown.get("window_id")})
 

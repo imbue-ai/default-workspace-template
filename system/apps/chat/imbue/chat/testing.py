@@ -420,18 +420,18 @@ class RecordingClientActivityShell:
 
 class RecordingLayoutOpShell:
     """A stand-in shell that records every op posted to ``/api/layout/broadcast`` and answers each with one
-    status and JSON body."""
+    status and body."""
 
-    def __init__(self, status: int, answer: dict[str, Any]) -> None:
+    def __init__(self, status: int, body: str) -> None:
         self.received: list[dict[str, Any]] = []
         self.status = status
-        self.answer = answer
+        self.body = body
         self.application = Flask("recording-op-shell")
         self.application.add_url_rule("/api/layout/broadcast", view_func=self._accept, methods=["POST"], endpoint="op")
 
     def _accept(self) -> tuple[str, int]:
         self.received.append(request.get_json())
-        return json.dumps(self.answer), self.status
+        return self.body, self.status
 
 
 def build_test_state(
