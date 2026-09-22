@@ -30,10 +30,6 @@ mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = mod
 _spec.loader.exec_module(mod)
 
-_FORWARD_PORT_SCRIPT = (
-    Path(__file__).resolve().parents[4] / "system" / "scripts" / "forward_port.py"
-)
-
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
 _MANIFEST = """
@@ -100,7 +96,7 @@ def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tear
     repo_root = tmp_path / "live"
     (repo_root / "system" / "scripts").mkdir(parents=True)
     shutil.copy(
-        _FORWARD_PORT_SCRIPT, repo_root / "system" / "scripts" / "forward_port.py"
+        mod._FORWARD_PORT_SCRIPT, repo_root / "system" / "scripts" / "forward_port.py"
     )
     live_data = repo_root / "data" / ".apps" / "fixture"
     live_data.mkdir(parents=True)
