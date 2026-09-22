@@ -16,6 +16,7 @@ from tempfile import TemporaryDirectory
 import click
 from loguru import logger
 from pydantic import SecretStr
+from pydantic import ValidationError
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.imbue_common.primitives import InvalidPrimitiveValueError
@@ -27,7 +28,10 @@ from imbue.minds_evals import cleanup_environments
 from imbue.minds_evals import flow_browser
 from imbue.minds_evals import flow_lab
 from imbue.minds_evals import pricing
+from imbue.minds_evals import slack_post
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.clock import ClockInterface
+from imbue.minds_evals.clock import RealClock
 from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import CiReportContext
 from imbue.minds_evals.data_types import DiagnosticVerdict
@@ -565,7 +569,10 @@ def ci_matrix_command(
     "output_path",
     required=True,
     type=click.Path(dir_okay=False, path_type=Path),
-    help="Where to write the Slack webhook payloads, as a JSON array of one payload per pair and eval config",
+    help=(
+        "Where to write the Slack messages, as a JSON array of {message, replies} objects, one per pair "
+        "and eval config"
+    ),
 )
 def ci_report_command(
     matrix_path: Path | None,
@@ -581,11 +588,12 @@ def ci_report_command(
     diagnose_behaviour_result: str,
     output_path: Path,
 ) -> None:
-    """Write the Slack report of a scheduled run: one webhook payload per pair and eval config, each
-    a grid of that config's cases by harness config.
+    """Write the Slack report of a scheduled run: one thread per pair and eval config, whose message
+    is a grid of that config's cases by harness config and whose replies hold the scores behind it.
 
     This command is the whole notification of a run, so it never fails: a matrix that cannot be read
     or a summary that is missing is reported as such, and the exit code is zero either way.
+    `post-slack-report` is what posts the file it writes.
     """
     context = CiReportContext(
         run_url=run_url,
@@ -598,11 +606,109 @@ def ci_report_command(
         diagnose_fixture_result=diagnose_fixture_result,
         diagnose_behaviour_result=diagnose_behaviour_result,
     )
-    messages = ci_report.render_slack_report(matrix_path, summaries_dir, context)
-    payloads = [ci_report.as_slack_payload(message) for message in messages]
+    threads = ci_report.render_slack_report(matrix_path, summaries_dir, context)
+    payloads = [ci_report.as_slack_thread_payload(thread) for thread in threads]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payloads, indent=2))
-    logger.info("Wrote {} run report message(s) to {}", len(payloads), output_path)
+    logger.info("Wrote {} run report thread(s) to {}", len(payloads), output_path)
+
+
+@main.command("post-slack-report")
+@click.option(
+    "--payloads",
+    "payloads_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The ci-report output: a JSON array of {message, replies} objects, one per pair and eval config",
+)
+@click.option(
+    "--channel",
+    required=True,
+    help="The Slack channel to post to, as its `C...` id. Not a secret, unlike the credentials below",
+)
+def post_slack_report_command(payloads_path: Path, channel: str) -> None:
+    """Post a rendered run report to Slack, one thread per pair and eval config.
+
+    The bot token is read from SLACK_MINDS_EVALS_BOT_TOKEN, and absent that the incoming webhook from
+    SLACK_MINDS_EVALS_WEBHOOK, which cannot thread: a run posting through it gets the top messages
+    alone. With neither, nothing is posted and the run's step summary is the whole report.
+
+    A notification must never turn a run red, so every refusal Slack answers with is a warning and the
+    exit code is zero once posting has begun. A rate-limited message is the one refusal that is not
+    reported straight away: it is posted again after the wait Slack asked for.
+    """
+    poster = slack_post.poster_from_environment(os.environ, slack_post.SLACK_POST_TIMEOUT_SECONDS)
+    run_post_slack_report(poster, channel=channel, payloads_path=payloads_path, clock=RealClock())
+
+
+def run_post_slack_report(
+    poster: slack_post.SlackPoster | None,
+    *,
+    channel: str,
+    payloads_path: Path,
+    clock: ClockInterface,
+) -> None:
+    """Everything `post-slack-report` decides, against a given Slack and a given clock.
+
+    Split from the command so that what is posted, and in what order, can be driven against a stand-in
+    poster, and so that the waits a rate limit costs can be driven without spending them. Both
+    refusals here are about the request rather than about Slack, and both are raised: they are decided
+    before anything is posted, which is the only point at which this command may still fail.
+    """
+    if not channel.startswith(slack_post.SLACK_CHANNEL_ID_PREFIX):
+        raise click.UsageError(
+            "--channel takes a channel id starting with {}; a U id is a person, which Slack delivers to "
+            "through its system user and will not thread under".format(slack_post.SLACK_CHANNEL_ID_PREFIX)
+        )
+    threads = _read_slack_threads(payloads_path)
+    if poster is None:
+        _echo_workflow_warning(
+            "neither {} nor {} is set -- the run summary was not posted to Slack".format(
+                slack_post.SLACK_BOT_TOKEN_ENV_VAR, slack_post.SLACK_WEBHOOK_ENV_VAR
+            )
+        )
+        return
+    outcome = asyncio.run(slack_post.post_threads(poster, clock, channel, threads))
+    for warning in outcome.warnings:
+        _echo_workflow_warning(warning)
+    logger.info(
+        "Posted {} message(s) to {} ({} as text, {} refused)",
+        outcome.posted_count,
+        channel,
+        outcome.fallback_count,
+        outcome.failed_count,
+    )
+
+
+def _read_slack_threads(payloads_path: Path) -> tuple[slack_post.SlackThreadPayload, ...]:
+    """The rendered report, refused as a bad parameter when it is not one.
+
+    A file this cannot read is a defect in whatever wrote it rather than anything Slack did, so it is
+    reported as the bad input it is instead of being posted around.
+    """
+    try:
+        payloads = json.loads(payloads_path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise click.BadParameter(
+            "{} could not be read: {}".format(payloads_path, error), param_hint="'--payloads'"
+        ) from None
+    if not isinstance(payloads, list):
+        raise click.BadParameter("{} does not hold a list of threads".format(payloads_path), param_hint="'--payloads'")
+    try:
+        return tuple(slack_post.SlackThreadPayload.model_validate(payload) for payload in payloads)
+    except ValidationError as error:
+        raise click.BadParameter(
+            "{} is not a rendered report: {}".format(payloads_path, error), param_hint="'--payloads'"
+        ) from None
+
+
+def _echo_workflow_warning(warning: str) -> None:
+    """One line a reader of the run should see, annotated the way GitHub Actions reads it.
+
+    On stdout rather than through the logger, because GitHub reads its annotations off a step's
+    standard output and loguru writes to standard error.
+    """
+    write_human_line("{}{}".format(slack_post.GITHUB_WARNING_PREFIX, warning))
 
 
 @main.command("flow-lab")
