@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from pytest_executable_tmp.plugin import can_run_files_in, select_temp_root
 
 _DEFAULT = Path("/default-root-51873")
@@ -7,42 +9,43 @@ _FALLBACK = Path("/fallback-root-51873")
 _EXPLICIT = Path("/explicit-root-51873")
 
 
-def _runnable_only(*runnable: Path):
-    return lambda directory: directory in runnable
-
-
-def test_select_temp_root_keeps_a_default_root_that_can_run_files() -> None:
+@pytest.mark.parametrize(
+    ("explicit_root", "runnable", "expected_usable", "expected_rejected"),
+    [
+        pytest.param(
+            None, (_DEFAULT, _FALLBACK), _DEFAULT, (), id="keeps-a-runnable-default"
+        ),
+        pytest.param(
+            None,
+            (_FALLBACK,),
+            _FALLBACK,
+            (_DEFAULT,),
+            id="moves-off-an-unrunnable-default",
+        ),
+        pytest.param(
+            _EXPLICIT,
+            (_DEFAULT, _FALLBACK),
+            None,
+            (_EXPLICIT,),
+            id="never-replaces-an-explicit-root",
+        ),
+        pytest.param(
+            None, (), None, (_DEFAULT, _FALLBACK), id="nothing-when-no-candidate-runs"
+        ),
+    ],
+)
+def test_select_temp_root_picks_the_first_candidate_that_can_run_files(
+    explicit_root: Path | None,
+    runnable: tuple[Path, ...],
+    expected_usable: Path | None,
+    expected_rejected: tuple[Path, ...],
+) -> None:
     selection = select_temp_root(
-        _DEFAULT, None, _FALLBACK, _runnable_only(_DEFAULT, _FALLBACK)
+        _DEFAULT, explicit_root, _FALLBACK, lambda directory: directory in runnable
     )
 
-    assert selection.usable_root == _DEFAULT
-    assert selection.rejected_roots == ()
-
-
-def test_select_temp_root_moves_off_a_default_root_that_cannot_run_files() -> None:
-    selection = select_temp_root(_DEFAULT, None, _FALLBACK, _runnable_only(_FALLBACK))
-
-    assert selection.usable_root == _FALLBACK
-    assert selection.rejected_roots == (_DEFAULT,)
-
-
-def test_select_temp_root_never_replaces_an_explicit_root_that_cannot_run_files() -> (
-    None
-):
-    selection = select_temp_root(
-        _DEFAULT, _EXPLICIT, _FALLBACK, _runnable_only(_DEFAULT, _FALLBACK)
-    )
-
-    assert selection.usable_root is None
-    assert selection.rejected_roots == (_EXPLICIT,)
-
-
-def test_select_temp_root_finds_nothing_when_no_candidate_can_run_files() -> None:
-    selection = select_temp_root(_DEFAULT, None, _FALLBACK, _runnable_only())
-
-    assert selection.usable_root is None
-    assert selection.rejected_roots == (_DEFAULT, _FALLBACK)
+    assert selection.usable_root == expected_usable
+    assert selection.rejected_roots == expected_rejected
 
 
 def test_can_run_files_in_runs_a_script_in_a_directory_that_allows_it(
