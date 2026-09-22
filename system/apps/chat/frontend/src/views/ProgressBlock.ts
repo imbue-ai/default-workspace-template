@@ -106,8 +106,8 @@ function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolRes
   const children = renderAssistantRun(step.events, toolResults, chatId);
   // The revealed work sits flush under its title -- no indent and no left rule.
   // The timeline's own thread already runs down the left of every node, so a
-  // second vertical line inside an opened step read as a nested timeline that
-  // wasn't one. Its p and tool-block child rules stay in style.css.
+  // second vertical line inside an opened step would read as a nested timeline
+  // that is not one. Its p and tool-block child rules stay in style.css.
   return m("div", { class: "pv-expanded markdown-content mt-2.5 text-(length:--font-size-body)" }, children);
 }
 

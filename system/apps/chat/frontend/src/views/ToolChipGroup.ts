@@ -1,13 +1,9 @@
 /**
  * A run of tool calls as a row of inline chips.
  *
- * A turn's actions used to be a stack of full-width bordered blocks, one per
- * call, each as loud as the prose around it -- so a turn that read three files
- * looked like three paragraphs of content. Here the run collapses into one
- * wrapping row of small ghost chips (glyph + name) that reads as a single line
- * of "what it did", and only the chip a reader picks opens its detail below the
- * row. One open at a time: the row is a list to scan, not a set of boxes to
- * leave lying open.
+ * The run collapses into one wrapping row of small ghost chips that reads as a
+ * single line of what the agent did, and only the chip a reader picks opens its
+ * detail below the row. One open at a time: the row is a list to scan.
  *
  * Runs merge across assistant events, so the chips carry the id of the event
  * each call came from -- that event is where the call's input is fetched from
@@ -59,12 +55,9 @@ function toolIcon(toolName: string): IconName {
 }
 
 /**
- * What a chip says about its call, in the order the reader is best served.
- *
- * A chip used to say the tool's name -- "Read", "Bash", "Grep". That is enough to
- * tell three calls apart and useless at twenty, where a row reads "Read Read Grep
- * Read Bash Read" and identifies nothing. The harness already knows better, on two
- * levels:
+ * What a chip says about its call, in the order the reader is best served. The
+ * tool's own name would tell one call from another only while there are few of
+ * them, so the harness's two better answers come first:
  *
  * 1. The agent's OWN words. Claude's shell and delegation tools require a short
  *    description of what the command is for, and the agent writes one every time
@@ -73,10 +66,10 @@ function toolIcon(toolName: string): IconName {
  *    ("read ChatPanel.ts", `searched "font-size" in views`). A file is named, not
  *    pathed -- the parser shortens it, and the whole path is in the panel.
  *
- * The fallbacks below that are for events this app parsed before the fields
- * existed, and for the harnesses whose parsers do not stamp them yet: the live
- * strip's caption ("Reading foo.py") is the same thing in the present tense and
- * reads fine on a chip, and the bare tool name is the last resort.
+ * The fallbacks below that cover an event parsed before the fields existed, and
+ * a harness whose parser stamps no action: the live strip's caption ("Reading
+ * foo.py") is the same thing in the present tense and reads fine on a chip, and
+ * the bare tool name is the last resort.
  */
 type ChipText = { kind: "note"; text: string } | { kind: "action"; verb: string; target: string };
 
@@ -103,18 +96,17 @@ function chipKey(call: ToolCall): string {
 }
 
 /** `-ml-1` cancels the first chip's own left padding, so the row's ink starts
- *  where the prose above it does. A ghost button needs that padding for its
- *  hover fill to have a shape, but the padding is chrome -- without this the
- *  whole row sat indented from the text it belongs to. It tracks the chip's
+ *  where the prose above it does: a ghost button needs that padding for its
+ *  hover fill to have a shape, but the padding is chrome. It tracks the chip's
  *  `px-1`, as does the panel's own margin below. */
 const ROW_CLASS = "tool-chip-row -ml-1 flex flex-wrap items-center gap-1";
 
 /** A ghost button: no fill at rest, a wash on hover, a stronger fill and full-
  *  strength text once it is the open one.
  *
- *  `max-w-[20rem]`: a chip now carries a phrase rather than a word, and one long
- *  one must not take a whole line of the row to itself. Past that width the
- *  target truncates and the hover title carries the rest. */
+ *  `max-w-[20rem]`: a chip carries a phrase, and one long one must not take a
+ *  whole line of the row to itself. Past that width the target truncates and the
+ *  hover title carries the rest. */
 const CHIP_BASE =
   "tool-chip inline-flex max-w-[20rem] cursor-pointer appearance-none items-center gap-0.5 rounded-md border-0 " +
   "px-1 py-[2px] text-(length:--font-size-helper) leading-normal transition-colors duration-(--dur-base) " +
@@ -122,16 +114,13 @@ const CHIP_BASE =
 
 /**
  * The two halves of a chip's phrase read as ONE sentence: same face, same size,
- * same colour, separated by an ordinary word space. They were set apart at first
- * -- the target in mono, as the machine's own text -- which made every chip look
- * like a line of console output wearing a pill. A chip is a thing to read, so it
- * is set like reading.
+ * same colour, separated by an ordinary word space. A chip is a thing to read,
+ * so it is set like reading rather than like the console output it describes.
  *
  * They stay separate elements because they are separate facts, which the tests
  * and the e2e suite locate individually. Both are bare markers: the wrapping
  * label owns the layout, so the space between them is a real text node rather
- * than the row's flex gap -- as flex children they sat a gap apart, which at this
- * size read as a double space.
+ * than the row's flex gap, which at this size reads as a double space.
  */
 const CHIP_LABEL_CLASS = "tool-chip-label min-w-0 truncate";
 
@@ -149,9 +138,8 @@ const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
 
 /** The pane itself carries the face and size, so everything in it -- the verb,
  *  the command, and the space BETWEEN them -- is set alike. The space is an
- *  ordinary text node, and a text node takes the face of whatever contains it:
- *  left on the pane's default it was a sans space beside monospace text, which
- *  read as no space at all. */
+ *  ordinary text node, and a text node takes the face of whatever contains it,
+ *  so on the pane's default face it would be a sans space beside monospace. */
 const PANE_CLASS = "py-0.5 font-mono text-(length:--font-size-helper) leading-normal";
 
 function renderPane(marker: string, text: string, extra = "", verb?: string): m.Vnode {
@@ -173,11 +161,10 @@ function renderPane(marker: string, text: string, extra = "", verb?: string): m.
  * A tool's input as something a person reads, rather than the raw JSON object it
  * arrives as.
  *
- * The object's braces and quoting are the wire's, not the reader's: a shell call
- * came out as a four-line JSON blob whose only real content was one command. So a
- * lone remaining field renders as its bare value -- which for a shell call is
- * exactly the command -- and several render as `key: value` lines, with a
- * multi-line value dropped below its key rather than run onto it.
+ * The object's braces and quoting are the wire's, not the reader's. A lone
+ * remaining field renders as its bare value -- which for a shell call is exactly
+ * the command -- and several render as `key: value` lines, with a multi-line
+ * value dropped below its key rather than run onto it.
  *
  * `omit` drops what the panel has already said. The chip is the agent's own note,
  * and that note IS one of these fields (a shell call's `description`), so leaving
@@ -242,8 +229,8 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     const input = formatToolInput(inputText, chip.call.action_note);
     // The verb leads the input only when the chip is showing the agent's note
     // instead: there it is the missing half, turning the pane into "ran <the
-    // command>". When the chip already reads "edited <file>", repeating the verb
-    // here would be the same doubling this pane just stopped doing.
+    // command>". When the chip already reads "edited <file>", the verb here
+    // would say it twice.
     const verb = chip.call.action_note ? chip.call.action_verb : undefined;
     if (input) sections.push(renderPane("tool-call-input", input, "", verb));
   } else {
@@ -290,13 +277,12 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
     const { chips, toolResults, chatId } = vnode.attrs;
     const open = chips.find((chip) => isBlockExpanded(chipKey(chip.call))) ?? null;
 
-    // The panel goes INSIDE the row, immediately after the chip that opened it.
-    // A long run wraps onto several lines, and a panel hung below the whole row
-    // ends up lines away from the chip it belongs to -- with unrelated chips in
-    // between, so the reader loses which one they opened. As a full-width flex
-    // item it cannot share a line, which breaks the wrap exactly where it sits:
-    // the chip it belongs to ends its line, the panel spans the width directly
-    // underneath, and the rest of the run resumes below it.
+    // The panel goes INSIDE the row, immediately after the chip that opened it,
+    // because a long run wraps and a panel hung below the whole row would sit
+    // lines away from its own chip. As a full-width flex item it cannot share a
+    // line, which breaks the wrap exactly where it sits: the chip that opened it
+    // ends its line, the panel spans the width underneath, and the rest of the
+    // run resumes below.
     return m("div", { class: "tool-chip-group my-1.5" }, [
       m(
         "div",
