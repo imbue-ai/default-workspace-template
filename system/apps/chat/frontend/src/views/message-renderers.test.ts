@@ -10,12 +10,38 @@ import {
 } from "./message-renderers";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { setBlockExpanded } from "./expansion-state";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import {
+  closeProviderChooser,
+  getUnpickableAccount,
+  isPickingAccount,
+  isProviderChooserOpen,
+  pickAccount,
+} from "../models/Providers";
+import { startChatOnAccount } from "../shell";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
 // the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
 // needs openSubagentView, and the card path never calls MarkdownContent.
 vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
+
+// The auth-error note moves the chat through the switch dialog's entry point and reads the chat
+// from its model; the chooser's open/pick state is the real module's.
+const switching = vi.hoisted(() => {
+  // Opening the chooser redraws, and mithril schedules a redraw on an animation frame.
+  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
+    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
+  return {
+    chat: undefined as unknown,
+    beginSwitchToAccountId: vi.fn(),
+  };
+});
+vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
+vi.mock("../models/Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Chats")>()),
+  getChatById: () => switching.chat,
+}));
 
 // The render paths ask the detail cache for on-demand payloads (and kick off fetches);
 // stub those three so tests control the state machine without mithril's XHR.
@@ -587,22 +613,77 @@ describe("thinking disclosure", () => {
   });
 });
 
-// Walk a mithril vnode tree and return the first element vnode whose class contains `name`.
-function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
-  if (node == null) return null;
+interface VnodeLike {
+  tag?: unknown;
+  text?: unknown;
+  children?: unknown;
+  attrs?: Record<string, unknown>;
+}
+
+// Walk a mithril vnode tree and return the first vnode `isMatch` accepts. A match is not
+// descended into, so the outermost of a nest of matches wins.
+function findVnode(node: unknown, isMatch: (vnode: VnodeLike) => boolean): VnodeLike | null {
+  if (node == null || typeof node !== "object") return null;
   if (Array.isArray(node)) {
     for (const child of node) {
-      const found = findByClass(child, name);
-      if (found) return found;
+      const found = findVnode(child, isMatch);
+      if (found !== null) return found;
     }
     return null;
   }
-  if (typeof node === "object") {
-    const v = node as { attrs?: { className?: unknown }; children?: unknown };
-    if (typeof v.attrs?.className === "string" && v.attrs.className.split(" ").includes(name)) {
-      return v as { attrs?: Record<string, unknown> };
-    }
-    return findByClass(v.children, name);
-  }
-  return null;
+  const v = node as VnodeLike;
+  if (isMatch(v)) return v;
+  return findVnode(v.children, isMatch);
 }
+
+// The first element vnode whose class contains `name`.
+function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
+  return findVnode(node, (v) => {
+    const className = v.attrs?.className;
+    return typeof className === "string" && className.split(" ").includes(name);
+  });
+}
+
+describe("the auth-error note's switch link", () => {
+  const OPENAI_ID = "acct-openai";
+  const ANTHROPIC_ID = "acct-anthropic";
+
+  function authErrorEvent(): AssistantMessageEvent {
+    return { ...apiErrorEvent("API Error: 401 invalid api key", null, false, true), is_auth_error: true };
+  }
+
+  function findButton(node: unknown, label: string): { attrs: { onclick: () => void } } | null {
+    const found = findVnode(node, (v) => v.tag === "button" && allText(v).trim() === label);
+    return found === null ? null : (found as { attrs: { onclick: () => void } });
+  }
+
+  beforeEach(() => {
+    closeProviderChooser();
+    switching.beginSwitchToAccountId.mockClear();
+    vi.mocked(startChatOnAccount).mockClear();
+    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
+  });
+
+  it("switches the failed chat to the account picked, rather than starting a new chat", () => {
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+    findButton(children, "switch to another provider")!.attrs.onclick();
+
+    expect(isProviderChooserOpen()).toBe(true);
+    expect(isPickingAccount()).toBe(true);
+    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, reason: "failing" });
+
+    pickAccount(ANTHROPIC_ID);
+
+    expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
+    expect(startChatOnAccount).not.toHaveBeenCalled();
+    expect(isProviderChooserOpen()).toBe(false);
+  });
+
+  it("is not offered until the chat itself is known", () => {
+    switching.chat = undefined;
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+    expect(findButton(children, "switch to another provider")).toBeNull();
+    expect(findButton(children, "Sign in again")).not.toBeNull();
+  });
+});
