@@ -49,9 +49,11 @@ time" describes. Three deltas:
   before editing any of them: check each one in `tk ready`
   (`grep -E -- "- editing critical app <name>$"`), take them in name order, and
   if any is held by another agent, release the ones you took before surfacing
-  it, so two passes that need the same apps never sit holding one each. If the
-  pass grows to another critical app later, take that app's lease before
-  touching it.
+  it, so two passes that need the same apps at entry never sit holding one
+  each. If the pass grows to another critical app later, take that app's lease
+  before touching it; if another agent holds it, surface that together with
+  the leases this pass already holds, since that holder may be waiting on one
+  of yours.
   Passes on different critical apps run side by side: step 4's freshness check
   catches a pass whose files moved under it, the apply refuses to start while
   another apply is in flight, and it builds the bundles from the merged tree
