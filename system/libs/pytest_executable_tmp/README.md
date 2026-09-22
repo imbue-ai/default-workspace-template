@@ -16,9 +16,10 @@ is about to use:
 
 - It runs: nothing changes.
 - It does not, and the root is pytest's default: temporary files move to
-  `~/.cache/pytest-executable-tmp` (the host backup excludes `.cache`), for
-  `tmp_path`, `tempfile` and, through `TMPDIR`, every subprocess a test starts.
-  The session header says so.
+  `/var/tmp`, for `tmp_path`, `tempfile` and, through `TMPDIR`, every
+  subprocess a test starts. It is off the backed-up home volume, and short
+  enough that a unix socket a test binds under `tmp_path` stays within the
+  `AF_UNIX` path limit. The session header says so.
 - It does not, and the root was chosen explicitly (`--basetemp` or
   `PYTEST_DEBUG_TEMPROOT`), or no candidate works: the session stops before any
   test runs, rather than letting stubs fall through to real tools.

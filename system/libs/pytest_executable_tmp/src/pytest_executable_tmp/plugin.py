@@ -13,8 +13,10 @@ from pydantic import Field
 
 _PROBE_SCRIPT: Final[str] = "#!/bin/sh\nexit 0\n"
 _PROBE_TIMEOUT_SECONDS: Final[float] = 10.0
-# Under ~/.cache because the host backup excludes every `.cache` directory.
-_FALLBACK_ROOT_PARTS: Final[tuple[str, ...]] = (".cache", "pytest-executable-tmp")
+# Off the backed-up home volume, and short: pytest nests tmp_path several levels
+# under this root, and a unix socket a test binds there must fit AF_UNIX's path
+# limit (104 bytes on macOS, 108 on Linux).
+_FALLBACK_ROOT: Final[Path] = Path("/var/tmp")
 
 
 class TempRootSelection(FrozenModel):
@@ -100,7 +102,7 @@ def pytest_configure(config: pytest.Config) -> None:
     selection = select_temp_root(
         default_root=Path(tempfile.gettempdir()),
         explicit_root=_explicit_temp_root(config),
-        fallback_root=Path.home().joinpath(*_FALLBACK_ROOT_PARTS),
+        fallback_root=_FALLBACK_ROOT,
         can_run=can_run_files_in,
     )
     if selection.usable_root is None:
