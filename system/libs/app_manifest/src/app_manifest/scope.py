@@ -366,7 +366,7 @@ def compute_skill_scope(repo_root: Path, target_path: RepoRelativePath) -> Creat
 
 
 @pure
-def is_accounted_for_by_scope(candidate: RepoRelativePath, scope: CreationScope) -> bool:
+def is_inside_footprint(candidate: RepoRelativePath, scope: CreationScope) -> bool:
     """Whether a changed file sits inside the footprint.
 
     Of each context directory only its manifest counts as inside: a skill's one sanctioned
@@ -437,7 +437,7 @@ def with_diff_against_base(
     for changed_file in changed_files:
         if exclude_spec.match_file(changed_file):
             continue
-        if is_accounted_for_by_scope(changed_file, scope):
+        if is_inside_footprint(changed_file, scope):
             inside_footprint.append(changed_file)
         else:
             outside_footprint.append(changed_file)
