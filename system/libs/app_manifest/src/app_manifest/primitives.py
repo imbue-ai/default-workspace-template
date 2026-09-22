@@ -229,6 +229,10 @@ class PriorityName(str):
         )
 
 
+class LaunchParamName(NonEmptyStr):
+    """The name of a launch path's query parameter, as the manifest declares it and the shell appends it."""
+
+
 class ProgramName(NonEmptyStr):
     """The supervisord program that runs an app."""
 

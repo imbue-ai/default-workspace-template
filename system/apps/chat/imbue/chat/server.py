@@ -149,6 +149,9 @@ CHAT_DOCUMENT_FILENAME: Final[str] = "chat.html"
 ROOT_DOCUMENT_FILENAME: Final[str] = "root.html"
 # The chat root's launch path (contracts.md section 2): the root with a chat just created.
 NEW_CHAT_PATH: Final[str] = "/new"
+# The ``send`` launch path: the root with its send picker open over the chats (launcher-and-getting-started plan
+# section 4.5).
+SEND_CHAT_PATH: Final[str] = "/send"
 
 # What the chat origin answers when the bundle is missing: the shell's placeholder carries the
 # repair story, and a chat frame is never the page a reader is looking at on its own.
@@ -1491,7 +1494,8 @@ def _inject_workspace_meta_tags(html_content: str, root_path: str) -> str:
 
 
 def _root_document() -> Response:
-    """Serve the chat root: the chat list beside an inner frame of the selected chat (``/?chat=<id>``), and ``/new``.
+    """Serve the chat root: the chat list beside an inner frame of the selected chat (``/?chat=<id>``), ``/new``, and
+    ``/send``.
 
     The page reads its selection off its own URL, so the document is the same for every path
     it is served at; it carries the meta tags a chat page does minus a chat identity.
@@ -1688,6 +1692,7 @@ def create_application(state: ChatAppState) -> Flask:
 
     application.add_url_rule("/", view_func=_root_document, methods=["GET"])
     application.add_url_rule(NEW_CHAT_PATH, view_func=_root_document, methods=["GET"], endpoint="new_chat_root")
+    application.add_url_rule(SEND_CHAT_PATH, view_func=_root_document, methods=["GET"], endpoint="send_chat_root")
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])

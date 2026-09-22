@@ -9,7 +9,15 @@
 
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
-import { DRAFT_PARAM, launchPathOf, launchPathWithParams } from "../model/launch";
+import {
+  DRAFT_PARAM,
+  NO_TEXT_APP_REASON,
+  freeTextRowsOf,
+  launchPathOf,
+  launchPathWithParams,
+  launchRowKindOf,
+  textPathOf,
+} from "../model/launch";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -22,6 +30,7 @@ import type {
   FloatingPosition,
   GridCell,
   IfPresent,
+  LaunchPath,
   Layout,
   PinStyle,
   Placement,
@@ -65,6 +74,7 @@ import {
   isAppStoppable,
   isEmbedderMessageHandled,
   isLayoutDirty,
+  openableApps,
   pinnedWindowOf,
   reduceDesktopState,
   renderedState,
@@ -777,15 +787,64 @@ export class DesktopStore {
     return this.runLaunch(shortcut.target.app, shortcut.target.launch, shortcut.mode);
   }
 
-  /** Run a launch path with params (a seeded prompt): always opens a new window. */
-  async openLaunchPath(app: string, launch: string, params: Readonly<Record<string, string>>): Promise<void> {
-    const record = appByName(this.state, app);
-    const launchPath = record === undefined ? null : launchPathOf(record, launch);
-    if (record === undefined || launchPath === null) {
-      this.deps.notify(`Cannot open: ${app} has no launch path ${launch}`);
-      return;
+  /** The app and launch path a launcher row names, or null (told to the user) when the app declares no such path. */
+  private launchOf(appName: string, launchId: string): { app: AppRecord; launchPath: LaunchPath } | null {
+    const app = appByName(this.state, appName);
+    const launchPath = app === undefined ? null : launchPathOf(app, launchId);
+    if (app === undefined || launchPath === null) {
+      this.deps.notify(`Cannot open: ${appName} has no launch path ${launchId}`);
+      return null;
     }
-    await this.openWindowAt(record.name, launchPathWithParams(launchPath, params), launchPath.id, "new");
+    return { app, launchPath };
+  }
+
+  /** Run a launch-path row (launcher plan section 3.3): a launch path at its app's pin path raises the pinned window
+   *  on the active desktop and opens nothing; every other opens a new window at the path. */
+  async runLaunchRow(appName: string, launchId: string): Promise<void> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return;
+    if (launchRowKindOf(found.app, found.launchPath) === "focus") {
+      const pinned = pinnedWindowOf(this.state, found.app.name);
+      if (pinned !== null) {
+        this.restoreWindow(pinned.id);
+        return;
+      }
+    }
+    await this.openWindowAt(found.app.name, found.launchPath.path, found.launchPath.id, "new");
+  }
+
+  /** Run a free-text row with ``text`` (launcher plan section 3.2), pinned-first: when the app has an independent
+   *  pinned window on the active desktop, this client's view of it is pointed at the launch path with the text
+   *  (the write an agent's navigate makes, which moves this client's page alone) and the window is restored and
+   *  raised; otherwise a new window opens at that path. A linked pinned window is never navigated to a launch
+   *  path, since every client would run it. False when the text cannot go (over the path bound) or the shell
+   *  refused, each told to the user. */
+  async runFreeText(appName: string, launchId: string, text: string): Promise<boolean> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return false;
+    const target = textPathOf(found.launchPath, text);
+    if (target.kind === "disabled") {
+      this.deps.notify(target.reason);
+      return false;
+    }
+    const pinned = pinnedWindowOf(this.state, found.app.name);
+    if (pinned !== null && pinned.scope === "independent") {
+      const isTaken = await this.navigateOwnWindow(pinned.id, target.path);
+      this.restoreWindow(pinned.id);
+      return isTaken;
+    }
+    return (await this.openWindowAt(found.app.name, target.path, found.launchPath.id, "new")) !== null;
+  }
+
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
+   *  with no free-text row on the machine the user is told. */
+  async startWithText(text: string): Promise<boolean> {
+    const [primary] = freeTextRowsOf(openableApps(this.state));
+    if (primary === undefined) {
+      this.deps.notify(NO_TEXT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout

@@ -23,6 +23,7 @@ from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.primitives import DisplayName
+from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
@@ -53,13 +54,17 @@ REGISTRATION_TIMEOUT_SECONDS: Final[float] = 15.0
 
 
 class RegistryLaunchPath(FrozenModel):
-    """A launch path as copied onto a registry row: the id, the label, the path, and the names of its params."""
+    """A launch path as copied onto a registry row: the id, the label, the path, the names of its params, and which
+    of them takes typed text."""
 
     id: LaunchPathId = Field(description="The declared launch path id")
     label: NonEmptyStr = Field(description="The launch path's user-facing label")
     path: LaunchPathValue = Field(description="The path under the app origin")
-    params: tuple[NonEmptyStr, ...] = Field(
+    params: tuple[LaunchParamName, ...] = Field(
         default=(), description="The names of the query parameters the shell may append, in manifest order"
+    )
+    text_param: LaunchParamName | None = Field(
+        default=None, description="The param the launcher fills with typed text; absent means the path takes none"
     )
 
 

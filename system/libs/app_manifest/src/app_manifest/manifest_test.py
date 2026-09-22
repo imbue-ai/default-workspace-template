@@ -38,6 +38,7 @@ def _full_manifest_data() -> dict[str, object]:
                 "label": "New File Viewer",
                 "path": "/",
                 "params": [{"name": "path", "label": "Path", "required": False}],
+                "text_param": "path",
             }
         ],
         "launcher_rank": 20,
@@ -59,6 +60,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.default_shortcut.launch == "new"
     assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/")]
     assert manifest.launch_paths[0].params[0].name == "path"
+    assert manifest.launch_paths[0].text_param == "path"
     assert manifest.launcher_rank == 20
     assert manifest.pin is not None
     assert manifest.pin.path == "/"
@@ -150,6 +152,18 @@ def test_duplicate_message_handler_types_are_rejected() -> None:
                 ],
             }
         )
+
+
+def test_text_param_must_name_a_declared_param_and_defaults_to_none() -> None:
+    data = _full_manifest_data()
+    launch_path = dict(data["launch_paths"][0])  # type: ignore[index]
+    del launch_path["text_param"]
+    assert AppManifest.model_validate({**data, "launch_paths": [launch_path]}).launch_paths[0].text_param is None
+
+    with pytest.raises(ValidationError, match="text_param 'message' is not one of the launch path's params"):
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": "message"}]})
+    with pytest.raises(ValidationError, match="at least 1 character"):
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": ""}]})
 
 
 def test_duplicate_launch_path_ids_are_rejected() -> None:

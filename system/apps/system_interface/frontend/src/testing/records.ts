@@ -1,8 +1,8 @@
 /**
- * Record factories for the frontend tests: an app as the shell lists it, a desktop, a window, a
- * placement, a launch path, a client record, a layout, the avatar state, the theme metrics, a
- * published template as the catalog lists it, and the update notice as the shell sends it. Each
- * takes overrides so a test spells only what it is about.
+ * Record factories for the frontend tests: an app as the shell lists it (and one shaped like the
+ * chat's manifest), a desktop, a window, a placement, a launch path, a client record, a layout, the
+ * avatar state, the theme metrics, and the update notice as the shell sends it. Each takes
+ * overrides so a test spells only what it is about.
  */
 
 import type {
@@ -15,7 +15,6 @@ import type {
   UpdateNoticeWire,
   WindowRecord,
 } from "../model/records";
-import type { CatalogTemplate } from "../model/TemplateCatalog";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
 import type { AvatarState } from "../reducers/desktopState";
@@ -26,7 +25,7 @@ function capitalized(name: string): string {
 
 /** A launch path ``new`` at ``/new`` with no params. */
 export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPath {
-  return { id: "new", label: "New", path: "/new", params: [], ...overrides };
+  return { id: "new", label: "New", path: "/new", params: [], text_param: null, ...overrides };
 }
 
 /** A running, non-critical, supervised app with one ``new`` launch path at ``/new``. */
@@ -48,6 +47,34 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     is_running: true,
     ...overrides,
   };
+}
+
+/** An app shaped like the chat's manifest: ranked, an independent avatar pin at ``/``, a ``root`` launch path at
+ *  the pin's path taking a ``draft``, and ``new`` and ``send`` launch paths taking ``message`` as typed text. */
+export function chatLikeAppRecord(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
+  const displayName = capitalized(name);
+  return appRecord(name, {
+    launcher_rank: 10,
+    pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
+    launch_paths: [
+      launchPathRecord({ id: "root", label: displayName, path: "/", params: ["draft"] }),
+      launchPathRecord({
+        id: "new",
+        label: `New ${displayName}`,
+        path: "/new",
+        params: ["message"],
+        text_param: "message",
+      }),
+      launchPathRecord({
+        id: "send",
+        label: `Send to ${name}...`,
+        path: "/send",
+        params: ["message"],
+        text_param: "message",
+      }),
+    ],
+    ...overrides,
+  });
 }
 
 /** A settled window of ``app`` at ``path`` with an empty title. */
@@ -115,27 +142,6 @@ export function layoutRecord(placements: readonly Placement[], updatedAt: string
 /** A shown, normal placement at the first cascade frame. */
 export function placementRecord(windowId: string, overrides: Partial<Placement> = {}): Placement {
   return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
-}
-
-/** A template titled after its slug, published by "someone" from a repository named after it, with a drawing and no requirements. */
-export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTemplate> = {}): CatalogTemplate {
-  return {
-    slug,
-    title: capitalized(slug),
-    description: `What ${slug} does.`,
-    what_it_is: "",
-    author: "someone",
-    repository_url: `https://github.com/someone/${slug}`,
-    thumbnail_url: `https://example.test/${slug}.svg`,
-    version: "v1",
-    updated_at: "",
-    required_accounts: [],
-    required_secrets: [],
-    needs_ai: false,
-    apt_packages: [],
-    choices: [],
-    ...overrides,
-  };
 }
 
 /** An open notice (no rollback started) for an apply that touched ``apps``, one program each. */

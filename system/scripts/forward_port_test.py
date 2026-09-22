@@ -721,6 +721,7 @@ id = "new"
 label = "New File Viewer"
 path = "/"
 params = [{name = "path", label = "Path", required = false}]
+text_param = "path"
 
 [[launch_paths]]
 id = "recent"
@@ -767,10 +768,10 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
     assert "actions" not in row
-    # The row carries each launch path's param NAMES (the launcher reads them), and no ``params``
+    # The row carries each launch path's param NAMES (the launcher reads them) and its text_param, and neither
     # key at all for a launch path that declares none.
     assert row["launch_paths"] == [
-        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"]},
+        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"], "text_param": "path"},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
     ]
     assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
@@ -806,6 +807,11 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
             '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\nparams = [{label = "Path"}]\n',
             "every launch path param needs a string 'name'",
             id="launch-path-param-without-a-name",
+        ),
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\ntext_param = 3\n',
+            "a launch path's text_param must be a string",
+            id="launch-path-text-param-not-a-string",
         ),
         pytest.param(
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',
