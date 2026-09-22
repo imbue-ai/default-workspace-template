@@ -1,10 +1,7 @@
 import base64
 import io
-import os
 import tarfile
 from collections.abc import Mapping
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import cast
@@ -22,29 +19,28 @@ from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.secret_wrapping import wrap_dek
-from imbue.minds_admin.cli._tier_secrets import WorkspaceStorageConfig
 from imbue.minds_admin.cli.cutover_drivers import CutoverContext
 from imbue.minds_admin.cli.cutover_drivers import _S3_COPY_PART_BYTES
+from imbue.minds_admin.cli.cutover_drivers import _dry_run_migration_detail
 from imbue.minds_admin.cli.cutover_drivers import _migrate_workspace
-from imbue.minds_admin.cli.cutover_drivers import _remove_box_transfer_dirs
 from imbue.minds_admin.cli.cutover_drivers import _render_migrate_reserve_script
 from imbue.minds_admin.cli.cutover_drivers import _repave_box
 from imbue.minds_admin.cli.cutover_drivers import _replay_latchkey_disk_state
 from imbue.minds_admin.cli.cutover_drivers import _rollback_workspace
-from imbue.minds_admin.cli.cutover_drivers import _run_on_box_checked
-from imbue.minds_admin.cli.cutover_drivers import _run_on_vm_checked
 from imbue.minds_admin.cli.cutover_drivers import _s3_multipart_copy
 from imbue.minds_admin.cli.cutover_drivers import _start_latchkey_gateway
 from imbue.minds_admin.cli.cutover_drivers import _target_capacity_error_or_none
 from imbue.minds_admin.cli.cutover_drivers import box_transfer_dir
 from imbue.minds_admin.cli.cutover_drivers import build_preflight_report
 from imbue.minds_admin.cli.cutover_drivers import build_saved_product_artifact
+from imbue.minds_admin.cli.cutover_drivers import failed_transition_error_or_none
 from imbue.minds_admin.cli.cutover_drivers import is_artifact_resave_due
 from imbue.minds_admin.cli.cutover_drivers import is_parked_row_shape
 from imbue.minds_admin.cli.cutover_drivers import minimal_mngr_context
 from imbue.minds_admin.cli.cutover_drivers import parked_sweep_rows
 from imbue.minds_admin.cli.cutover_drivers import partition_migration_rows
 from imbue.minds_admin.cli.cutover_drivers import probe_workspace_health
+from imbue.minds_admin.cli.cutover_drivers import remove_box_transfer_dirs
 from imbue.minds_admin.cli.cutover_drivers import render_preflight_table
 from imbue.minds_admin.cli.cutover_drivers import render_stage_table
 from imbue.minds_admin.cli.cutover_drivers import repave_dry_run_detail
@@ -53,12 +49,15 @@ from imbue.minds_admin.cli.cutover_drivers import repave_scope_refusal_or_none
 from imbue.minds_admin.cli.cutover_drivers import require_connector_stop_kinds
 from imbue.minds_admin.cli.cutover_drivers import require_named_servers_selected
 from imbue.minds_admin.cli.cutover_drivers import rollback_would_clobber_newer_artifact
+from imbue.minds_admin.cli.cutover_drivers import run_on_box_checked
+from imbue.minds_admin.cli.cutover_drivers import run_on_vm_checked
 from imbue.minds_admin.cli.cutover_drivers import s3_copy_part_ranges
 from imbue.minds_admin.cli.cutover_drivers import target_box_refusal_or_none
 from imbue.minds_admin.cli.cutover_drivers import undestroyed_pool_host_ids
 from imbue.minds_admin.cli.cutover_drivers import unreachable_vm_error
 from imbue.minds_admin.cli.cutover_drivers import unwrap_age_identity
-from imbue.minds_admin.slices.cutover_db import CutoverPoolRow
+from imbue.minds_admin.cli.testing import make_workspace_storage_config
+from imbue.minds_admin.slices.cutover_db import TransitionFailure
 from imbue.minds_admin.slices.cutover_state import CutoverStateStore
 from imbue.minds_admin.slices.cutover_types import BoxOutcome
 from imbue.minds_admin.slices.cutover_types import BoxPreflight
@@ -71,8 +70,10 @@ from imbue.minds_admin.slices.cutover_types import StageReport
 from imbue.minds_admin.slices.cutover_types import WorkspaceOutcome
 from imbue.minds_admin.slices.cutover_types import WorkspacePreflight
 from imbue.minds_admin.slices.testing import make_cutover_workspace_state
+from imbue.minds_admin.slices.testing import make_gen1_pool_row
 from imbue.minds_admin.slices.testing import make_harvested_keys
 from imbue.minds_admin.slices.testing import make_harvested_latchkey_state
+from imbue.minds_admin.slices.testing import make_ready_gen1_server
 from imbue.minds_admin.slices.testing import make_saved_product_artifact
 from imbue.minds_admin.slices.testing import make_test_management_identities
 from imbue.mngr.interfaces.data_types import CommandResult
@@ -83,13 +84,11 @@ from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyOutcome
 from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
 from imbue.mngr_imbue_cloud.errors import WorkspaceHasNoStopError
 from imbue.mngr_imbue_cloud.errors import WorkspaceStopKindRouteUnavailableError
-from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerStatus
 from imbue.mngr_imbue_cloud.primitives import PoolHostDestroyOutcomeStatus
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DELIVERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DRAINING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
-from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import build_qemu_slice_env_file
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.guest import build_qemu_slice_meta_data
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.guest import build_qemu_slice_network_config
@@ -135,18 +134,6 @@ def _client(answers_by_label: dict[str, list[tuple[int, str, str]]]) -> Scripted
     return ScriptedSliceVmClient(box_address="10.0.0.1", box_ssh_user="slicehost", answers_by_label=answers_by_label)
 
 
-def _storage() -> WorkspaceStorageConfig:
-    return WorkspaceStorageConfig(
-        s3_endpoint="https://s3.example",
-        s3_region="us-east-1",
-        access_key_id=SecretStr("AKIA"),
-        secret_access_key=SecretStr("secret"),
-        bucket="bucket",
-        kek_base64=SecretStr(base64.b64encode(os.urandom(32)).decode()),
-        key_prefix="dev-x/",
-    )
-
-
 def test_minimal_mngr_context_enters_its_concurrency_group_for_the_block(tmp_path: Path) -> None:
     # The snapshot-helper provisioning runs its steps in child groups of the
     # context's group, which make_concurrency_group refuses on an unentered parent.
@@ -171,7 +158,7 @@ def test_unwrap_age_identity_reads_the_connector_envelope() -> None:
     # The saved artifact's DEK is whatever the product stop recorded on the
     # row; the migrate must unwrap it with the tier KEK exactly as the
     # connector's own restore would.
-    storage = _storage()
+    storage = make_workspace_storage_config()
     identity = f"AGE-SECRET-KEY-1{uuid4().hex.upper()}"
     kek = base64.b64decode(storage.kek_base64.get_secret_value())
     wrapped = base64.b64encode(wrap_dek(kek, identity.encode("utf-8"))).decode("ascii")
@@ -260,9 +247,9 @@ def test_unreachable_vm_error_names_the_start_remedy_only_for_stopped_rows() -> 
 def test_run_on_box_checked_raises_with_stderr_on_failure() -> None:
     client = _client(answers_by_label={"probe": [(1, "", "boom\n")]})
     with pytest.raises(CutoverError, match="boom"):
-        _run_on_box_checked(client, "false", timeout=1.0, label="probe")
+        run_on_box_checked(client, "false", timeout=1.0, label="probe")
     ok = _client(answers_by_label={"probe": [(0, "fine", "")]})
-    assert _run_on_box_checked(ok, "true", timeout=1.0, label="probe") == "fine"
+    assert run_on_box_checked(ok, "true", timeout=1.0, label="probe") == "fine"
 
 
 def test_run_on_vm_checked_keeps_secret_stdout_out_of_the_failure_message() -> None:
@@ -270,21 +257,21 @@ def test_run_on_vm_checked_keeps_secret_stdout_out_of_the_failure_message() -> N
     # as the record's last_error and printed in the report) must not carry it.
     failed_with_secret = CommandResult(stdout="-----BEGIN OPENSSH PRIVATE KEY-----", stderr="", success=False)
     with pytest.raises(CutoverError, match=r"VM command 'vm-keys' failed: $"):
-        _run_on_vm_checked(
+        run_on_vm_checked(
             stub_outer(failed_with_secret), "harvest", timeout=1.0, label="vm-keys", is_stdout_secret=True
         )
     with pytest.raises(CutoverError, match="PRIVATE KEY"):
-        _run_on_vm_checked(stub_outer(failed_with_secret), "harvest", timeout=1.0, label="vm-keys")
+        run_on_vm_checked(stub_outer(failed_with_secret), "harvest", timeout=1.0, label="vm-keys")
     ok = stub_outer(CommandResult(stdout="fine", stderr="", success=True))
-    assert _run_on_vm_checked(ok, "true", timeout=1.0, label="probe", is_stdout_secret=True) == "fine"
+    assert run_on_vm_checked(ok, "true", timeout=1.0, label="probe", is_stdout_secret=True) == "fine"
 
 
 def test_remove_box_transfer_dirs_is_best_effort_and_never_raises() -> None:
     # It cleans up on failure paths, where a raise would mask the original error.
     timed_out = TimingOutSliceVmClient(box_address="10.0.0.1", box_ssh_user="slicehost")
-    _remove_box_transfer_dirs(timed_out, ("/home/slicehost/.mngr-transfers/x",), what="a timed-out box")
+    remove_box_transfer_dirs(timed_out, ("/home/slicehost/.mngr-transfers/x",), what="a timed-out box")
     failing = _client(answers_by_label={"rm-td": [(1, "", "rm: cannot remove\n")]})
-    _remove_box_transfer_dirs(failing, ("/home/slicehost/.mngr-transfers/x",), what="a failing rm")
+    remove_box_transfer_dirs(failing, ("/home/slicehost/.mngr-transfers/x",), what="a failing rm")
     assert failing.calls == [("rm-td", "rm -rf /home/slicehost/.mngr-transfers/x")]
 
 
@@ -401,28 +388,8 @@ def test_render_stage_table_lists_boxes_then_their_workspaces() -> None:
     assert "FAILED" in text and "refused rows" in text
 
 
-def _ready_gen1_server() -> BareMetalServer:
-    now = datetime(2026, 8, 28, tzinfo=timezone.utc)
-    return BareMetalServer(
-        id=BareMetalServerDbId(str(uuid4())),
-        plan_code="24rise02-v1-us",
-        region="vin",
-        public_address="15.204.1.2",
-        cpu_threads=32,
-        ram_gb=128,
-        disk_gb=1000,
-        memory_per_slice_gb=8,
-        cpu_overcommit_ratio=1.5,
-        slot_count=15,
-        status=BareMetalServerStatus(SERVER_STATUS_READY),
-        created_at=now,
-        updated_at=now,
-        uplink_mbps=1000,
-    )
-
-
 def _ready_gen2_server() -> BareMetalServer:
-    gen1 = _ready_gen1_server()
+    gen1 = make_ready_gen1_server()
     return gen1.model_copy_update(
         to_update(gen1.field_ref().box_generation, 2),
         to_update(gen1.field_ref().disk_gb, 879),
@@ -436,7 +403,7 @@ def _gen2_server_with_status(status: str) -> BareMetalServer:
 
 
 def test_require_named_servers_selected_refuses_named_boxes_the_scope_dropped() -> None:
-    kept = _ready_gen1_server()
+    kept = make_ready_gen1_server()
     dropped_id = str(uuid4())
     # Unscoped: whatever the filter kept is the batch.
     require_named_servers_selected([], [kept], reason="unused")
@@ -446,7 +413,7 @@ def test_require_named_servers_selected_refuses_named_boxes_the_scope_dropped() 
 
 
 def test_target_box_must_be_a_ready_gen2_box() -> None:
-    gen1_ready = _ready_gen1_server()
+    gen1_ready = make_ready_gen1_server()
     assert target_box_refusal_or_none(None) == "no bare_metal_servers row with a public address"
     refusal = target_box_refusal_or_none(gen1_ready)
     assert refusal is not None and "gen-2" in refusal
@@ -470,7 +437,7 @@ def test_target_capacity_check_refuses_a_full_box_before_the_stop(tmp_path: Path
             pool_public_key=_TEST_POOL_PUBLIC_KEY,
             identities=make_test_management_identities("dev", "pem", operator_key_path=tmp_path / "operator-key"),
             ssh_ca_public_key=_TEST_SSH_CA,
-            storage=_storage(),
+            storage=make_workspace_storage_config(),
             state=CutoverStateStore(root=tmp_path / "cutover"),
             mngr_ctx=mngr_ctx,
         )
@@ -489,9 +456,9 @@ def test_target_capacity_check_refuses_a_full_box_before_the_stop(tmp_path: Path
 
 
 def test_repave_scope_refuses_boxes_that_are_not_steady_gen1() -> None:
-    assert repave_scope_refusal_or_none(_ready_gen1_server()) is None
-    installing = _ready_gen1_server().model_copy_update(
-        to_update(_ready_gen1_server().field_ref().status, BareMetalServerStatus(SERVER_STATUS_INSTALLING))
+    assert repave_scope_refusal_or_none(make_ready_gen1_server()) is None
+    installing = make_ready_gen1_server().model_copy_update(
+        to_update(make_ready_gen1_server().field_ref().status, BareMetalServerStatus(SERVER_STATUS_INSTALLING))
     )
     refusal = repave_scope_refusal_or_none(installing)
     assert refusal is not None and "only a ready (or draining) gen-1 box repaves" in refusal
@@ -509,7 +476,7 @@ def test_repave_flips_a_drained_gen2_box_to_delivered_so_setup_reinstalls_it() -
     # A crashed gen-2 repave resumes from where setup left it, untouched.
     for resumable_status in (SERVER_STATUS_DELIVERED, SERVER_STATUS_INSTALLING):
         assert repave_pre_reinstall_server_fields(_gen2_server_with_status(resumable_status)) == {}
-    assert repave_pre_reinstall_server_fields(_ready_gen1_server()) == {
+    assert repave_pre_reinstall_server_fields(make_ready_gen1_server()) == {
         "box_generation": 2,
         "status": SERVER_STATUS_DELIVERED,
         "cpu_overcommit_ratio": 4.0,
@@ -517,7 +484,7 @@ def test_repave_flips_a_drained_gen2_box_to_delivered_so_setup_reinstalls_it() -
 
 
 def test_repave_dry_run_detail_names_the_columns_the_real_run_would_set() -> None:
-    assert repave_dry_run_detail(_ready_gen1_server()) == (
+    assert repave_dry_run_detail(make_ready_gen1_server()) == (
         "dry run: would set box_generation=2, status=delivered, cpu_overcommit_ratio=4.0, "
         "reinstall + prep, measure the partition"
     )
@@ -533,7 +500,7 @@ def test_repave_dry_run_detail_names_the_columns_the_real_run_would_set() -> Non
 
 
 def test_repave_refuses_a_box_with_in_flight_migrations(tmp_path: Path) -> None:
-    gen1 = _ready_gen1_server()
+    gen1 = make_ready_gen1_server()
     state_store = CutoverStateStore(root=tmp_path / "cutover")
     state_store.ensure_layout()
     # A migration mid-flight off this box: the repave must not pull the origin
@@ -548,7 +515,7 @@ def test_repave_refuses_a_box_with_in_flight_migrations(tmp_path: Path) -> None:
             pool_public_key=_TEST_POOL_PUBLIC_KEY,
             identities=make_test_management_identities("dev", "pem", operator_key_path=tmp_path / "operator-key"),
             ssh_ca_public_key=_TEST_SSH_CA,
-            storage=_storage(),
+            storage=make_workspace_storage_config(),
             state=state_store,
             mngr_ctx=mngr_ctx,
         )
@@ -562,7 +529,7 @@ def test_box_workers_report_a_failed_box_level_step_instead_of_raising(tmp_path:
     # The thread fan-out aborts the whole batch (daemon threads included) when a
     # worker raises, so a pool-DB failure on one box must become that box's own
     # failed outcome. An invalid DSN makes the first connection raise.
-    gen1 = _ready_gen1_server()
+    gen1 = make_ready_gen1_server()
     with minimal_mngr_context(tmp_path / "mngr-profile") as mngr_ctx:
         ctx = CutoverContext(
             env_name="dev-x",
@@ -570,7 +537,7 @@ def test_box_workers_report_a_failed_box_level_step_instead_of_raising(tmp_path:
             pool_public_key=_TEST_POOL_PUBLIC_KEY,
             identities=make_test_management_identities("dev", "pem", operator_key_path=tmp_path / "operator-key"),
             ssh_ca_public_key=_TEST_SSH_CA,
-            storage=_storage(),
+            storage=make_workspace_storage_config(),
             state=CutoverStateStore(root=tmp_path / "cutover"),
             mngr_ctx=mngr_ctx,
         )
@@ -591,36 +558,6 @@ def test_undestroyed_pool_host_ids_names_the_rows_a_destroy_left_behind() -> Non
     assert undestroyed_pool_host_ids([]) == []
 
 
-def _gen1_row(**overrides: object) -> CutoverPoolRow:
-    """A parked-shape gen-1 pool row (stopped, no placement, no artifact) unless overridden."""
-    fields: dict[str, object] = dict(
-        id=str(uuid4()),
-        status="stopped",
-        host_id=f"host-{uuid4().hex}",
-        agent_id=None,
-        host_name="slice-x",
-        leased_to_user="0123456789abcdef",
-        vps_address=None,
-        ssh_port=None,
-        container_ssh_port=None,
-        bare_metal_server_id=None,
-        slice_instance_name="mngr-slice-dev-x-" + "a" * 16,
-        slice_disk_name="mngr-slice-dev-x-" + "a" * 16 + "-data",
-        outer_host_public_key=None,
-        container_host_public_key=None,
-        box_generation=1,
-        memory_units=8,
-        disk_gb=44,
-        attributes={},
-        artifact_generation=3,
-        region=None,
-        artifact_manifest=None,
-        wrapped_dek=None,
-    )
-    fields.update(overrides)
-    return CutoverPoolRow.model_validate(fields)
-
-
 def test_is_artifact_resave_due_when_an_unparked_stopped_row_carries_a_newer_generation() -> None:
     # Between the save and the park the owner can start+stop the workspace;
     # the row's artifact generation then moves past the saved rollback copy,
@@ -629,14 +566,14 @@ def test_is_artifact_resave_due_when_an_unparked_stopped_row_carries_a_newer_gen
     state = make_cutover_workspace_state(uuid4().hex, str(uuid4()))
     state = state.model_copy_update(to_update(state.field_ref().saved_artifact, saved))
     manifest = {"generation": saved.generation + 1, "key_prefix": "p"}
-    newer = _gen1_row(artifact_manifest=manifest, artifact_generation=saved.generation + 1)
+    newer = make_gen1_pool_row(artifact_manifest=manifest, artifact_generation=saved.generation + 1)
     assert is_artifact_resave_due(state, newer)
     # The saved copy is current: no re-save.
-    same = _gen1_row(artifact_manifest={"generation": saved.generation}, artifact_generation=saved.generation)
+    same = make_gen1_pool_row(artifact_manifest={"generation": saved.generation}, artifact_generation=saved.generation)
     assert not is_artifact_resave_due(state, same)
     # A parked row (manifest cleared) and a non-stopped row never re-save.
-    assert not is_artifact_resave_due(state, _gen1_row(artifact_generation=saved.generation + 1))
-    assert not is_artifact_resave_due(state, _gen1_row(status="leased", artifact_manifest=manifest))
+    assert not is_artifact_resave_due(state, make_gen1_pool_row(artifact_generation=saved.generation + 1))
+    assert not is_artifact_resave_due(state, make_gen1_pool_row(status="leased", artifact_manifest=manifest))
     # Nothing saved yet: the plain save path covers it, not the re-save.
     unsaved = make_cutover_workspace_state(uuid4().hex, str(uuid4()))
     assert not is_artifact_resave_due(unsaved, newer)
@@ -649,18 +586,24 @@ def test_rollback_refuses_a_gen1_stop_whose_artifact_moved_past_the_saved_copy()
     # saved copy.
     saved = make_saved_product_artifact()
     manifest = {"generation": saved.generation + 1, "key_prefix": "p"}
-    newer = _gen1_row(artifact_manifest=manifest, artifact_generation=saved.generation + 1)
+    newer = make_gen1_pool_row(artifact_manifest=manifest, artifact_generation=saved.generation + 1)
     assert rollback_would_clobber_newer_artifact(saved, newer)
     # The crash-between-save-and-park shape with no owner interference: the
     # saved copy IS the row's artifact, so the park + flip is a benign repoint.
-    same = _gen1_row(artifact_manifest={"generation": saved.generation}, artifact_generation=saved.generation)
+    same = make_gen1_pool_row(artifact_manifest={"generation": saved.generation}, artifact_generation=saved.generation)
     assert not rollback_would_clobber_newer_artifact(saved, same)
     # A parked row (manifest cleared) and a leased row are other branches' work.
-    assert not rollback_would_clobber_newer_artifact(saved, _gen1_row(artifact_generation=saved.generation + 1))
-    assert not rollback_would_clobber_newer_artifact(saved, _gen1_row(status="leased", artifact_manifest=manifest))
+    assert not rollback_would_clobber_newer_artifact(
+        saved, make_gen1_pool_row(artifact_generation=saved.generation + 1)
+    )
+    assert not rollback_would_clobber_newer_artifact(
+        saved, make_gen1_pool_row(status="leased", artifact_manifest=manifest)
+    )
     # A finalized gen-2 stop is a completed migration: losing its
     # post-migration artifact is the rollback's stated policy, not a clobber.
-    gen2_stop = _gen1_row(box_generation=2, artifact_manifest=manifest, artifact_generation=saved.generation + 1)
+    gen2_stop = make_gen1_pool_row(
+        box_generation=2, artifact_manifest=manifest, artifact_generation=saved.generation + 1
+    )
     assert not rollback_would_clobber_newer_artifact(saved, gen2_stop)
 
 
@@ -668,24 +611,24 @@ def test_is_parked_row_shape_requires_the_cleared_manifest_not_just_no_placement
     # The connector's 409 guard fires only when the manifest is NULL too; a
     # retention-finalized stop (no placement, manifest kept) is an ordinary
     # startable row, so a resuming migrate must still park it.
-    assert is_parked_row_shape(_gen1_row())
-    finalized = _gen1_row(artifact_manifest={"generation": 3, "key_prefix": "p"}, wrapped_dek="d2VkZWs=")
+    assert is_parked_row_shape(make_gen1_pool_row())
+    finalized = make_gen1_pool_row(artifact_manifest={"generation": 3, "key_prefix": "p"}, wrapped_dek="d2VkZWs=")
     assert not is_parked_row_shape(finalized)
-    assert not is_parked_row_shape(_gen1_row(bare_metal_server_id=str(uuid4())))
-    assert not is_parked_row_shape(_gen1_row(vps_address="15.204.1.2"))
-    assert not is_parked_row_shape(_gen1_row(status="leased"))
+    assert not is_parked_row_shape(make_gen1_pool_row(bare_metal_server_id=str(uuid4())))
+    assert not is_parked_row_shape(make_gen1_pool_row(vps_address="15.204.1.2"))
+    assert not is_parked_row_shape(make_gen1_pool_row(status="leased"))
 
 
 def test_partition_migration_rows_splits_candidates_from_unmigratable_rows() -> None:
     # Leased and stopped gen-1 rows migrate (in selection order); unleased rows
     # get the pool-destroy remedy, wedged rows their classification remedy, and
     # gen-2 rows fail unless the state dir says this tooling migrated them.
-    leased = _gen1_row(status="leased", bare_metal_server_id=str(uuid4()), vps_address="15.204.1.2")
-    stopped = _gen1_row()
-    available = _gen1_row(status="available", bare_metal_server_id=str(uuid4()))
-    starting = _gen1_row(status="starting", bare_metal_server_id=str(uuid4()))
-    migrated = _gen1_row(status="leased", box_generation=2, bare_metal_server_id=str(uuid4()))
-    foreign_gen2 = _gen1_row(status="leased", box_generation=2, bare_metal_server_id=str(uuid4()))
+    leased = make_gen1_pool_row(status="leased", bare_metal_server_id=str(uuid4()), vps_address="15.204.1.2")
+    stopped = make_gen1_pool_row()
+    available = make_gen1_pool_row(status="available", bare_metal_server_id=str(uuid4()))
+    starting = make_gen1_pool_row(status="starting", bare_metal_server_id=str(uuid4()))
+    migrated = make_gen1_pool_row(status="leased", box_generation=2, bare_metal_server_id=str(uuid4()))
+    foreign_gen2 = make_gen1_pool_row(status="leased", box_generation=2, bare_metal_server_id=str(uuid4()))
 
     candidates, unmigratable = partition_migration_rows(
         [leased, stopped, available, starting, migrated, foreign_gen2], {migrated.id}
@@ -753,7 +696,7 @@ def test_failed_remigration_leaves_a_terminal_record_untouched(tmp_path: Path) -
     # both recorded boxes.
     state_store = CutoverStateStore(root=tmp_path / "cutover")
     state_store.ensure_layout()
-    row = _gen1_row(status="leased", bare_metal_server_id=str(uuid4()), vps_address="15.204.1.2")
+    row = make_gen1_pool_row(status="leased", bare_metal_server_id=str(uuid4()), vps_address="15.204.1.2")
     rolled_back = make_cutover_workspace_state(row.id, str(uuid4()), target_server_id="old-target")
     state_store.write_workspace(
         rolled_back.model_copy_update(to_update(rolled_back.field_ref().stage, CutoverStage.ROLLED_BACK))
@@ -767,11 +710,13 @@ def test_failed_remigration_leaves_a_terminal_record_untouched(tmp_path: Path) -
             pool_public_key=_TEST_POOL_PUBLIC_KEY,
             identities=make_test_management_identities("dev", "pem", operator_key_path=tmp_path / "operator-key"),
             ssh_ca_public_key=_TEST_SSH_CA,
-            storage=_storage(),
+            storage=make_workspace_storage_config(),
             state=state_store,
             mngr_ctx=mngr_ctx,
         )
-        outcome = _migrate_workspace(ctx, unsized_target, row, is_keep_origin_vm=False, replay_inputs_cache={})
+        outcome = _migrate_workspace(
+            ctx, unsized_target, row, is_keep_origin_vm=False, is_shrink_oversized_disks=False, replay_inputs_cache={}
+        )
     assert outcome.stage == CutoverStage.FAILED
     assert outcome.detail is not None and "sizing is unusable" in outcome.detail
     record = state_store.read_workspace(row.id)
@@ -800,7 +745,7 @@ def test_rollback_of_an_already_rolled_back_record_touches_nothing_but_the_keys(
             pool_public_key=_TEST_POOL_PUBLIC_KEY,
             identities=make_test_management_identities("dev", "pem", operator_key_path=tmp_path / "operator-key"),
             ssh_ca_public_key=_TEST_SSH_CA,
-            storage=_storage(),
+            storage=make_workspace_storage_config(),
             state=state_store,
             mngr_ctx=mngr_ctx,
         )
@@ -919,6 +864,22 @@ def _ordered_outer(**kwargs: Any) -> tuple[OuterHostInterface, OrderedStubOuter]
     return cast(OuterHostInterface, stub), stub
 
 
+def _running_container_results(supervisor_output: str | None = None) -> dict[str, CommandResult]:
+    """Stub answers for a running ``mngr-ws`` container with its UI up.
+
+    ``supervisor_output`` is the container's ``supervisorctl status`` (exiting
+    non-zero, as supervisorctl does when any program is not RUNNING); None
+    leaves it to the stub's default, an empty success.
+    """
+    results = {
+        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
+        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
+    }
+    if supervisor_output is not None:
+        results["mngr-ws supervisorctl status"] = CommandResult(stdout=supervisor_output, stderr="", success=False)
+    return results
+
+
 def _tar_member_names_and_contents(tar_bytes: bytes) -> dict[str, bytes]:
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as archive:
         contents: dict[str, bytes] = {}
@@ -1010,10 +971,7 @@ def test_start_latchkey_gateway_never_writes_a_secret_when_the_dir_is_not_ram_ba
 
 
 def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed() -> None:
-    healthy_container = {
-        "docker inspect -f": CommandResult(stdout="true\n", stderr="", success=True),
-        "curl -fsS": CommandResult(stdout="", stderr="", success=True),
-    }
+    healthy_container = _running_container_results()
     vm_findings = {
         "supervisorctl status latchkey-gateway latchkey-tunnel": CommandResult(
             stdout="latchkey-gateway RUNNING pid 1\nlatchkey-tunnel BACKOFF Exited too quickly\n",
@@ -1025,13 +983,16 @@ def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed(
     outer, stub = _ordered_outer(result_by_substring={**healthy_container, **vm_findings})
     # The in-container supervisorctl status answers through the stub's default
     # (an empty success), which parses as no programs at all.
-    warnings = probe_workspace_health(outer, "mngr-ws", is_latchkey_gateway_expected=True)
-    assert warnings == [
+    findings = probe_workspace_health(outer, "mngr-ws", is_latchkey_gateway_expected=True, template_program_names=None)
+    assert findings.blocking == (
         "latchkey program not running on the VM: latchkey-tunnel BACKOFF",
         "the latchkey gateway is not accepting connections on the VM loopback",
-    ]
+    )
+    assert not findings.is_healthy
     outer_without, stub_without = _ordered_outer(result_by_substring={**healthy_container, **vm_findings})
-    assert probe_workspace_health(outer_without, "mngr-ws", is_latchkey_gateway_expected=False) == []
+    assert probe_workspace_health(
+        outer_without, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
+    ).is_healthy
     assert not any("latchkey" in event for event in stub_without.events)
     assert any("supervisorctl status latchkey-gateway" in event for event in stub.events)
     healthy_vm = {
@@ -1041,8 +1002,70 @@ def test_probe_workspace_health_checks_the_vm_gateway_only_when_it_was_replayed(
         "/dev/tcp/127.0.0.1/1989": CommandResult(stdout="", stderr="", success=True),
     }
     outer_healthy, stub_healthy = _ordered_outer(result_by_substring={**healthy_container, **healthy_vm})
-    assert probe_workspace_health(outer_healthy, "mngr-ws", is_latchkey_gateway_expected=True) == []
+    assert probe_workspace_health(
+        outer_healthy, "mngr-ws", is_latchkey_gateway_expected=True, template_program_names=None
+    ).is_healthy
     assert any("/dev/tcp/127.0.0.1/1989" in event for event in stub_healthy.events)
+
+
+def test_probe_workspace_health_reports_an_owner_added_program_without_blocking_and_blocks_a_template_one() -> None:
+    supervisor_output = (
+        "system_interface                 RUNNING   pid 1, uptime 0:10:00\n"
+        "host-backup                      RUNNING   pid 2, uptime 0:10:00\n"
+        "sg-download                      FATAL     Exited too quickly (process log may have details)\n"
+    )
+    container = _running_container_results(supervisor_output)
+    template_programs = frozenset({"system_interface", "host-backup"})
+    outer, _stub = _ordered_outer(result_by_substring=container)
+    findings = probe_workspace_health(
+        outer, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
+    )
+    assert findings.is_healthy
+    assert findings.user_program_notes == ("owner-added program not running: sg-download FATAL",)
+    # The same output with the template's own program down blocks, and an
+    # unknown template (the preflight) treats every program as blocking.
+    outer_template_down, _stub = _ordered_outer(
+        result_by_substring=_running_container_results(
+            supervisor_output.replace("host-backup                      RUNNING", "host-backup FATAL")
+        )
+    )
+    template_down = probe_workspace_health(
+        outer_template_down, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
+    )
+    assert template_down.blocking == ("supervisord not healthy: host-backup FATAL",)
+    assert template_down.user_program_notes == ("owner-added program not running: sg-download FATAL",)
+    outer_unknown, _stub = _ordered_outer(result_by_substring=container)
+    unknown = probe_workspace_health(
+        outer_unknown, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
+    )
+    assert unknown.blocking == ("supervisord not healthy: sg-download FATAL",)
+    assert unknown.user_program_notes == ()
+
+
+def test_probe_workspace_health_reports_a_template_program_the_config_does_not_autostart_without_blocking() -> None:
+    supervisor_output = (
+        "system_interface                 RUNNING   pid 1, uptime 0:10:00\n"
+        "browser                          STOPPED   Not started\n"
+        "chat                             STOPPED   Sep 21 12:40 PM\n"
+    )
+    container = _running_container_results(supervisor_output)
+    template_programs = frozenset({"system_interface", "browser", "chat"})
+    outer, _stub = _ordered_outer(result_by_substring=container)
+    findings = probe_workspace_health(
+        outer, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=template_programs
+    )
+    # The never-started browser is the workspace's own config; the hand-stopped chat is not.
+    assert findings.blocking == ("supervisord not healthy: chat STOPPED",)
+    assert findings.user_program_notes == (
+        "template program not autostarted by the workspace's config: browser STOPPED",
+    )
+    # An unknown template (the preflight) still blocks on it.
+    outer_unknown, _stub = _ordered_outer(result_by_substring=container)
+    unknown = probe_workspace_health(
+        outer_unknown, "mngr-ws", is_latchkey_gateway_expected=False, template_program_names=None
+    )
+    assert unknown.blocking == ("supervisord not healthy: browser STOPPED", "supervisord not healthy: chat STOPPED")
+    assert unknown.user_program_notes == ()
 
 
 class _StopKindProbeClient(ImbueCloudConnectorClient):
@@ -1083,3 +1106,42 @@ def test_require_connector_stop_kinds_reads_the_kind_routes_answer() -> None:
     # A success is the route existing too: the owner stopped the row between the
     # migrate's observation and the probe, and it now carries the migrate's hold.
     require_connector_stop_kinds(_stop_kind_probe_client(), SecretStr("k"), row_id)
+
+
+def test_failed_transition_error_surfaces_only_a_row_back_on_its_fallback_with_a_new_failure() -> None:
+    baseline = TransitionFailure(count=1, error="an older failure")
+    newer = TransitionFailure(count=2, error="transfer failed on 51.81.185.229: sha256 mismatch for datadisk.zst.age")
+    # A failed start lands back on stopped with the count raised: that is the failure.
+    assert failed_transition_error_or_none("stopped", "stopped", newer, baseline) == newer.error
+    # The accepting CAS zeroes the count and clears the error; the failure then lands on count 1 with
+    # an error where the baseline (read after acceptance) had none: the new error alone is the failure.
+    accepted = TransitionFailure(count=0, error=None)
+    first_failure = TransitionFailure(count=1, error="limactl start failed")
+    assert failed_transition_error_or_none("stopped", "stopped", first_failure, accepted) == first_failure.error
+    same_count_new_error = TransitionFailure(count=1, error="a different failure")
+    assert failed_transition_error_or_none("stopped", "stopped", same_count_new_error, baseline) == (
+        "a different failure"
+    )
+    # Still starting, or landed: nothing to report, whatever the counter says.
+    assert failed_transition_error_or_none("starting", "stopped", newer, baseline) is None
+    assert failed_transition_error_or_none("leased", "stopped", newer, baseline) is None
+    # Back on stopped without a new failure (the poll raced the start request): keep waiting.
+    assert failed_transition_error_or_none("stopped", "stopped", baseline, baseline) is None
+    # A wait that names no fallback (or took no baseline) never reads the counter.
+    assert failed_transition_error_or_none("stopped", None, newer, baseline) is None
+    assert failed_transition_error_or_none("stopped", "stopped", newer, None) is None
+    # A raised count with no message still fails, with a placeholder the operator can act on.
+    assert "without a message" in str(
+        failed_transition_error_or_none("stopped", "stopped", TransitionFailure(count=2, error=None), baseline)
+    )
+
+
+def test_dry_run_detail_names_the_shrink_only_for_an_oversized_disk_when_asked() -> None:
+    oversized = make_gen1_pool_row(status="leased", bare_metal_server_id=str(uuid4()), disk_gb=232)
+    default_sized = make_gen1_pool_row(status="leased", bare_metal_server_id=str(uuid4()), disk_gb=44)
+    target = str(uuid4())
+    assert "would shrink its 232 GiB disk" in _dry_run_migration_detail(
+        oversized, None, target, is_shrink_oversized_disks=True
+    )
+    assert "shrink" not in _dry_run_migration_detail(oversized, None, target, is_shrink_oversized_disks=False)
+    assert "shrink" not in _dry_run_migration_detail(default_sized, None, target, is_shrink_oversized_disks=True)

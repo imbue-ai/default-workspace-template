@@ -66,6 +66,11 @@ STALENESS_TREE_MOVED = "updated-not-activated"
 # is running; absent when consistent.
 UPDATE_STALENESS_META_TAG = "system-interface-update-staleness"
 
+# The meta tag a preview shell's page carries (absent on the live shell), which
+# the frontend reads to hide the verbs a preview refuses.
+PREVIEW_META_TAG = "system-interface-preview"
+PREVIEW_META_CONTENT = "true"
+
 # Bound on the git reads. rev-parse/diff on a local repo are milliseconds; the
 # bound only keeps a wedged git from stalling the app shell.
 _GIT_TIMEOUT_SECONDS = 10.0
@@ -88,7 +93,7 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # The imported-source prefixes are every workspace tree this process runs code
 # from: its own backend, the vendored mngr tree (its shared libraries are
 # imported here; the tree counts as a whole rather than module by module), and
-# the instances and manifest libraries. All are editable installs resolving straight into these
+# the manifest library. All are editable installs resolving straight into these
 # trees, so the moment one advances this process is running old code.
 # ``test_every_imported_workspace_package_is_covered`` holds this list to the
 # app's actual dependencies.
@@ -96,7 +101,6 @@ _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
 _VENDORED_MNGR_PREFIX = "system/vendor/mngr/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
-    "system/libs/app_instances/",
     "system/libs/app_manifest/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
@@ -114,7 +118,6 @@ _IMPORTED_SOURCE_PREFIXES = (
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
-        "system/libs/app_instances/pyproject.toml",
         "system/libs/app_manifest/pyproject.toml",
         "pyproject.toml",
     }

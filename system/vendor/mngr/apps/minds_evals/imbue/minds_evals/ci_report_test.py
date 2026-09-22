@@ -15,31 +15,59 @@ from imbue.minds_evals.check_run import check_job_directory
 from imbue.minds_evals.check_run import write_run_check_reports
 from imbue.minds_evals.ci_matrix import config_slug
 from imbue.minds_evals.ci_report import DETAIL_BUDGET
+from imbue.minds_evals.ci_report import DIAGNOSE_BEHAVIOUR_SUMMARY_STEM
+from imbue.minds_evals.ci_report import DIAGNOSE_FIXTURE_SUMMARY_STEM
 from imbue.minds_evals.ci_report import GREEN_ICON_EMOJI
 from imbue.minds_evals.ci_report import SLACK_USERNAME
 from imbue.minds_evals.ci_report import SUMMARY_ARTIFACT_PREFIX
 from imbue.minds_evals.ci_report import SlackMessage
+from imbue.minds_evals.ci_report import SlackThread
 from imbue.minds_evals.ci_report import UNGREEN_ICON_EMOJI
 from imbue.minds_evals.ci_report import as_slack_payload
+from imbue.minds_evals.ci_report import as_slack_thread_payload
+from imbue.minds_evals.ci_report import band_emoji_name
+from imbue.minds_evals.ci_report import diagnose_behaviour_summary_path
+from imbue.minds_evals.ci_report import diagnose_fixture_summary_path
 from imbue.minds_evals.ci_report import format_budgeted_block
 from imbue.minds_evals.ci_report import format_duration
 from imbue.minds_evals.ci_report import format_ref_label
+from imbue.minds_evals.ci_report import live_invariants_summary_path
 from imbue.minds_evals.ci_report import live_summary_path
 from imbue.minds_evals.ci_report import oracle_summary_path
 from imbue.minds_evals.ci_report import parse_run_check
 from imbue.minds_evals.ci_report import render_slack_report
 from imbue.minds_evals.cli import main
+from imbue.minds_evals.data_types import BehaviourDiagnosticCell
 from imbue.minds_evals.data_types import CellDecision
 from imbue.minds_evals.data_types import CiMatrix
 from imbue.minds_evals.data_types import CiReportContext
+from imbue.minds_evals.data_types import CriterionKind
+from imbue.minds_evals.data_types import CriterionScore
 from imbue.minds_evals.data_types import DecidedPair
-from imbue.minds_evals.data_types import JudgeScore
+from imbue.minds_evals.data_types import DiagnosticRunCheck
+from imbue.minds_evals.data_types import DiagnosticTrialCheck
+from imbue.minds_evals.data_types import DiagnosticVerdict
+from imbue.minds_evals.data_types import DimensionScore
+from imbue.minds_evals.data_types import FactMatcher
+from imbue.minds_evals.data_types import FactMatcherKind
+from imbue.minds_evals.data_types import FactOutcome
+from imbue.minds_evals.data_types import FactStatus
+from imbue.minds_evals.data_types import FixtureDiagnosticCell
+from imbue.minds_evals.data_types import KnownFailure
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.data_types import PricingSource
 from imbue.minds_evals.data_types import RunCheck
+from imbue.minds_evals.data_types import Spender
+from imbue.minds_evals.data_types import SpenderCost
 from imbue.minds_evals.data_types import TrialCheck
+from imbue.minds_evals.data_types import UnsupportedDiagnosticCell
+from imbue.minds_evals.slack_post import SLACK_BOT_TOKEN_ENV_VAR
+from imbue.minds_evals.slack_post import SLACK_WEBHOOK_ENV_VAR
+from imbue.minds_evals.testing import FIXTURE_PRICE_MAP
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import read_scheduled_workflow_text
+from imbue.minds_evals.testing import trial_usage_payload
 from imbue.minds_evals.testing import write_trial_dir
 
 RUN_URL: Final[str] = "https://github.com/imbue-ai/mngr-internal/actions/runs/42"
@@ -104,14 +132,49 @@ def make_cell(pair_name: str, harness_config: str, decision: CellDecision, confi
     )
 
 
-def write_matrix(matrix_path: Path, pairs: Sequence[DecidedPair], cells: Sequence[MatrixCell]) -> None:
+def make_fixture_diagnostic(pair_name: str) -> FixtureDiagnosticCell:
+    return FixtureDiagnosticCell(
+        pair=pair_name,
+        mngr_ref="main",
+        mngr_sha=FROZEN_SHA,
+        dwt_ref="main",
+        dwt_sha=FROZEN_SHA,
+        lane_key_env="ANTHROPIC_API_KEY",
+        harbor_args="[]",
+    )
+
+
+def make_behaviour_diagnostic(pair_name: str, harness: str) -> BehaviourDiagnosticCell:
+    return BehaviourDiagnosticCell(**make_fixture_diagnostic(pair_name).model_dump(), harness=harness)
+
+
+def write_matrix(
+    matrix_path: Path,
+    pairs: Sequence[DecidedPair],
+    cells: Sequence[MatrixCell],
+    *,
+    diagnosed_pairs: Sequence[str] = (),
+    diagnosed_harnesses: Sequence[str] = (),
+    unsupported: Sequence[UnsupportedDiagnosticCell] = (),
+) -> None:
     """The decided matrix exactly as `ci-matrix` writes it, computed fields and all.
 
     Its configs are the ones its cells name, in cell order, which is what a run's suite list leaves
     behind. A matrix with no cell at all still names the suite the run was asked to evaluate.
     """
     configs = tuple(dict.fromkeys(cell.config for cell in cells)) or (EVAL_CONFIG,)
-    matrix = CiMatrix(configs=configs, pairs=tuple(pairs), cells=tuple(cells))
+    matrix = CiMatrix(
+        configs=configs,
+        pairs=tuple(pairs),
+        cells=tuple(cells),
+        fixture_diagnostics=tuple(make_fixture_diagnostic(pair_name) for pair_name in diagnosed_pairs),
+        behaviour_diagnostics=tuple(
+            make_behaviour_diagnostic(pair_name, harness)
+            for pair_name in diagnosed_pairs
+            for harness in diagnosed_harnesses
+        ),
+        unsupported_diagnostics=tuple(unsupported),
+    )
     matrix_path.parent.mkdir(parents=True, exist_ok=True)
     matrix_path.write_text(matrix.model_dump_json())
 
@@ -120,7 +183,7 @@ def write_summary(summary_path: Path, job_dir: Path, **trial_arguments: Any) -> 
     """One trial's job directory, graded the way `check-run` grades it and dumped where the report
     looks for it."""
     write_trial_dir(job_dir, "todo-app__aaaaaaa", **trial_arguments)
-    run_check = check_job_directory(job_dir)
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
     write_run_check_reports(run_check, None, summary_path)
     return run_check
 
@@ -129,7 +192,7 @@ def write_two_case_summary(summary_path: Path, job_dir: Path, **trial_arguments:
     """A pass over two cases, so the grid it feeds has more than one row."""
     write_trial_dir(job_dir, "greeting__aaaaaaa", case_id="greeting", **trial_arguments)
     write_trial_dir(job_dir, "todo-app__bbbbbbb", case_id="todo-app", **trial_arguments)
-    run_check = check_job_directory(job_dir)
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
     write_run_check_reports(run_check, None, summary_path)
     return run_check
 
@@ -157,6 +220,8 @@ def make_context(
     resolve_result: str = "success",
     oracle_result: str = "success",
     evaluate_result: str = "success",
+    diagnose_fixture_result: str = "success",
+    diagnose_behaviour_result: str = "success",
 ) -> CiReportContext:
     return CiReportContext(
         run_url=RUN_URL,
@@ -166,7 +231,16 @@ def make_context(
         resolve_result=resolve_result,
         oracle_result=oracle_result,
         evaluate_result=evaluate_result,
+        diagnose_fixture_result=diagnose_fixture_result,
+        diagnose_behaviour_result=diagnose_behaviour_result,
     )
+
+
+def render_messages(
+    matrix_path: Path | None, summaries_dir: Path, context: CiReportContext
+) -> tuple[SlackMessage, ...]:
+    """The top message of every thread the report renders, for the tests that are about those."""
+    return tuple(thread.message for thread in render_slack_report(matrix_path, summaries_dir, context))
 
 
 def read_blocks(message: SlackMessage, block_type: str) -> tuple[dict[str, Any], ...]:
@@ -191,16 +265,14 @@ def read_cell(cell: Mapping[str, Any]) -> str:
     """One table cell as a single string, whichever of the two shapes it is in.
 
     A plain cell reads as its text and a rich cell as its emoji's name followed by whatever it puts
-    beside it, so one assertion covers every half of what a cell says. The trailing spacer a passing
-    reward carries is dropped, because it is there to hold the column in line rather than to say
-    anything.
+    beside it, so one assertion covers every half of what a cell says.
     """
     if cell["type"] == "raw_text":
         return cell["text"]
     (section,) = cell["elements"]
     return "".join(
         element["name"] if element["type"] == "emoji" else element["text"] for element in section["elements"]
-    ).rstrip()
+    )
 
 
 def read_table_rows(table: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
@@ -210,9 +282,8 @@ def read_table_rows(table: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
 def read_grid(message: SlackMessage) -> tuple[tuple[str, ...], ...]:
     """The grid's rows, its cells flattened to strings; empty when the message carries no grid.
 
-    The grid is the message's first table. A failures table is drawn only under a grid, because a
-    trial that failed is a trial that was graded, and the judge table is nested in a container
-    rather than standing at the top level.
+    The grid is the message's first table, and a failures table is the only other one it can carry:
+    a trial that failed is a trial that was graded, so the failures are drawn only under a grid.
     """
     tables = read_blocks(message, "table")
     if not tables:
@@ -226,37 +297,52 @@ def read_failed_trials(message: SlackMessage) -> tuple[tuple[str, ...], ...]:
     return () if len(tables) < 2 else read_table_rows(tables[1])
 
 
-def read_container(message: SlackMessage) -> Mapping[str, Any]:
-    """The collapsed container the judge table lives in; empty when the message has none."""
-    containers = read_blocks(message, "container")
-    return containers[0] if containers else {}
+def read_scoring_reply(thread: SlackThread) -> SlackMessage | None:
+    """The reply carrying the scoring tables; None when the thread has none.
+
+    It is the reply that carries tables, which the diagnostics reply -- one section block -- does not.
+    """
+    replies = [reply for reply in thread.replies if any(block["type"] == "table" for block in reply.blocks)]
+    return replies[0] if replies else None
 
 
-def read_judge_table(message: SlackMessage) -> tuple[tuple[str, ...], ...]:
-    """Every graded trial of the pair, out of the collapsed container; empty when there is none."""
-    container = read_container(message)
-    if not container:
+def read_diagnostics_reply(thread: SlackThread) -> SlackMessage | None:
+    """The reply carrying the diagnostics detail; None when the thread has none."""
+    replies = [reply for reply in thread.replies if any(block["type"] == "section" for block in reply.blocks)]
+    return replies[0] if replies else None
+
+
+def read_scoring_tables(thread: SlackThread) -> tuple[tuple[tuple[str, ...], ...], ...]:
+    """Every scoring table of the thread's reply, its cells flattened to strings."""
+    reply = read_scoring_reply(thread)
+    return () if reply is None else tuple(read_table_rows(table) for table in read_blocks(reply, "table"))
+
+
+def read_scoring_contexts(thread: SlackThread) -> tuple[str, ...]:
+    """The context block above each scoring table, one string each."""
+    reply = read_scoring_reply(thread)
+    if reply is None:
         return ()
-    (table,) = [child for child in container["child_blocks"] if child["type"] == "table"]
-    return read_table_rows(table)
-
-
-def read_judge_legend(message: SlackMessage) -> str:
-    """The line above the judge table naming which dimension scored which criteria."""
-    container = read_container(message)
-    if not container:
-        return ""
-    (context,) = [child for child in container["child_blocks"] if child["type"] == "context"]
-    return context["elements"][0]["text"]
+    return tuple(block["elements"][0]["text"] for block in read_blocks(reply, "context"))
 
 
 def read_all_tables(message: SlackMessage) -> tuple[Mapping[str, Any], ...]:
-    """Every table in the message, the ones nested in a container included."""
-    return read_blocks(message, "table") + tuple(
-        child
-        for container in read_blocks(message, "container")
-        for child in container["child_blocks"]
-        if child["type"] == "table"
+    return read_blocks(message, "table")
+
+
+def count_table_characters(message: SlackMessage) -> int:
+    """What Slack counts against a message's table budget: the text in its cells.
+
+    An emoji element is a name rather than text, so it is not counted -- reading a cell's rendering
+    instead would charge the budget for characters no cell holds.
+    """
+    return sum(
+        len(cell["text"])
+        if cell["type"] == "raw_text"
+        else sum(len(element.get("text", "")) for section in cell["elements"] for element in section["elements"])
+        for table in read_all_tables(message)
+        for row in table["rows"]
+        for cell in row
     )
 
 
@@ -270,27 +356,88 @@ def make_bold_cell(text: str) -> dict[str, Any]:
     }
 
 
-def make_judge_score(dimension: str, criterion: str, raw_score: float) -> JudgeScore:
-    return JudgeScore(
-        dimension=dimension, criterion=criterion, normalized_score=(raw_score - 1) / 9, raw_score=raw_score
+def make_judge_score(dimension: str, criterion: str, value: float, *, step: str = "") -> CriterionScore:
+    """One criterion a judge scored, on rewardkit's own normalized scale."""
+    return CriterionScore(step=step, dimension=dimension, criterion=criterion, kind=CriterionKind.LLM, value=value)
+
+
+def make_check_score(dimension: str, criterion: str, value: float, *, step: str = "") -> CriterionScore:
+    """One criterion a programmatic check scored, which a scoring table reports beside the judges'."""
+    return CriterionScore(
+        step=step, dimension=dimension, criterion=criterion, kind=CriterionKind.PROGRAMMATIC, value=value
     )
 
 
-def make_graded_trial(case_id: str, judge_scores: Sequence[JudgeScore], reward: float | None = 0.75) -> TrialCheck:
+def make_dimension_score(dimension: str, value: float, *, step: str = "") -> DimensionScore:
+    return DimensionScore(step=step, dimension=dimension, value=value)
+
+
+def make_spend(
+    cost_usd: float | None,
+    *,
+    is_complete: bool = True,
+    is_rate_certain: bool = True,
+    unpriced_models: Sequence[str] = (),
+    harness_cost_usd: float | None = None,
+) -> tuple[SpenderCost, ...]:
+    """What one trial cost, as its summary carries it: the workspace agent's half, and the harness's
+    where a test asks for one.
+
+    The harness half is what tells the grid cell's agent-only reading apart from a reading of the
+    whole record, so a test that cares about the difference has to build a trial that has both.
+    """
+    agent = SpenderCost(
+        spender=Spender.WORKSPACE_AGENT,
+        cost_usd=cost_usd,
+        is_complete=is_complete,
+        is_rate_certain=is_rate_certain,
+        unpriced_models=tuple(unpriced_models),
+    )
+    if harness_cost_usd is None:
+        return (agent,)
+    return (
+        agent,
+        SpenderCost(
+            spender=Spender.DECIDER,
+            cost_usd=harness_cost_usd,
+            is_complete=True,
+            is_rate_certain=True,
+            unpriced_models=(),
+        ),
+    )
+
+
+def make_graded_trial(
+    case_id: str,
+    criterion_scores: Sequence[CriterionScore],
+    reward: float | None = 0.75,
+    *,
+    dimension_scores: Sequence[DimensionScore] = (),
+    spend: Sequence[SpenderCost] = (),
+    conversation_seconds: float | None = None,
+    is_gates_passed: bool = True,
+) -> TrialCheck:
     """One graded trial as a summary carries it.
 
-    Built as a model rather than out of a job directory, because the judge criteria are what is under
-    test and every fixture directory scores the same single one.
+    Built as a model rather than out of a job directory, because the scores are what is under test
+    and every fixture directory scores the same few. The composed reward rides among the dimensions
+    the way a real summary carries it, and a caller that scores dimensions of its own adds them to it.
     """
+    composed = () if reward is None else (make_dimension_score("reward", reward),)
     return TrialCheck(
         trial_name="{}__aaaaaaa".format(case_id),
         case_id=case_id,
         is_completed=True,
         incompletion_reason="",
-        is_gates_passed=True,
+        step_count=0,
+        completed_step_count=0,
+        is_gates_passed=is_gates_passed,
         error_entry_ids=(),
         reward=reward,
-        judge_scores=tuple(judge_scores),
+        criterion_scores=tuple(criterion_scores),
+        dimension_scores=(*dimension_scores, *composed),
+        conversation_seconds=conversation_seconds,
+        spend=tuple(spend),
         lane="anthropic",
         requested_model="",
         is_model_confirmed=None,
@@ -307,25 +454,96 @@ def write_model_summary(summary_path: Path, trials: Sequence[TrialCheck]) -> Non
     summary_path.write_text(RunCheck(job_name=summary_path.stem, trials=tuple(trials)).model_dump_json())
 
 
+def make_fact_outcome(
+    fact_name: str,
+    status: FactStatus,
+    *,
+    step_name: str = "",
+    recorded: Any = False,
+    expected: Any = True,
+    is_compliance: bool = False,
+    is_health: bool = False,
+    known_failure: KnownFailure | None = None,
+    unmet_requirements: Sequence[str] = (),
+) -> FactOutcome:
+    return FactOutcome(
+        fact_name=fact_name,
+        step_name=step_name,
+        status=status,
+        is_compliance=is_compliance,
+        is_health=is_health,
+        recorded=recorded,
+        expected=FactMatcher(kind=FactMatcherKind.EXPECTED, value=expected),
+        known_failure=known_failure,
+        unmet_requirements=tuple(unmet_requirements),
+    )
+
+
+def make_diagnostic_trial(
+    verdict: DiagnosticVerdict,
+    *,
+    case_id: str = "behaviour",
+    trial_name: str = "behaviour__aaaaaaa",
+    harness: str = "codex",
+    not_measured_reason: str = "",
+    failed_facts: Sequence[FactOutcome] = (),
+    not_recorded_facts: Sequence[FactOutcome] = (),
+    known_facts: Sequence[FactOutcome] = (),
+    not_followed_facts: Sequence[FactOutcome] = (),
+    unmet_preconditions: Sequence[FactOutcome] = (),
+    unexpectedly_passing_facts: Sequence[FactOutcome] = (),
+) -> DiagnosticTrialCheck:
+    return DiagnosticTrialCheck(
+        trial_name=trial_name,
+        case_id=case_id,
+        harness=harness,
+        verdict=verdict,
+        not_measured_reason=not_measured_reason,
+        failed_facts=tuple(failed_facts),
+        not_recorded_facts=tuple(not_recorded_facts),
+        known_facts=tuple(known_facts),
+        not_followed_facts=tuple(not_followed_facts),
+        unmet_preconditions=tuple(unmet_preconditions),
+        unexpectedly_passing_facts=tuple(unexpectedly_passing_facts),
+    )
+
+
+def write_diagnostic_summary(summary_path: Path, trials: Sequence[DiagnosticTrialCheck]) -> None:
+    """A diagnostic check's summary written straight from the model `check-diagnostics` dumps."""
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(DiagnosticRunCheck(job_name=summary_path.stem, trials=tuple(trials)).model_dump_json())
+
+
 # What Slack accepts in the blocks this report builds. A block over its limit is not rendered
 # smaller: the whole message is refused, and the run falls back to posting its plain text.
 SLACK_HEADER_LIMIT: Final[int] = 150
 SLACK_SECTION_LIMIT: Final[int] = 3000
 SLACK_TABLE_ROW_LIMIT: Final[int] = 100
 SLACK_TABLE_CELL_LIMIT: Final[int] = 20
-SLACK_CONTAINER_CHILD_LIMIT: Final[int] = 10
 SLACK_TABLE_CHARACTER_LIMIT: Final[int] = 10000
 SLACK_TABLE_CELL_CHARACTER_LIMIT: Final[int] = 120
 
 
 def assert_within_slack_limits(message: SlackMessage) -> None:
-    assert len(read_header(message)) <= SLACK_HEADER_LIMIT
+    """Every cap Slack refuses a whole message over. A reply carries no header, which is why the
+    header limit is checked over whatever headers the message has rather than over its first."""
+    assert [
+        header["text"]["text"]
+        for header in read_blocks(message, "header")
+        if len(header["text"]["text"]) > SLACK_HEADER_LIMIT
+    ] == []
     assert [len(section) for section in read_sections(message) if len(section) > SLACK_SECTION_LIMIT] == []
     for table in read_all_tables(message):
         assert len(table["rows"]) <= SLACK_TABLE_ROW_LIMIT
         assert [len(row) for row in table["rows"] if len(row) > SLACK_TABLE_CELL_LIMIT] == []
-    for container in read_blocks(message, "container"):
-        assert len(container["child_blocks"]) <= SLACK_CONTAINER_CHILD_LIMIT
+        # Header cells included: a criterion name is as unbounded as a case id, and a cell over the
+        # cap costs the whole message rather than its own column.
+        assert [
+            cell
+            for row in table["rows"]
+            for cell in (read_cell(cell) for cell in row)
+            if len(cell) > SLACK_TABLE_CELL_CHARACTER_LIMIT
+        ] == []
 
 
 def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tmp_path: Path) -> None:
@@ -351,7 +569,7 @@ def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tm
         harness_config=HAIKU_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert_within_slack_limits(message)
     assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
@@ -360,18 +578,10 @@ def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tm
     )
     assert read_grid(message) == (
         ("case", "default", "haiku"),
-        ("greeting", "large_green_square 0.75", "large_green_square 0.75"),
-        ("todo-app", "large_green_square 0.75", "large_green_square 0.75"),
+        ("greeting", "large_green_square 0.75 9m05s", "large_green_square 0.75 9m05s"),
+        ("todo-app", "large_green_square 0.75 9m05s", "large_green_square 0.75 9m05s"),
     )
     assert read_failed_trials(message) == ()
-    assert read_judge_table(message) == (
-        ("config", "case", "reward", "conciseness", "state"),
-        ("default", "greeting", "0.75", "8", "ok"),
-        ("default", "todo-app", "0.75", "8", "ok"),
-        ("haiku", "greeting", "0.75", "8", "ok"),
-        ("haiku", "todo-app", "0.75", "8", "ok"),
-    )
-    assert read_judge_legend(message) == "_criteria by dimension:_ quality: conciseness"
     assert read_details(message) == ""
     assert read_blocks(message, "context")[0]["elements"][0]["text"].startswith("_reward_ :large_red_square: `<0.25`")
     assert read_blocks(message, "context")[-1]["elements"][0]["text"] == (
@@ -402,14 +612,14 @@ def test_render_slack_report_posts_a_message_for_each_pair_of_a_one_suite_run(tm
         harness_config=WRONG_MODEL_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+    messages = render_messages(matrix_path, summaries_dir, make_context())
 
     assert [read_header(message) for message in messages] == [
         "minds-evals: main x eval-config-small -- passed",
         "minds-evals: released x eval-config-small -- failed",
     ]
-    assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75"))
-    assert read_grid(messages[1]) == (("case", "haiku"), ("todo-app", "large_green_square 0.75\u00a0\u2717"))
+    assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75 9m05s"))
+    assert read_grid(messages[1]) == (("case", "haiku"), ("todo-app", "large_green_square 0.75 9m05s\u00a0\u2717"))
 
 
 def test_render_slack_report_posts_a_message_for_each_eval_config_a_pair_ran(tmp_path: Path) -> None:
@@ -440,21 +650,21 @@ def test_render_slack_report_posts_a_message_for_each_eval_config_a_pair_ran(tmp
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+    threads = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert [read_header(message) for message in messages] == [
+    assert [read_header(thread.message) for thread in threads] == [
         "minds-evals: main x eval-config-small -- passed",
         "minds-evals: main x eval-config-time-to-mock -- passed",
     ]
     # Each grid holds its own suite's arm and its own suite's cases, read out of that suite's own
-    # summary files.
-    assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75"))
-    assert read_grid(messages[1]) == (
+    # summary files, and each thread's scoring reply holds that suite's own rows.
+    assert read_grid(threads[0].message) == (("case", "default"), ("todo-app", "large_green_square 0.75 9m05s"))
+    assert read_grid(threads[1].message) == (
         ("case", "opus-standard"),
-        ("greeting", "large_green_square 0.75"),
-        ("todo-app", "large_green_square 0.75"),
+        ("greeting", "large_green_square 0.75 9m05s"),
+        ("todo-app", "large_green_square 0.75 9m05s"),
     )
-    assert [row[0] for row in read_judge_table(messages[1])[1:]] == ["opus-standard", "opus-standard"]
+    assert [row[0] for row in read_scoring_tables(threads[1])[0][1:]] == ["opus-standard", "opus-standard"]
 
 
 def test_render_slack_report_gates_a_cell_on_the_oracle_pass_of_its_own_eval_config(tmp_path: Path) -> None:
@@ -485,13 +695,13 @@ def test_render_slack_report_gates_a_cell_on_the_oracle_pass_of_its_own_eval_con
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+    messages = render_messages(matrix_path, summaries_dir, make_context())
 
     assert [read_header(message) for message in messages] == [
         "minds-evals: main x eval-config-small -- passed",
         "minds-evals: main x eval-config-time-to-mock -- failed",
     ]
-    assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75"))
+    assert read_grid(messages[0]) == (("case", "default"), ("todo-app", "large_green_square 0.75 9m05s"))
     assert read_sections(messages[1])[0].startswith(":x: {} -- oracle failed".format(PAIR_LABEL))
     assert read_details(messages[1]).splitlines() == [
         "*opus-standard* -- not evaluated (the oracle pass did not pass)",
@@ -520,7 +730,7 @@ def test_render_slack_report_reports_a_suite_whose_every_cell_is_already_green_a
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+    messages = render_messages(matrix_path, summaries_dir, make_context())
 
     assert [read_header(message) for message in messages] == [
         "minds-evals: main x eval-config-small -- passed",
@@ -557,7 +767,7 @@ def test_render_slack_report_gives_a_skipped_pair_one_message_however_many_suite
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="skipped"))
+    messages = render_messages(matrix_path, summaries_dir, make_context(evaluate_result="skipped"))
 
     assert [read_header(message) for message in messages] == [
         "minds-evals: main x eval-config-small -- passed",
@@ -595,7 +805,7 @@ def test_render_slack_report_gives_an_unresolved_pair_one_message_however_many_s
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+    messages = render_messages(matrix_path, summaries_dir, make_context())
 
     assert [read_header(message) for message in messages] == [
         "minds-evals: main x eval-config-small -- passed",
@@ -614,7 +824,7 @@ def test_render_slack_report_still_reports_a_running_pair_whose_matrix_names_no_
     matrix_path = tmp_path / "matrix.json"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [])
 
-    (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context())
+    (message,) = render_messages(matrix_path, tmp_path / "summaries", make_context())
 
     assert read_header(message) == "minds-evals: main -- broken"
     assert "-- broken (no oracle summary; the job failed before grading)" in read_sections(message)[0]
@@ -643,12 +853,12 @@ def test_render_slack_report_names_a_failing_cells_reason_in_the_failures_table(
         errored_entry_ids=("todo-app__first_message",),
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
     assert read_grid(message) == (
         ("case", "default", "haiku"),
-        ("todo-app", "large_green_square 0.75\u00a0\u2717", "large_green_square 0.75\u00a0\u2717"),
+        ("todo-app", "large_green_square 0.75 9m05s\u00a0\u2717", "large_green_square 0.75 9m05s\u00a0\u2717"),
     )
     assert read_failed_trials(message) == (
         ("config", "case", "note"),
@@ -671,9 +881,9 @@ def test_render_slack_report_fails_a_cell_whose_trial_answered_on_another_model(
         harness_config=WRONG_MODEL_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
-    assert read_grid(message) == (("case", "haiku"), ("todo-app", "large_green_square 0.75\u00a0\u2717"))
+    assert read_grid(message) == (("case", "haiku"), ("todo-app", "large_green_square 0.75 9m05s\u00a0\u2717"))
     assert read_failed_trials(message) == (
         ("config", "case", "note"),
         ("haiku", "todo-app", "the run asked for haiku but the trial answered on claude-opus-5"),
@@ -696,10 +906,10 @@ def test_render_slack_report_names_a_passing_arm_whose_model_nothing_confirmed(t
         harness_config=UNCONFIRMED_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
-    assert read_grid(message) == (("case", "haiku"), ("todo-app", "large_green_square 0.75"))
+    assert read_grid(message) == (("case", "haiku"), ("todo-app", "large_green_square 0.75 9m05s"))
     # Nothing failed, so the failures table is not drawn and the note has nowhere else to go: the
     # details block is what carries it, naming the arm it belongs to.
     assert read_failed_trials(message) == ()
@@ -722,10 +932,10 @@ def test_render_slack_report_says_nothing_about_a_lane_that_can_never_confirm_a_
         harness_config=CODEX_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
-    assert read_grid(message) == (("case", "codex-sol-low"), ("todo-app", "large_green_square 0.75"))
+    assert read_grid(message) == (("case", "codex-sol-low"), ("todo-app", "large_green_square 0.75 9m05s"))
     assert "unconfirmed" not in message.text
 
 
@@ -747,17 +957,17 @@ def test_render_slack_report_marks_a_green_cell_of_a_running_pair_as_not_attempt
         harness_config=HAIKU_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
-    assert read_grid(message) == (
+    assert read_header(thread.message) == "minds-evals: main x eval-config-small -- passed"
+    assert read_grid(thread.message) == (
         ("case", "default", "haiku"),
-        ("todo-app", "heavy_minus_sign", "large_green_square 0.75"),
+        ("todo-app", "heavy_minus_sign", "large_green_square 0.75 9m05s"),
     )
-    # The skipped cell graded nothing, so it has no row in the judge table and the details block is
+    # The skipped cell graded nothing, so it has no row in the scoring reply and the details block is
     # what says why its column is empty.
-    assert [row[0] for row in read_judge_table(message)[1:]] == ["haiku"]
-    assert read_details(message) == "*default* -- skipped (already green)"
+    assert [row[0] for row in read_scoring_tables(thread)[0][1:]] == ["haiku"]
+    assert read_details(thread.message) == "*default* -- skipped (already green)"
 
 
 def test_render_slack_report_marks_a_cell_whose_summary_never_arrived_as_unknown(tmp_path: Path) -> None:
@@ -777,12 +987,12 @@ def test_render_slack_report_marks_a_cell_whose_summary_never_arrived_as_unknown
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
+    (message,) = render_messages(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- broken"
     assert read_grid(message) == (
         ("case", "default", "haiku"),
-        ("todo-app", "large_green_square 0.75", "grey_question"),
+        ("todo-app", "large_green_square 0.75 9m05s", "grey_question"),
     )
     assert read_details(message) == "*haiku* -- broken (no live summary; the job failed before grading)"
 
@@ -809,21 +1019,20 @@ def test_render_slack_report_marks_a_case_a_cell_never_ran_as_unknown(tmp_path: 
         harness_config=HAIKU_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert read_grid(message) == (
+    assert read_grid(thread.message) == (
         ("case", "default", "haiku"),
-        ("greeting", "large_green_square 0.75", "grey_question"),
-        ("todo-app", "large_green_square 0.75", "large_green_square 0.75"),
+        ("greeting", "large_green_square 0.75 9m05s", "grey_question"),
+        ("todo-app", "large_green_square 0.75 9m05s", "large_green_square 0.75 9m05s"),
     )
-    # The judge table has a row per trial that was actually graded, so the case the haiku cell never
+    # The scoring reply has a row per trial that was actually graded, so the case the haiku cell never
     # ran is absent from it rather than carried as a hole the way the grid has to carry it.
-    assert read_judge_table(message) == (
-        ("config", "case", "reward", "conciseness", "state"),
-        ("default", "greeting", "0.75", "8", "ok"),
-        ("default", "todo-app", "0.75", "8", "ok"),
-        ("haiku", "todo-app", "0.75", "8", "ok"),
-    )
+    assert [row[:2] for row in read_scoring_tables(thread)[0][1:]] == [
+        ("default", "greeting"),
+        ("default", "todo-app"),
+        ("haiku", "todo-app"),
+    ]
 
 
 def test_render_slack_report_marks_the_cells_of_a_pair_whose_oracle_failed_as_not_attempted(
@@ -845,7 +1054,7 @@ def test_render_slack_report_marks_the_cells_of_a_pair_whose_oracle_failed_as_no
         failed_gate_names=("all_turns_completed",),
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
     assert read_sections(message)[0].startswith(":x: {} -- oracle failed".format(PAIR_LABEL))
@@ -867,7 +1076,7 @@ def test_render_slack_report_reports_a_skipped_pair_without_a_grid(tmp_path: Pat
         matrix_path, [make_pair("released", PairDecision.SKIP)], [make_cell("released", "default", CellDecision.SKIP)]
     )
 
-    (message,) = render_slack_report(
+    (message,) = render_messages(
         matrix_path,
         tmp_path / "summaries",
         make_context(oracle_result="skipped", evaluate_result="skipped"),
@@ -886,7 +1095,7 @@ def test_render_slack_report_reports_an_unresolved_pair_without_pretending_it_ha
     matrix_path = tmp_path / "matrix.json"
     write_matrix(matrix_path, [make_pair("released", PairDecision.UNRESOLVED)], [])
 
-    (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context())
+    (message,) = render_messages(matrix_path, tmp_path / "summaries", make_context())
 
     assert read_header(message) == "minds-evals: released -- not evaluated"
     assert read_sections(message) == (
@@ -905,17 +1114,14 @@ def test_render_slack_report_gives_an_oracle_only_run_a_single_oracle_column(tmp
     write_passing_oracle(summaries_dir, tmp_path)
 
     # The evaluate job is gated off on such a run, so GitHub reports it `skipped`.
-    (message,) = render_slack_report(
+    (thread,) = render_slack_report(
         matrix_path, summaries_dir, make_context(is_live_pass_skipped=True, evaluate_result="skipped")
     )
 
-    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
-    assert read_sections(message)[0].endswith("passed in 41m20s, _trigger=_ `schedule` _(oracle only)_")
-    assert read_grid(message) == (("case", "oracle"), ("todo-app", "large_green_square 0.75"))
-    assert read_judge_table(message) == (
-        ("config", "case", "reward", "conciseness", "state"),
-        ("oracle", "todo-app", "0.75", "8", "ok"),
-    )
+    assert read_header(thread.message) == "minds-evals: main x eval-config-small -- passed"
+    assert read_sections(thread.message)[0].endswith("`schedule` _(oracle only)_")
+    assert read_grid(thread.message) == (("case", "oracle"), ("todo-app", "large_green_square 0.75 9m05s"))
+    assert [row[:2] for row in read_scoring_tables(thread)[0][1:]] == [("oracle", "todo-app")]
 
 
 def test_render_slack_report_gives_a_failed_oracle_only_run_its_reason_in_the_failures_table(
@@ -933,13 +1139,13 @@ def test_render_slack_report_gives_a_failed_oracle_only_run_its_reason_in_the_fa
         failed_gate_names=("all_turns_completed",),
     )
 
-    (message,) = render_slack_report(
+    (message,) = render_messages(
         matrix_path, summaries_dir, make_context(is_live_pass_skipped=True, evaluate_result="skipped")
     )
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
     assert read_sections(message)[0].startswith(":x: {} -- oracle failed".format(PAIR_LABEL))
-    assert read_grid(message) == (("case", "oracle"), ("todo-app", "large_green_square 0.75\u00a0\u2717"))
+    assert read_grid(message) == (("case", "oracle"), ("todo-app", "large_green_square 0.75 9m05s\u00a0\u2717"))
     assert read_failed_trials(message) == (
         ("config", "case", "note"),
         ("oracle", "todo-app", "gates failed"),
@@ -958,7 +1164,7 @@ def test_render_slack_report_tells_an_unreadable_summary_from_a_missing_one(tmp_
     truncated_path.parent.mkdir(parents=True, exist_ok=True)
     truncated_path.write_text('{"job_name": "main-default-live", "trials": [{"trial_name"')
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert read_details(message) == "*default* -- broken (the live summary could not be read)"
     assert "no live summary" not in message.text
@@ -982,7 +1188,7 @@ def test_render_slack_report_reports_an_unreadable_cell_summary_even_when_the_or
     truncated_path.parent.mkdir(parents=True, exist_ok=True)
     truncated_path.write_text("{not json at all")
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert "*default* -- broken (the live summary could not be read)" in read_details(message)
     assert "not evaluated (the oracle pass did not pass)" not in message.text
@@ -994,7 +1200,7 @@ def test_render_slack_report_says_a_pair_that_wrote_no_oracle_summary_is_broken(
     matrix_path = tmp_path / "matrix.json"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
 
-    (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context())
+    (message,) = render_messages(matrix_path, tmp_path / "summaries", make_context())
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- broken"
     assert "-- broken (no oracle summary; the job failed before grading)" in read_sections(message)[0]
@@ -1011,13 +1217,13 @@ def test_render_slack_report_tells_an_unreadable_oracle_summary_from_a_missing_o
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text("{not json at all")
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert "-- broken (the oracle summary could not be read)" in read_sections(message)[0]
 
 
 def test_render_slack_report_reports_a_run_that_never_decided_what_to_evaluate(tmp_path: Path) -> None:
-    (message,) = render_slack_report(
+    (message,) = render_messages(
         tmp_path / "absent-matrix.json",
         tmp_path / "summaries",
         make_context(duration_seconds=None, resolve_result="failure", oracle_result="", evaluate_result="skipped"),
@@ -1039,7 +1245,7 @@ def test_render_slack_report_reports_a_matrix_that_decided_no_pairs_as_broken(tm
     matrix_path = tmp_path / "matrix.json"
     write_matrix(matrix_path, [], [])
 
-    (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context())
+    (message,) = render_messages(matrix_path, tmp_path / "summaries", make_context())
 
     assert read_header(message) == "minds-evals -- broken"
     assert "no pairs were resolved" in read_sections(message)[0]
@@ -1049,7 +1255,7 @@ def test_render_slack_report_reports_a_matrix_file_it_cannot_read_the_same_way(t
     matrix_path = tmp_path / "matrix.json"
     matrix_path.write_text('{"configs": ["x"], "pairs": [')
 
-    (message,) = render_slack_report(matrix_path, tmp_path / "summaries", make_context(resolve_result="cancelled"))
+    (message,) = render_messages(matrix_path, tmp_path / "summaries", make_context(resolve_result="cancelled"))
 
     assert "no pairs were resolved (resolve=cancelled" in message.text
 
@@ -1063,7 +1269,7 @@ def test_render_slack_report_warns_when_every_arm_passed_but_a_job_did_not(tmp_p
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"), tmp_path / "main-default-live")
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
+    (message,) = render_messages(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
 
     assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
     assert read_sections(message)[0] == (
@@ -1093,7 +1299,7 @@ def test_render_slack_report_does_not_blame_the_job_when_an_arm_already_explains
         test_state="crashed",
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
+    messages = render_messages(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
 
     # The green pair's own message stays quiet about a job the other pair's failure accounts for.
     assert "check cleanup and uploads" not in messages[0].text
@@ -1111,7 +1317,7 @@ def test_render_slack_report_names_every_job_of_a_red_run_that_nothing_else_expl
     write_passing_oracle(summaries_dir, tmp_path)
     write_summary(live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"), tmp_path / "main-default-live")
 
-    (message,) = render_slack_report(
+    (message,) = render_messages(
         matrix_path, summaries_dir, make_context(oracle_result="cancelled", evaluate_result="failure")
     )
 
@@ -1127,26 +1333,29 @@ def test_render_slack_report_marks_a_trial_that_was_never_graded_without_a_rewar
     write_passing_oracle(summaries_dir, tmp_path)
     write_trial_dir(tmp_path / "main-default-live", "todo-app__aaaaaaa", exception_type="TimeoutError")
     write_run_check_reports(
-        check_job_directory(tmp_path / "main-default-live"),
+        check_job_directory(tmp_path / "main-default-live", FIXTURE_PRICE_MAP),
         None,
         live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert read_grid(message) == (("case", "default"), ("todo-app", "grey_question\u00a0\u2717"))
-    table = read_judge_table(message)
-    assert table[0] == ("config", "case", "reward", "state")
-    assert table[1][:3] == ("default", "todo-app", "-")
+    assert read_grid(thread.message) == (("case", "default"), ("todo-app", "grey_question 9m05s\u00a0\u2717"))
+    # Nothing scored it, so the scoring reply has no row to draw for it and no reply at all.
+    assert read_scoring_tables(thread) == ()
 
 
-def test_render_slack_report_builds_a_grid_cell_out_of_a_band_and_a_reward(tmp_path: Path) -> None:
-    """A cell is the reward's band as a coloured square, the reward, and then the mark that says
-    whether the trial passed -- so the colour means one thing throughout, and the verdict never
-    competes with it for the reader's eye.
+def test_render_slack_report_builds_a_grid_cell_out_of_a_band_a_reward_and_what_the_trial_cost(
+    tmp_path: Path,
+) -> None:
+    """A cell is the reward's band as a coloured square, the reward, what the arm spent on the case
+    and how long it talked, and then the mark that says whether the trial passed.
 
-    A passing trial carries a spacer where a failing one carries its mark, so that the
-    right-aligned rewards stay in line.
+    The colour therefore means one thing throughout and never competes with the verdict, and the two
+    figures an arm is actually chosen on ride beside its score rather than in a report nobody opens.
+    They are italic so that the score stays what the eye lands on, and every column is left-aligned:
+    a cell is a run of elements of different widths, so right-aligning it would line the failure
+    marks up rather than the rewards.
     """
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
@@ -1156,22 +1365,59 @@ def test_render_slack_report_builds_a_grid_cell_out_of_a_band_and_a_reward(tmp_p
         [make_cell("main", "default", CellDecision.RUN), make_cell("main", "haiku", CellDecision.SKIP)],
     )
     write_passing_oracle(summaries_dir, tmp_path)
-    write_summary(
+    write_model_summary(
         live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
-        tmp_path / "main-default-live",
-        harness_config=DEFAULT_HARNESS_CONFIG,
+        [
+            # The harness spent forty times what the agent did on this trial, and the cell says
+            # nothing about it: a grid is read to compare arms, and the decider costs what it costs
+            # whichever arm it decided for.
+            make_graded_trial(
+                "greeting",
+                [make_judge_score("quality", "conciseness", 0.8)],
+                spend=make_spend(1.234, harness_cost_usd=50.0),
+                conversation_seconds=545.0,
+            ),
+            # A figure that holds less than the trial spent, on a trial that also failed its gates.
+            make_graded_trial(
+                "roadmap",
+                [make_judge_score("quality", "conciseness", 0.4)],
+                reward=0.55,
+                spend=make_spend(12.5, is_complete=False),
+                conversation_seconds=41.0,
+                is_gates_passed=False,
+            ),
+            # A spender whose model carries no price, and a trial whose records do not time it.
+            make_graded_trial(
+                "todo-app",
+                [make_judge_score("quality", "conciseness", 0.2)],
+                reward=0.2,
+                spend=make_spend(None, unpriced_models=["kimi-k2.6"]),
+                conversation_seconds=None,
+            ),
+            # Real money that rounds to nothing at the width a cell prints, and a trial that recorded
+            # no spend at all.
+            make_graded_trial(
+                "welcome",
+                [make_judge_score("quality", "conciseness", 0.9)],
+                reward=0.95,
+                spend=make_spend(0.004),
+                conversation_seconds=120.0,
+            ),
+            make_graded_trial("bare", [make_judge_score("quality", "conciseness", 0.9)], conversation_seconds=None),
+        ],
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     grid = read_blocks(message, "table")[0]
+    assert grid["column_settings"] == [{"align": "left"}, {"align": "left"}, {"align": "left"}]
     assert grid["rows"][0] == [
         {"type": "raw_text", "text": "case"},
         make_bold_cell("default"),
         make_bold_cell("haiku"),
     ]
     case_cell, graded_cell, skipped_cell = grid["rows"][1]
-    assert case_cell == {"type": "raw_text", "text": "todo-app"}
+    assert case_cell == {"type": "raw_text", "text": "greeting"}
     assert graded_cell == {
         "type": "rich_text",
         "elements": [
@@ -1180,7 +1426,7 @@ def test_render_slack_report_builds_a_grid_cell_out_of_a_band_and_a_reward(tmp_p
                 "elements": [
                     {"type": "emoji", "name": "large_green_square"},
                     {"type": "text", "text": " 0.75"},
-                    {"type": "text", "text": "\u00a0\u2007", "style": {"bold": True}},
+                    {"type": "text", "text": " $1.23 9m05s", "style": {"italic": True}},
                 ],
             }
         ],
@@ -1189,13 +1435,64 @@ def test_render_slack_report_builds_a_grid_cell_out_of_a_band_and_a_reward(tmp_p
         "type": "rich_text",
         "elements": [{"type": "rich_text_section", "elements": [{"type": "emoji", "name": "heavy_minus_sign"}]}],
     }
+    # A floor, spend nothing could price, a trial that reports no time, and one that recorded no
+    # spend at all: four readings a reader must not confuse, so each is spelled differently.
+    assert read_grid(message)[2:] == (
+        ("roadmap", "large_yellow_square 0.55 $12.50+ 41s\u00a0\u2717", "heavy_minus_sign"),
+        ("todo-app", "large_red_square 0.20 $?", "heavy_minus_sign"),
+        ("welcome", "large_green_square 0.95 <$0.01 2m00s", "heavy_minus_sign"),
+        ("bare", "large_green_square 0.75", "heavy_minus_sign"),
+    )
 
 
-def test_render_slack_report_names_the_dimension_beside_each_judge_criterion(tmp_path: Path) -> None:
-    """A criterion's name alone does not say what it measured: two dimensions can score criteria of
-    the same name, and the dimension is what says whether a score is about the product or about the
-    harness that drove it. The columns are the union across the cell's cases, in first-seen order, so
-    a case the judges scored differently has holes rather than zeros."""
+def test_render_slack_report_explains_the_grid_cell_under_the_grid(tmp_path: Path) -> None:
+    """Nothing in a cell says what its figures are, and both marks a cost can carry are about how the
+    figure was arrived at rather than about the money, which no number can show."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
+
+    note = read_blocks(message, "context")[0]["elements"][0]["text"]
+    assert note == (
+        "_reward_ :large_red_square: `<0.25` :large_orange_square: `<0.50` :large_yellow_square:"
+        " `<0.75` :large_green_square: `>=0.75`  --  *✗* = the trial failed its gates  --"
+        "  _italics_ = agent spend and conversation time, `+` a floor and `$?` spend nothing"
+        " could price"
+    )
+
+
+@pytest.mark.parametrize(
+    ("reward", "emoji_name"),
+    [
+        (0.0, "large_red_square"),
+        (0.249, "large_red_square"),
+        (0.25, "large_orange_square"),
+        (0.499, "large_orange_square"),
+        (0.5, "large_yellow_square"),
+        (0.749, "large_yellow_square"),
+        (0.75, "large_green_square"),
+        (1.0, "large_green_square"),
+    ],
+)
+def test_band_emoji_name_reads_a_bands_figure_as_the_ceiling_it_does_not_reach(reward: float, emoji_name: str) -> None:
+    """The legend prints each band as `<0.25`, so a reward exactly on a band's figure belongs to the
+    band above it. Every band is exercised, since the one a cell wears is the whole of what the grid
+    says about a score at a glance."""
+    assert band_emoji_name(reward) == emoji_name
+
+
+def test_render_slack_report_carries_the_messages_own_spend_on_the_pair_line(tmp_path: Path) -> None:
+    """What a night cost is read per arm, beside the verdict of that arm: a total across every pair
+    answers a question nobody asks at the top of one pair's message. The halves are named the way the
+    run's markdown summary names them, so the two reports can be read against each other."""
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
@@ -1205,49 +1502,54 @@ def test_render_slack_report_names_the_dimension_beside_each_judge_criterion(tmp
         [
             make_graded_trial(
                 "greeting",
-                [make_judge_score("quality", "conciseness", 9.0), make_judge_score("outcome", "conciseness", 7.0)],
+                [make_judge_score("quality", "conciseness", 0.8)],
+                spend=(
+                    *make_spend(1.25),
+                    SpenderCost(
+                        spender=Spender.DECIDER,
+                        cost_usd=0.1,
+                        is_complete=True,
+                        is_rate_certain=True,
+                        unpriced_models=(),
+                    ),
+                ),
             ),
-            make_graded_trial(
-                "todo-app",
-                [
-                    make_judge_score("quality", "conciseness", 6.0),
-                    make_judge_score("harness_quality", "main_harness", 10.0),
-                ],
-                reward=0.5,
-            ),
+            make_graded_trial("todo-app", [make_judge_score("quality", "conciseness", 0.8)], spend=make_spend(0.75)),
         ],
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
-    assert_within_slack_limits(message)
-    # `conciseness` is scored under two dimensions, so those two columns carry theirs in their
-    # headings; `main_harness` is scored under one, so its heading stays bare.
-    assert read_judge_table(message) == (
-        ("config", "case", "reward", "quality: conciseness", "outcome: conciseness", "main_harness", "state"),
-        ("default", "greeting", "0.75", "9", "7", "-", "ok"),
-        ("default", "todo-app", "0.50", "6", "-", "10", "ok"),
-    )
-    assert read_judge_legend(message) == (
-        "_criteria by dimension:_ quality: conciseness; outcome: conciseness; harness_quality: main_harness"
+    assert read_sections(message)[0].splitlines()[1] == (
+        "passed in 41m20s, _trigger=_ `schedule`, agent spend $2.00 over 2 trials; harness spend $0.10 over 1 trial"
     )
 
 
-@pytest.mark.parametrize(
-    ("criteria_count", "expected_overflow_line"),
-    [
-        # Exactly the criteria a row has room for: nothing is dropped, and nothing is announced.
-        (SLACK_TABLE_CELL_LIMIT - 4, ""),
-        (25, "_showing 16 of 25 judge criteria; the rest are in the run's summary_"),
-    ],
-)
-def test_render_slack_report_fills_a_judge_table_row_and_says_when_columns_did_not_fit(
-    tmp_path: Path, criteria_count: int, expected_overflow_line: str
-) -> None:
-    """Slack refuses a table whose row is over the cap, and the whole message with it, so the columns
-    that do not fit go rather than the table -- and the legend above it says so, since a table that
-    quietly lost columns reads as the whole of what the judges scored. A pair scored on exactly what
-    fits loses nothing, and must not say it did."""
+def test_render_slack_report_leaves_the_spend_off_a_pair_line_with_nothing_to_sum(tmp_path: Path) -> None:
+    """A run whose trials recorded no spend at all -- every summary written before usage.json existed
+    -- says nothing rather than reporting a $0.00 nobody earned."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [make_graded_trial("greeting", [make_judge_score("quality", "conciseness", 0.8)])],
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
+
+    assert read_sections(message)[0].splitlines()[1] == "passed in 41m20s, _trigger=_ `schedule`"
+
+
+def test_render_slack_report_replies_with_every_scoring_input_behind_its_grid(tmp_path: Path) -> None:
+    """The grid says what an arm scored; the reply says what that score was made of.
+
+    Two tables, because a row holding every dimension's criteria is far past what a Slack table row
+    takes: the first is what was built, the second the harness that drove it. Each dimension is a bold
+    super-column carrying its own score, with the criteria that make it up beside it -- programmatic
+    checks and judges alike, since a report of the judges alone is not the scoring input.
+    """
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
@@ -1257,27 +1559,341 @@ def test_render_slack_report_fills_a_judge_table_row_and_says_when_columns_did_n
         [
             make_graded_trial(
                 "todo-app",
-                [make_judge_score("quality", "criterion-{}".format(index), 8.0) for index in range(criteria_count)],
+                [
+                    make_judge_score("outcome", "works_as_expected", 0.9),
+                    make_check_score("outcome", "app_registered", 1.0),
+                    make_judge_score("quality", "conciseness", 0.78),
+                    make_judge_score("harness_quality", "main_harness_success", 0.5),
+                    make_check_score("gates", "not_timed_out", 1.0),
+                ],
+                dimension_scores=[
+                    make_dimension_score("outcome", 0.95),
+                    make_dimension_score("quality", 0.78),
+                    make_dimension_score("harness_quality", 0.5),
+                    make_dimension_score("gates", 1.0),
+                ],
             )
         ],
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    assert_within_slack_limits(message)
-    table = read_judge_table(message)
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    assert reply.icon_emoji == thread.message.icon_emoji
+    assert read_scoring_tables(thread) == (
+        (
+            ("config", "case", "outcome", "works_as_expected", "app_registered", "quality", "conciseness"),
+            ("default", "todo-app", "0.95", "0.90", "1.00", "0.78", "0.78"),
+        ),
+        (
+            ("config", "case", "harness_quality", "main_harness_success", "gates", "not_timed_out"),
+            ("default", "todo-app", "0.50", "0.50", "\u2713", "\u2713"),
+        ),
+    )
+    # The dimension headings are bold, as the grid's own column headings are: nothing else in the row
+    # says where one dimension's block of columns ends and the next begins.
+    (first_table, second_table) = read_blocks(reply, "table")
+    assert first_table["rows"][0][2] == make_bold_cell("outcome")
+    assert first_table["rows"][0][3] == {"type": "raw_text", "text": "works_as_expected"}
+    assert first_table["rows"][1][0] == make_bold_cell("default")
+    # The columns that say which trial a row is are left-aligned and every score is right-aligned, so
+    # the numbers line up under their headings however long the case ids beside them run.
+    assert first_table["column_settings"] == [{"align": "left"}] * 2 + [{"align": "right"}] * 5
+    assert second_table["column_settings"] == [{"align": "left"}] * 2 + [{"align": "right"}] * 4
+    # Each table says which dimensions it holds and the scale its cells are on, and the one holding
+    # the gates says how a gate reads.
+    assert read_scoring_contexts(thread) == (
+        "_outcome, quality: each dimension's own score, then the criteria under it; every score 0.00-1.00_",
+        "_harness_quality, gates: each dimension's own score, then the criteria under it;"
+        " a gate reads ✓ or :x:; every score 0.00-1.00_",
+    )
+    # The scale is stated once above each table, because nothing in a cell shows it.
+    assert read_scoring_contexts(thread)[0] == (
+        "_outcome, quality: each dimension's own score, then the criteria under it; every score 0.00-1.00_"
+    )
+    # The reply's text is the same content as fixed-width fences, for wherever the blocks do not render.
+    assert reply.text.splitlines()[:4] == [
+        "_outcome, quality: each dimension's own score, then the criteria under it; every score 0.00-1.00_",
+        "```",
+        "config   case      outcome  works_as_expected  app_registered  quality  conciseness",
+        "default  todo-app  0.95     0.90               1.00            0.78     0.78",
+    ]
+
+
+def test_render_slack_report_keeps_two_dimensions_criteria_of_the_same_name_apart(tmp_path: Path) -> None:
+    """A criterion name comes out of a case's own expectations, so two dimensions can score one of
+    the same name -- and a cell that found its value by name alone would report one dimension's
+    answer under the other's heading."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "todo-app",
+                [
+                    make_judge_score("outcome", "completeness", 0.20),
+                    make_judge_score("quality", "completeness", 0.90),
+                ],
+                dimension_scores=[make_dimension_score("outcome", 0.20), make_dimension_score("quality", 0.90)],
+            )
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_scoring_tables(thread)[0] == (
+        ("config", "case", "outcome", "completeness", "quality", "completeness"),
+        ("default", "todo-app", "0.20", "0.20", "0.90", "0.90"),
+    )
+
+
+def test_render_slack_report_counts_a_stepped_rows_step_column_against_the_cell_cap(tmp_path: Path) -> None:
+    """The step column is one of the columns that identify a row, so it is one fewer for the scores.
+    A table that did not count it would build a row over Slack's cell cap, which is refused together
+    with the whole message."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "roadmap",
+                [make_judge_score("outcome", "criterion-{}".format(index), 0.8, step="build") for index in range(25)],
+                dimension_scores=[make_dimension_score("outcome", 0.8, step="build")],
+            )
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    (table,) = read_scoring_tables(thread)
+    # Three columns identify the row and one carries the dimension's own score, so sixteen criteria
+    # are what is left of the twenty-five -- one fewer than a flat row fits.
     assert [len(row) for row in table] == [SLACK_TABLE_CELL_LIMIT, SLACK_TABLE_CELL_LIMIT]
-    assert table[0][-2:] == ("criterion-15", "state")
-    overflow = read_judge_legend(message).partition("\n")[2]
-    assert overflow == expected_overflow_line
+    assert table[0][:4] == ("config", "case", "step", "outcome")
+    assert table[0][-1] == "criterion-15"
+    # The columns that say which trial a row is are left-aligned and every score is right-aligned.
+    assert read_blocks(reply, "table")[0]["column_settings"] == [{"align": "left"}] * 3 + [{"align": "right"}] * 17
 
 
-def test_render_slack_report_states_the_dimensions_above_the_judge_table_rather_than_in_it(
+def test_render_slack_report_gives_each_step_of_a_stepped_case_a_row_of_its_own(tmp_path: Path) -> None:
+    """A stepped case is scored once per step against that step's own expectations, so one criterion
+    is as many answers as the case has steps. One row per step keeps them apart, and the step column
+    is drawn only where some row has one -- a suite of flat cases has nothing to put in it."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "roadmap",
+                [
+                    make_judge_score("quality", "conciseness", 0.6, step="triage"),
+                    make_judge_score("quality", "conciseness", 0.9, step="build"),
+                ],
+                dimension_scores=[
+                    make_dimension_score("quality", 0.6, step="triage"),
+                    make_dimension_score("quality", 0.9, step="build"),
+                ],
+            ),
+            make_graded_trial("greeting", [make_judge_score("quality", "conciseness", 0.8)]),
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    # The flat trial's row keeps the column and says it has no step, rather than leaving a cell that
+    # reads as a step nobody named. Its composed reward is not a row of its own either.
+    assert read_scoring_tables(thread)[0] == (
+        ("config", "case", "step", "quality", "conciseness"),
+        ("default", "roadmap", "triage", "0.60", "0.60"),
+        ("default", "roadmap", "build", "0.90", "0.90"),
+        ("default", "greeting", "-", "-", "0.80"),
+    )
+
+
+def test_render_slack_report_marks_a_gate_rather_than_scoring_it(tmp_path: Path) -> None:
+    """A gate is a property a trial either has or has not, so a number would read as a measurement
+    where there is none. Only the failure is coloured: a check blends with the numbers beside it, and
+    a table full of red emoji says nothing about which row is the one to read."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "todo-app",
+                [make_check_score("gates", "not_timed_out", 0.0)],
+                dimension_scores=[make_dimension_score("gates", 0.0)],
+                is_gates_passed=False,
+            ),
+            make_graded_trial(
+                "greeting",
+                [make_check_score("gates", "not_timed_out", 1.0)],
+                dimension_scores=[make_dimension_score("gates", 1.0)],
+            ),
+            # A gate that landed between the two: there is no mark for half a property, so the
+            # number is what the cell says.
+            make_graded_trial(
+                "roadmap",
+                [make_check_score("gates", "not_timed_out", 0.5)],
+                dimension_scores=[make_dimension_score("gates", 0.5)],
+            ),
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    # A failed gate is the `x` emoji as an element of its own: a table cell renders no `:name:`
+    # shortcode written into its text.
+    (gates_table,) = read_blocks(reply, "table")
+    assert gates_table["rows"][1][2] == {
+        "type": "rich_text",
+        "elements": [{"type": "rich_text_section", "elements": [{"type": "emoji", "name": "x"}]}],
+    }
+    assert gates_table["rows"][2][2] == {"type": "raw_text", "text": "\u2713"}
+    # The fence says both in glyphs, because Slack renders no emoji inside one.
+    assert read_scoring_tables(thread)[0][1:] == (
+        ("default", "todo-app", "x", "x"),
+        ("default", "greeting", "\u2713", "\u2713"),
+        ("default", "roadmap", "0.50", "0.50"),
+    )
+    assert "\u2717" in reply.text
+    # The gates ride in the second of the two tables, so its own context line is the one that has to
+    # explain the marks -- and it is the only line above the only table this message drew.
+    (context,) = read_scoring_contexts(thread)
+    assert context.endswith("a gate reads \u2713 or :x:; every score 0.00-1.00_")
+
+
+def test_render_slack_report_keeps_a_row_out_of_the_table_it_scored_nothing_in(tmp_path: Path) -> None:
+    """Each table draws two of the four dimensions, so a trial scored on one table's pair has nothing
+    to say in the other -- and a row of dashes there reads as a trial that scored bottom rather than
+    as one that was never scored on those. The row cap and the character budget are each table's own
+    for the same reason: a row it does not draw must not cost it one it does."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "todo-app",
+                [make_judge_score("quality", "conciseness", 0.8)],
+                dimension_scores=[make_dimension_score("quality", 0.8)],
+            ),
+            make_graded_trial(
+                "greeting",
+                [make_check_score("gates", "not_timed_out", 1.0)],
+                dimension_scores=[make_dimension_score("gates", 1.0)],
+            ),
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_scoring_tables(thread) == (
+        (
+            ("config", "case", "quality", "conciseness"),
+            ("default", "todo-app", "0.80", "0.80"),
+        ),
+        (
+            ("config", "case", "gates", "not_timed_out"),
+            ("default", "greeting", "\u2713", "\u2713"),
+        ),
+    )
+
+
+def test_render_slack_report_takes_the_scoring_columns_as_the_union_across_the_rows(tmp_path: Path) -> None:
+    """A case can be scored on criteria another case is not: the dataset's cases carry their own
+    expectations. So the columns are the union across the rows, in first-seen order, and a row that
+    was never scored on one prints a dash rather than a zero it did not earn."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial("greeting", [make_judge_score("quality", "conciseness", 0.9)]),
+            make_graded_trial(
+                "todo-app",
+                [
+                    make_judge_score("quality", "conciseness", 0.6),
+                    make_judge_score("outcome", "works_as_expected", 0.5),
+                ],
+            ),
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    # `outcome` leads the table wherever it is scored, whichever row first names it; the row that was
+    # not scored on it has a hole in both of its columns. The harness table is not drawn at all.
+    assert read_scoring_tables(thread) == (
+        (
+            ("config", "case", "outcome", "works_as_expected", "quality", "conciseness"),
+            ("default", "greeting", "-", "-", "-", "0.90"),
+            ("default", "todo-app", "-", "0.50", "-", "0.60"),
+        ),
+    )
+
+
+def test_render_slack_report_says_when_scoring_columns_did_not_fit_a_row(tmp_path: Path) -> None:
+    """Slack refuses a table whose row is over the cap, and the whole message with it, so the columns
+    that do not fit go rather than the table -- and the line above it says how many, since a table
+    that quietly lost columns reads as the whole of what a trial was scored on."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "todo-app",
+                [make_judge_score("quality", "criterion-{}".format(index), 0.8) for index in range(25)],
+            )
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    (table,) = read_scoring_tables(thread)
+    # Two columns identify the row and one carries the dimension's own score, so seventeen criteria
+    # are what is left of the twenty-five.
+    assert [len(row) for row in table] == [SLACK_TABLE_CELL_LIMIT, SLACK_TABLE_CELL_LIMIT]
+    assert table[0][-1] == "criterion-16"
+    assert read_scoring_contexts(thread)[0].splitlines()[1] == (
+        "_8 criterion columns did not fit this row; they are in the run's summary_"
+    )
+
+
+def test_render_slack_report_drops_a_scoring_dimension_left_no_room_for_its_own_score(
     tmp_path: Path,
 ) -> None:
-    """A criterion's dimension is stated once, above the table, in the blocks and in the fence
-    alike. Qualifying every heading makes the columns far wider than the numbers under them, and a
-    fence wider than a narrow client wraps is no longer a table at all."""
+    """The columns that do not fit go from the end, so the dimension a reader is handed first keeps
+    its criteria whole. One with no room left for even its own score goes entirely -- a criterion
+    under a dimension nobody can see says nothing -- and the line above the table stops naming it."""
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
@@ -1288,38 +1904,303 @@ def test_render_slack_report_states_the_dimensions_above_the_judge_table_rather_
             make_graded_trial(
                 "todo-app",
                 [
-                    make_judge_score("harness_quality", "main_harness_success", 10.0),
-                    make_judge_score("outcome", "works_as_expected", 9.0),
-                    make_judge_score("outcome", "no_placeholder_content", 8.0),
+                    *(make_judge_score("outcome", "criterion-{}".format(index), 0.8) for index in range(25)),
+                    *(make_judge_score("quality", "conciseness-{}".format(index), 0.8) for index in range(3)),
                 ],
+                dimension_scores=[make_dimension_score("outcome", 0.8), make_dimension_score("quality", 0.8)],
             )
         ],
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
 
-    # No criterion name is scored under two dimensions here, so every heading stays bare.
-    assert read_judge_table(message)[0] == (
-        "config",
-        "case",
-        "reward",
-        "main_harness_success",
-        "works_as_expected",
-        "no_placeholder_content",
-        "state",
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    (table,) = read_scoring_tables(thread)
+    # Seventeen of `outcome`'s criteria fit beside its own score; `quality` and all three of its own
+    # are counted among the columns that did not.
+    assert [len(row) for row in table] == [SLACK_TABLE_CELL_LIMIT, SLACK_TABLE_CELL_LIMIT]
+    assert table[0][2] == "outcome"
+    assert "quality" not in table[0]
+    context = read_scoring_contexts(thread)[0].splitlines()
+    assert context[0].startswith("_outcome: ")
+    assert context[1] == "_12 criterion columns did not fit this row; they are in the run's summary_"
+
+
+def test_render_slack_report_says_when_a_dimension_of_its_own_did_not_fit_a_row(tmp_path: Path) -> None:
+    """A dimension scored with no criteria is a single column, so counting only criteria would drop
+    it without a word -- and a table nothing says it is missing a dimension reads as the whole of
+    what the trial was scored on."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "todo-app",
+                [make_check_score("harness_quality", "check-{}".format(index), 0.8) for index in range(25)],
+                dimension_scores=[make_dimension_score("harness_quality", 0.8), make_dimension_score("gates", 1.0)],
+            )
+        ],
     )
-    legend = (
-        "_criteria by dimension:_ harness_quality: main_harness_success;"
-        " outcome: works_as_expected, no_placeholder_content"
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    (table,) = read_scoring_tables(thread)
+    assert "gates" not in table[0]
+    context = read_scoring_contexts(thread)[0].splitlines()
+    # Eight of `harness_quality`'s checks did not fit, and `gates`, whose one column is its own score.
+    assert context[1] == "_9 criterion columns did not fit this row; they are in the run's summary_"
+
+
+def test_render_slack_report_clamps_a_heading_as_long_as_the_text_it_was_authored_from(
+    tmp_path: Path,
+) -> None:
+    """A criterion name comes out of a case's own expectations and a harness config name out of the
+    matrix, and neither is held to a length. Slack refuses a table cell over its cap together with
+    the whole message behind it, so a heading is cut like every other cell."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    long_config = "harness-{}".format("c" * 200)
+    long_criterion = "criterion-{}".format("n" * 200)
+    write_matrix(
+        matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", long_config, CellDecision.RUN)]
     )
-    assert read_judge_legend(message) == legend
-    # The fence carries the same legend and the same bare headings.
-    fence = message.text.partition(legend + "\n")[2].splitlines()
-    assert fence[:3] == [
-        "```",
-        "config   case      reward  main_harness_success  works_as_expected  no_placeholder_content  state",
-        "default  todo-app  0.75    10                    9                  8                       ok",
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, long_config),
+        [make_graded_trial("todo-app", [make_judge_score("quality", long_criterion, 0.8)])],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(thread.message)
+    assert_within_slack_limits(reply)
+    clamped_config = long_config[: SLACK_TABLE_CELL_CHARACTER_LIMIT - 3] + "..."
+    assert read_grid(thread.message)[0] == ("case", clamped_config)
+    (table,) = read_scoring_tables(thread)
+    assert table[0][-1] == long_criterion[: SLACK_TABLE_CELL_CHARACTER_LIMIT - 3] + "..."
+
+
+def test_render_slack_report_keeps_the_scoring_reply_inside_slacks_row_cap(tmp_path: Path) -> None:
+    """Slack refuses a table of more than a hundred rows, header included, and a suite of many cases
+    times many steps reaches that on its own. The rows that do not fit go, and the line above the
+    table says how many -- a table that quietly lost rows reads as every trial the run graded."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial("case-{}".format(index), [make_judge_score("quality", "conciseness", 0.8)])
+            for index in range(120)
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    (table,) = read_scoring_tables(thread)
+    assert len(table) == SLACK_TABLE_ROW_LIMIT
+    assert read_scoring_contexts(thread)[0].splitlines()[-1] == (
+        "_showing 99 of 120 scored rows; the rest are in the run's summary_"
+    )
+
+
+def test_render_slack_report_spends_each_scoring_tables_row_cap_on_its_own_rows(tmp_path: Path) -> None:
+    """The cap is Slack's per table, so a table that held the rows of both would lose rows carrying
+    scores to rows of dashes. Each table draws only what its own two dimensions scored, so a suite
+    of more graded trials than one table holds still reports every one of them."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "quality-{}".format(index),
+                [make_judge_score("quality", "conciseness", 0.8)],
+                dimension_scores=[make_dimension_score("quality", 0.8)],
+            )
+            for index in range(60)
+        ]
+        + [
+            make_graded_trial(
+                "gates-{}".format(index),
+                [make_check_score("gates", "not_timed_out", 1.0)],
+                dimension_scores=[make_dimension_score("gates", 1.0)],
+            )
+            for index in range(60)
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    quality_table, gates_table = read_scoring_tables(thread)
+    # 120 rows across the two, which one shared cap would have cut to 99.
+    assert [len(table) - 1 for table in (quality_table, gates_table)] == [60, 60]
+    assert [row[1] for row in quality_table[1:]] == ["quality-{}".format(index) for index in range(60)]
+    assert [row[1] for row in gates_table[1:]] == ["gates-{}".format(index) for index in range(60)]
+    # Nothing was dropped, so neither table says it was.
+    assert [context.splitlines()[-1].startswith("_showing ") for context in read_scoring_contexts(thread)] == [
+        False,
+        False,
     ]
+
+
+def test_render_slack_report_keeps_the_scoring_tables_inside_slacks_character_budget(tmp_path: Path) -> None:
+    """Slack caps a message at 10000 characters across the cells of all its tables and refuses the
+    whole message past it, so a suite with more graded trials than fit loses rows rather than blocks.
+
+    Whole rows, or the scores that survived would line up under the wrong headings, and from the
+    longer table, so the two tables shrink together rather than one of them disappearing.
+    """
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "case-{}-{}".format(index, "x" * 300),
+                [
+                    make_judge_score("quality", "conciseness", 0.8),
+                    make_check_score("gates", "not_timed_out", 1.0),
+                ],
+                dimension_scores=[make_dimension_score("quality", 0.8), make_dimension_score("gates", 1.0)],
+            )
+            for index in range(60)
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    tables = read_scoring_tables(thread)
+    assert count_table_characters(reply) <= SLACK_TABLE_CHARACTER_LIMIT
+    # Rows went from both tables, every row that survived is whole, and no single cell ran away with
+    # the budget either.
+    assert [0 < len(table) - 1 < 60 for table in tables] == [True, True]
+    assert {len(row) for table in tables for row in table} == {4}
+    assert [row[1] for table in tables for row in table[1:] if len(row[1]) > SLACK_TABLE_CELL_CHARACTER_LIMIT] == []
+    # Each table announces the rows it kept, so a reader comparing the two knows which trials each
+    # of them is missing.
+    assert [context.splitlines()[-1] for context in read_scoring_contexts(thread)] == [
+        "_showing {} of 60 scored rows; the rest are in the run's summary_".format(len(table) - 1) for table in tables
+    ]
+
+
+def test_render_slack_report_gives_up_the_columns_of_the_rows_the_budget_dropped(tmp_path: Path) -> None:
+    """A table's columns are collected from the rows it had before the character budget took any off
+    the end, so a criterion only a dropped row was scored on would keep a column of dashes -- which
+    reads as a trial that scored bottom on it rather than as one nobody scored on it, and spends a
+    header and one of the row's cells on saying nothing."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "case-{}-{}".format(index, "x" * 300),
+                [make_judge_score("quality", "conciseness", 0.8)],
+                dimension_scores=[make_dimension_score("quality", 0.8)],
+            )
+            for index in range(95)
+        ]
+        # Last in case order, so it is the first row the budget drops, and the only row scored on a
+        # criterion of its own.
+        + [
+            make_graded_trial(
+                "zzz-rare",
+                [make_judge_score("quality", "rarely_scored", 0.4)],
+                dimension_scores=[make_dimension_score("quality", 0.4)],
+            )
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    assert count_table_characters(reply) <= SLACK_TABLE_CHARACTER_LIMIT
+    (table,) = read_scoring_tables(thread)
+    assert "zzz-rare" not in [row[1] for row in table[1:]]
+    assert table[0] == ("config", "case", "quality", "conciseness")
+
+
+def test_render_slack_report_gives_up_a_dimension_none_of_the_rows_it_kept_scored(tmp_path: Path) -> None:
+    """A table draws the rows of either of its two dimensions, so the budget can take every row that
+    scored one of them and leave the other's standing. The dimension goes with them, legend and all:
+    a block whose every column would be a dash says nothing, and a legend naming a dimension the
+    table no longer holds sends the reader looking for columns that are not there.
+    """
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "outcome-{:03d}-{}".format(index, "x" * 300),
+                [make_judge_score("outcome", "works", 0.8)],
+                dimension_scores=[make_dimension_score("outcome", 0.8)],
+            )
+            for index in range(90)
+        ]
+        # Last in case order, so the budget drops all three before it reaches an `outcome` row.
+        + [
+            make_graded_trial(
+                "zzz-quality-{}".format(index),
+                [make_judge_score("quality", "conciseness", 0.4)],
+                dimension_scores=[make_dimension_score("quality", 0.4)],
+            )
+            for index in range(3)
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    reply = read_scoring_reply(thread)
+    assert reply is not None
+    assert_within_slack_limits(reply)
+    (table,) = read_scoring_tables(thread)
+    assert table[0] == ("config", "case", "outcome", "works")
+    assert [row for row in table[1:] if row[1].startswith("zzz-quality")] == []
+    assert 0 < len(table) - 1 < 90
+    assert read_scoring_contexts(thread)[0].splitlines()[0] == (
+        "_outcome: each dimension's own score, then the criteria under it; every score 0.00-1.00_"
+    )
+
+
+def test_render_slack_report_posts_no_scoring_reply_for_a_suite_that_graded_nothing(tmp_path: Path) -> None:
+    """A pair the run skipped whole graded no trial, so there is nothing behind its grid to reply
+    with -- and an empty reply reads as a measurement that went missing."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path, [make_pair("released", PairDecision.SKIP)], [make_cell("released", "default", CellDecision.SKIP)]
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(thread.message) == "minds-evals: released -- skipped (already green)"
+    assert thread.replies == ()
 
 
 def test_format_budgeted_block_cuts_one_enormous_line_inside_the_budget() -> None:
@@ -1332,16 +2213,12 @@ def test_format_budgeted_block_cuts_one_enormous_line_inside_the_budget() -> Non
     assert block.endswith("\n... (truncated; see the run summary)")
 
 
-def test_render_slack_report_keeps_a_huge_judge_table_inside_slacks_character_budget(
+def test_render_slack_report_keeps_the_grid_and_its_failures_inside_slacks_character_budget(
     tmp_path: Path,
 ) -> None:
     """Slack caps a message at 10000 characters across the cells of all its tables and refuses the
-    whole message past it, so a pair with more graded trials than fit loses rows rather than blocks.
-
-    Whole rows go, or the scores that survived would line up under the wrong headings, and the
-    legend above the table says how many were dropped -- a table that quietly lost rows reads as
-    every trial the run graded.
-    """
+    whole message past it. The top message's own two tables are bounded by the matrix, but a case id
+    is not, so each cell is clamped and the failures table takes whatever the grid left it."""
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
@@ -1351,55 +2228,33 @@ def test_render_slack_report_keeps_a_huge_judge_table_inside_slacks_character_bu
         [
             make_graded_trial(
                 "case-{}-{}".format(index, "x" * 300),
-                [make_judge_score("quality", "criterion-{}".format(score), 8.0) for score in range(16)],
+                [make_judge_score("quality", "conciseness", 0.8)],
+                is_gates_passed=False,
             )
             for index in range(60)
         ],
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert_within_slack_limits(message)
-    table = read_judge_table(message)
-    assert sum(len(cell) for row in table for cell in row) <= SLACK_TABLE_CHARACTER_LIMIT
-    # Rows were dropped, and every row that survived is whole.
-    assert 0 < len(table) - 1 < 60
-    assert {len(row) for row in table} == {SLACK_TABLE_CELL_LIMIT}
-    assert read_judge_legend(message).splitlines()[-1] == (
-        "_showing {} of 60 graded trials; the rest are in the run's summary_".format(len(table) - 1)
-    )
-    # No single cell may run away with the budget either, so the enormous case ids are cut too.
-    assert [row[1] for row in table[1:] if len(row[1]) > SLACK_TABLE_CELL_CHARACTER_LIMIT] == []
-    assert table[1][1].endswith("...")
-
-
-def test_render_slack_report_says_so_when_no_judge_row_fits_at_all(tmp_path: Path) -> None:
-    """A budget that leaves room for no row leaves no table to say so in, so the message says it
-    where the table would have gone -- otherwise a pair whose scores did not fit reads as a pair the
-    judges never scored."""
-    matrix_path = tmp_path / "matrix.json"
-    summaries_dir = tmp_path / "summaries"
-    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
-    write_passing_oracle(summaries_dir, tmp_path)
-    # Enough cases that the grid alone spends the message's whole table budget.
-    write_model_summary(
-        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
-        [
-            make_graded_trial(
-                "case-{}-{}".format(index, "x" * 300),
-                [make_judge_score("quality", "conciseness", 8.0)],
-            )
-            for index in range(90)
-        ],
-    )
-
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
-
-    assert_within_slack_limits(message)
-    assert read_judge_table(message) == ()
-    notice = "_the judge scores did not fit this message; they are in the run's summary_"
-    assert notice in [element["text"] for block in read_blocks(message, "context") for element in block["elements"]]
-    assert notice in message.text
+    assert count_table_characters(message) <= SLACK_TABLE_CHARACTER_LIMIT
+    # The enormous case ids are cut rather than allowed to spend the whole budget, and the failures
+    # table says how many rows it had to give up.
+    grid = read_grid(message)
+    assert [row[0] for row in grid[1:] if len(row[0]) > SLACK_TABLE_CELL_CHARACTER_LIMIT] == []
+    assert grid[1][0].endswith("...")
+    assert 0 < len(read_failed_trials(message)) - 1 < 60
+    assert [
+        element["text"]
+        for block in read_blocks(message, "context")
+        for element in block["elements"]
+        if element["text"].startswith("_showing ")
+    ] == [
+        "_showing {} of 60 failing rows; the rest are in the run's summary_".format(
+            len(read_failed_trials(message)) - 1
+        )
+    ]
 
 
 def test_render_slack_report_truncates_a_long_details_block(tmp_path: Path) -> None:
@@ -1419,10 +2274,12 @@ def test_render_slack_report_truncates_a_long_details_block(tmp_path: Path) -> N
             is_environment_recorded=False,
         )
     write_run_check_reports(
-        check_job_directory(oracle_job_dir), None, oracle_summary_path(summaries_dir, "main", CONFIG_SLUG)
+        check_job_directory(oracle_job_dir, FIXTURE_PRICE_MAP),
+        None,
+        oracle_summary_path(summaries_dir, "main", CONFIG_SLUG),
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
 
     assert_within_slack_limits(message)
     details = read_details(message)
@@ -1435,9 +2292,9 @@ def test_render_slack_report_truncates_a_long_details_block(tmp_path: Path) -> N
 
 
 def test_as_slack_payload_posts_as_the_run_and_carries_the_whole_report_as_text(tmp_path: Path) -> None:
-    """The webhook carries no identity of its own, and Slack shows `text` wherever the blocks cannot
-    be rendered -- including the retry the workflow posts if a block type is refused -- so the text
-    has to be the whole report rather than a caption for it."""
+    """Neither transport carries an identity of its own, and Slack shows `text` wherever the blocks
+    cannot be rendered -- including the retry the poster makes when a block type is refused -- so the
+    text has to be the whole report rather than a caption for it."""
     matrix_path = tmp_path / "matrix.json"
     summaries_dir = tmp_path / "summaries"
     write_matrix(
@@ -1452,19 +2309,19 @@ def test_as_slack_payload_posts_as_the_run_and_carries_the_whole_report_as_text(
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
     payload = as_slack_payload(message)
 
     assert payload["username"] == SLACK_USERNAME
     assert payload["icon_emoji"] == GREEN_ICON_EMOJI
     assert payload["text"] == message.text
+    # Nothing failed, so no failures table stands between the grid and the details, and the scores
+    # behind the grid are a reply rather than a block of this message.
     assert [block["type"] for block in payload["blocks"]] == [
         "header",
         "section",
         "table",
         "context",
-        # Nothing failed, so no failures table stands between the grid and the collapsed scores.
-        "container",
         "section",
         "context",
     ]
@@ -1474,20 +2331,57 @@ def test_as_slack_payload_posts_as_the_run_and_carries_the_whole_report_as_text(
         ":white_check_mark: {} -- oracle passed".format(PAIR_LABEL),
         "passed in 41m20s, _trigger=_ `schedule`",
         "```",
-        "case      default  haiku",
-        "greeting  ok 0.75  -",
-        "todo-app  ok 0.75  -",
-        "```",
-        "_criteria by dimension:_ quality: conciseness",
-        "```",
-        "config   case      reward  conciseness  state",
-        "default  greeting  0.75    8            ok",
-        "default  todo-app  0.75    8            ok",
+        "case      default        haiku",
+        "greeting  ok 0.75 9m05s  -",
+        "todo-app  ok 0.75 9m05s  -",
         "```",
         "*details*",
         "*haiku* -- skipped (already green)",
         "<{url}|run logs> | <{url}#artifacts|artifacts>".format(url=RUN_URL),
     ]
+
+
+def test_as_slack_thread_payload_carries_the_message_and_its_replies(tmp_path: Path) -> None:
+    """The file `ci-report` writes is what the posting command reads back, so a thread is one object
+    with its replies inside it: a flat list of payloads would leave nothing saying which message a
+    reply belongs under, and each reply is a report of nothing on its own."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [make_cell("main", "default", CellDecision.RUN)],
+        diagnosed_pairs=["main"],
+        diagnosed_harnesses=["codex"],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+    write_diagnostic_summary(
+        diagnose_fixture_summary_path(summaries_dir, "main"),
+        [
+            make_diagnostic_trial(
+                DiagnosticVerdict.KNOWN,
+                case_id="fixture",
+                known_facts=[make_fact_outcome("agent.worker_launched", FactStatus.KNOWN)],
+            )
+        ],
+    )
+    write_diagnostic_summary(diagnose_behaviour_summary_path(summaries_dir, "main", "codex"), [])
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+    payload = as_slack_thread_payload(thread)
+
+    # The keys the posting command reads the file back through, and nothing else: a payload of any
+    # other shape is refused as a bad `--payloads` file rather than posted.
+    assert set(payload) == {"message", "replies"}
+    assert payload["message"]["text"] == thread.message.text
+    assert payload["message"]["blocks"] == list(thread.message.blocks)
+    assert [reply["icon_emoji"] for reply in payload["replies"]] == [GREEN_ICON_EMOJI, GREEN_ICON_EMOJI]
+    assert payload["replies"][1]["text"].startswith("*diagnostics detail*")
 
 
 def test_as_slack_payload_posts_a_green_pair_under_the_green_icon(tmp_path: Path) -> None:
@@ -1507,7 +2401,7 @@ def test_as_slack_payload_posts_a_green_pair_under_the_green_icon(tmp_path: Path
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context())
+    messages = render_messages(matrix_path, summaries_dir, make_context())
 
     assert [read_header(message) for message in messages] == [
         "minds-evals: main x eval-config-small -- passed",
@@ -1529,7 +2423,7 @@ def test_as_slack_payload_posts_an_oracle_only_run_whose_oracle_passed_under_the
     write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
     write_passing_oracle(summaries_dir, tmp_path)
 
-    (message,) = render_slack_report(
+    (message,) = render_messages(
         matrix_path, summaries_dir, make_context(is_live_pass_skipped=True, evaluate_result="skipped")
     )
 
@@ -1554,8 +2448,8 @@ def test_as_slack_payload_posts_anything_that_wants_reading_under_the_ungreen_ic
         harness_config=WRONG_MODEL_HARNESS_CONFIG,
     )
 
-    messages = render_slack_report(matrix_path, summaries_dir, make_context())
-    (undecided,) = render_slack_report(None, summaries_dir, make_context(resolve_result="failure"))
+    messages = render_messages(matrix_path, summaries_dir, make_context())
+    (undecided,) = render_messages(None, summaries_dir, make_context(resolve_result="failure"))
 
     assert [read_header(message) for message in messages] == [
         "minds-evals: main x eval-config-small -- failed",
@@ -1583,7 +2477,7 @@ def test_as_slack_payload_posts_a_run_whose_arms_all_passed_but_whose_job_did_no
         harness_config=DEFAULT_HARNESS_CONFIG,
     )
 
-    (message,) = render_slack_report(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
+    (message,) = render_messages(matrix_path, summaries_dir, make_context(evaluate_result="failure"))
 
     assert ":warning:" in read_sections(message)[0]
     assert as_slack_payload(message)["icon_emoji"] == GREEN_ICON_EMOJI
@@ -1591,10 +2485,12 @@ def test_as_slack_payload_posts_a_run_whose_arms_all_passed_but_whose_job_did_no
 
 def test_parse_run_check_reads_back_the_summary_check_run_wrote(tmp_path: Path) -> None:
     """`check-run` dumps a model whose verdict fields are computed, and computed fields are extras on
-    the way back in, so the dump does not validate as-is."""
+    the way back in, so the dump does not validate as-is. The trial carries a spend record, which is
+    the deepest level of the summary: a computed field on one of those would make every summary of a
+    trial that recorded money read as one that could not be read."""
     job_dir = tmp_path / "nightly-run"
-    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=HAIKU_HARNESS_CONFIG)
-    run_check = check_job_directory(job_dir)
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=HAIKU_HARNESS_CONFIG, usage=trial_usage_payload())
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
     summary_path = tmp_path / "live-summary.json"
     write_run_check_reports(run_check, None, summary_path)
     assert '"is_passed"' in summary_path.read_text()
@@ -1604,6 +2500,29 @@ def test_parse_run_check_reads_back_the_summary_check_run_wrote(tmp_path: Path) 
     assert parsed == run_check
     assert parsed.is_passed is True
     assert parsed.trials[0].requested_model == "haiku"
+    assert [entry.spender for entry in parsed.trials[0].spend] == list(Spender)
+    assert parsed.pricing == run_check.pricing
+
+
+def test_parse_run_check_reads_a_summary_written_before_the_cost_fields_existed(tmp_path: Path) -> None:
+    """A summary is read back by whatever `ci-report` is current, which is not always the `check-run`
+    that wrote it, and a field the writer never heard of must read as a trial that recorded nothing
+    for it rather than as a summary that could not be read -- the one thing the report has no way to
+    tell a reader apart from a pass that genuinely went missing.
+    """
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=HAIKU_HARNESS_CONFIG)
+    payload = json.loads(check_job_directory(job_dir, FIXTURE_PRICE_MAP).model_dump_json())
+    payload.pop("pricing")
+    for trial in payload["trials"]:
+        for field_name in ("step_count", "completed_step_count", "spend"):
+            trial.pop(field_name)
+
+    parsed = parse_run_check(json.dumps(payload))
+
+    assert parsed.pricing.source == ""
+    (trial_check,) = parsed.trials
+    assert (trial_check.step_count, trial_check.completed_step_count, trial_check.spend) == (0, 0, ())
 
 
 def _nested_model_types(model: type[BaseModel]) -> set[type[BaseModel]]:
@@ -1622,12 +2541,15 @@ def test_only_the_levels_parse_run_check_strips_carry_computed_fields() -> None:
     read as one that could not be read -- the failure the report must never show for a bug of its
     own -- and a new model nested under RunCheck would put a whole unstripped level between them.
     Growing the parsing by a level is the fix; this is what says a level has appeared."""
-    assert _nested_model_types(RunCheck) == {TrialCheck}
+    assert _nested_model_types(RunCheck) == {TrialCheck, PricingSource}
 
     deeper_models = _nested_model_types(TrialCheck)
 
-    assert deeper_models == {JudgeScore}
-    assert [model for model in deeper_models if model.model_computed_fields] == []
+    assert deeper_models == {CriterionScore, DimensionScore, SpenderCost}
+    # Every level the stripping does not reach, which is every model under the summary but the two it
+    # names: a computed field on any of them is validated back as one the model did not declare.
+    unstripped_models = {PricingSource, *deeper_models}
+    assert [model for model in unstripped_models if model.model_computed_fields] == []
 
 
 def test_format_duration_reads_as_a_wall_clock() -> None:
@@ -1637,10 +2559,10 @@ def test_format_duration_reads_as_a_wall_clock() -> None:
     assert format_duration(2480) == "41m20s"
 
 
-def test_ci_report_writes_one_payload_per_message_and_exits_zero_without_a_matrix(tmp_path: Path) -> None:
+def test_ci_report_writes_one_thread_per_suite_and_exits_zero_without_a_matrix(tmp_path: Path) -> None:
     """The notification is the whole report of a nightly, so a run broken enough to have decided
-    nothing still gets a message rather than a failing job. The workflow posts the file as it
-    stands, one payload at a time, so it is an array whatever the run decided."""
+    nothing still gets a message rather than a failing job. The posting command reads the file as it
+    stands, one thread at a time, so it is an array of threads whatever the run decided."""
     output_path = tmp_path / "reports" / "slack-payloads.json"
 
     result = CliRunner().invoke(
@@ -1667,8 +2589,10 @@ def test_ci_report_writes_one_payload_per_message_and_exits_zero_without_a_matri
     assert result.exit_code == 0, result.output
     payloads = json.loads(output_path.read_text())
     assert len(payloads) == 1
-    assert payloads[0]["blocks"][0]["text"]["text"] == "minds-evals -- broken"
-    assert "the run broke before deciding what to evaluate" in payloads[0]["text"]
+    assert payloads[0]["message"]["blocks"][0]["text"]["text"] == "minds-evals -- broken"
+    assert "the run broke before deciding what to evaluate" in payloads[0]["message"]["text"]
+    # Nothing was graded and no pair has diagnostics, so the thread is a message on its own.
+    assert payloads[0]["replies"] == []
 
 
 def test_format_ref_label_does_not_repeat_a_ref_that_is_already_the_sha() -> None:
@@ -1693,8 +2617,15 @@ def test_the_summary_file_names_the_report_composes_are_the_ones_the_workflow_wr
     oracle_name = oracle_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG").name
     live_name = live_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG", "$HARNESS_CONFIG").name
 
+    invariants_name = live_invariants_summary_path(Path("summaries"), "$PAIR", "$CONFIG_SLUG", "$HARNESS_CONFIG").name
+
     assert '--summary-json "$SUMMARY_DIR/{}"'.format(oracle_name) in workflow_text
     assert '--summary-json "$SUMMARY_DIR/{}"'.format(live_name) in workflow_text
+    assert '--summary-json "$SUMMARY_DIR/{}"'.format(invariants_name) in workflow_text
+    assert '--summary-json "$SUMMARY_DIR/{}-$PAIR.json"'.format(DIAGNOSE_FIXTURE_SUMMARY_STEM) in workflow_text
+    assert (
+        '--summary-json "$SUMMARY_DIR/{}-$PAIR-$HARNESS.json"'.format(DIAGNOSE_BEHAVIOUR_SUMMARY_STEM) in workflow_text
+    )
     assert "pattern: {}*\n".format(SUMMARY_ARTIFACT_PREFIX) in workflow_text
 
 
@@ -1716,21 +2647,433 @@ def test_the_notify_job_merges_the_summary_artifacts_into_one_directory() -> Non
     assert "merge-multiple: true" in download_step.partition("\n      - ")[0]
 
 
-def test_the_notify_job_posts_every_payload_the_report_writes() -> None:
-    """`ci-report` writes an array of webhook payloads, one per pair and eval config, and each is a
-    whole message: posting only the first, or the array itself, would drop a suite's report on the
-    floor."""
+def test_the_notify_job_posts_every_thread_the_report_writes() -> None:
+    """The whole file goes to one command, which posts each thread and each reply under it: a step
+    that posted the payloads itself would have no message id to thread a reply under, and the scores
+    behind every grid live in those replies."""
     workflow_text = read_scheduled_workflow_text()
 
-    assert "jq -c '.[]' /tmp/slack-payloads.json > /tmp/slack-payloads.jsonl" in workflow_text
-    assert "done < /tmp/slack-payloads.jsonl" in workflow_text
+    assert "minds-evals post-slack-report \\\n            --payloads /tmp/slack-payloads.json" in workflow_text
+    assert '--channel "$SLACK_CHANNEL_ID"' in workflow_text
+    # Posting is guarded rather than trusted: the toolchain steps above it may have been skipped, and
+    # a notification must never turn the run red.
+    assert "::warning::minds-evals post-slack-report failed" in workflow_text
 
 
-def test_the_notify_job_falls_back_to_a_rejected_messages_own_text() -> None:
-    """A payload Slack refuses is most likely one carrying a block type the workspace cannot render.
-    Its `text` says everything its blocks do, so the message is posted rather than lost, and the
-    warning says which of the two happened."""
+def test_the_notify_job_fetches_both_slack_credentials_and_names_the_channel_in_the_open() -> None:
+    """The bot token is what the command prefers and the webhook is its fallback, so the job fetches
+    both. The channel id is not a secret: it names a channel and grants nothing, and where the report
+    lands is worth reading off the workflow."""
     workflow_text = read_scheduled_workflow_text()
 
-    assert "jq '{username, icon_emoji, text}' /tmp/slack-payload.json > /tmp/slack-fallback.json" in workflow_text
-    assert "::warning::Slack rejected the report's blocks" in workflow_text
+    assert "mngr/ci/{}".format(SLACK_BOT_TOKEN_ENV_VAR) in workflow_text
+    assert "mngr/ci/{}".format(SLACK_WEBHOOK_ENV_VAR) in workflow_text
+    assert "SLACK_CHANNEL_ID: C0BUFUVU0T0" in workflow_text
+
+
+def test_the_notify_job_writes_each_threads_message_and_its_replies_into_the_step_summary() -> None:
+    """The step summary is the whole report wherever Slack is not reachable, so it carries the
+    replies as well as the messages -- and the rendering-failure notice it writes in place of a
+    report is a thread like any other, or the command would refuse the file."""
+    workflow_text = read_scheduled_workflow_text()
+
+    assert "jq -r '.message.text'" in workflow_text
+    assert "jq -r '.replies[]? | .text + \"\\n\"'" in workflow_text
+    assert '\'[{message: {username: "Evals", icon_emoji: ":brainless:", text: $text}, replies: []}]\'' in workflow_text
+
+
+def write_green_pair_with_diagnostics(
+    tmp_path: Path,
+    summaries_dir: Path,
+    *,
+    fixture_trials: Sequence[DiagnosticTrialCheck] = (),
+    behaviour_trials: Sequence[DiagnosticTrialCheck] | None = None,
+    unsupported: Sequence[UnsupportedDiagnosticCell] = (),
+) -> Path:
+    """A pair whose one cell passed, with both of its diagnose jobs' summaries in place.
+
+    The cells are green throughout, so whatever the message says beyond the grid is the diagnostics'
+    doing and nothing else's.
+    """
+    matrix_path = tmp_path / "matrix.json"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [make_cell("main", "default", CellDecision.RUN)],
+        diagnosed_pairs=["main"],
+        diagnosed_harnesses=["codex"],
+        unsupported=unsupported,
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        tmp_path / "main-default-live",
+        harness_config=DEFAULT_HARNESS_CONFIG,
+    )
+    write_diagnostic_summary(diagnose_fixture_summary_path(summaries_dir, "main"), fixture_trials)
+    if behaviour_trials is not None:
+        write_diagnostic_summary(diagnose_behaviour_summary_path(summaries_dir, "main", "codex"), behaviour_trials)
+    return matrix_path
+
+
+def test_render_slack_report_carries_the_worst_diagnostics_verdict_on_the_pairs_opening_line(
+    tmp_path: Path,
+) -> None:
+    """The families and harnesses are named at the top, so a night without a measurement is never read
+    as a clean one from the opening line alone."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[
+            make_diagnostic_trial(DiagnosticVerdict.NOT_MEASURED, not_measured_reason="the workspace never came up")
+        ],
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
+    assert read_sections(message)[0].startswith(
+        ":white_check_mark: {} -- oracle passed; diagnostics not measured: behaviour codex".format(PAIR_LABEL)
+    )
+    assert "*diagnose behaviour codex* `behaviour`: not measured: the workspace never came up" in read_details(message)
+
+
+def test_render_slack_report_says_diagnostics_passed_without_naming_a_job(tmp_path: Path) -> None:
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED)],
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
+
+    assert "-- oracle passed; diagnostics passed\n" in read_sections(message)[0]
+    assert read_details(message) == ""
+
+
+def test_render_slack_report_fails_a_pair_whose_diagnostic_failed_and_rows_every_failing_fact(
+    tmp_path: Path,
+) -> None:
+    """A failed diagnostic is the instrument's own fault, so it fails the pair even with every cell
+    green; each failing fact is a row of its own, because the fact names the reader that regressed.
+
+    The count on the opening line is of the facts that missed, never of the ones a table held back:
+    a trial stopped early holds back everything it asserts, and counting those would turn one defect
+    into a number the size of the table."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                failed_facts=[
+                    make_fact_outcome("tools.every_call_has_one_result", FactStatus.FAILED, step_name="work")
+                ],
+                not_recorded_facts=[make_fact_outcome("probe.parsed", FactStatus.NOT_RECORDED, recorded=None)],
+                unmet_preconditions=[
+                    make_fact_outcome("progress.step_ids_agree", FactStatus.PRECONDITION_NOT_MET, recorded=None)
+                ],
+                unexpectedly_passing_facts=[
+                    make_fact_outcome(
+                        "transcript.agent_steps_with_model_name",
+                        FactStatus.UNEXPECTEDLY_PASSING,
+                        recorded="all",
+                        expected="none",
+                        known_failure=KnownFailure(issue=898),
+                    )
+                ],
+            )
+        ],
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- failed"
+    assert message.icon_emoji == UNGREEN_ICON_EMOJI
+    assert "diagnostics failed: behaviour codex (3 facts)" in read_sections(message)[0]
+    rows = read_failed_trials(message)
+    assert rows[0] == ("config", "case", "note")
+    assert [row[0] for row in rows[1:]] == ["diagnose behaviour codex"] * 3
+    assert rows[1][2] == "tools.every_call_has_one_result [work]: false vs expected true"
+    assert rows[3][2].startswith("unexpectedly passing: transcript.agent_steps_with_model_name")
+
+
+def test_render_slack_report_leaves_the_pairs_verdict_alone_for_a_known_or_unfollowed_diagnostic(
+    tmp_path: Path,
+) -> None:
+    """Only a failed diagnostic moves the pair. A known failure is expected every night it is declared,
+    and an agent that did not follow the prompt says nothing about the instrument."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.KNOWN,
+                case_id="fixture",
+                harness="claude",
+                known_facts=[
+                    make_fact_outcome("workers.captured", FactStatus.KNOWN, known_failure=KnownFailure(issue=873))
+                ],
+            )
+        ],
+        behaviour_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.NOT_FOLLOWED,
+                not_followed_facts=[
+                    make_fact_outcome("agent.worker_launched", FactStatus.NOT_FOLLOWED, step_name="work")
+                ],
+                unmet_preconditions=[
+                    make_fact_outcome("workers.discovered_equals_listed", FactStatus.PRECONDITION_NOT_MET)
+                ],
+            )
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(thread.message) == "minds-evals: main x eval-config-small -- passed"
+    assert thread.message.icon_emoji == GREEN_ICON_EMOJI
+    assert "diagnostics not followed: behaviour codex" in read_sections(thread.message)[0]
+    # The opening line names the job; the facts behind it are a reply, where a reader goes only once
+    # that line has told them to.
+    reply = read_diagnostics_reply(thread)
+    assert reply is not None
+    assert reply.text.splitlines()[0] == "*diagnostics detail*"
+    assert (
+        "*diagnose behaviour codex* `behaviour`: not followed: agent.worker_launched [work] "
+        "(1 dependent fact(s) not asserted)"
+    ) in reply.text
+    assert "*diagnose fixture* `fixture`: known: workers.captured (#873)" in reply.text
+    assert "known" not in read_details(thread.message)
+
+
+def test_render_slack_report_reads_a_diagnose_job_that_left_no_summary_as_broken(tmp_path: Path) -> None:
+    """The job gates nothing, so the details block is the only place its absence is said out loud."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=None,
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context(diagnose_behaviour_result="failure"))
+
+    assert read_header(message) == "minds-evals: main x eval-config-small -- passed"
+    assert "diagnostics broken: behaviour codex" in read_sections(message)[0]
+    assert "*diagnose behaviour codex* -- broken (no diagnostics summary" in read_details(message)
+    # The job's own red result is already explained by the line above, so it raises no second warning.
+    assert "diagnose-behaviour=failure" not in "\n".join(read_sections(message))
+
+
+def test_render_slack_report_names_a_behaviour_cell_the_pair_cannot_run(tmp_path: Path) -> None:
+    """No box is spent to produce a dark cell, so the report is where the missing measurement shows."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED)],
+        unsupported=[UnsupportedDiagnosticCell(pair="main", harness="pi-coding", reason="no pasted-key sign-in")],
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
+
+    assert "diagnostics passed (pi-coding unsupported)" in read_sections(message)[0]
+    assert "*diagnose behaviour* not run on this pair: pi-coding" in read_details(message)
+
+
+def test_render_slack_report_reports_the_diagnostics_of_a_pair_whose_every_cell_was_skipped(
+    tmp_path: Path,
+) -> None:
+    """An all-green night moves no SHA, which is exactly when the diagnostics are the only measurement
+    the run took."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("released", PairDecision.SKIP)],
+        [make_cell("released", "default", CellDecision.SKIP)],
+        diagnosed_pairs=["released"],
+        diagnosed_harnesses=["codex"],
+    )
+    write_diagnostic_summary(
+        diagnose_fixture_summary_path(summaries_dir, "released"),
+        [make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+    )
+    write_diagnostic_summary(
+        diagnose_behaviour_summary_path(summaries_dir, "released", "codex"),
+        [
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                failed_facts=[make_fact_outcome("manifest.readable", FactStatus.FAILED)],
+            )
+        ],
+    )
+
+    (message,) = render_messages(
+        matrix_path, summaries_dir, make_context(oracle_result="skipped", evaluate_result="skipped")
+    )
+
+    assert read_header(message) == "minds-evals: released -- failed"
+    assert "diagnostics failed: behaviour codex (1 fact)" in read_sections(message)[0]
+
+
+def test_render_slack_report_reports_no_diagnostics_on_a_run_that_stopped_after_the_oracle(
+    tmp_path: Path,
+) -> None:
+    """The diagnose jobs are skipped with the rest of the live pass, so nothing about them is claimed."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path,
+        [make_pair("main", PairDecision.RUN)],
+        [make_cell("main", "default", CellDecision.RUN)],
+        diagnosed_pairs=["main"],
+        diagnosed_harnesses=["codex"],
+        unsupported=[UnsupportedDiagnosticCell(pair="main", harness="pi-coding", reason="no pasted-key sign-in")],
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+
+    (message,) = render_messages(
+        matrix_path,
+        summaries_dir,
+        make_context(
+            is_live_pass_skipped=True,
+            evaluate_result="skipped",
+            diagnose_fixture_result="skipped",
+            diagnose_behaviour_result="skipped",
+        ),
+    )
+
+    assert "diagnostics" not in read_sections(message)[0]
+    assert read_details(message) == ""
+
+
+def test_render_slack_report_names_the_live_invariants_a_cells_own_trials_missed(tmp_path: Path) -> None:
+    """The reading turns "the readers are checked once a night on a fixture" into "on every real
+    trial", and it gates nothing: the cell and the pair stay exactly as their own pass made them."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "haiku", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        tmp_path / "main-haiku-live",
+        harness_config=HAIKU_HARNESS_CONFIG,
+    )
+    write_diagnostic_summary(
+        live_invariants_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        [
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                case_id="todo-app",
+                trial_name="todo-app__{}".format(index),
+                harness="claude",
+                failed_facts=[
+                    make_fact_outcome("prep.stage_reached", FactStatus.FAILED),
+                    *(
+                        [make_fact_outcome("steps.boundary_markers_match_case", FactStatus.FAILED)]
+                        if index == 0
+                        else []
+                    ),
+                ],
+            )
+            for index in range(3)
+        ],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(thread.message) == "minds-evals: main x eval-config-small -- passed"
+    reply = read_diagnostics_reply(thread)
+    assert reply is not None
+    assert reply.text.splitlines()[1:] == [
+        "*haiku* live invariants missed: prep.stage_reached (3 of 3 trials);"
+        " steps.boundary_markers_match_case (1 of 3 trials)"
+    ]
+    assert read_details(thread.message) == ""
+    assert read_failed_trials(thread.message) == ()
+
+
+def test_render_slack_report_says_nothing_of_a_cell_whose_trials_held_every_invariant(tmp_path: Path) -> None:
+    """The line exists to name a miss, so a cell that missed none gets no reply carrying one -- and
+    reads as clean rather than as one more line to skip past."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "haiku", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        tmp_path / "main-haiku-live",
+        harness_config=HAIKU_HARNESS_CONFIG,
+    )
+    write_diagnostic_summary(
+        live_invariants_summary_path(summaries_dir, "main", CONFIG_SLUG, "haiku"),
+        [make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="todo-app", harness="claude")],
+    )
+
+    (thread,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_diagnostics_reply(thread) is None
+    assert read_details(thread.message) == ""
+
+
+def test_render_slack_report_keeps_the_failures_table_within_slacks_row_cap(tmp_path: Path) -> None:
+    """A diagnostic lists every failing fact as a row of its own, so a broken reader can fail more facts
+    than a Slack table holds; the rows Slack refuses would take the whole message with them."""
+    summaries_dir = tmp_path / "summaries"
+    matrix_path = write_green_pair_with_diagnostics(
+        tmp_path,
+        summaries_dir,
+        fixture_trials=[make_diagnostic_trial(DiagnosticVerdict.PASSED, case_id="fixture", harness="claude")],
+        behaviour_trials=[
+            make_diagnostic_trial(
+                DiagnosticVerdict.FAILED,
+                failed_facts=[
+                    make_fact_outcome("fact.number_{}".format(index), FactStatus.FAILED) for index in range(150)
+                ],
+            )
+        ],
+    )
+
+    (message,) = render_messages(matrix_path, summaries_dir, make_context())
+
+    assert_within_slack_limits(message)
+    rows = read_failed_trials(message)
+    assert len(rows) == SLACK_TABLE_ROW_LIMIT
+    assert "showing 99 of 150 failing rows" in "\n".join(
+        element["text"] for block in read_blocks(message, "context") for element in block["elements"]
+    )
+
+
+def test_the_notify_job_waits_for_the_diagnose_jobs_and_passes_their_results() -> None:
+    """The report reads every diagnose summary of a pair, so a notify that did not wait for them would
+    report a pair whose diagnostics had not finished as one whose diagnostics left no summary."""
+    workflow_text = read_scheduled_workflow_text()
+
+    assert "needs: [resolve, oracle, evaluate, diagnose-fixture, diagnose-behaviour]" in workflow_text
+    assert '--diagnose-fixture-result "$DIAGNOSE_FIXTURE_RESULT"' in workflow_text
+    assert '--diagnose-behaviour-result "$DIAGNOSE_BEHAVIOUR_RESULT"' in workflow_text
+
+
+def test_the_live_invariants_never_decide_a_cells_own_verdict() -> None:
+    """The reading is what turns "the readers are checked once a night on a fixture" into "on every
+    real trial". A miss belongs in the report's details; letting its exit code reach the step would
+    make an invariant gate the product's own pass, which nothing in the spec asks for."""
+    workflow_text = read_scheduled_workflow_text()
+
+    check_step = workflow_text.partition("      - name: Check the live pass\n")[2].partition("\n      - ")[0]
+
+    assert check_step, "no live-pass check step in {}".format(SCHEDULED_WORKFLOW_PATH)
+    invariants_call = check_step.partition("minds-evals check-diagnostics")[2]
+    assert invariants_call, "the live pass is not read against the invariants"
+    assert "check_status" not in invariants_call.partition("\n          {")[0]
+    assert 'exit "$check_status"' in check_step

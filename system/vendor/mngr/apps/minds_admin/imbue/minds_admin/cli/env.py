@@ -112,6 +112,7 @@ from imbue.minds_admin.envs.providers.neon_db import create_neon_project
 from imbue.minds_admin.envs.providers.neon_db import create_snapshot_branch as real_create_neon_snapshot_branch
 from imbue.minds_admin.envs.providers.neon_db import delete_neon_branch as real_delete_neon_branch
 from imbue.minds_admin.envs.providers.neon_db import delete_neon_project
+from imbue.minds_admin.envs.providers.neon_db import neon_project_exists
 from imbue.minds_admin.envs.providers.neon_db import pool_hosts_migrations_dir
 from imbue.minds_admin.envs.providers.neon_db import resolve_default_branch_id as real_resolve_neon_default_branch_id
 from imbue.minds_admin.envs.providers.neon_db import (
@@ -399,6 +400,14 @@ def _delete_generation_id_for_provider(tier_vault_prefix: str, cg: ConcurrencyGr
     real_delete_generation_id(tier_vault_prefix, parent_concurrency_group=cg)
 
 
+def _neon_project_exists_for_provider(name: DevEnvName, org_id: str, api_token: SecretStr) -> bool:
+    return neon_project_exists(name, org_id=org_id, api_token=api_token)
+
+
+def _tear_down_pool_slices_for_provider(name: DevEnvName) -> None:
+    tear_down_env_pool_slices(str(name))
+
+
 def _cleanup_state_container_for_provider(name: DevEnvName, cg: ConcurrencyGroup) -> None:
     cleanup_env_state_container(name, parent_concurrency_group=cg)
 
@@ -415,6 +424,7 @@ def _build_real_providers() -> Providers:
         delete_modal_env=_delete_modal_env_for_provider,
         create_neon_project=_create_neon_for_provider,
         delete_neon_project=_delete_neon_for_provider,
+        neon_project_exists=_neon_project_exists_for_provider,
         create_supertokens_app=_create_supertokens_for_provider,
         delete_supertokens_app=_delete_supertokens_for_provider,
         read_per_env_secret_values=_read_per_env_secret_values_for_provider,
@@ -441,6 +451,7 @@ def _build_real_providers() -> Providers:
         await_apps_healthy=_await_apps_healthy_for_provider,
         destroy_mngr_agents=real_destroy_mngr_agents,
         delete_workspace_storage_prefix=real_delete_workspace_storage_prefix,
+        tear_down_pool_slices=_tear_down_pool_slices_for_provider,
         cleanup_state_container=_cleanup_state_container_for_provider,
         wipe_supertokens_app_data=_wipe_supertokens_for_provider,
         wipe_neon_db_schema=_wipe_neon_db_schema_for_provider,
@@ -1114,9 +1125,10 @@ def env_deactivate() -> None:
 
     Symmetric with :func:`env_activate`. Use as
     ``eval "$(uv run minds-admin env deactivate)"``. After sourcing, the shell
-    has no activated env -- ``minds run`` refuses to start until you
-    activate something, and ``mngr`` falls back to its own
-    ``~/.mngr/`` default.
+    has no activated env -- ``minds run`` targets production (the in-repo
+    production ``client.toml`` and ``~/.minds/``), ``minds-admin env deploy`` /
+    ``destroy`` refuse until you activate something, and ``mngr`` falls back
+    to its own ``~/.mngr/`` default.
     """
     _refuse_if_any_recover_target_exists()
     write_stdout_line('# Deactivate the current env. Source via: eval "$(uv run minds-admin env deactivate)"')
@@ -1541,14 +1553,6 @@ def env_destroy(ctx: click.Context, keep_agents: bool, stop_local_processes: boo
                 stop_env_local_processes(holders)
             except EnvLocalProcessesStillRunningError as exc:
                 raise click.ClickException(str(exc)) from exc
-
-        # Tear down the env's unleased pool slices on their bare-metal boxes BEFORE
-        # destroy_env deletes the per-env DB (after which the slice rows -- and thus
-        # the only record of which VMs to destroy -- are gone). Leased slices are torn
-        # down by destroy_env's agent-release path, so this targets only the baked pool
-        # backlog that would otherwise leak its VMs on shared boxes. Must-succeed: a
-        # box we cannot reach raises and stops the destroy rather than leaking.
-        tear_down_env_pool_slices(env_name)
 
         try:
             destroy_env(

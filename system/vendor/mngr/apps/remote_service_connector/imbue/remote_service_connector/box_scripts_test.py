@@ -16,6 +16,7 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import RESTORE_NO_PORTS
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import RESTORE_RESERVED_MARKER
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import TRANSFER_DIR_ROOT
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import TransferEnv
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import build_is_transfer_alive_command
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import build_launch_detached_command
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import parse_status_text
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import render_transfer_env
@@ -254,7 +255,7 @@ def test_cleanup_commands_kill_the_queued_transfer_and_roll_back_the_slot(tmp_pa
     transfer = tmp_path / TRANSFER_DIR_ROOT / _INSTANCE
     with ConcurrencyGroup(name="rollback") as cg:
         holder = _hold_lock(cg, env)
-        launch = build_launch_detached_command(_INSTANCE, "download.sh")
+        launch = build_launch_detached_command(_INSTANCE, "download.sh", "token-a")
         cg.run_process_to_completion(["bash", "-c", launch], env=env)
         transfer_pid = int((transfer / "pid").read_text())
         assert poll_until(lambda: _transfer_status(tmp_path).get("STAGE") == "waiting-for-lock"), (
@@ -309,3 +310,44 @@ def test_cleanup_commands_never_group_kill_a_reused_pid(tmp_path: Path) -> None:
         assert returncode == 0, stderr
         assert bystander.poll() is None
         bystander.terminate()
+
+
+@_linux_only
+def test_relaunch_under_a_new_token_kills_the_previous_transfer_and_resets_its_files(tmp_path: Path) -> None:
+    """A supervisor fenced out of the row leaves its transfer running on the box; the next launch
+    (under the takeover's token) must kill that pipeline and start from a clean transfer dir, and
+    the liveness probe must answer only for the token that launched the running script."""
+    env = _make_fake_box_home(tmp_path)
+    transfer = tmp_path / TRANSFER_DIR_ROOT / _INSTANCE
+    # A stand-in transfer script that parks with a pipeline child, like a stalled upload would.
+    (transfer / "upload.sh").write_text("sleep 300 | cat\n")
+    (transfer / "DATADISK.sha").write_text("stale-hash\n")
+    (transfer / "status").write_text("STAGE=uploading\nFINISHED=0\n")
+    with ConcurrencyGroup(name="relaunch") as cg:
+        cg.run_process_to_completion(
+            ["bash", "-c", build_launch_detached_command(_INSTANCE, "upload.sh", "token-a")], env=env
+        )
+        first_pid = int((transfer / "pid").read_text())
+        assert (transfer / "token").read_text() == "token-a"
+        assert not (transfer / "DATADISK.sha").exists()
+        assert not (transfer / "status").exists()
+        assert poll_until(lambda: _is_process_running(first_pid)), "first transfer never started"
+
+        def is_alive(token: str) -> bool:
+            probe = build_is_transfer_alive_command(_INSTANCE, token)
+            return cg.run_process_to_completion(["bash", "-c", probe], env=env, is_checked_after=False).returncode == 0
+
+        assert is_alive("token-a")
+        assert not is_alive("token-b")
+
+        cg.run_process_to_completion(
+            ["bash", "-c", build_launch_detached_command(_INSTANCE, "upload.sh", "token-b")], env=env
+        )
+        second_pid = int((transfer / "pid").read_text())
+        assert second_pid != first_pid
+        assert poll_until(lambda: not _is_process_running(first_pid)), "the fenced-out transfer survived the relaunch"
+        assert (transfer / "token").read_text() == "token-b"
+        assert is_alive("token-b")
+        assert not is_alive("token-a")
+        # Relaunching under the same token leaves nothing to kill but still resets; tidy up.
+        os.killpg(second_pid, 15)

@@ -230,7 +230,7 @@ def _build_agent_details_from_online_agent(
         type=str(agent.agent_type),
         command=agent.get_command(),
         work_dir=agent.work_dir,
-        initial_branch=agent.get_created_branch_name(),
+        initial_branch=agent.get_checked_out_branch_name(),
         create_time=agent.create_time,
         start_on_boot=agent.get_is_start_on_boot(),
         state=lifecycle.state,
@@ -267,7 +267,7 @@ def build_agent_details_from_offline_ref(
         # surfaced via to_offline_host with no certified data).
         command=agent_ref.command or CommandString("(unknown)"),
         work_dir=agent_ref.work_dir or Path("/"),
-        initial_branch=agent_ref.created_branch_name,
+        initial_branch=agent_ref.checked_out_branch_name,
         create_time=create_time,
         start_on_boot=agent_ref.start_on_boot,
         state=AgentLifecycleState.STOPPED,
@@ -646,8 +646,10 @@ class ProviderInstanceInterface(MutableModel, ABC):
         Returns ``None`` by default, meaning the externally-routable port is also
         the outer-host-loopback port (callers fall back to that). Providers whose
         topology splits publish from connect (e.g. imbue_cloud slices) override
-        this so a service running *on the outer host* (the VPS-resident latchkey
-        gateway) can reverse-tunnel into the container on the correct port.
+        this so a service running *on the outer host* that still has to
+        reverse-tunnel into the container (the VPS-resident latchkey gateway, for
+        a container that predates its docker-bridge route) does so on the
+        correct port.
         """
         return None
 

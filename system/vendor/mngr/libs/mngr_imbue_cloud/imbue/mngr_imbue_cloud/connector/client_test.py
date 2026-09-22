@@ -39,10 +39,13 @@ from imbue.mngr_imbue_cloud.errors import ImbueCloudShareError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncConflictError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudUnreachableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudWorkspaceHeldError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudWorkspaceRetiredError
 from imbue.mngr_imbue_cloud.errors import WORKSPACE_HELD_MESSAGE
+from imbue.mngr_imbue_cloud.errors import WORKSPACE_RETIRED_MESSAGE
 from imbue.mngr_imbue_cloud.errors import WorkspaceHasNoStopError
 from imbue.mngr_imbue_cloud.errors import WorkspaceStopKindRouteUnavailableError
 from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
+from imbue.mngr_imbue_cloud.errors import workspace_hold_message_in
 from imbue.mngr_imbue_cloud.wire_types import LiteLLMKeyInfo
 from imbue.mngr_imbue_cloud.wire_types import LiteLLMKeyMaterial
 from imbue.mngr_imbue_cloud.wire_types import SyncKeyBundle
@@ -57,6 +60,11 @@ def _make_client(handler) -> tuple[ImbueCloudConnectorClient, httpx.MockTranspor
     # Patch httpx module-level functions to use the transport for the duration of the test.
     # The client uses module-level httpx.* calls; intercept them via monkeypatch in tests.
     return ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com")), transport
+
+
+def _auth_upstream_unavailable_response(message: str) -> httpx.Response:
+    """The connector's structured 503 for a SuperTokens core outage mid-session-check."""
+    return httpx.Response(503, json={"detail": {"code": "auth_upstream_unavailable", "message": message}})
 
 
 def _install_fake_transport(monkeypatch: pytest.MonkeyPatch, handler) -> None:
@@ -81,6 +89,19 @@ def test_lease_host_503_raises_unavailable(monkeypatch: pytest.MonkeyPatch) -> N
     client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
     with pytest.raises(ImbueCloudLeaseUnavailableError):
         client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=2), "ssh-ed25519 AAAA", "my-host")
+
+
+def test_lease_host_auth_upstream_unavailable_503_is_not_pool_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connector's structured auth-outage 503 on the lease route is the retryable unreachable error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _auth_upstream_unavailable_response("The authentication service answered 502")
+
+    _install_fake_transport(monkeypatch, handler)
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
+    with pytest.raises(ImbueCloudUnreachableError, match="answered 502") as exc_info:
+        client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=2), "ssh-ed25519 AAAA", "my-host")
+    assert not isinstance(exc_info.value, ImbueCloudLeaseUnavailableError)
 
 
 def test_lease_host_success_parses_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -374,6 +395,19 @@ def test_get_bucket_info_not_found_raises(monkeypatch: pytest.MonkeyPatch) -> No
 
     client = _install_mock_httpx(monkeypatch, handler)
     with pytest.raises(ImbueCloudBucketNotFoundError):
+        client.get_bucket_info(SecretStr("tok"), "data")
+
+
+def test_bucket_route_auth_upstream_unavailable_503_raises_the_unreachable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bucket ladder maps the connector's structured auth-outage 503 like every other route, not to a bucket error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _auth_upstream_unavailable_response("The authentication service answered 502")
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudUnreachableError, match="answered 502"):
         client.get_bucket_info(SecretStr("tok"), "data")
 
 
@@ -920,6 +954,35 @@ def test_list_hosts_exhausted_retries_raise_the_typed_unreachable_error(monkeypa
     assert "could not reach the imbue_cloud connector" in str(exc_info.value)
 
 
+def test_auth_upstream_unavailable_503_raises_the_unreachable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connector's structured auth-outage 503 reads like not reaching the connector, never like a sign-out."""
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return _auth_upstream_unavailable_response(
+            "The authentication service answered 502 for /recipe/session/verify; retry shortly."
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudUnreachableError, match="retry shortly"):
+        client.list_workspaces(SecretStr("tok"))
+    assert call_count == 1
+
+
+def test_plain_503_without_the_structured_code_keeps_the_generic_connector_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"detail": "some other outage"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudConnectorError) as exc_info:
+        client.list_workspaces(SecretStr("tok"))
+    assert not isinstance(exc_info.value, ImbueCloudUnreachableError)
+
+
 def test_list_hosts_does_not_retry_auth_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """A 401 is a response, not a transport failure: fail fast with the auth type,
     exactly one request on the wire."""
@@ -1211,9 +1274,7 @@ def test_sync_records_auth_error_raises(monkeypatch: pytest.MonkeyPatch) -> None
         client.list_sync_records(SecretStr("bad"))
 
 
-# ---------------------------------------------------------------------------
 # create_litellm_key_rotating_on_exists
-# ---------------------------------------------------------------------------
 
 
 class _RotationScriptedConnectorClient(ImbueCloudConnectorClient):
@@ -1349,9 +1410,7 @@ def test_rotating_create_errors_when_no_listable_key_matches_the_alias() -> None
     assert client.create_call_count == 1
 
 
-# ---------------------------------------------------------------------------
 # Shares (self-hosted relays)
-# ---------------------------------------------------------------------------
 
 _SHARE_HOST_ID = "host-" + "a" * 32
 _SHARE_DOMAIN = _SHARE_HOST_ID + "." + "b" * 32 + ".us1.imbueminds.com"
@@ -1684,9 +1743,7 @@ def test_list_shares_parses_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     assert items[0].state == "inactive"
 
 
-# ----------------------------------------------------------------------
 # Browser-login support probe + device-token exchange
-# ----------------------------------------------------------------------
 
 
 def _make_transport_client(handler) -> ImbueCloudConnectorClient:
@@ -1902,6 +1959,25 @@ def test_start_workspace_surfaces_an_operator_hold_as_the_typed_error(monkeypatc
     with pytest.raises(ImbueCloudWorkspaceHeldError) as excinfo:
         client.start_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
     assert str(excinfo.value) == WORKSPACE_HELD_MESSAGE
+
+
+def test_start_workspace_surfaces_a_retired_workspace_as_the_retired_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409, json={"detail": {"code": "workspace_retired", "message": WORKSPACE_RETIRED_MESSAGE}}
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudWorkspaceRetiredError) as excinfo:
+        client.start_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
+    # A hold for every caller that stands down for one, with its own sentence.
+    assert isinstance(excinfo.value, ImbueCloudWorkspaceHeldError)
+    assert str(excinfo.value) == WORKSPACE_RETIRED_MESSAGE
+    assert str(ImbueCloudWorkspaceRetiredError("")) == WORKSPACE_RETIRED_MESSAGE
+    assert str(ImbueCloudWorkspaceRetiredError("archived")) == f"{WORKSPACE_RETIRED_MESSAGE} (archived)"
+    assert workspace_hold_message_in(f"error: {WORKSPACE_RETIRED_MESSAGE}") == WORKSPACE_RETIRED_MESSAGE
+    assert workspace_hold_message_in(f"error: {WORKSPACE_HELD_MESSAGE}") == WORKSPACE_HELD_MESSAGE
+    assert workspace_hold_message_in("error: no capacity") is None
 
 
 def test_admin_start_reports_a_parked_rows_hold_as_a_plain_connector_refusal(monkeypatch: pytest.MonkeyPatch) -> None:

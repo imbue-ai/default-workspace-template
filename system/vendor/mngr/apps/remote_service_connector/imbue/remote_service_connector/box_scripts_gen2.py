@@ -123,6 +123,8 @@ SLICE_DIR="{GEN2_INSTANCES_DIR}/$WS_INSTANCE"
 
 upload_one() {{
     local src="$1" object="$2" name="$3"
+    # This run's readings only: an earlier run's tap must never be read as ours.
+    rm -f "$TD/$name.sha" "$TD/$name.bytes"
     zstd -q -T0 -c "$src" \\
         | age -e -r "$WS_AGE_RECIPIENT" \\
         | tee >(sha256sum | awk '{{print $1}}' > "$TD/$name.sha") >(wc -c | tr -d ' ' > "$TD/$name.bytes") \\

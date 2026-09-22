@@ -332,6 +332,105 @@ minds-test-electron-menu *args:
     cd apps/minds
     xvfb-run -a pnpm exec playwright test --config=test/e2e/playwright.config.js context-menu.spec.js {{args}}
 
+# Type-check and test apps/minds_evals. It is a standalone uv project, not a
+# workspace member (see the root [tool.uv.workspace].exclude), so it has its own
+# lock and venv: the root `uv sync --all-packages`, `just test-quick`, `just
+# test-offload` and the root `ty check` all skip it, and this recipe is the only
+# thing that runs its suite. `--locked` fails rather than silently re-resolving,
+# so a pyproject edit without a matching `uv lock` is caught here.
+#
+# CI caps each pytest session at 150 s, and the tests marked `chromium` (a real
+# headless Chromium each, seconds apiece) would take most of that budget on
+# their own. So a run with no args is two sessions: the rest of the suite, then
+# the chromium tests, each with its own budget; the second appends to the
+# first's coverage data, so its report covers the whole suite. Given args (a
+# path, a node id, a -m), the recipe runs the one session they select.
+#
+# The chromium session's budget is 300 s rather than CI's 150 s. Its time is
+# spent in waits the flow runner makes on purpose (a settle window, a fresh
+# process per step), which stretch with the runner's load rather than with the
+# code under test, and a session that overruns the cap fails with no failing
+# test to point at.
+[group("minds evals")]
+test-minds-evals args="":
+  #!/usr/bin/env bash
+  set -uo pipefail
+  cd apps/minds_evals
+  uv sync --locked || exit 1
+  uv run ty check || exit 1
+  if [ -n {{quote(args)}} ]; then
+    exec uv run pytest {{_minds_evals_parallel}} {{args}}
+  fi
+  uv run pytest {{_minds_evals_parallel}} -m "not release and not chromium"
+  rest_exit_code=$?
+  PYTEST_MAX_DURATION_SECONDS="${PYTEST_MAX_DURATION_SECONDS:-300}" uv run pytest {{_minds_evals_parallel}} -m "not release and chromium" --cov-append
+  chromium_exit_code=$?
+  [ "$rest_exit_code" -eq 0 ] && [ "$chromium_exit_code" -eq 0 ]
+
+# Run the minds_evals suite `passes` times, plus `stressed_passes` more with every core kept
+# busy, and merge the passes into test-results/junit.xml with one testcase per attempt -- the
+# shape an offload run with retries leaves behind. The suite has no retrying runner, so this is
+# what tells a flaky test (failed in some passes) from a broken one (failed in all of them); the
+# recipe fails only for the broken kind, and for a session that never produced a junit. The
+# stressed passes come last, so in the report a test's highest attempts are the starved ones:
+# a test that fails only there has a real-time budget a busy runner can use up.
+#
+# The sessions run under coverage like the PR job's, although nothing reads the data: the point is
+# to draw the flakes a PR would, and the tracer's weight is part of the timing a PR runs with.
+#
+# Each session gets a 15 minute budget in place of CI's 150 s cap: the cap polices how long the
+# suite takes on a PR, and here a slow pass is the point rather than a failure.
+[group("minds evals")]
+test-minds-evals-repeat passes="5" stressed_passes="1":
+  #!/usr/bin/env bash
+  set -uo pipefail
+  repo_root="$PWD"
+  passes_dir="$repo_root/test-results/minds-evals-passes"
+  rm -rf "$passes_dir" "$repo_root/test-results/junit.xml"
+  mkdir -p "$passes_dir"
+  cd apps/minds_evals
+  uv sync --locked || exit 1
+  rm -f .test_output/flaky_tests_*.txt
+  export PYTEST_MAX_DURATION_SECONDS=900
+  total_passes=$(( {{passes}} + {{stressed_passes}} ))
+  hog_pids=()
+  # An interrupted stressed pass must not leave its busy loops spinning on a developer's machine.
+  trap 'for hog_pid in ${hog_pids[@]+"${hog_pids[@]}"}; do kill "$hog_pid" 2>/dev/null; done' EXIT
+  for pass in $(seq 1 "$total_passes"); do
+    hog_pids=()
+    if [ "$pass" -gt {{passes}} ]; then
+      for _ in $(seq 1 "$(getconf _NPROCESSORS_ONLN)"); do
+        ( while :; do :; done ) &
+        hog_pids+=("$!")
+      done
+    fi
+    label="$(printf 'pass-%02d' "$pass")"
+    uv run pytest {{_minds_evals_parallel}} -m "not release and not chromium" --junitxml="$passes_dir/$label-rest.xml"
+    uv run pytest {{_minds_evals_parallel}} -m "not release and chromium" --cov-append --junitxml="$passes_dir/$label-chromium.xml"
+    for hog_pid in ${hog_pids[@]+"${hog_pids[@]}"}; do
+      kill "$hog_pid"
+    done
+  done
+  # The manifest names tests relative to this project; the merged junit names them from the repo
+  # root. They land beside the passes rather than in test-results/ directly: the reader's glob
+  # (test-results/**/flaky_tests_*.txt) reaches either way, and only this directory is cleared per
+  # run, so a previous run's manifest cannot report a test that is no longer marked flaky.
+  for manifest in .test_output/flaky_tests_*.txt; do
+    [ -f "$manifest" ] && sed "s|^|apps/minds_evals/|" "$manifest" > "$passes_dir/$(basename "$manifest")"
+  done
+  cd "$repo_root"
+  expected_junits=()
+  for pass in $(seq 1 "$total_passes"); do
+    label="$(printf 'pass-%02d' "$pass")"
+    expected_junits+=("$passes_dir/$label-rest.xml" "$passes_dir/$label-chromium.xml")
+  done
+  python3 scripts/junit_merge_passes.py --pass-junit "${expected_junits[@]}" --path-prefix apps/minds_evals --output test-results/junit.xml
+
+# Sized for CI's two-vCPU runner rather than taken from `_parallel`: workers
+# beyond the core count spend the session importing the suite in parallel and
+# starve each other's Chromium.
+_minds_evals_parallel := "-n 2 --dist=worksteal --max-worker-restart=0"
+
 # Generate a harbor task dataset from a minds eval config (one task per persona
 # case). Datasets default OUTSIDE the repo tree: each generated task embeds a
 # full mngr-internal clone, which must not sit under the repo's apps/ scan (it
@@ -920,9 +1019,11 @@ destroy-bugsink-instance instance_id:
 # shell's default node. Installs the pinned pnpm (engines.pnpm in
 # apps/minds/package.json) into that Node when missing or mismatched: npm
 # globals are per-Node-version under nvm, so a fresh Node install has no pnpm.
-# Run this once before `just minds-start`; `minds-start` points here when
-# node_modules is missing. Never installs Node itself (errors with a hint if
-# the pinned version isn't available via nvm).
+# `just minds-start` installs node_modules itself (via start-desktop.sh, which
+# refuses to install pnpm), so this recipe is for getting the pinned pnpm onto
+# a fresh machine and for the recipes that run pnpm directly
+# (minds-test-electron-menu, minds-build). Never installs Node itself (errors
+# with a hint if the pinned version isn't available via nvm).
 [group("minds install")]
 minds-install:
     #!/bin/bash
@@ -1024,34 +1125,17 @@ minds-start branch="" default_workspace_template="" debug_port="":
     echo "MINDS_WORKSPACE_BRANCH=$MINDS_WORKSPACE_BRANCH"
     echo "$$" > "$pid_file"
     trap 'rm -f "$pid_file"' EXIT
-    # Bail with a copy-pasteable install + build hint if the electron
-    # node_modules tree isn't there yet. `pnpm start` would otherwise
-    # die with a confusing "electron: not found" + WARN-about-missing-
-    # node_modules message.
-    if [ ! -x "apps/minds/node_modules/.bin/electron" ]; then
-        echo "" >&2
-        echo "error: minds desktop client isn't installed/built yet in this worktree." >&2
-        echo "       Run:" >&2
-        echo "         just minds-install" >&2
-        echo "       (~2 min on first run; subsequent rebuilds are seconds)." >&2
-        echo "       Then re-run \`just minds-start\`." >&2
-        exit 2
-    fi
     if [ -n "{{debug_port}}" ]; then
         # Read by electron/main.js, which appends Chromium's
         # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
         export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
         echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
     fi
-    # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
-    # engine-strict check passes regardless of the shell's default node.
-    . apps/minds/scripts/select_node_version.sh || exit 2
-    # Build the SPA the app server actually serves. `pnpm start` only builds
-    # the legacy JinjaX stylesheet; static/ui/ is produced at wheel-build time
-    # and is gitignored, so without this a dev run serves whatever bundle
-    # happened to be built last -- or 404s on a fresh worktree.
-    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
-    cd apps/minds && pnpm start
+    # The shared launcher selects the pinned Node, syncs the Electron deps, and
+    # runs `pnpm start` (whose prestart builds the UI bundle the app serves).
+    # Run as a child, not exec'd, so the EXIT trap above still removes the
+    # PID file when the app exits.
+    apps/minds/scripts/start-desktop.sh
 
 # Launch the minds desktop client (electron) in dev mode against the
 # activated env for testing the IMBUE_CLOUD provider against pre-baked pool
@@ -1108,26 +1192,15 @@ minds-start-cloud debug_port="":
     unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
     echo "$$" > "$pid_file"
     trap 'rm -f "$pid_file"' EXIT
-    if [ ! -x "apps/minds/node_modules/.bin/electron" ]; then
-        echo "" >&2
-        echo "error: minds desktop client isn't installed/built yet in this worktree." >&2
-        echo "       Run \`just minds-install\` first, then re-run \`just minds-start-cloud\`." >&2
-        exit 2
-    fi
     if [ -n "{{debug_port}}" ]; then
         # Read by electron/main.js, which appends Chromium's
         # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
         export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
         echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
     fi
-    # Put apps/minds's pinned Node (.nvmrc) first on PATH so pnpm's
-    # engine-strict check passes regardless of the shell's default node.
-    . apps/minds/scripts/select_node_version.sh || exit 2
-    # Build the SPA the app server actually serves, same as minds-start:
-    # `pnpm start` only launches electron, and static/ui/ is gitignored
-    # (produced at wheel-build time), so a fresh worktree would 404 without this.
-    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
-    cd apps/minds && pnpm start
+    # Same shared launcher as minds-start; a child rather than exec so the
+    # EXIT trap above still removes the PID file.
+    apps/minds/scripts/start-desktop.sh
 
 # Stop the minds desktop client started in this worktree by `just minds-start`
 # or `just minds-start-cloud` (both share this worktree-keyed PID file).

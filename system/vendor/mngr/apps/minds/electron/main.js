@@ -1,9 +1,9 @@
 const { BrowserWindow, Menu, Notification, clipboard, dialog, ipcMain, net, shell, app, session, screen, nativeImage, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const paths = require('./paths');
-const { initElectronLogging } = require('./logger');
+const { initElectronLogging, closeElectronLogging } = require('./logger');
 const { initConsoleCapture, recordConsoleMessage, closeConsoleCapture } = require('./console-capture');
 const { initSentry, captureManualReport } = require('./sentry');
 const { runEnvSetup } = require('./env-setup');
@@ -11,9 +11,24 @@ const { isSecretStartupLogLine } = require('./startup-log');
 const { startBackend, shutdown, getBackendProcess } = require('./backend');
 const { decideStartupRoute } = require('./startup-routing');
 const { deeplinkTargetPath, extractDeeplinkUrlFromArgv } = require('./deeplink');
+const {
+  SCHEME_MIME_TYPE,
+  DESKTOP_ENTRY_FILENAME,
+  ICON_PIXEL_SIZE,
+  desktopEntryPaths,
+  renderDesktopEntry,
+} = require('./linux-desktop-entry');
+const {
+  NO_SANDBOX_SWITCH,
+  decideSandboxRelaunch,
+  detectSandboxAvailability,
+  isSandboxRelaunched,
+} = require('./linux-sandbox');
+const { startRelaunchAfterExit } = require('./linux-relaunch');
 // Workspace-URL classification lives in ./surface-routing so it can be
 // unit-tested under plain node (main.js can't be required outside Electron).
-const { parseWorkspaceId, parseSpaWorkspaceRouteId } = require('./surface-routing');
+const { parseWorkspaceId } = require('./surface-routing');
+const { linkFallbackFor, nativeNotificationOptionsFor, routeNotificationClick } = require('./notifications');
 const { shouldWriteSessionState, createDebouncedSaver, isSameSavedWindow } = require('./session-persistence');
 const updater = require('./updater');
 const { removeLegacyNameDirs } = require('./legacy-name-cleanup');
@@ -40,6 +55,45 @@ const { registerContextMenuFor } = require('./context-menu');
 // Tee console output into ~/.minds/logs/electron.log and record uncaught
 // main-process failures BEFORE anything else runs.
 initElectronLogging();
+
+// A Linux launch with a --no-sandbox the sandbox did not need (see
+// linux-sandbox.js) is corrected here, before anything else starts.
+const launchArgs = process.argv.slice(1);
+const sandboxRelaunch = decideSandboxRelaunch({
+  platform: process.platform,
+  isPackaged: app.isPackaged,
+  args: launchArgs,
+  detectAvailability: () => detectSandboxAvailability(process.execPath),
+});
+if (sandboxRelaunch.action === 'relaunch') {
+  console.log(`[sandbox] Relaunching without ${NO_SANDBOX_SWITCH}: ${sandboxRelaunch.reason}`);
+  // Not app.relaunch: its relauncher helper would hand the replacement
+  // no_new_privs, and with that flag no .deb update can ever run pkexec (see
+  // linux-relaunch.js). The replacement waits for this process to exit.
+  const replacement = startRelaunchAfterExit({
+    pid: process.pid,
+    executablePath: process.execPath,
+    args: sandboxRelaunch.args,
+  });
+  // Exiting before the event loop has flushed electron.log's async stream
+  // would lose the lines logged here, so the exit waits for the flush, and
+  // the flush waits for the spawn's outcome ('spawn' or 'error', both
+  // delivered on a later tick) so a failure is on disk too. The rest of this
+  // module belongs to the relaunched process, not this one.
+  replacement.once('spawn', () => {
+    closeElectronLogging().then(() => app.exit(0));
+  });
+  replacement.once('error', (err) => {
+    console.error(`[sandbox] Could not start the replacement process: ${err.message}`);
+    closeElectronLogging().then(() => app.exit(1));
+  });
+  return;
+}
+if (launchArgs.includes(NO_SANDBOX_SWITCH)) {
+  console.log(`[sandbox] Running without the Chromium sandbox: ${sandboxRelaunch.reason}`);
+} else if (isSandboxRelaunched(launchArgs)) {
+  console.log(`[sandbox] Running with the Chromium sandbox after relaunching without ${NO_SANDBOX_SWITCH}`);
+}
 
 // Open the rolling renderer-console tail beside it, so every window created
 // below has somewhere to record what its page printed.
@@ -444,6 +498,7 @@ function createBundle() {
     chromeLoadRetryCount: 0,
     chromeLoadRetryPendingUrl: null,
     chromeLoadFailedUrl: null,
+    pendingNotificationEntries: [],
     showInactiveOnFirstShow: false,
     _maximizedByUs: false,
     _boundsBeforeMaximize: null,
@@ -487,11 +542,22 @@ function createBundle() {
 function wireBundleWindowEvents(bundle) {
   const { window: win } = bundle;
 
+  // Relay every focus and blur to the page: the renderer only sees the
+  // top-level window's own focus events while keyboard focus sits in the
+  // chrome document, so with focus inside the workspace iframe a switch to
+  // another app and back goes unseen there. Main's window events fire
+  // reliably, and the backend's OS-banner gate reads the page's report.
+  const relayFocus = (isFocused) => {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+    try { win.webContents.send('window-focus-changed', isFocused); } catch { /* noop */ }
+  };
   win.on('focus', () => {
     const idx = mruWindows.indexOf(bundle);
     if (idx >= 0) mruWindows.splice(idx, 1);
     mruWindows.unshift(bundle);
+    relayFocus(true);
   });
+  win.on('blur', () => relayFocus(false));
 
   win.on('maximize', () => { bundle._maximizedByUs = true; });
   win.on('unmaximize', () => { bundle._maximizedByUs = false; });
@@ -692,8 +758,8 @@ function registerShortcutsFor(bundle, wc) {
       try { wc.send('escape-pressed'); } catch { /* noop */ }
       return;
     }
-    // Cmd+W (macOS) / Ctrl+W closes the active dockview tab INSIDE the
-    // displayed workspace, not the window. before-input-event sees the
+    // Cmd+W (macOS) / Ctrl+W closes the focused window INSIDE the
+    // displayed workspace, not the Electron window. before-input-event sees the
     // keystroke even when focus is inside the workspace iframe; the chrome
     // page relays it into the workspace through the embed contract.
     const closeTabCombo = isMac
@@ -729,7 +795,7 @@ function applyExternalLinkHandling(wc) {
     setImmediate(() => {
       shell.openExternal(url).catch((err) => {
         console.warn('[external-link] failed to open', url, err);
-        notifyOpenFailed(url);
+        notifyOpenFailed(url, wc);
       });
     });
   };
@@ -747,23 +813,18 @@ function applyExternalLinkHandling(wc) {
   });
 }
 
-function notifyOpenFailed(url) {
-  let scheme = '';
+// The address is copied either way; the explanation is an in-app toast in
+// the window the click happened in (never a system notification: nothing
+// left the app, and the reader is right there).
+function notifyOpenFailed(url, wc) {
+  const fallback = linkFallbackFor(url);
+  clipboard.writeText(fallback.clipboardText);
+  if (!wc || wc.isDestroyed()) return;
   try {
-    scheme = new URL(url).protocol.replace(':', '');
-  } catch {
-    // Unparseable url -- fall through with an empty scheme and copy verbatim.
+    wc.send('show-toast', { title: fallback.title, body: fallback.body });
+  } catch (err) {
+    console.warn('[external-link] could not show the fallback toast:', err && err.message);
   }
-  const isAddressScheme = scheme === 'mailto' || scheme === 'tel';
-  const payload = isAddressScheme ? url.slice(url.indexOf(':') + 1) : url;
-  clipboard.writeText(payload);
-  const what = scheme === 'mailto' ? 'email address'
-    : scheme === 'tel' ? 'phone number'
-    : 'link';
-  new Notification({
-    title: "Couldn't open link",
-    body: `No app is set up to handle this ${what}. It has been copied to your clipboard.`,
-  }).show();
 }
 
 function wireBundleShowLogic(bundle) {
@@ -1389,6 +1450,24 @@ function postStopStateContainer() {
   });
 }
 
+/**
+ * A quit-time question, owned by the window it is about.
+ *
+ * Owned, the dialog stays above that window whatever brings the window
+ * forward meanwhile (another launch of the app, a notification click);
+ * unowned, one such raise hides it, and a quit that is waiting on it looks
+ * like a hang. The window is brought forward first: an owned dialog is
+ * attached to its window (a sheet on macOS), so one attached to a minimized
+ * or hidden window would be just as invisible. With no window left there is
+ * nothing to own it.
+ */
+function showQuitPrompt(options) {
+  const bundle = getMostRecentWindow();
+  if (!bundle) return dialog.showMessageBox(options);
+  focusBundle(bundle);
+  return dialog.showMessageBox(bundle.window, options);
+}
+
 async function stopAllWorkspacesThenDecide(running) {
   let remaining = running;
   while (true) {
@@ -1403,7 +1482,7 @@ async function stopAllWorkspacesThenDecide(running) {
     }
     const blocked = stillRunning.length > 0 ? stillRunning : remaining;
     const names = blocked.map((workspace) => workspace.name).join(', ');
-    const { response } = await dialog.showMessageBox({
+    const { response } = await showQuitPrompt({
       type: 'warning',
       buttons: ['Cancel quit', 'Quit anyway', 'Retry'],
       defaultId: 2,
@@ -1421,7 +1500,7 @@ async function promptWorkspaceShutdown() {
   if (!getBackendProcess() || !backendBaseUrl) return { proceed: true, stop: false, running: [] };
   const { ok, running } = await getRunningWorkspaces();
   if (!ok) {
-    const { response } = await dialog.showMessageBox({
+    const { response } = await showQuitPrompt({
       type: 'warning',
       buttons: ['Cancel', 'Quit anyway'],
       defaultId: 1,
@@ -1436,7 +1515,7 @@ async function promptWorkspaceShutdown() {
   console.log('[workspace-shutdown] prompt: running workspaces =', JSON.stringify(running));
   if (running.length === 0) return { proceed: true, stop: false, running: [] };
   const names = running.map((workspace) => workspace.name).join(', ');
-  const { response } = await dialog.showMessageBox({
+  const { response } = await showQuitPrompt({
     type: 'question',
     buttons: ['Cancel', 'Leave running', 'Shut down all'],
     defaultId: 2,
@@ -1558,12 +1637,57 @@ if (!gotLock) {
   app.whenReady().then(onReady);
 }
 
+/**
+ * Register the running AppImage with the desktop: a menu entry, its icon, and
+ * the minds:// scheme handler, none of which an AppImage gets from an
+ * installer. Runs on every packaged Linux launch that has `APPIMAGE` set (the
+ * AppImage runtime's name for the file being run), so the entry follows the
+ * file after an in-place update renames it. Best effort throughout: a failure
+ * leaves the app without a menu entry, which is the state it started in.
+ */
+function registerAppImageDesktopEntry() {
+  if (process.platform !== 'linux' || !app.isPackaged) return;
+  const appImagePath = process.env.APPIMAGE;
+  if (!appImagePath) return;
+  const { applicationsDir, desktopEntryPath, iconPath } = desktopEntryPaths({
+    homeDir: app.getPath('home'),
+    xdgDataHome: process.env.XDG_DATA_HOME,
+  });
+  try {
+    fs.mkdirSync(applicationsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(iconPath), { recursive: true });
+    const iconSourcePath = path.join(__dirname, 'assets', 'icon.png');
+    const icon = nativeImage.createFromPath(iconSourcePath);
+    // createFromPath answers an unreadable file with an empty image rather
+    // than an error, which would otherwise be written out as an empty PNG.
+    if (icon.isEmpty()) throw new Error(`could not read the icon at ${iconSourcePath}`);
+    fs.writeFileSync(iconPath, icon.resize({ width: ICON_PIXEL_SIZE, height: ICON_PIXEL_SIZE }).toPNG());
+    fs.writeFileSync(desktopEntryPath, renderDesktopEntry({ appImagePath, productName: app.name }));
+    console.log(`[desktop-entry] wrote ${desktopEntryPath} for ${appImagePath}`);
+  } catch (err) {
+    console.warn(`[desktop-entry] could not write the AppImage desktop entry: ${err.message}`);
+    return;
+  }
+  // The database refresh is what makes the menu entry appear without a
+  // re-login; the mime default is what routes minds:// links here. Either
+  // tool may be absent on a minimal desktop, which is not worth an error.
+  for (const [command, args] of [
+    ['update-desktop-database', [applicationsDir]],
+    ['xdg-mime', ['default', DESKTOP_ENTRY_FILENAME, SCHEME_MIME_TYPE]],
+  ]) {
+    execFile(command, args, (err) => {
+      if (err) console.warn(`[desktop-entry] ${command} failed: ${err.message}`);
+    });
+  }
+}
+
 async function onReady() {
   // Send external links to the user's default browser for every WebContents
   // the app ever creates.
   app.on('web-contents-created', (_event, contents) => {
     applyExternalLinkHandling(contents);
   });
+  registerAppImageDesktopEntry();
   installApplicationMenu();
   installDockMenu();
   installDevDockIcon();
@@ -1645,8 +1769,8 @@ function installApplicationMenu() {
         },
         { type: 'separator' },
         {
-          // Deliberately NO Cmd+W accelerator: inside a workspace the dockview
-          // UI closes its active tab with it (via the embed contract).
+          // Deliberately NO Cmd+W accelerator: inside a workspace the desktop
+          // closes its focused window with it (via the embed contract).
           label: 'Close Window',
           click: () => {
             const target = getMostRecentWindow();
@@ -2030,10 +2154,30 @@ function flushPendingDeeplink() {
   handleDeeplink(url);
 }
 
+// Both native banners and the card/feed IPC enter here. Source is null for
+// a native click; an in-app click can defer its local gesture to its renderer.
+function openNotificationDestination(url, source = null, entry = null) {
+  return routeNotificationClick(url ? toAbsoluteUrl(url) : null, source, {
+    findWindow: mostRecentBundleForWorkspace,
+    mostRecentWindow: getMostRecentWindow,
+    focus: focusBundleFromNotificationClick,
+    navigate: navigateBundle,
+    openEntry: entry ? (target) => {
+      if (isOnBackendPage(target) && !target.window.webContents.isLoading()) {
+        target.window.webContents.send('open-notification', entry);
+      } else {
+        // Keep the action until the new page has registered its listener.
+        target.pendingNotificationEntries.push(entry);
+        navigateBundle(target, url || '/');
+      }
+    } : undefined,
+  });
+}
+
 function handleNotification(event) {
-  const agentName = event.agent_name || 'Agent';
-  const title = event.title || `Notification from ${agentName}`;
-  console.log(`[notification] received: title=${JSON.stringify(title)} agent=${agentName}`);
+  const options = nativeNotificationOptionsFor(event, process.platform);
+  const title = options.title;
+  console.log(`[notification] received: title=${JSON.stringify(title)} subtitle=${JSON.stringify(event.subtitle || '')}`);
   if (!Notification.isSupported()) {
     // No JS-level "ask for permission" exists for Electron's native
     // Notification module -- macOS owns that decision entirely (System
@@ -2047,10 +2191,7 @@ function handleNotification(event) {
     console.warn('[notification] Notification.isSupported() is false -- the OS cannot show native notifications here; skipping .show()');
     return;
   }
-  const notification = new Notification({
-    title,
-    body: event.message,
-  });
+  const notification = new Notification(options);
   // 'show' fires once the OS has actually presented the banner -- the one
   // signal that distinguishes "displayed" from "silently declined" (macOS
   // exposes no permission-check API to app code, so this is the closest
@@ -2064,39 +2205,7 @@ function handleNotification(event) {
   notification.on('failed', () => {
     console.warn(`[notification] failed to display (OS-reported): ${JSON.stringify(title)}`);
   });
-  notification.on('click', () => {
-    const url = event.url;
-    if (!url) {
-      const mru = getMostRecentWindow();
-      if (mru) focusBundleFromNotificationClick(mru);
-      return;
-    }
-    const absolute = toAbsoluteUrl(url);
-    const agentId = parseWorkspaceId(absolute);
-    if (agentId) {
-      // The most-recently-focused window already showing this workspace, else
-      // navigate the most recent window (never auto-open a new one).
-      const showingBundle = mostRecentBundleForWorkspace(agentId);
-      const target = showingBundle || getMostRecentWindow();
-      if (target) {
-        focusBundleFromNotificationClick(target);
-        if (showingBundle === null) navigateBundle(target, absolute);
-      }
-    } else {
-      // Notification deep links use the SPA's /workspace/<agent-id>?review=
-      // route -- a chrome-page path, not a workspace origin, so
-      // parseWorkspaceId above cannot see it. Match the path id against each
-      // window's tracked workspace so the window already on that workspace is
-      // the one focused -- and still navigated: it needs the ?review= param
-      // to open the review popup. Anything else falls back to the MRU window.
-      const routeId = parseSpaWorkspaceRouteId(absolute);
-      const target = (routeId && mostRecentBundleForWorkspace(routeId)) || getMostRecentWindow();
-      if (target) {
-        focusBundleFromNotificationClick(target);
-        navigateBundle(target, absolute);
-      }
-    }
-  });
+  notification.on('click', () => openNotificationDestination(event.url, null, event.entry));
   notification.show();
   console.log(`[notification] .show() called for ${JSON.stringify(title)} -- if no banner appeared, check System Settings > Notifications for this app`);
 }
@@ -2251,8 +2360,26 @@ ipcMain.handle('check-for-updates', async () => {
   return updater.describe();
 });
 
-// The "Restart" control on the update card. Quits, so it returns nothing.
-ipcMain.handle('install-update', () => updater.installNow());
+// The install control on the update card and the Settings panel. Quits when
+// the install goes through; when it does not (on a .deb, a cancelled password
+// prompt) the failure travels as a payload rather than a rejection, because a
+// rejected invoke reaches the renderer wrapped in Electron's "Error invoking
+// remote method" text, and the renderer shows this message verbatim.
+//
+// After a successful install the quit is asked for on a later tick and can be
+// cancelled at the running-workspaces prompt, leaving the app up with the
+// package installed. The renderer holds its install control until this call
+// settles, so it settles exactly then; when the quit goes ahead the app exits
+// with the call still pending, which is the point.
+ipcMain.handle('install-update', async () => {
+  try {
+    updater.installNow();
+  } catch (err) {
+    return { error: String((err && err.message) || err) };
+  }
+  await waitForQuitCancelled();
+  return { error: null };
+});
 
 ipcMain.on('bring-app-to-front', (event) => {
   const bundle = getBundleFromEvent(event);
@@ -2287,6 +2414,21 @@ ipcMain.on('open-workspace-in-new-window', (_event, agentId) => {
   // already shows the workspace (two windows on one workspace is allowed).
   const url = wrapperUrlForWorkspace(agentId);
   if (url) openNewWindow(url);
+});
+
+ipcMain.handle('open-notification-in-existing-window', (event, route, entry) => {
+  const source = getBundleFromEvent(event);
+  // This IPC only accepts local notification destinations, never external URLs.
+  if (!source || typeof route !== 'string' || !route.startsWith('/workspace/')) return false;
+  return openNotificationDestination(route, source, entry);
+});
+
+ipcMain.on('notification-listener-ready', (event) => {
+  const target = getBundleFromEvent(event);
+  if (!target || !isOnBackendPage(target)) return;
+  for (const entry of target.pendingNotificationEntries.splice(0)) {
+    target.window.webContents.send('open-notification', entry);
+  }
 });
 
 // Reload after the window showed the crash strip: back to the failed URL if a
@@ -2378,6 +2520,21 @@ function initiateFullQuit() {
 
 let isQuitSequenceRunning = false;
 let isHeadlessQuit = false;
+// Callers waiting to hear that a quit sequence ended with the app staying up.
+let quitCancelledWaiters = [];
+
+/** Resolves the next time a quit sequence is cancelled by the user. */
+function waitForQuitCancelled() {
+  return new Promise((resolve) => {
+    quitCancelledWaiters.push(resolve);
+  });
+}
+
+function notifyQuitCancelled() {
+  const waiters = quitCancelledWaiters;
+  quitCancelledWaiters = [];
+  for (const resolve of waiters) resolve();
+}
 
 async function runQuitSequence() {
   if (isShuttingDown || isQuitSequenceRunning) return;
@@ -2389,6 +2546,7 @@ async function runQuitSequence() {
       plan = await promptWorkspaceShutdown();
       if (!plan.proceed) {
         isQuitSequenceRunning = false;
+        notifyQuitCancelled();
         return;
       }
     }
@@ -2413,6 +2571,7 @@ async function runQuitSequence() {
       isShuttingDown = false;
       restoreFromQuittingInAllWindows();
       isQuitSequenceRunning = false;
+      notifyQuitCancelled();
       return;
     }
   }

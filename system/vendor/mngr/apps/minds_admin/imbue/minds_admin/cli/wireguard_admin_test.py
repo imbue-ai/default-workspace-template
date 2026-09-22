@@ -10,15 +10,22 @@ from imbue.minds_admin.cli.wireguard_admin import MANAGEMENT_TIERS
 from imbue.minds_admin.cli.wireguard_admin import PeerSyncOutcome
 from imbue.minds_admin.cli.wireguard_admin import _select_operator
 from imbue.minds_admin.cli.wireguard_admin import build_peer_sync_report
+from imbue.minds_admin.cli.wireguard_admin import live_peer_mismatch_or_none
 from imbue.minds_admin.cli.wireguard_admin import resolve_management_tier
+from imbue.minds_admin.cli.wireguard_admin import select_canary_box
+from imbue.minds_admin.slices.testing import make_ready_gen1_server
 
 
 def _config(*operators: WireguardOperatorConfig) -> ManagementPlaneConfig:
     return ManagementPlaneConfig.model_validate({"wireguard": {"operators": [op.model_dump() for op in operators]}})
 
 
-_JOSH = WireguardOperatorConfig.model_validate({"name": "josh", "public_key": "opkeyjosh=", "address": "10.202.0.2"})
-_ALEX = WireguardOperatorConfig.model_validate({"name": "alex", "public_key": "opkeyalex=", "address": "10.202.0.3"})
+_JOSH = WireguardOperatorConfig.model_validate(
+    {"name": "josh", "public_key": "wee0+EFoclrCL2Pdf3oT3dKtL3Z2W2Tr9JsbvLzqwLc=", "address": "10.202.0.2"}
+)
+_ALEX = WireguardOperatorConfig.model_validate(
+    {"name": "alex", "public_key": "aAWhPfhifGs/d9CO0mkiyJc96qHKK8mmeiM7UXSAi3g=", "address": "10.202.0.3"}
+)
 
 
 def test_select_operator_defaults_to_the_only_configured_one() -> None:
@@ -83,3 +90,38 @@ def test_build_peer_sync_report_keys_boxes_by_row_id_and_carries_errors_only_for
             },
         }
     )
+
+
+def test_live_peer_mismatch_or_none_accepts_exactly_the_committed_keys_in_any_order() -> None:
+    live_output = f"{_ALEX.public_key}\n{_JOSH.public_key}\n"
+
+    assert live_peer_mismatch_or_none(live_output, (_JOSH, _ALEX)) is None
+
+
+def test_live_peer_mismatch_or_none_names_missing_and_unexpected_keys() -> None:
+    # A box whose wg0 came back without a committed peer (or with one that was
+    # removed) has not converged, whatever the sync session's exit said.
+    live_output = f"{_JOSH.public_key}\nstale-key=\n"
+
+    mismatch = live_peer_mismatch_or_none(live_output, (_JOSH, _ALEX))
+
+    assert mismatch is not None
+    assert str(_ALEX.public_key) in mismatch
+    assert "stale-key=" in mismatch
+
+
+def test_live_peer_mismatch_or_none_treats_an_empty_peer_list_as_a_mismatch() -> None:
+    assert live_peer_mismatch_or_none("", (_JOSH,)) is not None
+
+
+def test_select_canary_box_defaults_to_the_first_box_and_honors_an_explicit_id() -> None:
+    first = make_ready_gen1_server()
+    second = make_ready_gen1_server()
+
+    assert select_canary_box([first, second], None) == first
+    assert select_canary_box([first, second], str(second.id)) == second
+
+
+def test_select_canary_box_refuses_an_id_outside_the_fleet() -> None:
+    with pytest.raises(click.UsageError, match="not a prepped gen-2 box"):
+        select_canary_box([make_ready_gen1_server()], "not-a-box")

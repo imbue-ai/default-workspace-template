@@ -1,0 +1,133 @@
+{
+  "case_id": "behaviour",
+  "requires": ["prep.stage_reached@work"],
+  "facts": {
+    "prep.stage_reached@work": {"expected": "conversation"},
+    "trial.completed": {"expected": true},
+
+    "probe.read@work": {"expected": true, "health": true},
+    "probe.read@check": {"expected": true, "health": true},
+    "feed.inputs_read@work": {"expected": true, "health": true},
+    "feed.inputs_read@check": {"expected": true, "health": true},
+    "listing.complete@work": {"expected": true, "health": true},
+    "listing.complete@check": {"expected": true, "health": true},
+
+    "agent.step_tickets@work": {"expected": true, "compliance": true},
+    "agent.regular_ticket@work": {"expected": true, "compliance": true},
+    "agent.ran_nonce_echo@work": {"expected": true, "compliance": true},
+    "agent.ran_missing_command@work": {"expected": true, "compliance": true},
+    "agent.worker_launched@work": {"expected": true, "compliance": true},
+    "agent.worker_finished@check": {"expected": true, "compliance": true},
+    "agent.read_upload_marker@check": {"expected": true, "compliance": true},
+    "agent.invoked_skill@work": {"expected": true, "compliance": true},
+
+    "progress.step_ids_agree": {"expected": true, "requires": ["agent.step_tickets@work"]},
+    "progress.declared_titles_agree": {"expected": true, "requires": ["agent.step_tickets@work"]},
+    "progress.done_summaries_agree": {"expected": true, "requires": ["agent.step_tickets@work"]},
+    "progress.nonce_block_count": {"expected": 4, "requires": ["agent.step_tickets@work"]},
+    "progress.regular_ticket_rendered": {"expected": false, "requires": ["agent.regular_ticket@work"]},
+
+    "tools.every_call_has_one_result": {"expected": true},
+    "tools.nonce_in_one_executing_result": {"expected": true, "requires": ["agent.ran_nonce_echo@work"]},
+
+    "failures.missing_command_count": {"at_least": 1, "requires": ["agent.ran_missing_command@work"]},
+    "failures.missing_command_is_error": {
+      "expected": true,
+      "requires": ["agent.ran_missing_command@work"],
+      "by_harness": {
+        "codex": {
+          "expected": false,
+          "known_failure": {"reason": "mngr's codex converter marks no result errored"}
+        }
+      }
+    },
+
+    "workers.no_phantoms": {"expected": true, "requires": ["listing.complete@check"]},
+    "workers.listed_agent_created": {
+      "expected": ["diag-worker-7f3a"],
+      "requires": ["agent.worker_launched@work", "listing.complete@check"]
+    },
+    "workers.discovered_equals_listed": {
+      "expected": true,
+      "requires": ["agent.worker_launched@work", "listing.complete@check"]
+    },
+    "workers.captured_equals_listed": {
+      "expected": true,
+      "requires": ["agent.worker_launched@work", "listing.complete@check"]
+    },
+    "workers.embedded_equals_listed": {
+      "expected": true,
+      "requires": ["agent.worker_launched@work", "listing.complete@check"]
+    },
+    "workers.harness_is_lead_harness": {
+      "expected": true,
+      "requires": ["agent.worker_launched@work", "listing.complete@check"]
+    },
+    "workers.launch_count@check": {"expected": 1, "requires": ["agent.worker_finished@check"]},
+    "workers.captured_count@check": {"expected": 1, "requires": ["agent.worker_finished@check"]},
+    "workers.report_captured@check": {"expected": true, "requires": ["agent.worker_finished@check"]},
+    "workers.model_is_lead_model@check": {
+      "expected": true,
+      "requires": ["agent.worker_finished@check"],
+      "by_harness": {
+        "claude": {"expected": false, "known_failure": {"issue": 1008}},
+        "pi-coding": {"expected": false, "known_failure": {"issue": 1008}},
+        "codex": {"expected": null, "known_failure": {"issue": 898}}
+      }
+    },
+
+    "steps.boundary_markers@work": {"expected": ["work"]},
+    "steps.boundary_markers@check": {"expected": ["work", "check"]},
+    "steps.boundary_markers_followed_by_opening": {"expected": true},
+    "entries.count@work": {"expected": 1},
+    "entries.count@check": {"expected": 2},
+    "steps.entries_before@work": {"expected": 0},
+    "steps.entries_before@check": {"expected": 1},
+    "steps.upload_marker_present@work": {"expected": false},
+    "steps.upload_marker_present@check": {"expected": true},
+    "steps.upload_marker_read@check": {"expected": true, "requires": ["agent.read_upload_marker@check"]},
+    "steps.driver_log_step_local@check": {"expected": true},
+    "steps.trajectory_cumulative@check": {"expected": true},
+    "steps.spend_deltas_sum@check": {
+      "expected": true,
+      "by_harness": {"codex": {"expected": null, "known_failure": {"issue": 898}}}
+    },
+
+    "transcript.source@work": {"expected": "workspace"},
+    "transcript.source@check": {"expected": "workspace"},
+    "transcript.agent_steps_with_model_name": {
+      "expected": "all",
+      "by_harness": {"codex": {"expected": "none", "known_failure": {"issue": 898}}}
+    },
+    "harness.detected_is_lane_harness@work": {"expected": true},
+    "harness.detected_is_lane_harness@check": {"expected": true},
+    "arm.harness_config.is_model_confirmed": {
+      "expected": true,
+      "by_harness": {"codex": {"expected": null, "known_failure": {"issue": 898}}}
+    },
+
+    "usage.tokens_present@check": {
+      "expected": true,
+      "by_harness": {
+        "codex": {
+          "expected": false,
+          "known_failure": {"reason": "the feed carries no usage for a codex turn"}
+        }
+      }
+    },
+    "usage.is_cost_complete@check": {"expected": true, "requires": ["agent.worker_finished@check"]},
+
+    "process.invoked_skills@work": {"expected": ["build-app"], "requires": ["agent.invoked_skill@work"]},
+    "process.worker_launch_count@work": {"expected": 1, "requires": ["agent.worker_launched@work"]},
+    "evidence.statuses@work": {
+      "expected": {
+        "file_inventory": "passed",
+        "skill_required_build_app": "passed",
+        "skill_required_diag_never_invoked_7f3a": "failed",
+        "skill_forbidden_diag_forbidden_7f3a": "passed",
+        "worker_launches": "passed"
+      },
+      "requires": ["agent.invoked_skill@work", "agent.worker_launched@work"]
+    }
+  }
+}

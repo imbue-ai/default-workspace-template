@@ -137,7 +137,7 @@ class AttemptsRecord:
         if self.skipped > 0:
             return RunStatus.SKIPPED
         # UNKNOWN only arises for a record with zero recorded attempts. The parser
-        # (_parse_junit) always record()s an outcome before reading final_status,
+        # (parse_junit) always record()s an outcome before reading final_status,
         # so this is a defensive last resort that is unreachable in the real flow.
         return RunStatus.UNKNOWN
 
@@ -181,7 +181,7 @@ def main() -> int:
         return 1
 
     flaky_ids = _load_flaky_manifest(args.flaky_manifest_glob)
-    per_test, failures = _parse_junit(args.junit)
+    per_test, failures = parse_junit(args.junit)
     markdown = _render_markdown(
         per_test=per_test,
         failures=failures,
@@ -212,7 +212,7 @@ def _load_flaky_manifest(glob_pattern: str) -> set[str]:
     return ids
 
 
-def _parse_junit(path: Path) -> tuple[dict[str, AttemptsRecord], list[FailureDetail]]:
+def parse_junit(path: Path) -> tuple[dict[str, AttemptsRecord], list[FailureDetail]]:
     """Parse junit.xml into per-test attempts and per-attempt failure detail.
 
     A failed/errored attempt contributes both an `AttemptsRecord` count and a

@@ -182,7 +182,10 @@ jobs:
         # where the Dockerfile looks. Without this entry, the PR that moves the
         # export skips the only job that runs that guard.
         #
-        # The workflow files at the end are not dependencies either: the suite
+        # The setup action is a dependency of a different kind: it decides what
+        # this job installs, so a change to it has to run the job.
+        #
+        # The workflow files at the end are not dependencies at all -- the suite
         # reads them and asserts against them, so a change to one can break a
         # test without touching the project. The scheduled workflow's
         # CI_ENVIRONMENT_PREFIX is pinned to the environment name a CI trial
@@ -194,10 +197,11 @@ jobs:
               libs/concurrency_group \
               libs/imbue_common \
               libs/mngr \
-              libs/mngr_usage \
               libs/overlay \
               libs/resource_guards \
               justfile \
+              private.just \
+              .github/actions/setup-minds-evals-tests \
               .github/workflows/ci.yml \
               .github/workflows/minds-evals-scheduled.yml | grep -q .; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -205,35 +209,9 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up Python
+      - name: Set up the minds_evals test suite
         if: steps.evals-diff.outputs.changed == 'true'
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        if: steps.evals-diff.outputs.changed == 'true'
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-
-      - name: Install just
-        if: steps.evals-diff.outputs.changed == 'true'
-        uses: extractions/setup-just@v4
-
-      # The vendored viewer (apps/minds_evals/viewer) is source, not a committed bundle, so
-      # nothing else here would notice if it stopped building. The script bootstraps its own
-      # pinned bun, which is why no node toolchain is set up above.
-      - name: Build the vendored harbor viewer
-        if: steps.evals-diff.outputs.changed == 'true'
-        run: apps/minds_evals/scripts/build_viewer.sh
-
-      # The flow lab's tests drive a real headless Chromium, the one playwright installs for
-      # the pinned release. Its absence fails those tests rather than skipping them here
-      # (the `chromium_path` fixture reads CI), so a job that lost this step is red, not quiet.
-      - name: Install the flow lab's Chromium
-        if: steps.evals-diff.outputs.changed == 'true'
-        run: cd apps/minds_evals && uv sync --locked && uv run python -m playwright install --with-deps chromium
+        uses: ./.github/actions/setup-minds-evals-tests
 
       - name: Run minds_evals typecheck and tests
         if: steps.evals-diff.outputs.changed == 'true'
@@ -843,6 +821,42 @@ jobs:
         # legitimately takes on a good runner; per-test hangs are still
         # caught by --timeout 300.
         run: PYTEST_MAX_DURATION_SECONDS=900 uv run pytest -n 0 --timeout 300 --no-cov --cov-fail-under=0 -v --tb=short -m '(docker or docker_sdk) and not release and not minds_snapshot_resume'
+
+  # Proves the public-repo developer bootstrap: apps/minds/scripts/install-linux.sh
+  # run from a checkout on a stock Ubuntu runner, non-interactively and without
+  # Docker (the runner's daemon is not what the script installs), must leave
+  # the pinned toolchain, the Electron dependencies, the bundled binaries, and
+  # a working `minds run` behind. Anything the script touches is on the public
+  # mirror, so this needs no secrets.
+  test-minds-linux-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run the Linux installer from the checkout
+        run: apps/minds/scripts/install-linux.sh --yes --no-launch --skip-docker
+
+      - name: Verify the installed toolchain and app
+        env:
+          NODE_PIN_FILE: apps/minds/.nvmrc
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          export NVM_DIR="$HOME/.nvm"
+          set +u; . "$NVM_DIR/nvm.sh"; nvm use "$(cat "$NODE_PIN_FILE")" >/dev/null; set -u
+          node_pin="v$(tr -d '[:space:]' < "$NODE_PIN_FILE")"
+          pnpm_pin="$(node -p "require('./apps/minds/package.json').engines.pnpm")"
+          git_pin="$(node -p "require('./apps/minds/scripts/git-manifest.json').gitVersion")"
+          test "$(node --version)" = "$node_pin"
+          test "$(cd apps/minds && pnpm --version)" = "$pnpm_pin"
+          test -x apps/minds/node_modules/.bin/electron
+          test -x "$HOME/.local/bin/minds-desktop"
+          apps/minds/resources/git/bin/git --version | tee /dev/stderr | grep -F "git version $git_pin"
+          test -f apps/minds/imbue/minds/desktop_client/static/ui/.vite/manifest.json
+          uv run minds run --help
 
   # Bundled-git acceptance test on a GitHub-hosted macOS runner: offload
   # proves the linux-x64 payload from a networkless sandbox; this job proves

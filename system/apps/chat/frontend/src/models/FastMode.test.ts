@@ -86,3 +86,13 @@ describe("fastModeLabel", () => {
     expect(fastMode.fastModeLabel({ mode: "auto", is_switched: true })).toBe("Auto (off now)");
   });
 });
+
+describe("fastModeDetail", () => {
+  it("explains each mode, auto with the limit it runs to", async () => {
+    const fastMode = await freshModule();
+    expect(fastMode.fastModeDetail("off", 5)).toBe("Standard speed always");
+    expect(fastMode.fastModeDetail("on", 5)).toBe("Fast mode always");
+    expect(fastMode.fastModeDetail("auto", 1)).toBe("Fast for the first 1 turn, then standard");
+    expect(fastMode.fastModeDetail("auto", 4)).toBe("Fast for the first 4 turns, then standard");
+  });
+});

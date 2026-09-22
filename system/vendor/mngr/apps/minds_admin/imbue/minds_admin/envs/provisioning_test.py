@@ -173,6 +173,7 @@ def _build_fake_providers(
     fail_step: str | None = None,
     fail_delete: set[str] | None = None,
     vault_responses: dict[str, dict[str, str]] | None = None,
+    is_neon_project_present: bool = True,
 ) -> Providers:
     fail_delete = fail_delete or set()
     # Canned Vault dicts so tier-destroy wipes can find what they need
@@ -216,6 +217,18 @@ def _build_fake_providers(
         call_log["calls"].append(("delete_neon_project", str(name)))
         if "neon_project" in fail_delete:
             raise NeonProviderError("neon delete boom")
+
+    def neon_project_exists(name, org_id, api_token):
+        call_log["calls"].append(("neon_project_exists", str(name)))
+        return is_neon_project_present
+
+    def tear_down_pool_slices(name):
+        call_log["calls"].append(("tear_down_pool_slices", str(name)))
+        # The slice rows live in the env's Neon project, so the real teardown cannot connect without it.
+        if not is_neon_project_present:
+            raise MindError("pool DB unreachable boom")
+        if fail_step == "tear_down_pool_slices":
+            raise MindError("unreachable box boom")
 
     def create_supertokens_app(name, core_base_url, api_key):
         call_log["calls"].append(("create_supertokens_app", str(name)))
@@ -424,6 +437,7 @@ def _build_fake_providers(
         delete_modal_env=delete_modal_env,
         create_neon_project=create_neon_project,
         delete_neon_project=delete_neon_project,
+        neon_project_exists=neon_project_exists,
         create_supertokens_app=create_supertokens_app,
         delete_supertokens_app=delete_supertokens_app,
         read_per_env_secret_values=read_per_env_secret_values,
@@ -450,6 +464,7 @@ def _build_fake_providers(
         await_apps_healthy=await_apps_healthy,
         destroy_mngr_agents=destroy_mngr_agents,
         delete_workspace_storage_prefix=delete_workspace_storage_prefix,
+        tear_down_pool_slices=tear_down_pool_slices,
         cleanup_state_container=cleanup_state_container,
         wipe_supertokens_app_data=wipe_supertokens_app_data,
         wipe_neon_db_schema=wipe_neon_db_schema,
@@ -644,6 +659,9 @@ def test_destroy_env_dev_walks_providers_in_order_and_removes_root(
     )
     step_names = [c[0] for c in call_log["calls"]]
     assert step_names == [
+        # Step 0: unleased pool slices, while the env's Neon project still exists.
+        "neon_project_exists",
+        "tear_down_pool_slices",
         # Step 1: mngr agents are listed but none exist in the fresh
         # env root; no destroy_mngr_agents call.
         # Step 1b: state-container cleanup still runs (independent of agents).
@@ -702,7 +720,12 @@ def test_destroy_env_dev_destroys_mngr_agents_before_cloud_teardown(
     # step is the SuperTokens app deletion).
     step_names = [c[0] for c in call_log["calls"]]
     first_cloud_index = step_names.index("delete_supertokens_app")
-    assert step_names[:first_cloud_index] == ["destroy_mngr_agents", "cleanup_state_container"]
+    assert step_names[:first_cloud_index] == [
+        "neon_project_exists",
+        "tear_down_pool_slices",
+        "destroy_mngr_agents",
+        "cleanup_state_container",
+    ]
     agent_id_batches = [c[1] for c in call_log["calls"] if c[0] == "destroy_mngr_agents"]
     assert agent_id_batches == [("agent-1111", "agent-2222")]
 
@@ -894,6 +917,65 @@ def test_destroy_missing_env_proceeds_with_cloud_cleanup(_isolated_home: Path, _
     assert "delete_modal_env" in step_names
     assert "delete_neon_project" in step_names
     assert "delete_supertokens_app" in step_names
+
+
+def test_destroy_env_dev_rerun_after_neon_project_deleted_skips_slice_teardown_and_finishes(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """A re-run after a destroy that deleted the Neon project but failed later still converges.
+
+    The slice rows lived in the deleted project, so the slice teardown (which would
+    fail to connect to it) is skipped and the remaining steps run.
+    """
+    call_log = _make_call_log()
+    deploy_env(
+        DevEnvName("dev-nora"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=_build_fake_providers(call_log),
+        parent_concurrency_group=_root_cg,
+    )
+    call_log["calls"].clear()
+
+    destroy_env(
+        DevEnvName("dev-nora"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=_build_fake_providers(call_log, is_neon_project_present=False),
+        parent_concurrency_group=_root_cg,
+    )
+    assert "delete_modal_env" in [c[0] for c in call_log["calls"]]
+    assert not env_root_exists(DevEnvName("dev-nora"))
+
+
+def test_destroy_env_dev_slice_teardown_failure_stops_before_any_cloud_teardown(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """An unreachable box must stop the destroy before the Neon project (the only record of the slices) goes."""
+    call_log = _make_call_log()
+    deploy_env(
+        DevEnvName("dev-otto"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=_build_fake_providers(call_log),
+        parent_concurrency_group=_root_cg,
+    )
+    call_log["calls"].clear()
+
+    with pytest.raises(MindError, match="unreachable box boom"):
+        destroy_env(
+            DevEnvName("dev-otto"),
+            tier="dev",
+            deploy_config=_deploy_config(),
+            credentials=_credentials(),
+            providers=_build_fake_providers(call_log, fail_step="tear_down_pool_slices"),
+            parent_concurrency_group=_root_cg,
+        )
+    assert [c[0] for c in call_log["calls"]] == ["neon_project_exists", "tear_down_pool_slices"]
+    assert env_root_exists(DevEnvName("dev-otto"))
 
 
 def test_list_dev_envs_returns_summaries_in_sorted_order(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
@@ -1460,6 +1542,8 @@ def test_destroy_env_tier_full_step_order(_isolated_home: Path, _root_cg: Concur
     )
     step_names = [c[0] for c in call_log["calls"]]
     assert step_names == [
+        # 0: unleased pool slices (the tier's pool DB is operator-managed, so always present).
+        "tear_down_pool_slices",
         # 1: agents
         "destroy_mngr_agents",
         # 1b: state-container cleanup (independent of agents).

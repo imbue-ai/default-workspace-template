@@ -81,6 +81,7 @@ from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector.auth import require_admin_key
 from imbue.remote_service_connector.errors import EmailNotVerifiedError
 from imbue.remote_service_connector.errors import MissingAuthWebsiteDomainError
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
@@ -345,12 +346,17 @@ def send_verification_email_with_cooldown(
         _verification_email_sent_at_monotonic_by_user_id[user_id] = now
     is_sent = False
     try:
-        send_email_verification_email(
-            tenant_id=AUTH_TENANT_ID,
-            user_id=user_id,
-            recipe_user_id=recipe_user_id,
-            email=email,
-            user_context=({_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY: continue_next_path} if continue_next_path else None),
+        auth_module.call_supertokens_core(
+            lambda: send_email_verification_email(
+                tenant_id=AUTH_TENANT_ID,
+                user_id=user_id,
+                recipe_user_id=recipe_user_id,
+                email=email,
+                user_context=(
+                    {_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY: continue_next_path} if continue_next_path else None
+                ),
+            ),
+            caller="send_verification_email",
         )
         is_sent = True
     finally:
@@ -377,7 +383,7 @@ def _send_verification_email_best_effort(user_id: str, email: str) -> bool:
             recipe_user_id=recipe_user_id,
             email=email,
         )
-    except (HTTPException, SuperTokensSessionError, SuperTokensGeneralError) as exc:
+    except (HTTPException, SuperTokensSessionError, SuperTokensGeneralError, SuperTokensCoreUnavailableError) as exc:
         emit_metric("verification_email_send_failed", 1, {"caller": "auth_proxy"})
         logger.warning("Could not send the verification email for %s", email, exc_info=exc)
         return False
@@ -770,10 +776,13 @@ def auth_revoke_current_session(request: Request) -> dict[str, object]:
         if not auth_header.lower().startswith("bearer "):
             raise HTTPException(status_code=401, detail="Missing Bearer credentials")
         try:
-            session = get_session_without_request_response(
-                access_token=auth_header[7:],
-                anti_csrf_check=False,
-                override_global_claim_validators=lambda *_args, **_kwargs: [],
+            session = auth_module.call_supertokens_core(
+                lambda: get_session_without_request_response(
+                    access_token=auth_header[7:],
+                    anti_csrf_check=False,
+                    override_global_claim_validators=lambda *_args, **_kwargs: [],
+                ),
+                caller="revoke_current_session",
             )
         except (ValueError, TypeError, SuperTokensSessionError, SuperTokensGeneralError) as exc:
             raise HTTPException(status_code=401, detail="Invalid token") from exc
@@ -842,7 +851,7 @@ def recipe_user_id_for_callers_email(user_id: str, email: str) -> RecipeUserId:
     without this check, any valid session could probe or trigger emails for
     arbitrary addresses.
     """
-    user = get_user(user_id)
+    user = auth_module.call_supertokens_core(lambda: get_user(user_id), caller="recipe_user_id_for_callers_email")
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     email_lower = email.strip().lower()
@@ -885,7 +894,10 @@ def auth_is_email_verified(body: IsEmailVerifiedRequest, request: Request) -> di
         require_supertokens_configured()
         user_id = auth_module.get_user_id_from_bearer_header(request)
         recipe_user_id = recipe_user_id_for_callers_email(user_id, body.email)
-        verified = is_email_verified(recipe_user_id=recipe_user_id, email=body.email)
+        verified = auth_module.call_supertokens_core(
+            lambda: is_email_verified(recipe_user_id=recipe_user_id, email=body.email),
+            caller="is_email_verified",
+        )
         return {"verified": verified}
 
 

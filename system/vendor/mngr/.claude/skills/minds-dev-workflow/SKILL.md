@@ -42,8 +42,10 @@ When you click "Create" in the desktop client with a LOCAL-Docker provider, the 
 > access, Vault login, Modal profile) -- the steps below assume they're in place.
 
 ```bash
-# 1. (Once) Install electron deps.
-cd apps/minds && pnpm install && cd ../..
+# 1. (Once) Install the pinned pnpm (and electron deps) into the pinned Node.
+#    `just minds-start` re-syncs the electron deps on every launch, but never
+#    installs pnpm itself.
+just minds-install
 
 # 2. (Once) Stand up a DEFAULT_WORKSPACE_TEMPLATE worktree at .external_worktrees/default-workspace-template/
 #    on a branch named after your current mngr branch (so template-side
@@ -279,6 +281,6 @@ TEMPLATE_BRANCH=$(cd .external_worktrees/default-workspace-template && git branc
   set +a
   export MINDS_WORKSPACE_GIT_URL="$(pwd)/.external_worktrees/default-workspace-template"
   export MINDS_WORKSPACE_BRANCH="$TEMPLATE_BRANCH"
-  cd apps/minds && pnpm start
+  apps/minds/scripts/start-desktop.sh
 )
 ```

@@ -40,12 +40,14 @@ from modal.exception import NotFoundError as ModalNotFoundError
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.check_run import list_trial_dirs
-from imbue.minds_evals.check_run import read_trial_state
 from imbue.minds_evals.data_types import CleanupReport
 from imbue.minds_evals.data_types import ModalDeletionOutcome
 from imbue.minds_evals.errors import CleanupScopeError
 from imbue.minds_evals.errors import JobReadError
 from imbue.minds_evals.errors import ModalAdminError
+from imbue.minds_evals.trial_layout import TrialLayout
+from imbue.minds_evals.trial_layout import load_optional_json_object
+from imbue.minds_evals.trial_layout import resolve_trial_layout
 
 # The marker a scheduled run stamps into every trial's Modal user id, and which a sweep prefix must
 # carry. This bounds what an operator can point the sweep at; it does not by itself identify a
@@ -135,13 +137,27 @@ def select_sweepable_environment_names(
     return tuple(sorted(selected))
 
 
+@pure
+def _trial_state_paths(layout: TrialLayout) -> tuple[Path, ...]:
+    """Every state.json one trial may hold: each step's own copy, and the copy the layout resolves as
+    the trial's, which is the trial root's whenever a step died before harbor archived it.
+
+    Every one is read rather than the resolved one alone, because the copy a crash truncated is the
+    newest one -- the very copy that resolves -- and every step of a trial records the same
+    environment, so an earlier step's intact copy still names what is left running.
+    """
+    resolved = () if layout.state_path is None else (layout.state_path,)
+    return tuple(dict.fromkeys((*(step.state_path for step in layout.steps), *resolved)))
+
+
 def read_job_environment_names(job_dir: Path) -> tuple[str, ...]:
     """The Modal environments one job's own trials recorded, and only those.
 
     Deliberately more forgiving than the run gate that reads the same directory. The gate refuses a
     job whose artifacts cannot be parsed, because an unjudged run must never read as a pass; cleanup
     asks "what did this job record?", and a job with no trials, or with one trial whose state was
-    truncated by the crash being cleaned up after, still has an answer for the rest. Inheriting the
+    truncated by the crash being cleaned up after, still has an answer for the rest -- and for that
+    trial too, wherever a step before the truncated copy named the same environment. Inheriting the
     gate's strictness would mean one unreadable trial leaks every environment of the job -- and the
     age-based sweep is no backstop for the run that just made them, since its cutoff is hours older
     than the run's own budget.
@@ -150,14 +166,15 @@ def read_job_environment_names(job_dir: Path) -> tuple[str, ...]:
         raise JobReadError("{} is not a job directory".format(job_dir))
     environment_names: set[str] = set()
     for trial_dir in list_trial_dirs(job_dir):
-        try:
-            state = read_trial_state(trial_dir)
-        except JobReadError as exc:
-            logger.warning("Skipping {}: its state cannot be read ({})", trial_dir.name, exc)
-            continue
-        environment_name = str((state or {}).get("modal_environment_name") or "")
-        if environment_name:
-            environment_names.add(environment_name)
+        for state_path in _trial_state_paths(resolve_trial_layout(trial_dir)):
+            try:
+                state = load_optional_json_object(state_path)
+            except JobReadError as exc:
+                logger.warning("Skipping {} of {}: it cannot be read ({})", state_path.name, trial_dir.name, exc)
+                continue
+            environment_name = str((state or {}).get("modal_environment_name") or "")
+            if environment_name:
+                environment_names.add(environment_name)
     if not environment_names:
         logger.warning("{} recorded no Modal environments -- nothing named to clean up", job_dir)
     return tuple(sorted(environment_names))

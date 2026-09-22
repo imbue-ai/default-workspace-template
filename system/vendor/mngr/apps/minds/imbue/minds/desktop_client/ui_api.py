@@ -31,6 +31,7 @@ from imbue.minds.desktop_client.ui_api_create import register_create_routes
 from imbue.minds.desktop_client.ui_api_folder_syncs import register_folder_sync_routes
 from imbue.minds.desktop_client.ui_api_inbox import register_inbox_routes
 from imbue.minds.desktop_client.ui_api_lifecycle import register_lifecycle_routes
+from imbue.minds.desktop_client.ui_api_notifications import register_notification_routes
 from imbue.minds.desktop_client.ui_api_onboarding import register_onboarding_routes
 from imbue.minds.desktop_client.ui_api_options import register_options_routes
 from imbue.minds.desktop_client.ui_api_permissions import register_permissions_routes
@@ -175,8 +176,8 @@ def serve_spa_index(**_path_params: str) -> Response:
     Registered both at ``/ui/`` and (by ``create_desktop_client``) at every
     page path the SPA router owns; the router reads the real
     ``location.pathname``, so the handler ignores path parameters. The embed
-    contract module loads before the bundle because the shell consumes
-    ``window.MindsEmbedContract`` at module-evaluation time.
+    contract is an ES module the workspace frame imports when it mounts
+    (``WorkspaceFrame.loadEmbedContract``), so the page only preloads it.
     """
     if not is_ui_request_authenticated():
         return Response(status=302, headers={"Location": "/login"})
@@ -192,7 +193,7 @@ def serve_spa_index(**_path_params: str) -> Response:
         "    <title>Mind</title>\n"
         f"{_build_sentry_head_tags()}"
         f"    <script>window.__MINDS_BOOTSTRAP__ = {_build_bootstrap_json()};</script>\n"
-        '    <script src="/_static/embed_contract.js"></script>\n'
+        '    <link rel="modulepreload" href="/_static/embed_contract.js">\n'
         f"    {entry_tags}\n"
         "  </head>\n"
         '  <body><div id="app"></div></body>\n'
@@ -267,6 +268,7 @@ def create_ui_blueprint() -> Blueprint:
     register_folder_sync_routes(blueprint)
     register_lifecycle_routes(blueprint)
     register_inbox_routes(blueprint)
+    register_notification_routes(blueprint)
     register_onboarding_routes(blueprint)
     register_update_routes(blueprint)
     return blueprint
