@@ -406,9 +406,11 @@ built from), also take the `editing critical app <name>` lease for each
 critical app it touches through the apply, as
 `update-app/references/critical-app.md` does (`<name>` is the app's `app.toml`
 name, so `system/apps/terminal_pty/` is `terminal-pty`; `workspace_ui` and the
-npm files count as both `system_interface` and `chat`): check `tk ready` for a foreign one
-(surface instead of proceeding), then `tk create "editing critical app <name>"
--t chore` and `tk start` it, each as its own command. Release them afterwards.
+npm files count as both `system_interface` and `chat`). Take them all or none,
+as that reference says: check each one in `tk ready`, take them in name order
+(`tk create "editing critical app <name>" -t chore`, then `tk start` it, each
+as its own command), and if any is held by another agent, release the ones you
+took before surfacing it. Release them afterwards.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
