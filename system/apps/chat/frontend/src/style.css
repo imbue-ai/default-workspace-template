@@ -293,10 +293,24 @@
      as a hole with two pictures behind it. */
   background: var(--c-surface);
   border-radius: inherit;
-  overflow: hidden;
+  /* No `overflow: hidden` here: every child that needs clipping does its own, so a clip at the
+     face's edge would only ever trim what a child casts past it. */
 }
 .chat-flip-back {
   transform: rotateY(180deg);
+  /* The terminal brings its own dark surface, so it sits IN the pane rather than filling it:
+     a 4px gutter. The bottom is flush, though -- that edge is where the composer's bottom edge
+     is on the other face, so turning the card over leaves the bottom line where it was. */
+  padding: 4px 4px 0;
+}
+/* The ttyd frame fills that padded box and carries the corner: 8px is what the pane's own 12px
+   corner leaves once you step 4px inward, so the terminal reads as concentric with the pane. An
+   iframe clips its own painting to its border-radius, so its background rounds with the frame. */
+.terminal-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: var(--radius-lg);
 }
 
 /* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
@@ -308,9 +322,7 @@
 }
 
 /* The switch that turns the card over. Only the row around it is styled here -- the switch
-   itself is the shared one from `modelCardStyles`, at its own size: the knob's offset is a
-   Tailwind utility, which a `transform` here would lose to, leaving the knob outside the
-   track. */
+   itself is the shared one from `modelProviderMenuStyles`, at its own size. */
 .terminal-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -320,11 +332,16 @@
   background: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  color: var(--c-text-secondary);
+  /* Faint, like the model chip beside it: a view setting under the composer is not something to
+     draw the eye down there. */
+  color: var(--c-text-faint);
   font-size: var(--font-size-row);
   transition: color var(--dur-base);
 }
-.terminal-view-toggle:hover,
+.terminal-view-toggle:hover {
+  color: var(--c-text-secondary);
+}
+/* Switched ON is a state rather than a hover, and says so at full strength. */
 .terminal-view-toggle[aria-checked="true"] {
   color: var(--c-text-primary);
 }
@@ -332,23 +349,23 @@
 /* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
    base and grows upward, so its top edge is not somewhere the eye naturally checks for "more",
    and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
-.model-flyout-scroll {
+.model-submenu-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--c-border) transparent;
 }
-.model-flyout-scroll::-webkit-scrollbar {
+.model-submenu-scroll::-webkit-scrollbar {
   width: 8px;
 }
-.model-flyout-scroll::-webkit-scrollbar-track {
+.model-submenu-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-.model-flyout-scroll::-webkit-scrollbar-thumb {
+.model-submenu-scroll::-webkit-scrollbar-thumb {
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: var(--radius-sm);
   background-color: var(--c-border);
 }
-.model-flyout-scroll::-webkit-scrollbar-thumb:hover {
+.model-submenu-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--c-text-faint);
 }
 
@@ -584,7 +601,7 @@
   margin: 0.5em 0;
 }
 
-/* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
+/* Transcript custom scrollbar (transcript-smooth-scroll spec) */
 
 /* The transcript scroll container hides its native scrollbar entirely; the
    TranscriptScrollbar overlay replaces it (physical region in pixel space,
