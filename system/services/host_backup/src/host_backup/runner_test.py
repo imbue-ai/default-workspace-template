@@ -436,6 +436,13 @@ def _events_in(events_dir: Path | None) -> list[dict]:
     ]
 
 
+def _state_recording_events(tmp_path: Path) -> _LoopState:
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-under-test"
+    return state
+
+
 def _run_backup_under_test(
     tmp_path: Path,
     backup: _ScriptedRestic,
@@ -443,9 +450,7 @@ def _run_backup_under_test(
     unlock: _ScriptedRestic | None = None,
     initial_failures: int = 0,
 ) -> tuple[_LoopState, bool]:
-    state = _LoopState(_direct_capabilities())
-    state.events_dir = tmp_path / "events"
-    state.current_tick_id = "tick-under-test"
+    state = _state_recording_events(tmp_path)
     state.consecutive_backup_failures = initial_failures
     succeeded = _run_restic_backup(
         state=state,
@@ -547,13 +552,6 @@ _NON_EXCLUSIVE_LOCK_STDERR = (
     "unable to create lock in backend: repository is already locked by "
     "PID 1928420 on efa2d6b8510d by root (UID 0, GID 0)"
 )
-
-
-def _state_recording_events(tmp_path: Path) -> _LoopState:
-    state = _LoopState(_direct_capabilities())
-    state.events_dir = tmp_path / "events"
-    state.current_tick_id = "tick-under-test"
-    return state
 
 
 def _forget_exit_codes(state: _LoopState) -> list[object]:
