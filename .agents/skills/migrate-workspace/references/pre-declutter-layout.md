@@ -81,11 +81,11 @@ convention now is "everything visible under `data/` is the user's to organize";
 | `parent.toml` | `system/config/parent.toml` |
 | `skills-lock.json` | `.agents/skills-lock.json` |
 | `VERSION_HISTORY.md` | `docs/VERSION_HISTORY.md` |
-| `style_guide.md` | `docs/system/style_guide.md` (a symlink into `system/vendor/mngr/`) |
+| `style_guide.md` | `docs/system/style_guide.md` (a symlink into `system/vendor/mngr-assets/`, fetched at build time) |
 | `blueprint/`, `specs/` | `docs/system/blueprint/`, `docs/system/specs/` |
 | `changelog/`, `dev/changelog/` | `system/changelog/` |
 | `test_meta_ratchets.py`, `test_mngr_template_stacking.py` | `system/test_meta_ratchets.py`, `system/test_mngr_template_stacking.py` |
-| `vendor/mngr/`, `vendor/tk/` | `system/vendor/mngr/`, `system/vendor/tk/` |
+| `vendor/mngr/`, `vendor/tk/` | `system/vendor/mngr/` (untracked here, and nothing installs from it -- edits to the old copy have no destination and are re-submitted as mngr changes), `system/vendor/tk/` |
 | `apps/system_interface/` | `system/apps/system_interface/` |
 
 The old flat `libs/` split three ways -- `system/apps/` for anything tab-openable,
