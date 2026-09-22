@@ -60,7 +60,6 @@ def test_a_session_whose_temp_root_can_run_files_uses_it_unchanged(
         tmp_path / "project",
         {
             "TMPDIR": str(temp_root),
-            "HOME": str(tmp_path / "home"),
             "MARKER_PATH": str(marker),
         },
     )
@@ -82,7 +81,6 @@ def test_an_explicit_temp_root_that_cannot_run_files_stops_the_session_before_an
         tmp_path / "project",
         {
             "PYTEST_DEBUG_TEMPROOT": str(unusable_root),
-            "HOME": str(tmp_path / "home"),
             "MARKER_PATH": str(marker),
         },
     )
