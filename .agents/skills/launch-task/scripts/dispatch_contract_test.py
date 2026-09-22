@@ -166,11 +166,16 @@ def _dispatcher_candidates() -> list[Path]:
     return sorted(_SKILLS_ROOT.glob("*/SKILL.md"))
 
 
+def _block_commands(block: str) -> list[str]:
+    """Every command in a fenced block, with its line continuations joined."""
+    return re.split(r"\n(?=\S)", block.replace("\\\n", " "))
+
+
 def _launcher_invocations(block: str) -> list[list[str]]:
     """Every ``create_worker.py <argv...>`` command in a fenced block, as the
     argv after the script path (line continuations joined, comments dropped)."""
     invocations: list[list[str]] = []
-    for command in re.split(r"\n(?=\S)", block.replace("\\\n", " ")):
+    for command in _block_commands(block):
         if "create_worker.py" not in command:
             continue
         words = shlex.split(command, comments=True)
@@ -293,7 +298,7 @@ def _prose_await_commands() -> list[tuple[str, str]]:
         (str(prose.relative_to(_REPO_ROOT)), command)
         for prose in _prose_files()
         for block in _fenced_blocks(prose.read_text(encoding="utf-8"))
-        for command in re.split(r"\n(?=\S)", block.replace("\\\n", " "))
+        for command in _block_commands(block)
         if "create_worker.py await" in command
     ]
 
