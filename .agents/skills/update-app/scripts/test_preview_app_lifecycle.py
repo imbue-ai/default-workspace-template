@@ -30,6 +30,10 @@ mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = mod
 _spec.loader.exec_module(mod)
 
+# The shared script gives each boot up to 60s to pass its health check, and this test boots
+# twice (``up``, then ``refresh``) before tearing down.
+_BOOT_TIMEOUT_SECONDS = 180
+
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
 _MANIFEST = """
@@ -89,7 +93,7 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
     }
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(_BOOT_TIMEOUT_SECONDS)
 def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tears_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
