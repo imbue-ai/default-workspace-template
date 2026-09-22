@@ -1,9 +1,8 @@
 """``apply`` lands a prepared merge and makes the live workspace consistent with
 it, as one deterministic, idempotent, rollback-on-failure motion: merge,
 state snapshots, dependency refresh, provisioner run, frontend build (or the
-worker's already-built bundle), pre-flight, the workspace layout migration
-(warning-only), restart, health probes, the version-history ledger entry, and
-the environment converge. On any failure it
+worker's already-built bundle), pre-flight, restart, health probes, the
+version-history ledger entry, and the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
 
@@ -65,7 +64,9 @@ from update_environment import (
     discard_snapshots,
     refresh_app_tools,
     refresh_backend_dependencies,
+    remove_shadowing_app_tool_installs,
     remove_shadowing_mngr_installs,
+    resolve_tool_destinations,
     restore_snapshots,
     run_provisioner,
     take_snapshots,
@@ -78,7 +79,6 @@ from update_layout import (
     FRONTEND_BUNDLES,
     FRONTEND_DIR,
     FRONTEND_LIB_DIR,
-    LAYOUT_MIGRATION_SCRIPT,
     NPM_LOCKFILE,
     NPM_ROOT_DIR,
     PROVISIONER_SCRIPT,
@@ -93,10 +93,10 @@ from update_probes import (
     has_chat_program,
     preflight,
     preflight_chat,
-    read_critical_instance_apps,
+    read_critical_apps,
     refresh_workspace_view,
+    wait_app_healthy,
     wait_healthy,
-    wait_instances_healthy,
 )
 from update_runtime import (
     ApplyFailed,
@@ -110,7 +110,6 @@ from update_runtime import (
     diff_name_status,
     git_out,
     run_checked,
-    tail,
 )
 
 # Per-step wall-clock budgets for the forward apply steps. Nothing about an
@@ -129,10 +128,6 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 _RESTART_TIMEOUT_SECONDS = 600.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
-
-# The layout migration reads and writes a handful of small JSON files; anything
-# past this is a hang.
-_LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
 
 
 def _restore_tree(
@@ -447,40 +442,6 @@ def _install_or_build_bundles(
     )
 
 
-def _migrate_workspace_layouts(repo_root: Path, runner: Runner) -> str | None:
-    """Run the merged tree's layout migration; return why it failed, or ``None``.
-
-    Warning-only by design: the migration never overwrites an output that
-    holds anything (the app stores only gain records), leaves the old store
-    untouched, and runs again at every boot behind its own marker, so a
-    failure here is a retry later, never a reason to roll an otherwise healthy
-    update back. Never raises: a hang and a spawn failure both come back as
-    the reason.
-    """
-    argv = ["python3", LAYOUT_MIGRATION_SCRIPT, "run"]
-    try:
-        result = runner.run(
-            argv,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_LAYOUT_MIGRATION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return (
-            f"python3 {LAYOUT_MIGRATION_SCRIPT} did not finish within "
-            f"{_LAYOUT_MIGRATION_TIMEOUT_SECONDS:g}s"
-        )
-    except OSError as exc:
-        return f"python3 {LAYOUT_MIGRATION_SCRIPT} could not be run ({exc})"
-    returncode = getattr(result, "returncode", 0)
-    if returncode == 0:
-        return None
-    stderr = tail((getattr(result, "stderr", "") or "").strip(), 20)
-    return f"python3 {LAYOUT_MIGRATION_SCRIPT} failed (exit {returncode}): {stderr}"
-
-
 class RecoveryOutcome(NamedTuple):
     """What a rollback's recovery confirmed.
 
@@ -657,13 +618,18 @@ def _recover_running_state(
             _assert_bundles_built(
                 repo_root, None, live_service_restarted=False, bundles=frontend.bundles
             )
+        destinations = resolve_tool_destinations(plan, runner)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
-            refresh_backend_dependencies(repo_root, runner, keep_protected)
+            refresh_backend_dependencies(
+                repo_root, runner, keep_protected, destinations
+            )
         rebuildable_app_tools = _app_tools_to_rebuild(
             plan.app_tools, restored, repo_root
         )
         if rebuildable_app_tools:
-            refresh_app_tools(rebuildable_app_tools, repo_root, runner, keep_protected)
+            refresh_app_tools(
+                rebuildable_app_tools, repo_root, runner, keep_protected, destinations
+            )
         if live_service_restarted:
             run_checked(
                 runner,
@@ -678,15 +644,15 @@ def _recover_running_state(
             HEALTH_INTERVAL_SECONDS,
             sleeper,
         )
-        # Every critical app with an instances API is probed beside the shell as
-        # the forward apply does, read off the restored tree: a tree whose
-        # manifests declare none is confirmed by the shell alone.
+        # Every critical app is probed beside the shell as the forward apply does,
+        # read off the restored tree: a tree whose manifests declare none is
+        # confirmed by the shell alone.
         if healthy:
-            for app in read_critical_instance_apps(repo_root):
-                app_failure = wait_instances_healthy(
+            for app_name in read_critical_apps(repo_root):
+                app_failure = wait_app_healthy(
                     http,
                     repo_root,
-                    app,
+                    app_name,
                     HEALTH_ATTEMPTS,
                     HEALTH_INTERVAL_SECONDS,
                     sleeper,
@@ -694,7 +660,7 @@ def _recover_running_state(
                 if app_failure is not None:
                     healthy = False
                     sys.stderr.write(
-                        f"recovery: the {app.name} app did not become healthy after the "
+                        f"recovery: the {app_name} app did not become healthy after the "
                         f"restart ({app_failure})\n"
                     )
                     break
@@ -803,8 +769,8 @@ def apply_update(
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
     code: 0 applied / 2 rolled back / 3 emergency / 1 precondition.
 
-    ``sweep_homes`` are the homes swept for a stale mngr install after the
-    refresh (:func:`update_environment.default_sweep_homes` for a live apply).
+    ``sweep_homes`` are the homes swept for stale mngr and app tool installs
+    after the refresh (:func:`update_environment.default_sweep_homes` for a live apply).
 
     Idempotent throughout: every phase checks current state before acting
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
@@ -899,7 +865,7 @@ def apply_update(
         marker.phase_timings[phase] = now()
         write_marker(marker, repo_root, now)
 
-    # --- Land the merge (skipped when already landed: idempotent re-entry). ---
+    # Land the merge (skipped when already landed: idempotent re-entry).
     if not is_merge_landed:
         merge_argv = (
             ["git", "merge", "--ff-only", merge_ref]
@@ -935,10 +901,11 @@ def apply_update(
     _advance(PHASE_MERGED)
 
     name_status = diff_name_status(repo_root, marker.rollback_to, runner)
+    app_tools = read_app_tools(repo_root)
     plan = plan_apply(
         [path for _, path in name_status],
         read_provisioner_inputs(repo_root),
-        read_app_tools(repo_root),
+        app_tools,
     )
 
     unresolved_frontend_failure: str | None = None
@@ -1002,7 +969,10 @@ def apply_update(
 
     failure: ApplyFailed | None = None
     try:
-        marker.snapshots = take_snapshots(plan, repo_root, runner, marker.snapshots)
+        destinations = resolve_tool_destinations(plan, runner)
+        marker.snapshots = take_snapshots(
+            plan, repo_root, destinations, marker.snapshots
+        )
         _advance(PHASE_SNAPSHOTTED)
 
         # Whether the npm manifest *changed* says nothing about whether the
@@ -1024,7 +994,11 @@ def apply_update(
             )
         if plan.backend_manifest:
             refresh_backend_dependencies(
-                repo_root, runner, expend, ENVIRONMENT_REFRESH_TIMEOUT_SECONDS
+                repo_root,
+                runner,
+                expend,
+                destinations,
+                ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
         if plan.app_tools:
             refresh_app_tools(
@@ -1032,11 +1006,16 @@ def apply_update(
                 repo_root,
                 runner,
                 expend,
+                destinations,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
             )
         for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
+            )
+        for stale in remove_shadowing_app_tool_installs(runner, sweep_homes, app_tools):
+            sys.stderr.write(
+                f"refresh: removed {stale}, a stale app tool install that shadowed the pinned one\n"
             )
         _advance(PHASE_REFRESHED)
 
@@ -1110,17 +1089,6 @@ def apply_update(
             )
             _advance(PHASE_BUILT)
 
-        # The merged tree's layout migration runs before the restart, so the
-        # restarted shell reads migrated state at once rather than after the
-        # boot-time run; a failure is reported and left to that run.
-        migration_failure = _migrate_workspace_layouts(repo_root, runner)
-        if migration_failure is not None:
-            sys.stderr.write(
-                f"warning: {migration_failure}\nContinuing without rolling back: "
-                "the migration never overwrites an output that holds anything, "
-                "leaves the old store untouched, and runs again at the next boot.\n"
-            )
-
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and
         # the chat both import the workspace libraries and re-read
@@ -1152,20 +1120,19 @@ def apply_update(
                 "backend did not become healthy after restart",
                 live_service_restarted=True,
             )
-        # Every critical app that serves instances restarts with the shell (all are
-        # the services agent's programs), so each one's instances API answering is
-        # the update's health too: the chat is the process that imports mngr, and
-        # the terminal is what the not-built placeholder hands over. Which apps
-        # those are comes from the merged tree's manifests; where each is reached
-        # follows the registry as the app re-registers, and the failure names what
-        # the last poll found.
-        for app in read_critical_instance_apps(repo_root):
-            app_failure = wait_instances_healthy(
-                http, repo_root, app, HEALTH_ATTEMPTS, HEALTH_INTERVAL_SECONDS, sleeper
+        # Every critical app restarts with the shell (all are the services agent's
+        # programs), so each one's health route answering is the update's health
+        # too: the chat is the process that imports mngr, and the terminal is what
+        # the not-built placeholder hands over. Which apps those are comes from the
+        # merged tree's manifests; where each is reached follows the registry as
+        # the app re-registers, and the failure names what the last poll found.
+        for app_name in read_critical_apps(repo_root):
+            app_failure = wait_app_healthy(
+                http, repo_root, app_name, HEALTH_ATTEMPTS, HEALTH_INTERVAL_SECONDS, sleeper
             )
             if app_failure is not None:
                 raise ApplyFailed(
-                    f"the {app.name} app did not become healthy after restart ({app_failure})",
+                    f"the {app_name} app did not become healthy after restart ({app_failure})",
                     live_service_restarted=True,
                 )
 
@@ -1290,7 +1257,7 @@ def apply_update(
         )
         return 3
 
-    # --- Post-success bookkeeping (update-self mode only). -----------------------
+    # Post-success bookkeeping (update-self mode only).
     if target_ref is not None:
         # For the fast-forward landing the merge commit IS the worker branch's
         # tip, so the sha is re-derivable on any re-run -- which is what keeps

@@ -1,10 +1,6 @@
 import pytest
-from browser.errors import InvalidBrowserNameValueError
-from browser.primitives import (
-    BrowserName,
-    derive_browser_title,
-    instance_url_for_browser,
-)
+from browser.errors import InvalidBrowserNameValueError, InvalidStartUrlError
+from browser.primitives import AbsoluteHttpUrl, BrowserName, browser_page_path
 
 
 @pytest.mark.parametrize("value", ["browser-1", "alex-smith", "research-2b"])
@@ -20,12 +16,25 @@ def test_browser_name_rejects_what_the_daemon_rejects(value: str) -> None:
         BrowserName(value)
 
 
-def test_numbered_names_derive_their_title_and_legacy_names_are_verbatim() -> None:
-    assert derive_browser_title(BrowserName("browser-3")) == "Browser 3"
-    assert derive_browser_title(BrowserName("browser-12")) == "Browser 12"
-    assert derive_browser_title(BrowserName("alex-smith")) == "alex-smith"
-    assert derive_browser_title(BrowserName("browser-x")) == "browser-x"
+def test_the_browser_page_selects_the_browser_by_session() -> None:
+    assert browser_page_path(BrowserName("browser-3")) == "/?session=browser-3"
 
 
-def test_instance_url_selects_the_browser_by_session() -> None:
-    assert instance_url_for_browser(BrowserName("browser-3")) == "/?session=browser-3"
+@pytest.mark.parametrize("value", ["https://example.com", "http://localhost:8080/path?q=1"])
+def test_a_start_url_is_an_absolute_http_url(value: str) -> None:
+    assert AbsoluteHttpUrl(value) == value
+
+
+@pytest.mark.parametrize(
+    ("value", "problem"),
+    [
+        ("ftp://example.com", "expected an absolute http or https URL"),
+        ("/docs/", "expected an absolute http or https URL"),
+        ("https://", "expected an absolute http or https URL"),
+        ("https://exa mple.com", "whitespace and control characters"),
+        ("https://example.com/" + "a" * 2048, "over the 2048-character limit"),
+    ],
+)
+def test_a_start_url_that_is_not_absolute_http_is_refused(value: str, problem: str) -> None:
+    with pytest.raises(InvalidStartUrlError, match=problem):
+        AbsoluteHttpUrl(value)
