@@ -464,7 +464,9 @@ def _write_lib(
         _lib_pyproject(name, package, description, extras)
     )
     (lib_dir / "app.toml").write_text(
-        _MANIFEST_TEMPLATE.format(name=name, display_name=display_name)
+        _MANIFEST_TEMPLATE.format(
+            name=name, display_name=display_name, package_upper=package.upper()
+        )
     )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
@@ -478,13 +480,21 @@ def _write_lib(
 # ``priority = "user"`` is what puts a user-built app in the user band the
 # ``oom_tag_service.py user`` prefix below also names. No launch paths: the
 # shell offers ``open`` at the app's root. No ``default_shortcut``: an app
-# pins itself to a desktop's backdrop only when the user asks.
+# pins itself to a desktop's backdrop only when the user asks. The ``[preview]``
+# table is the library's default for the name spelled out, so an edit to the
+# runner's env names has the table to keep in step beside it.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
 priority = "user"
 program = "{name}"
+
+# How update-app boots a throwaway preview of this app: on a free port, over a
+# scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).
+[preview]
+env = {{{package_upper}_PORT = "{{port:main}}", {package_upper}_HOST = "{{host}}", {package_upper}_DATA_DIR = "{{copy:data}}"}}
+copies = {{data = "data/.apps/{name}"}}
 """
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
