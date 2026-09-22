@@ -5,13 +5,13 @@ supervised as the `files` program declared in
 `system/supervisord.conf.d/files.conf`. There is no Python package here: the
 program line registers `app.toml` and the dufs port 8300 through
 `system/scripts/forward_port.py`, then runs
-`dufs --allow-all --bind 127.0.0.1 --port 8300 --assets system/apps/files/assets .`.
+`dufs --allow-upload --allow-delete --allow-search --allow-archive --allow-hash --bind 127.0.0.1 --port 8300 --assets system/apps/files/assets .`.
 
 The server is [dufs](https://github.com/sigoden/dufs), a single static binary
 installed at image build by `system/scripts/install_dufs.sh` (version and
-per-arch sha256 pinned there). It serves the workspace root -- including `data/`, documents, and app and skill files -- bound to loopback with all operations enabled (browse, preview,
+per-arch sha256 pinned there). It serves the workspace root -- including `data/`, documents, and app and skill files -- bound to loopback with file operations enabled (browse, preview,
 upload, rename, delete): the workspace origin is what gates access, exactly as
-for every other registered app.
+for every other registered app. Symlinks within the workspace work; symlinks outside it are refused.
 
 ## Opening a folder
 
@@ -26,11 +26,11 @@ folder.
 
 Beyond the manifest (`app.toml`) and its icon (`icon.svg`), this directory
 holds `assets/`: a vendored copy of dufs's own frontend (its `assets/`
-directory at the pinned release, served via `--assets`), carrying three
+directory at the pinned release, served via `--assets`), carrying four
 workspace patches -- a toolbox toggle that hides "system files" (any path
 whose name, or any segment of a search result's path, starts with `.`) by
 default, with the choice kept in the browser's localStorage; the `?path=`
-redirect (a rooted path on this origin, honoured before anything renders); and a
+redirect (a rooted path on this origin, honoured before anything renders); a Home link to `data/` plus a Workspace shortcut to `/`; and a
 location beacon that posts the path being viewed and the folder's name one hop up
 (`window.parent.postMessage({type: "shell:location", path, title})`, the message
 of desktop-interface contracts.md section 7; the title is the last segment of the

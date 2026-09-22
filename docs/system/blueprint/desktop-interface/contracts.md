@@ -48,7 +48,7 @@ Built-in manifests:
 | `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, params `draft` optional); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional) |
 | `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
-| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, params `path` optional) |
+| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/data/`, params `path` optional) |
 | `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Open Browser", `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.

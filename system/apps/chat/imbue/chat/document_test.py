@@ -1,5 +1,7 @@
 """The chat document over the chat app's real Flask app: the page, its probe route, and the client-activity report."""
 
+import html
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -210,3 +212,25 @@ def test_rename_route_maps_the_managers_refusals(tmp_path: Path) -> None:
     assert "usable" in unusable.get_json()["detail"]
     assert client.post(f"/api/chats/{chat_id}/rename", json={"title": ""}).status_code == 400
     assert client.post(f"/api/chats/{_agent_id()}/rename", json={"title": "x"}).status_code == 404
+
+
+def test_documents_carry_files_label_and_workspace_aliases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    alias = tmp_path / 'workspace & "alias"'
+    alias.symlink_to(workspace, target_is_directory=True)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(alias))
+    monkeypatch.chdir(workspace)
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "files"\nurl = "http://localhost:8300"\nlabel = "files-abc123"\n')
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path / "static", chat_id)
+    (tmp_path / "static" / "root.html").write_text("<html><head></head><body>root</body></html>")
+    roots = html.escape(json.dumps([str(alias), str(workspace)]), quote=True)
+    for path in ("/", "/new", f"/{chat_id}"):
+        response = client.get(path)
+        assert f'<meta name="chat-workspace-roots" content="{roots}">' in response.text
+        assert '<meta name="chat-files-label" content="files-abc123">' in response.text
+    registry.write_text("")
+    assert '<meta name="chat-files-label" content="">' in client.get(f"/{chat_id}").text

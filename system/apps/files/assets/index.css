@@ -24,6 +24,11 @@ body {
   background-color: white;
 }
 
+/* minds patch: keep the Workspace shortcut separate from the Home breadcrumb. */
+.workspace-shortcut {
+  margin-right: 0.75em;
+}
+
 .breadcrumb {
   font-size: 1.25em;
   padding-right: 0.6em;

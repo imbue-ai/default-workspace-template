@@ -586,6 +586,22 @@ describe("the contract", () => {
     warn.mockRestore();
   });
 
+  it("opens another app from a page and rejects an invalid app selector", async () => {
+    messageFromPage("win-1", {
+      type: SHELL_OPEN,
+      app: "notes",
+      path: "/guide?view",
+      ifPresent: "focus",
+    });
+    await settle();
+    expect(api.calls).toContain("openWindow:home:notes:/guide?view:focus:-");
+    const calls = [...api.calls];
+    messageFromPage("win-1", { type: SHELL_OPEN, app: 7, path: "/bad" });
+    messageFromPage("win-1", { type: SHELL_OPEN, app: "absent", path: "/bad" });
+    await settle();
+    expect(api.calls).toEqual(calls);
+  });
+
   it("reloads pages for the agent's refresh op at their windows' stored paths", async () => {
     await navigateInPage("win-1", "/?doc=2");
     const reloads = spyOnSrc("win-1");
