@@ -92,6 +92,8 @@ export function App(): m.Component<AppAttrs> {
   let launcherQuery = "";
   // The row the arrows or a hover moved the highlight to; null follows the default rule for the rows shown.
   let launcherHighlight: number | null = null;
+  // How far the launcher field stands above its one row, in px; the menu sits above it.
+  let launcherFieldRise = 0;
   let selectedShortcutKey: string | null = null;
   let pages: LivePagesLayer | null = null;
   let backdropArea: HTMLElement | null = null;
@@ -690,6 +692,7 @@ export function App(): m.Component<AppAttrs> {
                   highlightIndex: launcherHighlightIndex(menu.rows),
                   isCompact: state.modes.isCompact,
                   isApplePlatform: isApplePlatform(),
+                  bottomOffsetPx: launcherFieldRise,
                   onRun: (row) => runLauncherRow(current, row),
                   onHighlight: (index) => {
                     launcherHighlight = index;
@@ -719,6 +722,10 @@ export function App(): m.Component<AppAttrs> {
             },
             onRunHighlight: () => runHighlightedRow(current),
             onRunSecondary: () => runSecondaryRow(current),
+            onRise: (rise) => {
+              launcherFieldRise = rise;
+              m.redraw();
+            },
           },
           tray: {
             desktops: state.desktops,

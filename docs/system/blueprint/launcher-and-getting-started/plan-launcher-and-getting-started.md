@@ -181,7 +181,7 @@ The field keeps its place at the taskbar's left and its width.
 Its placeholder is `Start app or send message...`.
 Focusing it opens the menu; typing filters; Escape clears the text, and a second Escape on an empty field closes the menu and blurs.
 A press outside the field and the menu closes the menu and leaves the text; the next focus reopens it with the text still there.
-The field is a one-row text area that grows with its text, to eight lines, and scrolls past that.
+The field is a one-row text area that grows with its text, to eight lines, and scrolls past that; it grows upward out of its one-row footprint in the taskbar, over the backdrop, so the taskbar and its entries hold still, and the menu rises with it.
 Shift+Enter breaks the line: a longer message to an agent can be written here.
 A text with a line break in it is a message rather than a query, and the menu offers the free-text rows alone (section 3.5); with the last line break gone the text is a query again.
 
@@ -189,7 +189,7 @@ In compact mode the field collapses to a button that expands over the taskbar's 
 
 ### 4.2 The menu
 
-The menu is a card anchored above the field's left edge, `--desk-launcher-menu-width` wide (a new theme token, 22rem, and 100% of the taskbar's width less its padding in compact mode), at most the backdrop's height less a margin, scrolling when longer, drawn with the desktop's surface, border, radius, and overlay shadow tokens.
+The menu is a card anchored above the field's left edge (lifted by however far the field has grown past one row, so a message being written never runs under it), `--desk-launcher-menu-width` wide (a new theme token, 22rem, and 100% of the taskbar's width less its padding in compact mode), at most the backdrop's height less a margin, scrolling when longer, drawn with the desktop's surface, border, radius, and overlay shadow tokens.
 Its rows are the taskbar entries' height, in the `--font-size-row` size: the app's glyph as a taskbar entry draws it for a launch-path or window row and the plus glyph for a free-text row, then the label, then a faint right-hand caption.
 The launch-path rows come first, then a divider and the window rows while typing, then a divider and the free-text rows.
 A section with no rows draws nothing, not a heading.
