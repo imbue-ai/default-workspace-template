@@ -1387,9 +1387,10 @@ def _touched_critical_apps(
     under its directory, when the bundle it owns was rebuilt, when the apply reinstalled
     its tool environment (a shared backend manifest moves every tool's closure, so
     ``plan.app_tools`` then names every app), or, for the shell, when anything the
-    shell's process runs changed. A frontend apply replaces both bundles, so include
-    both owners even if one app's source was unchanged. An extra restart is acceptable;
-    rollback targeting does not need to compare installed and kept source stamps.
+    shell's process runs changed. A frontend apply replaces every bundle, so include
+    each critical owner even if that app's source was unchanged. An extra restart is
+    acceptable; rollback targeting does not need to compare installed and kept source
+    stamps.
     """
     paths = [path for _, path in name_status]
     apps_dir = repo_root / APPS_DIR

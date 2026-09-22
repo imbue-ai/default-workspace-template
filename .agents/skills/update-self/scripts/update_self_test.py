@@ -2750,9 +2750,9 @@ def test_a_stale_chat_bundle_rejects_the_worker_pair(
 def test_a_build_that_writes_only_the_shell_bundle_is_a_failure(
     apply_repo: Path, capsys
 ) -> None:
-    # One build emits both bundles; a build that died after the shell's exits 0 with
-    # index.html in place and no chat page, and the index check must catch the
-    # second bundle as it does the first.
+    # One build emits every bundle; a build that died after the shell's exits 0 with
+    # index.html in place and no chat page, and the index check must catch each
+    # later bundle as it does the first.
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.unwritten_bundle_apps = frozenset({"chat"})
 
@@ -7120,7 +7120,7 @@ def test_an_apply_keeps_its_rollback_point_only_when_asked(apply_repo: Path) -> 
 def test_the_record_names_every_critical_app_the_apply_touched(
     apply_repo: Path,
 ) -> None:
-    """A shared-library change rebuilds both bundles, so both bundle owners are touched;
+    """A shared-library change rebuilds every bundle, so each critical bundle owner is touched;
     a change under one app's directory touches that app; a non-critical app never counts."""
     _write_openable_app(apply_repo, "chat")
     _write_openable_app(apply_repo, "terminal")
@@ -7212,7 +7212,7 @@ def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_prog
     restarting only what the apply touched -- never the services agent."""
     _write_openable_app(apply_repo, "chat")
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
-    # A chat frontend change: one ``npm run build`` rebuilds both bundles, so the
+    # A chat frontend change: one ``npm run build`` rebuilds every bundle, so the
     # shell is touched as a bundle owner even though none of its files changed.
     assert (
         _apply_keeping_the_rollback_point(
@@ -7672,7 +7672,7 @@ def test_a_frontend_apply_keeps_both_bundle_owners_in_its_rollback(
     apply_repo: Path,
     diff: str,
 ) -> None:
-    """Either frontend edit replaces both bundles. Include both apps even when a
+    """Either frontend edit replaces every bundle. Include both critical owners even when a
     source stamp is unchanged, and restart both when their copies are restored."""
     _write_openable_app(apply_repo, "chat")
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
