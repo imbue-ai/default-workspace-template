@@ -45,10 +45,13 @@ time" describes. Three deltas:
   <name>` for every critical app whose code it changes or whose preview it
   boots, a `--with` sibling included. A change under `system/libs/workspace_ui/`
   or to `system/package.json` / `system/package-lock.json` changes both
-  frontends, so it takes `system_interface` and `chat`. Check for each one in
-  `tk ready` (`grep -E -- "- editing critical app <name>$"`), and take a lease
-  for every app you will touch before editing any of them; if the pass grows
-  to another critical app later, take that app's lease before touching it.
+  frontends, so it takes `system_interface` and `chat`. Take them all or none,
+  before editing any of them: check each one in `tk ready`
+  (`grep -E -- "- editing critical app <name>$"`), take them in name order, and
+  if any is held by another agent, release the ones you took before surfacing
+  it, so two passes that need the same apps never sit holding one each. If the
+  pass grows to another critical app later, take that app's lease before
+  touching it.
   Passes on different critical apps run side by side: step 4's freshness check
   catches a pass whose files moved under it, the apply refuses to start while
   another apply is in flight, and it builds the bundles from the merged tree
