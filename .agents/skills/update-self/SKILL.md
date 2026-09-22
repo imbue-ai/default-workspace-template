@@ -400,9 +400,9 @@ path below instead.
 **When the update touches a critical app (`system/apps/system_interface/`,
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/libs/workspace_ui/`, or
-`system/package.json` / `system/package-lock.json` at all** (the trees the
-critical bundles are built from, the same set the careful flow's freshness
-check names), also take the `editing critical app <name>` lease for each
+`system/package.json` / `system/package-lock.json` at all** (every critical
+app's tree, plus the shared library and npm files both frontend bundles are
+built from), also take the `editing critical app <name>` lease for each
 critical app it touches through the apply, as
 `update-app/references/critical-app.md` does (`<name>` is the app's `app.toml`
 name, so `system/apps/terminal_pty/` is `terminal-pty`; `workspace_ui` and the
