@@ -412,12 +412,12 @@ def _run_git(repo_root: Path, arguments: Sequence[str]) -> str:
 
 
 def with_diff_against_base(
-    scope: CreationScope, repo_root: Path, diff_base: str, diff_ref: str = "HEAD"
+    scope: CreationScope, repo_root: Path, diff_base: str, diff_ref: str
 ) -> CreationScope:
     """The same scope with its diff filled in from the changed files between a base and a ref.
 
-    The ref defaults to HEAD; naming another lets one tree answer for a range that does not
-    end at it, such as what a merge commit's first parent changed since the fork point.
+    A ref other than HEAD lets one tree answer for a range that does not end at it, such as
+    what a merge commit's first parent changed since the fork point.
     """
     base_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_base}^{{commit}}")).strip())
     ref_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_ref}^{{commit}}")).strip())

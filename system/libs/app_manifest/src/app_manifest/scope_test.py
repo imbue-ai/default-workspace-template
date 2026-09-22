@@ -431,7 +431,7 @@ def test_a_change_to_the_owning_apps_manifest_is_inside_a_skill_scopes_footprint
     commit_everything(repo_root, "the skill claims a doc through its owning app")
 
     scope = compute_skill_scope(repo_root, RepoRelativePath(".agents/skills/news-refresh"))
-    scope_with_diff = with_diff_against_base(scope, repo_root, base_sha)
+    scope_with_diff = with_diff_against_base(scope, repo_root, base_sha, "HEAD")
 
     assert scope_with_diff.diff is not None
     assert "system/apps/news/app.toml" in scope_with_diff.diff.files
@@ -460,7 +460,7 @@ def _commit_news_workspace_base(repo_root: Path) -> str:
 
 
 def _news_scope_with_diff(repo_root: Path, base_sha: str) -> CreationScope:
-    return with_diff_against_base(_news_app_scope(repo_root), repo_root, base_sha)
+    return with_diff_against_base(_news_app_scope(repo_root), repo_root, base_sha, "HEAD")
 
 
 def test_the_diff_lists_every_changed_file_and_only_the_unaccounted_ones_as_outside(
@@ -522,7 +522,7 @@ def test_a_diff_base_that_does_not_resolve_raises_rather_than_reporting_no_chang
     _commit_news_workspace_base(repo_root)
 
     with pytest.raises(ScopeComputationError, match="rev-parse"):
-        with_diff_against_base(_news_app_scope(repo_root), repo_root, "no-such-ref-9f13c2")
+        with_diff_against_base(_news_app_scope(repo_root), repo_root, "no-such-ref-9f13c2", "HEAD")
 
 
 def test_the_diff_reports_a_non_ascii_name_and_a_name_with_a_space_as_the_paths_they_are(
@@ -587,7 +587,7 @@ def test_the_diff_can_run_to_a_ref_other_than_head_so_a_merge_answers_for_each_s
     run_git(repo_root, ("merge", "-q", "--no-ff", "-m", "update-self: merge upstream", "upstream"))
 
     local_side = with_diff_against_base(_news_app_scope(repo_root), repo_root, base_sha, "HEAD^1")
-    update_side = with_diff_against_base(_news_app_scope(repo_root), repo_root, "HEAD^1")
+    update_side = with_diff_against_base(_news_app_scope(repo_root), repo_root, "HEAD^1", "HEAD")
 
     assert local_side.diff is not None
     assert local_side.diff.ref == local_sha
