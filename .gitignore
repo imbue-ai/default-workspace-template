@@ -382,4 +382,4 @@ system/apps/system_interface/frontend/permission-demo.html
 system/apps/system_interface/frontend/src/permission-demo.ts
 
 # macOS Finder metadata -- never tracked
-.DS_Store
+**/.DS_Store
