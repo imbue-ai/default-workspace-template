@@ -608,9 +608,7 @@ def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
     A fourth carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
     ``apps/minds_evals/imbue/minds_evals/data_types.py``, copied from
     ``validate_service_name`` here so a seeded app's name can be checked before the
-    workspace sees it. What sits in this tree under ``system/vendor/mngr/`` is a generated
-    snapshot of it, so only a fix upstream reaches that carrier, and an assertion here
-    would pin the snapshot rather than the set it was taken from.
+    workspace sees it. It lives outside this tree, so only a fix in mngr reaches it.
     """
     forward_port = _load_module("_forward_port_set_drift_check", _SCRIPT)
     layout = _load_module("_layout_set_drift_check", _SCRIPT.parent / "layout.py")

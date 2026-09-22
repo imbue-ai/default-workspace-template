@@ -635,7 +635,11 @@ def _recover_running_state(
         destinations = resolve_tool_destinations(plan, runner)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(
-                repo_root, runner, keep_protected, destinations
+                repo_root,
+                runner,
+                keep_protected,
+                destinations,
+                is_mngr_source_required=False,
             )
         rebuildable_app_tools = _app_tools_to_rebuild(
             plan.app_tools, restored, repo_root
