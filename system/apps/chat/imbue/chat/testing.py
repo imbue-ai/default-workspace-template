@@ -69,6 +69,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
@@ -244,6 +245,7 @@ def make_chat_handoff_record(
     handoff_id: str = "handoff-1",
     held_sends: tuple[HeldSend, ...] | None = None,
     target_account_id: str = "acct-openai",
+    model_pick: ModelPick | None = None,
 ) -> ChatHandoffRecord:
     """The handoff entry of a hand-built record: a claude chat named ``Chat 1`` moving to a codex account."""
     started_at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
@@ -265,6 +267,7 @@ def make_chat_handoff_record(
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
+        model_pick=model_pick,
     )
 
 
@@ -277,6 +280,7 @@ def make_chat_rebind_record(
     target_account_id: str = "acct-anthropic-2",
     previous_account_id: str = "acct-anthropic",
     error: str | None = None,
+    model_pick: ModelPick | None = None,
 ) -> ChatRebindRecord:
     """The rebind entry of a hand-built record: a claude chat's agent moving to a second Anthropic account.
 
@@ -303,6 +307,7 @@ def make_chat_rebind_record(
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
+        model_pick=model_pick,
         error=error,
     )
 

@@ -77,7 +77,9 @@ from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
+from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -88,6 +90,7 @@ from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
+from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -2974,6 +2977,42 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.matched.id == "gpt-5.6-terra"
 
 
+def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
+    agent_manager: AgentManager,
+) -> None:
+    """A codex agent restarted on another account answers for its options only once its daemon is up; until then
+    the pick is checked against the set the agent was offered before, which may lack a model the new account has.
+    That is a refusal worth trying again, while a pick outside a set that is known is rejected for good."""
+    _seed_agent(agent_manager, "agent-codex", harness=HarnessType.CODEX)
+    write_codex_model_options(
+        get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-codex")),
+        (_codex_model_entry("gpt-5.5", "high"),),
+    )
+    codex_info = agent_manager.get_agent_info_by_id("agent-codex")
+    assert codex_info is not None
+    with pytest.raises(ModelApplyError) as refused:
+        agent_manager.apply_model_pick(codex_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
+    assert not isinstance(refused.value, ModelPickRejectedError)
+
+    _seed_agent(agent_manager, "agent-claude")
+    claude_info = agent_manager.get_agent_info_by_id("agent-claude")
+    assert claude_info is not None
+    with pytest.raises(ModelPickRejectedError):
+        agent_manager.apply_model_pick(claude_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
+
+
+def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for_good(
+    agent_manager: AgentManager,
+) -> None:
+    """Antigravity's model is changed from its terminal, so a pick for one (from a stale page, or any other caller
+    of the switch route) fails at once rather than being tried again for a rebind's whole budget."""
+    _seed_agent(agent_manager, "agent-agy", harness=HarnessType.ANTIGRAVITY)
+    agy_info = agent_manager.get_agent_info_by_id("agent-agy")
+    assert agy_info is not None
+    with pytest.raises(ModelPickRejectedError, match="changed from the agent's terminal"):
+        agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3.7-flash-high"))
+
+
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 
@@ -3593,7 +3632,11 @@ def _openai_account() -> str:
 
 
 def _handoff_manager(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, sent: list[tuple[str, str, str]], has_user_turn: bool = True
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    sent: list[tuple[str, str, str]],
+    has_user_turn: bool = True,
+    messenger: RecordingMngrMessenger | None = None,
 ) -> tuple[AgentManager, InMemoryChatRecordStore, Path]:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     store = InMemoryChatRecordStore()
@@ -3603,6 +3646,7 @@ def _handoff_manager(
         mngr_binary=mngr_binary,
         chat_files_root=tmp_path / "chats",
         prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+        messenger=messenger if messenger is not None else RecordingMngrMessenger(),
     )
     manager.set_handoff_capabilities(_handoff_capabilities(sent, has_user_turn=has_user_turn))
     return manager, store, argv_log
@@ -3802,25 +3846,58 @@ def test_a_switch_that_failed_after_its_successor_was_adopted_retries_only_where
         manager.stop()
 
 
-def test_a_pick_is_refused_for_a_switch_that_keeps_the_agent(
+def test_a_rebind_carries_a_model_pick_to_the_restarted_agent_and_a_refused_pick_retries_only_the_pick(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A rebind keeps the agent's model settings, so a pick beside it is a refusal, not a silent drop."""
+    """A switch that keeps the agent takes a pick too: once the agent is back on the new account, the pick goes to it
+    through the model bar's own path before the confirming message. A pick the agent's options do not hold fails
+    the switch at the model step, and its retry runs no second restart."""
     sent: list[tuple[str, str, str]] = []
-    manager, _store, _argv_log, agent_id, _first_account, second_account = _rebind_manager(
-        broadcaster, tmp_path, monkeypatch, sent
+    messenger = RecordingMngrMessenger()
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent, messenger=messenger
     )
+    chat_id = ChatId(agent_id)
     try:
-        with pytest.raises(HandoffError, match="keeps its model settings"):
-            manager.begin_switch(
-                ChatId(agent_id),
-                second_account,
-                "hi",
-                "m-1",
-                HeldSendOrigin.CLIENT,
-                model_pick=ModelPick(model_id="opus"),
-            )
-        assert manager.get_handoff_state(ChatId(agent_id)) is None
+        kind, _phase, _block = manager.begin_switch(
+            chat_id,
+            second_account,
+            "Carry on here",
+            "m-1",
+            HeldSendOrigin.CLIENT,
+            model_pick=ModelPick(model_id="haiku", effort="low"),
+        )
+        assert kind is TransitionKind.REBIND
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+        assert [message for _agent, message in messenger.sent] == ["/model haiku", "/effort low", "/fast off"]
+        assert {agent for agent, _message in messenger.sent} == {agent_id}
+        assert sent == [(agent_id, "Carry on here", "m-1")]
+        assert store.read(chat_id) is None
+
+        manager.begin_switch(
+            chat_id,
+            first_account,
+            "And back",
+            "m-2",
+            HeldSendOrigin.CLIENT,
+            model_pick=ModelPick(model_id="gpt-6-astra", effort="high"),
+        )
+
+        def is_failed() -> bool:
+            state = manager.get_handoff_state(chat_id)
+            return state is not None and state.phase is HandoffPhase.FAILED
+
+        wait_for(is_failed, timeout=15.0)
+        failed = manager.get_handoff_state(chat_id)
+        assert failed is not None and failed.kind is TransitionKind.REBIND
+        assert failed.failed_step is HandoffFailedStep.MODEL and failed.error == "Unknown model 'gpt-6-astra'"
+        # The restart landed before the pick was tried, and the confirming message waits for the pick.
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"] * 2
+        assert sent == [(agent_id, "Carry on here", "m-1")]
+
+        assert manager.retry_handoff(chat_id, first_account) is HandoffPhase.RESTARTING
+        wait_for(is_failed, timeout=15.0)
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"] * 2
     finally:
         manager.stop()
 
@@ -4074,12 +4151,13 @@ def _rebind_manager(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     sent: list[tuple[str, str, str]],
+    messenger: RecordingMngrMessenger | None = None,
 ) -> tuple[AgentManager, InMemoryChatRecordStore, Path, str, str, str]:
     """A manager over the test's own host dir, tracking a claude chat bound to one Anthropic account with a second
     signed in; returns it with the record store, the mngr argv log, the agent id, and the two account ids."""
     host_dir = tmp_path / "host"
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
-    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent, messenger=messenger)
     first_account, second_account = _anthropic_account(), _anthropic_account()
     agent_id = f"agent-{uuid4().hex}"
     seed_agent_state(manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": first_account})
