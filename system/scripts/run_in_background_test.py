@@ -144,6 +144,7 @@ def test_the_report_still_arrives_after_the_callers_whole_process_group_is_kille
 
     os.killpg(caller.pid, signal.SIGKILL)
     caller.wait(timeout=10)
+    caller.stdout.close()
 
     [(_, body)] = _wait_for_posts(fake_chat_app, 1)
     assert "survived" in body["message"]
