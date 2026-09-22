@@ -1652,11 +1652,9 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 # native `outputStyle` setting, codex -- which has no output-style concept --
 # gets the same file's body as developer instructions.
 #
-# `MNGR_AGENT_ROLE=chat` is what the finish-notification hooks
-# (system/scripts/agent_notify_user_*.sh) gate on. They test it positively, so
-# a chat created before this landed simply never nudges -- the fail-safe
-# direction, and the alternative (treat an unset role as a chat) would nudge
-# every bare `mngr create` agent in the workspace.
+# `MNGR_AGENT_ROLE=chat` marks the agent as a chat (as opposed to a worker or
+# a bare `mngr create` agent) for any tooling that wants to tell them apart;
+# AGENTS.md's finish-notification rule is addressed to chats and is prose-only.
 [create_templates.chat]
 transfer = "none"
 output_style = "Engineering Subordinate"
