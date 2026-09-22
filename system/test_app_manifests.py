@@ -87,8 +87,9 @@ def _manifest_path_constant(module_file: Path) -> str | None:
 def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
     """Every app package declaring a console script, with the ``module:function`` it points at.
 
-    A program whose command ends in a console script is run by the packages this finds: the
-    terminal's package declares ``terminal-app`` and ``terminal-pty`` both.
+    One package may declare several (the terminal's declares ``terminal-app`` and
+    ``terminal-pty`` both), and several packages may declare the same name, in which case only
+    whichever is on PATH runs -- a declaration alone does not say a package runs anything.
     """
     entry_points: list[tuple[Path, str]] = []
     for pyproject_path in sorted(_APPS_DIR.glob("*/pyproject.toml")):
@@ -103,13 +104,20 @@ def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
 
 
 def _packages_running_program(program: str, command_by_program: dict[str, str]) -> set[Path]:
-    """The app packages that run a supervisord program: those declaring the console script its
-    command ends in. A program with no block, or one whose command runs something other than an
-    app's entry point, is run by no app package here."""
+    """The app package that runs a supervisord program: the sole declarer of the console script
+    its command ends in, whose script is therefore the only one of the apps' on PATH.
+
+    Run by no app package here, so excusing nothing: a program with no block, one whose command
+    runs something other than an app's entry point, and one whose script several packages
+    declare -- which of those runs is not something this config decides.
+    """
     command = command_by_program.get(program, "")
     if not command:
         return set()
-    return {package for package, _ in _script_entry_points(command.split()[-1])}
+    entry_points = _script_entry_points(command.split()[-1])
+    if len(entry_points) != 1:
+        return set()
+    return {entry_points[0][0]}
 
 
 def _entry_point_manifest_paths(command: str) -> list[str]:
