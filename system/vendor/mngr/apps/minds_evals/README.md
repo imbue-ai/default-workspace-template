@@ -2055,20 +2055,28 @@ The driver's `state.json` and `usage.json` are cumulative, so the trial's comple
 whole spend is priced from come from the last step that wrote one -- or, for a trial that died mid-step
 before harbor archived anything, from the copy still at the trial root; the evidence manifest and `reward-details.json` are
 step-local, so **every** step's are read and a gate that failed -- or an entry left unmeasured -- on
-any step fails the trial. An errored entry id and a judge criterion each carry the step they came from
-(`build/http_0_root_0`, `amend/conciseness`), and the `completed` cell says how many steps a pass
-covers (`pass (3 steps)`). A trial that ran fewer steps than its task declared is **not** complete
-even when its last step finished: harbor abandons the remaining steps when one misses its
-`min_reward` and records no exception for it, and since `result.json` lists only the steps that ran,
-`step_count` in the driver's state file -- the count the task declared -- is what tells that trial
-from one that ran them all.
+any step fails the trial. An errored entry id, a criterion score and a dimension score each carry the
+step they came from (`build/http_0_root_0`; `amend/conciseness` as a Slack column and
+`amend/quality: conciseness` in the summary's criteria cell; `build/quality`), and the
+`completed` cell says how many steps a pass covers (`pass (3 steps)`). A trial that ran fewer steps
+than its task declared is **not** complete even when its last step finished: harbor abandons the
+remaining steps when one misses its `min_reward` and records no exception for it, and since
+`result.json` lists only the steps that ran, `step_count` in the driver's state file -- the count
+the task declared -- is what tells that trial from one that ran them all.
 
-**Judge scores are reported, never gated.** They are statistical and drift between runs; gating on
-them would make the scheduled job fail for reasons a code change cannot fix.
+**Every scoring input is reported, and none of it is gated.** Beside the composed `reward` the
+summary carries what each dimension scored and what each criterion under it scored -- programmatic
+checks and judges alike, each criterion naming the kind that produced it (`programmatic`, `llm` or
+`agent`). Judge scores are statistical and drift between runs, so gating on them would make the
+scheduled job fail for reasons a code change cannot fix. Every value is
+rewardkit's normalized 0-1 score, the judges' included: the raw 1-10 likert stays in the trial's own
+`reward-details.json` and is recoverable from the normalization (`raw = 9 * normalized + 1`), and a
+report that mixed the two scales would put numbers on one scale beside numbers on another with
+nothing in a figure saying which.
 
 `--summary-md <path>` writes a GitHub step-summary table -- one row per trial with its case, arm,
-completion, gates, errored evidence, reward, agent cost, harness cost, judge scores, Modal
-environment, and the mngr and dwt SHAs. The `arm` cell holds the harness half of the arm, with the pair in the mngr and dwt columns
+completion, gates, errored evidence, reward, agent cost, harness cost, dimensions, criteria, time,
+Modal environment, and the mngr and dwt SHAs. The `arm` cell holds the harness half of the arm, with the pair in the mngr and dwt columns
 beside it: the wrong-model reason when there is one, `-` when the trial recorded no arm at all, and
 otherwise the lane, the requested model (the word `default` when it asked for none) and, when one
 was requested, `confirmed` or `unconfirmed` -- or `not observable` on a lane whose harness names no
@@ -2087,6 +2095,16 @@ price map)`), since the trials hold tokens and a figure says nothing about what 
 are left out of a run that recorded no spend at all. Under the table, only where a `+` or a `?`
 appears, one line says what those marks mean.
 
+The `dimensions` cell holds what each dimension scored (`gates 1.00, quality 0.80, reward 0.75`)
+and the `criteria` cell every criterion grouped under the dimension that scored it (`gates:
+not_timed_out 1.00; quality: conciseness 0.78`), both a dash where the trial was never graded.
+The `time` cell holds the three spans a trial times itself over -- `elapsed 612s / conversation 545s
+/ replies 320s` -- which are the whole trial including workspace creation, the first client message
+to the last reply, and the sum of the recorded turns' own reply times; a span the trial's records do
+not carry reads as `-`, and a trial that recorded none of them reads as `-` altogether. All three are
+cumulative over a stepped trial's steps, and the replies are a floor on the conversation: a turn
+earns a record only once its reply has arrived.
+
 `--summary-json <path>` writes
 the same rows as JSON with `is_passed`, `job_name`, `modal_environment_names` (exactly the list the
 cleanup below acts on), the harness half as its own fields (`lane`, `requested_model`,
@@ -2094,9 +2112,11 @@ cleanup below acts on), the harness half as its own fields (`lane`, `requested_m
 computed from (`source`, `version`, `map_source`), a `spend` list per trial: one entry per
 spender, carrying `spender`, `cost_usd`, `is_complete`, `is_rate_certain` and `unpriced_models`, and
 per trial `step_count` and `completed_step_count` -- the steps the task declared and the steps harbor
-ran, both `0` on a flat trial. An oracle run
-(`harbor run -a oracle`) is checkable the same way: it writes a `state.json` and a reward, and its
-fabricated evidence carries no `error` entries.
+ran, both `0` on a flat trial -- a `criterion_scores` list (`step`, `dimension`, `criterion`, `kind`,
+`value`), a `dimension_scores` list (`step`, `dimension`, `value`) and the three durations
+(`elapsed_seconds`, `conversation_seconds`, `reply_seconds`, each `null` where the trial's records do
+not say). An oracle run (`harbor run -a oracle`) is checkable the same way: it writes a `state.json`
+and a reward, and its fabricated evidence carries no `error` entries.
 
 ### Checking a diagnostic run
 
@@ -2855,12 +2875,17 @@ reads as a measurement that went missing rather than as a night with nothing to 
 Below that, one collapsed container, `judge scores`, holds every graded trial of the pair in a
 single table -- config, case, reward, a column per judge criterion, then what became of the trial --
 rather than a table per harness config, so a criterion can be compared straight down its own column.
-The criteria are the union across every arm: a criterion only one config was scored on still gets a
-column, and the arms that were not scored on it print `-` rather than a zero. A column is headed
-with the bare criterion name, and with `<dimension>: <criterion>` only where two dimensions scored
-criteria of the same name; which dimension scored which criteria is stated once in a legend above
-the table (`quality: conciseness`, `outcome: works_as_expected`), because the dimension is what says
-whether a score is about the product or about the harness that drove it.
+The judges' criteria alone have columns here; the programmatic checks a trial was also scored on are
+in the run's own summary. Each cell is rewardkit's normalized 0-1 score (`0.78`), not the judge's
+1-10 likert answer, which stays in the trial's `reward-details.json`; the legend above the table says
+the scale. The criteria are the union across every arm: a criterion only one config was scored on
+still gets a column, and the arms that were not scored on it print `-` rather than a zero. A column
+is headed with the bare criterion name -- qualified by its step on a stepped case
+(`build/conciseness`), so three steps stay three columns -- and with `<dimension>: <criterion>` only
+where two dimensions scored criteria of the same name; which dimension scored which criteria is
+stated once in a legend above the table (`criteria by dimension, each scored 0.00-1.00: quality:
+conciseness; outcome: works_as_expected`), because the dimension is what says whether a score is
+about the product or about the harness that drove it.
 
 Slack refuses the whole message over 20 cells in a table row or 10,000 characters across the cells
 of all its tables, so the message keeps itself under both. Every cell is clamped to 120 characters

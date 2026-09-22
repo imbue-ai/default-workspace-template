@@ -285,12 +285,20 @@ the bypass list.
   shipped CLI's help deep-links (`doc_links.py`) are pinned to release blob URLs, and
   outsiders need "which public commit is v0.2.18".
 - `minds-v*` tags point at older SHAs (`GREEN_MNGR_SHA`), which per-change `tag_name`
-  cannot express. A small private-repo workflow on `push: tags:` maps private SHA ->
-  public SHA via the `GitOrigin-RevId` trailer (walking first-parent ancestors when the
-  tagged commit produced no public commit), then pushes the annotated tag to the mirror
-  with the App credential, with retry for sync lag and force-repoint support. This is the
-  kubernetes/publishing-bot pattern. (Only needed if minds tags remain public — see open
-  decisions; `install-wsl.sh` currently clones the public repo at the latest `minds-v*`.)
+  cannot express. `.github/workflows/mirror-tags.yml` (on `push: tags: minds-v*`, plus a
+  dispatch that backfills every missing tag) runs `scripts/mirror_tag.py`, which maps
+  private SHA -> public SHA via the `GitOrigin-RevId` trailer: it finds the first-parent
+  commit of `main` that carries the tag (the tagged commit itself, or the `--no-ff` merge
+  that landed the release branch, since the tag names the merge parent), walks `main`'s
+  first-parent history from there when that commit produced no public commit, waits for
+  the mirror push to export past the tagged commit, then pushes the annotated tag to the
+  mirror with the App credential; `--force` re-points. This is the kubernetes/publishing-bot
+  pattern.
+  Tags not reachable from `main` (test tags) have no public counterpart: `--all-missing`
+  reports and skips them, while naming one explicitly (which the tag-push trigger does) is
+  an error.
+  `install-linux.sh --version latest` clones the public repo at the latest `minds-v*`,
+  which is why the tags must be public.
 - The `qemu-img-v10.2.2` GitHub Release (and future public build-asset releases) stays on
   the public repo so unauthenticated build-time downloads keep working.
 

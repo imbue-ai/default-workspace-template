@@ -23,6 +23,7 @@ from imbue.minds_evals.ci_report import SUMMARY_ARTIFACT_PREFIX
 from imbue.minds_evals.ci_report import SlackMessage
 from imbue.minds_evals.ci_report import UNGREEN_ICON_EMOJI
 from imbue.minds_evals.ci_report import as_slack_payload
+from imbue.minds_evals.ci_report import collect_judge_criteria
 from imbue.minds_evals.ci_report import diagnose_behaviour_summary_path
 from imbue.minds_evals.ci_report import diagnose_fixture_summary_path
 from imbue.minds_evals.ci_report import format_budgeted_block
@@ -38,16 +39,18 @@ from imbue.minds_evals.data_types import BehaviourDiagnosticCell
 from imbue.minds_evals.data_types import CellDecision
 from imbue.minds_evals.data_types import CiMatrix
 from imbue.minds_evals.data_types import CiReportContext
+from imbue.minds_evals.data_types import CriterionKind
+from imbue.minds_evals.data_types import CriterionScore
 from imbue.minds_evals.data_types import DecidedPair
 from imbue.minds_evals.data_types import DiagnosticRunCheck
 from imbue.minds_evals.data_types import DiagnosticTrialCheck
 from imbue.minds_evals.data_types import DiagnosticVerdict
+from imbue.minds_evals.data_types import DimensionScore
 from imbue.minds_evals.data_types import FactMatcher
 from imbue.minds_evals.data_types import FactMatcherKind
 from imbue.minds_evals.data_types import FactOutcome
 from imbue.minds_evals.data_types import FactStatus
 from imbue.minds_evals.data_types import FixtureDiagnosticCell
-from imbue.minds_evals.data_types import JudgeScore
 from imbue.minds_evals.data_types import KnownFailure
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
@@ -330,17 +333,25 @@ def make_bold_cell(text: str) -> dict[str, Any]:
     }
 
 
-def make_judge_score(dimension: str, criterion: str, raw_score: float) -> JudgeScore:
-    return JudgeScore(
-        dimension=dimension, criterion=criterion, normalized_score=(raw_score - 1) / 9, raw_score=raw_score
+def make_judge_score(dimension: str, criterion: str, value: float, *, step: str = "") -> CriterionScore:
+    """One criterion a judge scored, on rewardkit's own normalized scale."""
+    return CriterionScore(step=step, dimension=dimension, criterion=criterion, kind=CriterionKind.LLM, value=value)
+
+
+def make_check_score(dimension: str, criterion: str, value: float, *, step: str = "") -> CriterionScore:
+    """One criterion a programmatic check scored, which the judge table has no column for."""
+    return CriterionScore(
+        step=step, dimension=dimension, criterion=criterion, kind=CriterionKind.PROGRAMMATIC, value=value
     )
 
 
-def make_graded_trial(case_id: str, judge_scores: Sequence[JudgeScore], reward: float | None = 0.75) -> TrialCheck:
+def make_graded_trial(
+    case_id: str, criterion_scores: Sequence[CriterionScore], reward: float | None = 0.75
+) -> TrialCheck:
     """One graded trial as a summary carries it.
 
     Built as a model rather than out of a job directory, because the judge criteria are what is under
-    test and every fixture directory scores the same single one.
+    test and every fixture directory scores the same few.
     """
     return TrialCheck(
         trial_name="{}__aaaaaaa".format(case_id),
@@ -352,7 +363,8 @@ def make_graded_trial(case_id: str, judge_scores: Sequence[JudgeScore], reward: 
         is_gates_passed=True,
         error_entry_ids=(),
         reward=reward,
-        judge_scores=tuple(judge_scores),
+        criterion_scores=tuple(criterion_scores),
+        dimension_scores=() if reward is None else (DimensionScore(step="", dimension="reward", value=reward),),
         spend=(),
         lane="anthropic",
         requested_model="",
@@ -488,13 +500,15 @@ def test_render_slack_report_reports_a_green_run_as_a_grid_of_cases_by_config(tm
     )
     assert read_failed_trials(message) == ()
     assert read_judge_table(message) == (
-        ("config", "case", "reward", "conciseness", "state"),
-        ("default", "greeting", "0.75", "8", "ok"),
-        ("default", "todo-app", "0.75", "8", "ok"),
-        ("haiku", "greeting", "0.75", "8", "ok"),
-        ("haiku", "todo-app", "0.75", "8", "ok"),
+        ("config", "case", "reward", "main_harness_success", "conciseness", "state"),
+        ("default", "greeting", "0.75", "0.50", "0.78", "ok"),
+        ("default", "todo-app", "0.75", "0.50", "0.78", "ok"),
+        ("haiku", "greeting", "0.75", "0.50", "0.78", "ok"),
+        ("haiku", "todo-app", "0.75", "0.50", "0.78", "ok"),
     )
-    assert read_judge_legend(message) == "_criteria by dimension:_ quality: conciseness"
+    assert read_judge_legend(message) == (
+        "_criteria by dimension, each scored 0.00-1.00:_ harness_quality: main_harness_success; quality: conciseness"
+    )
     assert read_details(message) == ""
     assert read_blocks(message, "context")[0]["elements"][0]["text"].startswith("_reward_ :large_red_square: `<0.25`")
     assert read_blocks(message, "context")[-1]["elements"][0]["text"] == (
@@ -942,10 +956,10 @@ def test_render_slack_report_marks_a_case_a_cell_never_ran_as_unknown(tmp_path: 
     # The judge table has a row per trial that was actually graded, so the case the haiku cell never
     # ran is absent from it rather than carried as a hole the way the grid has to carry it.
     assert read_judge_table(message) == (
-        ("config", "case", "reward", "conciseness", "state"),
-        ("default", "greeting", "0.75", "8", "ok"),
-        ("default", "todo-app", "0.75", "8", "ok"),
-        ("haiku", "todo-app", "0.75", "8", "ok"),
+        ("config", "case", "reward", "main_harness_success", "conciseness", "state"),
+        ("default", "greeting", "0.75", "0.50", "0.78", "ok"),
+        ("default", "todo-app", "0.75", "0.50", "0.78", "ok"),
+        ("haiku", "todo-app", "0.75", "0.50", "0.78", "ok"),
     )
 
 
@@ -1036,8 +1050,8 @@ def test_render_slack_report_gives_an_oracle_only_run_a_single_oracle_column(tmp
     assert read_sections(message)[0].endswith("passed in 41m20s, _trigger=_ `schedule` _(oracle only)_")
     assert read_grid(message) == (("case", "oracle"), ("todo-app", "large_green_square 0.75"))
     assert read_judge_table(message) == (
-        ("config", "case", "reward", "conciseness", "state"),
-        ("oracle", "todo-app", "0.75", "8", "ok"),
+        ("config", "case", "reward", "main_harness_success", "conciseness", "state"),
+        ("oracle", "todo-app", "0.75", "0.50", "0.78", "ok"),
     )
 
 
@@ -1314,6 +1328,57 @@ def test_render_slack_report_builds_a_grid_cell_out_of_a_band_and_a_reward(tmp_p
     }
 
 
+def test_render_slack_report_gives_each_step_of_a_stepped_case_its_own_column(tmp_path: Path) -> None:
+    """A stepped case is scored once per step against that step's own expectations, so one criterion
+    is as many answers as the case has steps. A column keyed without the step would collapse them
+    into one cell of repeated numbers, and a programmatic check scored beside them is not a column
+    here at all."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "default", CellDecision.RUN)])
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_model_summary(
+        live_summary_path(summaries_dir, "main", CONFIG_SLUG, "default"),
+        [
+            make_graded_trial(
+                "roadmap",
+                [
+                    make_judge_score("quality", "conciseness", 0.6, step="triage"),
+                    make_judge_score("quality", "conciseness", 0.9, step="build"),
+                    make_check_score("gates", "all_turns_completed", 1.0, step="build"),
+                ],
+            )
+        ],
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert_within_slack_limits(message)
+    assert read_judge_table(message) == (
+        ("config", "case", "reward", "triage/conciseness", "build/conciseness", "state"),
+        ("default", "roadmap", "0.75", "0.60", "0.90", "ok"),
+    )
+    assert read_judge_legend(message) == (
+        "_criteria by dimension, each scored 0.00-1.00:_ quality: triage/conciseness, build/conciseness"
+    )
+
+
+def test_collect_judge_criteria_gives_both_judge_kinds_a_column_and_the_checks_none() -> None:
+    """rewardkit tags an AgentJudge's rewards `agent`, an LLMJudge's `llm` and a .py criterion's
+    `programmatic`. Both judge kinds are columns, or a case that grows an agent judge quietly stops
+    being reported here; the checks are not, and are read off the run's own summary instead."""
+    trial = make_graded_trial(
+        "todo-app",
+        [
+            make_judge_score("quality", "conciseness", 0.78),
+            CriterionScore(step="", dimension="outcome", criterion="delivered", kind=CriterionKind.AGENT, value=0.5),
+            make_check_score("outcome", "app_registered", 1.0),
+        ],
+    )
+
+    assert [criterion.criterion for criterion in collect_judge_criteria([trial])] == ["conciseness", "delivered"]
+
+
 def test_render_slack_report_names_the_dimension_beside_each_judge_criterion(tmp_path: Path) -> None:
     """A criterion's name alone does not say what it measured: two dimensions can score criteria of
     the same name, and the dimension is what says whether a score is about the product or about the
@@ -1328,13 +1393,13 @@ def test_render_slack_report_names_the_dimension_beside_each_judge_criterion(tmp
         [
             make_graded_trial(
                 "greeting",
-                [make_judge_score("quality", "conciseness", 9.0), make_judge_score("outcome", "conciseness", 7.0)],
+                [make_judge_score("quality", "conciseness", 0.9), make_judge_score("outcome", "conciseness", 0.7)],
             ),
             make_graded_trial(
                 "todo-app",
                 [
-                    make_judge_score("quality", "conciseness", 6.0),
-                    make_judge_score("harness_quality", "main_harness", 10.0),
+                    make_judge_score("quality", "conciseness", 0.6),
+                    make_judge_score("harness_quality", "main_harness", 1.0),
                 ],
                 reward=0.5,
             ),
@@ -1348,11 +1413,12 @@ def test_render_slack_report_names_the_dimension_beside_each_judge_criterion(tmp
     # headings; `main_harness` is scored under one, so its heading stays bare.
     assert read_judge_table(message) == (
         ("config", "case", "reward", "quality: conciseness", "outcome: conciseness", "main_harness", "state"),
-        ("default", "greeting", "0.75", "9", "7", "-", "ok"),
-        ("default", "todo-app", "0.50", "6", "-", "10", "ok"),
+        ("default", "greeting", "0.75", "0.90", "0.70", "-", "ok"),
+        ("default", "todo-app", "0.50", "0.60", "-", "1.00", "ok"),
     )
     assert read_judge_legend(message) == (
-        "_criteria by dimension:_ quality: conciseness; outcome: conciseness; harness_quality: main_harness"
+        "_criteria by dimension, each scored 0.00-1.00:_"
+        " quality: conciseness; outcome: conciseness; harness_quality: main_harness"
     )
 
 
@@ -1380,7 +1446,7 @@ def test_render_slack_report_fills_a_judge_table_row_and_says_when_columns_did_n
         [
             make_graded_trial(
                 "todo-app",
-                [make_judge_score("quality", "criterion-{}".format(index), 8.0) for index in range(criteria_count)],
+                [make_judge_score("quality", "criterion-{}".format(index), 0.8) for index in range(criteria_count)],
             )
         ],
     )
@@ -1411,9 +1477,9 @@ def test_render_slack_report_states_the_dimensions_above_the_judge_table_rather_
             make_graded_trial(
                 "todo-app",
                 [
-                    make_judge_score("harness_quality", "main_harness_success", 10.0),
-                    make_judge_score("outcome", "works_as_expected", 9.0),
-                    make_judge_score("outcome", "no_placeholder_content", 8.0),
+                    make_judge_score("harness_quality", "main_harness_success", 1.0),
+                    make_judge_score("outcome", "works_as_expected", 0.9),
+                    make_judge_score("outcome", "no_placeholder_content", 0.8),
                 ],
             )
         ],
@@ -1432,7 +1498,7 @@ def test_render_slack_report_states_the_dimensions_above_the_judge_table_rather_
         "state",
     )
     legend = (
-        "_criteria by dimension:_ harness_quality: main_harness_success;"
+        "_criteria by dimension, each scored 0.00-1.00:_ harness_quality: main_harness_success;"
         " outcome: works_as_expected, no_placeholder_content"
     )
     assert read_judge_legend(message) == legend
@@ -1441,7 +1507,7 @@ def test_render_slack_report_states_the_dimensions_above_the_judge_table_rather_
     assert fence[:3] == [
         "```",
         "config   case      reward  main_harness_success  works_as_expected  no_placeholder_content  state",
-        "default  todo-app  0.75    10                    9                  8                       ok",
+        "default  todo-app  0.75    1.00                  0.90               0.80                    ok",
     ]
 
 
@@ -1474,7 +1540,7 @@ def test_render_slack_report_keeps_a_huge_judge_table_inside_slacks_character_bu
         [
             make_graded_trial(
                 "case-{}-{}".format(index, "x" * 300),
-                [make_judge_score("quality", "criterion-{}".format(score), 8.0) for score in range(16)],
+                [make_judge_score("quality", "criterion-{}".format(score), 0.8) for score in range(16)],
             )
             for index in range(60)
         ],
@@ -1510,7 +1576,7 @@ def test_render_slack_report_says_so_when_no_judge_row_fits_at_all(tmp_path: Pat
         [
             make_graded_trial(
                 "case-{}-{}".format(index, "x" * 300),
-                [make_judge_score("quality", "conciseness", 8.0)],
+                [make_judge_score("quality", "conciseness", 0.8)],
             )
             for index in range(90)
         ],
@@ -1603,11 +1669,11 @@ def test_as_slack_payload_posts_as_the_run_and_carries_the_whole_report_as_text(
         "greeting  ok 0.75  -",
         "todo-app  ok 0.75  -",
         "```",
-        "_criteria by dimension:_ quality: conciseness",
+        "_criteria by dimension, each scored 0.00-1.00:_ harness_quality: main_harness_success; quality: conciseness",
         "```",
-        "config   case      reward  conciseness  state",
-        "default  greeting  0.75    8            ok",
-        "default  todo-app  0.75    8            ok",
+        "config   case      reward  main_harness_success  conciseness  state",
+        "default  greeting  0.75    0.50                  0.78         ok",
+        "default  todo-app  0.75    0.50                  0.78         ok",
         "```",
         "*details*",
         "*haiku* -- skipped (already green)",
@@ -1776,7 +1842,7 @@ def test_only_the_levels_parse_run_check_strips_carry_computed_fields() -> None:
 
     deeper_models = _nested_model_types(TrialCheck)
 
-    assert deeper_models == {JudgeScore, SpenderCost}
+    assert deeper_models == {CriterionScore, DimensionScore, SpenderCost}
     # Every level the stripping does not reach, which is every model under the summary but the two it
     # names: a computed field on any of them is validated back as one the model did not declare.
     unstripped_models = {PricingSource, *deeper_models}

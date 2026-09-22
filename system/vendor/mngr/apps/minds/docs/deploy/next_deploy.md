@@ -183,6 +183,19 @@ deploy was deliberately not done.
   provisional tag) were destroyed on 2026-09-13; the dev pool is re-baked from
   the real `minds-v0.6.0` tag.
 
+- [ ] **Connector concurrency and scaledown reshape** (imbue-ai/mngr-internal#1158;
+  branch `mngr/fix-modal-containers`). The next production and staging
+  services deploy raises the connector's per-container input cap from 8 to
+  32 (target 16), bounds every Neon socket so a half-open connection fails in
+  about 20 s instead of Modal's 300 s timeout, and applies the tiers' new
+  `[scaledown_window]` (600 s) and production's `[min_containers].connector = 2`
+  from `deploy.toml`. Staging first. After each deploy, confirm the reshape
+  landed by querying the tier's OpenObserve `modal_logs`: distinct `api`
+  `container_id`s per day should drop from hundreds to a handful, and 500s on
+  `/frps/auth/*` with `duration_ms` near 300000 should stop. The open
+  questions for Modal (worker heartbeat failures, scale-down drain, Proxy idle
+  flows) are in `~/handoff/modal-questions.md` on Josh's dev box.
+
 - [ ] **Deploy the production services.** Production runs connector
   `dabb19b95b`, whose `FALLBACK_BRANCH` is `minds-v0.4.3`, so browser creates
   (`/hosts/claim`) pin to that tag while desktop 0.5.0 clients ask for
@@ -223,10 +236,29 @@ deploy was deliberately not done.
   `260825un55i8ix7`), so most users are two releases behind. The 0.5.0 build is
   `260902shwco3ynx`.
 
-  Bump the connector download fallback (`_DEFAULT_TARGET_BY_PLATFORM` in
+  Bump the connector download fallback (`_RELEASE_CHANNEL_PLATFORMS` in
   `accounts_web.py`) in the same PR **only when the channel is `stable`** -- it
   is what the public download link serves while the feed is unreadable, and
   leaving it *ahead* of stable is unrecoverable, since `allowDowngrade` is false.
+
+- [ ] **Manual Linux pass before stable lists `linux`.** Alpha and beta list
+  `linux` first, as soon as a Linux-capable build is promoted there; stable
+  stays `platforms = ["mac"]` until
+  someone has, on Ubuntu 24.04 and Debian 12: installed the `.deb` and run the
+  AppImage, created a mind on each local backend the machine supports (Docker,
+  gVisor, Lima with qemu + KVM) and one cloud backend, opened a `minds://`
+  link, and taken an in-app update through the password prompt. Then list
+  `linux` on stable, pin a Linux download fallback beside the mac one in the
+  connector, and delete the test asserting there is none. The pass itself is
+  done (PR #968): Ubuntu 26.04 on 2026-09-14 through 2026-09-16 and Debian 12
+  on 2026-09-16, both artifacts, Docker, gVisor, Lima and an Imbue Cloud
+  create, a `minds://` link, and in-app updates of both the `.deb` (through
+  the PolicyKit prompt) and the AppImage. The Debian half and the final
+  Ubuntu checks ran on ToDesktop build `2609166wft3ii55`; the earlier Ubuntu
+  steps ran on that build's predecessors from the same branch as each fix
+  landed. What remains is the release half: promote the first
+  Linux-capable build to alpha and beta with `platforms = ["mac", "linux"]`,
+  and after it has soaked there, the stable listing with the fallback pin.
 
 - [ ] **Bake the production pool at whatever tag is promoted**, before the
   `[web_channels.*]` repoint that pins browser creates to it

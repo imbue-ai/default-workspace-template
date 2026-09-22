@@ -33,7 +33,6 @@ from collections.abc import Mapping
 from typing import Any
 from typing import Protocol
 
-import psycopg2
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
@@ -466,9 +465,12 @@ def decide_frps_ping(
     sever guarantee is one heartbeat interval (~10s) plus at most that TTL --
     a deliberate trade of kill-switch latency for O(shares/TTL) DB reads
     instead of one per ping. frp also fails closed on plugin errors, so this
-    path fails OPEN on the connector's own internal errors (never cached):
-    tunnel uptime stays coupled only to the connector being reachable, and a
-    non-active share slips through only until the next successful lookup.
+    path fails OPEN on any connector-internal error -- whatever the lookup
+    raises, not only the database's own error type -- and never caches that
+    allow: tunnel uptime stays coupled only to the connector being reachable,
+    and a non-active share slips through only until the next successful
+    lookup. Each fail-open is reported as a warning, so a programming error
+    here is visible in the error tracker rather than silent.
     ``Login``/``NewProxy`` keep their fail-closed, uncached handling -- they
     are security decisions, while a heartbeat merely continues an
     already-authorized session.
@@ -485,7 +487,7 @@ def decide_frps_ping(
             return _frps_allow()
     try:
         share = share_lookup(token_hash)
-    except psycopg2.Error as exc:
+    except Exception as exc:
         emit_metric("frps_ping_fail_open", 1, {})
         logger.warning("Allowing frps ping despite a share lookup failure", exc_info=exc)
         return _frps_allow()

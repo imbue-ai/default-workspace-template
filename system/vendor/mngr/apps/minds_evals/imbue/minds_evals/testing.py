@@ -22,7 +22,9 @@ from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import PricingSource
 from imbue.minds_evals.data_types import StepBoxFile
 from imbue.minds_evals.data_types import StepPosition
+from imbue.minds_evals.data_types import TokenBuckets
 from imbue.minds_evals.data_types import TokenSnapshot
+from imbue.minds_evals.data_types import TurnRecord
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.driver import DriverEventType
 from imbue.minds_evals.driver import EVAL_USER_ID_NAMESPACE
@@ -368,6 +370,14 @@ GATES_CRITERION_NAMES: Final[tuple[str, ...]] = (
 TRIAL_MNGR_SHA: Final[str] = "a" * 40
 TRIAL_DWT_SHA: Final[str] = "c" * 40
 
+# How long a written trial says it took. The three are ordered the way a real trial's are and each is
+# distinct, so a report that read one of them for another says so rather than passing: the whole
+# trial holds the workspace bring-up and the evidence phase, the conversation holds what the client
+# waited through, and the replies are the turns' own share of that.
+TRIAL_ELAPSED_SECONDS: Final[float] = 612.0
+TRIAL_CONVERSATION_SECONDS: Final[float] = 545.0
+TRIAL_REPLY_SECONDS: Final[tuple[float, ...]] = (200.0, 120.0)
+
 
 def _exception_info(exception_type: str) -> dict[str, Any]:
     return {
@@ -379,8 +389,13 @@ def _exception_info(exception_type: str) -> dict[str, Any]:
 
 
 def _graded_verifier_result() -> dict[str, Any]:
-    """What harbor records for a trial, or a step, its verifier graded."""
-    return {"rewards": {"gates": 1.0, "quality": 0.75, "reward": 0.75}}
+    """What harbor records for a trial, or a step, its verifier graded.
+
+    Four keys, because a reader of the dimension scores has to be held to more than the composed one:
+    the gates the trial is charged for, the two dimensions the criteria below add up to, and the
+    composed `reward` harbor compares a step's floor against.
+    """
+    return {"rewards": {"gates": 1.0, "quality": 0.8, "outcome": 0.7, "reward": 0.75}}
 
 
 def _write_harbor_trial_result(
@@ -426,9 +441,16 @@ def _write_agent_state(
     harness_config: Mapping[str, Any] | None,
     step_name: str,
     step_count: int,
+    elapsed_seconds: float | None,
+    conversation_seconds: float | None,
 ) -> None:
     """The driver's own progress record, synced out of the box. The two step keys are what the driver
-    writes for a flat trial -- no step, no steps declared -- unless a stepped one is being written."""
+    writes for a flat trial -- no step, no steps declared -- unless a stepped one is being written.
+
+    Either duration is left out of the file altogether where the caller passes None, which is the
+    shape every state file written before the driver timed a trial has: a duration nobody recorded is
+    not a duration of no time, and only an absent key can say so.
+    """
     state: dict[str, Any] = {
         "eval_name": trial_dir.name,
         "case_name": case_id,
@@ -439,6 +461,10 @@ def _write_agent_state(
         "test_state": test_state,
         "timed_out": test_state == "timed_out",
     }
+    if elapsed_seconds is not None:
+        state["elapsed_seconds"] = elapsed_seconds
+    if conversation_seconds is not None:
+        state["conversation_seconds"] = conversation_seconds
     # Absent rather than empty for a trial that recorded no arm, which is the shape every state file
     # written before arms existed has. The block repeats the pinned pair the way the driver writes
     # it, so it describes a whole treatment on its own.
@@ -459,7 +485,14 @@ def _write_reward_details(
     trial_dir: Path, test_state: str, failed_gate_names: tuple[str, ...], judge_raw_score: float
 ) -> None:
     """rewardkit's per-criterion breakdown, in both shapes it emits: one dict for a dimension that
-    yielded a single reward, and a list for one that yielded a judge alongside programmatic guards."""
+    yielded a single reward, and a list for one that yielded a judge alongside programmatic guards.
+
+    All four dimensions a graded case can carry, with both judge kinds and programmatic checks among
+    them: what a report makes of a criterion turns on the kind that scored it, so a fixture of judges
+    alone would leave every reader of the checks untested. The two markers finalize.py stamps in are
+    here too -- neither is a dimension, and a reader that took them for one would report the harness
+    name as a score.
+    """
     (trial_dir / "verifier" / "reward-details.json").write_text(
         json.dumps(
             {
@@ -479,7 +512,22 @@ def _write_reward_details(
                         ],
                     },
                 ],
+                "harness_quality": [
+                    {
+                        "kind": "llm",
+                        "criteria": [{"name": "main_harness_success", "value": 0.5, "raw": 5.5}],
+                    },
+                    {"kind": "programmatic", "criteria": [{"name": "worker_reports_present", "value": 1.0}]},
+                ],
+                "outcome": {
+                    "kind": "programmatic",
+                    "criteria": [
+                        {"name": "app_registered", "value": 1.0},
+                        {"name": "http_expectations_met", "value": 0.5},
+                    ],
+                },
                 "timed_out": test_state == "timed_out",
+                "harness": {"name": "claude", "is_harness_quality_scored": True},
             }
         )
     )
@@ -634,6 +682,41 @@ def usage_cost_usd(model: str, tokens: TokenSnapshot, *, cache_write_ttl: CacheW
     return cost_usd
 
 
+def _turn_timestamp(seconds_after_noon: float) -> str:
+    """A UTC ISO 8601 time this many seconds into the fixture trial's conversation.
+
+    Composed rather than computed from a clock, so that the same fixture writes the same file every
+    run and the turns' times stand in the order their reply times put them in.
+    """
+    whole_seconds = int(seconds_after_noon)
+    return "2026-09-01T{:02d}:{:02d}:{:02d}+00:00".format(
+        12 + whole_seconds // 3600, whole_seconds % 3600 // 60, whole_seconds % 60
+    )
+
+
+def _turn_records(reply_seconds: Sequence[float]) -> list[dict[str, Any]]:
+    """The per-turn account as the driver dumps it: one record per answered client message, each
+    sent when the turn before it was replied to."""
+    records: list[dict[str, Any]] = []
+    sent_after_noon = 0.0
+    for index, turn_reply_seconds in enumerate(reply_seconds):
+        records.append(
+            TurnRecord(
+                index=index + 1,
+                entry_index=index,
+                exchange=0,
+                sent_at=_turn_timestamp(sent_after_noon),
+                replied_at=_turn_timestamp(sent_after_noon + turn_reply_seconds),
+                reply_seconds=turn_reply_seconds,
+                agent_message_count=1,
+                message_count=1,
+                tokens=TokenBuckets(input=1_000, output=500, cache_read=2_000, cache_write=250),
+            ).model_dump(mode="json")
+        )
+        sent_after_noon += turn_reply_seconds
+    return records
+
+
 def trial_usage_payload(
     *,
     workspace_tokens: TokenSnapshot = USAGE_WORKSPACE_TOKENS,
@@ -647,10 +730,15 @@ def trial_usage_payload(
     verifier_model: str = USAGE_VERIFIER_MODEL,
     verifier_tokens: TokenSnapshot = USAGE_VERIFIER_TOKENS,
     verifier_failed_call_count: int = 0,
+    reply_seconds: Sequence[float] = TRIAL_REPLY_SECONDS,
 ) -> dict[str, Any]:
-    """`agent/usage.json` as the driver writes it: one block per spender, in tokens and never in
-    money. The driver writes the verification agent's block as null where no verification phase ran;
-    a caller that wants that shape sets the key itself.
+    """`agent/usage.json` as the driver writes it: one block per spender plus the per-turn record, in
+    tokens and never in money. The driver writes the verification agent's block as null where no
+    verification phase ran; a caller that wants that shape sets the key itself.
+
+    `reply_seconds` is one figure per answered turn, so an empty sequence writes the record a trial
+    whose conversation never drew a reply leaves -- which is a different claim from a trial that
+    recorded no turns at all, and only a caller that drops the key altogether makes the second.
 
     Every block goes through the driver's own metadata writer, so what a reader of these fixtures
     prices is the artifact a real trial leaves rather than a second description of it. What a block
@@ -704,6 +792,7 @@ def trial_usage_payload(
         "workspace_agent": workspace_usage_metadata(workspace_usage),
         "decider": decider_usage_metadata(decider_usage),
         "verifier_agent": verifier_usage_metadata(verifier_usage),
+        "per_turn": _turn_records(reply_seconds),
     }
 
 
@@ -725,6 +814,8 @@ def write_trial_dir(
     is_manifest_written: bool = True,
     harness_config: Mapping[str, Any] | None = None,
     usage: Mapping[str, Any] | None = None,
+    elapsed_seconds: float | None = TRIAL_ELAPSED_SECONDS,
+    conversation_seconds: float | None = TRIAL_CONVERSATION_SECONDS,
 ) -> Path:
     """One finished trial's on-disk artifacts, in the layout harbor and the driver leave behind.
 
@@ -751,7 +842,15 @@ def write_trial_dir(
         )
     if is_state_written:
         _write_agent_state(
-            trial_dir, case_id, test_state, is_environment_recorded, harness_config, step_name="", step_count=0
+            trial_dir,
+            case_id,
+            test_state,
+            is_environment_recorded,
+            harness_config,
+            step_name="",
+            step_count=0,
+            elapsed_seconds=elapsed_seconds,
+            conversation_seconds=conversation_seconds,
         )
     if not exception_type and not step_exception_type:
         _write_reward_details(trial_dir, test_state, failed_gate_names, judge_raw_score)
@@ -789,13 +888,23 @@ class StepFixture(FrozenModel):
         description="Whether harbor moved this step's outputs into its step directory; false leaves them at the "
         "trial root, where a step that died before the archive leaves them",
     )
+    # Every step is graded on its own conversation against its own expectations, so these two are
+    # per step: a fixture whose steps all scored alike cannot tell a reader that reports the right
+    # step's numbers from one that reports the same step's three times over.
+    judge_raw_score: float | None = Field(
+        default=None, description="The likert answer this step's judge gave; None takes the trial's own"
+    )
+    rewards: Mapping[str, float] | None = Field(
+        default=None, description="What this step's verifier scored per dimension; None takes the trial's own"
+    )
 
 
 def _step_result(step: StepFixture) -> dict[str, Any]:
     """Harbor's record of one step: graded, or carrying the exception that stopped the trial there."""
     if step.exception_type:
         return {"step_name": step.name, "exception_info": _exception_info(step.exception_type)}
-    return {"step_name": step.name, "verifier_result": _graded_verifier_result()}
+    verifier_result = _graded_verifier_result() if step.rewards is None else {"rewards": dict(step.rewards)}
+    return {"step_name": step.name, "verifier_result": verifier_result}
 
 
 def write_stepped_trial_dir(
@@ -807,6 +916,8 @@ def write_stepped_trial_dir(
     declared_step_count: int = 0,
     judge_raw_score: float = 8.0,
     harness_config: Mapping[str, Any] | None = None,
+    elapsed_seconds: float | None = TRIAL_ELAPSED_SECONDS,
+    conversation_seconds: float | None = TRIAL_CONVERSATION_SECONDS,
 ) -> Path:
     """One stepped trial's on-disk artifacts, in the layout harbor leaves a multi-step task in.
 
@@ -835,13 +946,20 @@ def write_stepped_trial_dir(
                 harness_config,
                 step_name=step.name,
                 step_count=step_count,
+                elapsed_seconds=elapsed_seconds,
+                conversation_seconds=conversation_seconds,
             )
         if step.usage is not None:
             (paths.agent_dir / "usage.json").write_text(json.dumps(dict(step.usage), indent=2))
         # A step harbor recorded an exception for was never graded, which is also what makes harbor
         # abandon the steps after it.
         if not step.exception_type:
-            _write_reward_details(trial_dir, step.test_state, step.failed_gate_names, judge_raw_score)
+            _write_reward_details(
+                trial_dir,
+                step.test_state,
+                step.failed_gate_names,
+                judge_raw_score if step.judge_raw_score is None else step.judge_raw_score,
+            )
         _write_evidence_manifest(trial_dir, case_id, step.errored_entry_ids, ())
         if step.is_archived:
             ArtifactHandler.move_dir_contents(paths.agent_dir, paths.step_agent_dir(step.name))

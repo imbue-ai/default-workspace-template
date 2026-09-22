@@ -4,7 +4,7 @@ A scheduled run has to answer one question in one exit code, and the artifacts t
 spread across four files per trial: harbor's own ``result.json`` (did the trial run at all), the
 driver's ``agent/state.json`` (did the conversation reach its end, or run out of time -- harbor
 grades a timed-out trial as an ordinary result, so nothing else tells the two apart),
-``verifier/reward-details.json`` (did the structural gates hold, what did the judges say) and
+``verifier/reward-details.json`` (did the structural gates hold, what did every criterion score) and
 ``agent/verification/manifest.json`` (was anything left unmeasured).
 
 The gate is deliberately narrow. A trial is charged for not running, for failing a structural gate,
@@ -19,12 +19,13 @@ stepped trial's artifacts into `steps/<name>/` as it goes. Every path read here 
 cost account, every step's own evidence manifest and reward details.
 
 A fifth file is read for the record alone. ``agent/usage.json`` is the driver's per-spender token
-account, and this is where it turns into money: a trial records what each spender consumed and
-nothing about what it cost, so every figure in both summaries is priced here, from the price map
-``check_job_directory`` is handed, and the report says which map answered. None of it gates anything
--- a cost is not a shortfall, and a run that went red because it got expensive would be a run nobody
-could interpret. Every figure keeps the flags that say how far it can be read, because a cost
-stripped of them reads as exact.
+account and its per-turn record, and this is where the tokens turn into money: a trial records what
+each spender consumed and nothing about what it cost, so every figure in both summaries is priced
+here, from the price map ``check_job_directory`` is handed, and the report says which map answered.
+Its turn records answer a second question beside the money -- how much of the trial's wall-clock the
+replies themselves took. None of it gates anything -- a cost is not a shortfall, and a run that went
+red because it got expensive would be a run nobody could interpret. Every figure keeps the flags that
+say how far it can be read, because a cost stripped of them reads as exact.
 """
 
 from collections.abc import Mapping
@@ -35,13 +36,15 @@ from typing import Final
 from typing import assert_never
 
 from harbor.models.trial.result import TrialResult
+from harbor.models.verifier.result import VerifierResult
 from loguru import logger
 from pydantic import ValidationError
 
-from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.data_types import CheckStatus
-from imbue.minds_evals.data_types import JudgeScore
+from imbue.minds_evals.data_types import CriterionKind
+from imbue.minds_evals.data_types import CriterionScore
+from imbue.minds_evals.data_types import DimensionScore
 from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import Spender
 from imbue.minds_evals.data_types import SpenderCost
@@ -64,6 +67,7 @@ from imbue.minds_evals.reporting import format_spend_cell
 from imbue.minds_evals.reporting import format_spend_totals_line
 from imbue.minds_evals.reporting import is_spend_qualified
 from imbue.minds_evals.reporting import select_spend
+from imbue.minds_evals.reporting import step_qualified
 from imbue.minds_evals.reporting import write_reports
 from imbue.minds_evals.trial_layout import TrialLayout
 from imbue.minds_evals.trial_layout import load_json_object
@@ -73,10 +77,6 @@ from imbue.minds_evals.trial_layout import resolve_trial_layout
 # The dimension whose criteria zero the reward when any of them fails: the transcript parses, the
 # agent engaged, every turn completed, the run did not time out.
 GATES_DIMENSION: Final[str] = "gates"
-# rewardkit tags each reward it emits with how it was produced: "llm" and "agent" for its two judge
-# kinds, "programmatic" for the .py criteria, whose pass/fail guards are gated elsewhere. Both judge
-# kinds are collected, so a case that grows an agent judge does not quietly stop being reported.
-_JUDGE_REWARD_KINDS: Final[frozenset[str]] = frozenset({"llm", "agent"})
 
 # What an errored evidence entry carrying no id of its own is called in the report. Never empty:
 # both readers join these ids and render an empty join as "none", so an empty id would print a trial
@@ -90,13 +90,6 @@ _FINISHED_TEST_STATE: Final[str] = "finished"
 # How the totals line names each half of a run's spend. The markdown table has room for the word.
 _AGENT_SPEND_LABEL: Final[str] = "agent spend"
 _HARNESS_SPEND_LABEL: Final[str] = "harness spend"
-
-
-@pure
-def _step_qualified(step_name: str, name: str) -> str:
-    """Something a step produced, named with the step it came from. Unqualified for a flat trial,
-    which ran no step to name."""
-    return name if not step_name else "{}/{}".format(step_name, name)
 
 
 # _reward_dicts, _criteria and is_gates_dimension_passed below are mirrored by _reward_dicts,
@@ -139,18 +132,29 @@ def criteria_of_dimension(reward_details: Mapping[str, Any], dimension_name: str
 
 
 @pure
+def _optional_criterion_value(criterion: Mapping[str, Any]) -> float | None:
+    """A criterion's normalized 0-1 score, or None where it carries none this can read.
+
+    A boolean is excluded before the numeric check because `isinstance(True, int)` holds.
+    """
+    value = criterion.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+@pure
 def criterion_value(criterion: Mapping[str, Any]) -> float:
     """A criterion's normalized 0-1 score, or 0.0 when it carries none this can read.
 
     reward-details.json is read without a schema, so an unreadable value has to mean something. Zero
     is the safe reading for both callers: it fails a gate, which is the same verdict as a gate that
     was never scored, and it reports a judge criterion at the bottom of its scale rather than hiding
-    it. A boolean is excluded before the numeric check because `isinstance(True, int)` holds.
+    it. Which of the two a zero is is not visible in the number, so the reporting side says so
+    separately; see `collect_criterion_scores`.
     """
-    value = criterion.get("value")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0.0
-    return float(value)
+    value = _optional_criterion_value(criterion)
+    return 0.0 if value is None else value
 
 
 @pure
@@ -177,8 +181,8 @@ def is_gates_dimension_passed(reward_details: Mapping[str, Any] | None) -> bool:
 def _read_step_reward_details(layout: TrialLayout) -> tuple[tuple[str, dict[str, Any] | None], ...]:
     """Each step's rewardkit breakdown beside the name of the step that produced it, in step order.
 
-    Read once for both readings the report takes of it, the gate verdict and the judge scores, so the
-    two cannot come from different versions of the same file.
+    Read once for both readings the report takes of it, the gate verdict and the criterion scores, so
+    the two cannot come from different versions of the same file.
     """
     return tuple((step.step_name, load_optional_json_object(step.reward_details_path)) for step in layout.steps)
 
@@ -197,58 +201,126 @@ def _is_every_step_gated_open(step_details: Sequence[tuple[str, Mapping[str, Any
     return bool(step_details) and all(is_gates_dimension_passed(details) for _, details in step_details)
 
 
-def collect_judge_scores(reward_details: Mapping[str, Any] | None) -> tuple[JudgeScore, ...]:
-    """Every likert criterion the judges scored, across every dimension. Reported, never gated.
+@pure
+def _criterion_kind(reward_dict: Mapping[str, Any]) -> CriterionKind | None:
+    """How rewardkit says it produced one reward, or None where this side cannot tell.
 
-    A criterion whose likert answer cannot be read is the one thing that cannot be reported, since
-    there is no number to report; it is dropped and logged. Silence would be worse than the gap: the
-    report is the only place a judge score exists, so an empty judge column reads as a case with no
-    judges rather than as one whose answers went unread.
+    A kind it does not know is a kind there is no member to record under, and a reward dict carrying
+    none at all is the same case: a file this side cannot place the scores of.
+    """
+    try:
+        return CriterionKind(reward_dict.get("kind"))
+    except ValueError:
+        return None
+
+
+def collect_criterion_scores(step_name: str, reward_details: Mapping[str, Any] | None) -> tuple[CriterionScore, ...]:
+    """Every criterion of every dimension of one step's rewardkit breakdown, whatever scored it.
+    Reported, never gated.
+
+    Judges and programmatic checks alike, because the report is where the whole scoring input of a
+    run is read: a reward that moved between two runs is explained by the criteria under it, and
+    which of them a model answered is said by the kind rather than by leaving the checks out.
+
+    A reward dict whose kind cannot be read has its criteria dropped and says so, since there is no
+    member to record them under. Silence would be worse than the gap: this report is the only place
+    a criterion score exists, so a missing column reads as a case nothing scored rather than as one
+    whose scores went unread. A dict with no criteria at all is skipped quietly -- the markers
+    finalize.py stamps into this file (`timed_out`, `harness`, `outcome_evidence`) are not rewards
+    and have nothing to drop.
+
+    A criterion whose value cannot be read is reported at the bottom of the scale, the same reading
+    the gate verdict takes of one, and logged: nothing in a `0.00` tells a score nobody could read
+    from a score of nothing.
     """
     if reward_details is None:
         return ()
-    scores: list[JudgeScore] = []
+    scores: list[CriterionScore] = []
     for dimension_name, dimension in sorted(reward_details.items()):
         for reward_dict in _reward_dicts(dimension):
-            if reward_dict.get("kind") not in _JUDGE_REWARD_KINDS:
+            criteria = _criteria(reward_dict)
+            if not criteria:
                 continue
-            for criterion in _criteria(reward_dict):
-                raw_score = criterion.get("raw")
-                if not isinstance(raw_score, (int, float)) or isinstance(raw_score, bool):
+            kind = _criterion_kind(reward_dict)
+            if kind is None:
+                logger.warning(
+                    "Dropping the {} criteria {}: rewardkit produced them under the unknown kind {!r}",
+                    dimension_name,
+                    [criterion.get("name") for criterion in criteria],
+                    reward_dict.get("kind"),
+                )
+                continue
+            for criterion in criteria:
+                value = _optional_criterion_value(criterion)
+                if value is None:
                     logger.warning(
-                        "Dropping the judge criterion {}.{}: its likert answer {!r} is not a number",
+                        "Reporting the {} criterion {} as 0.00: its value {!r} is not a number",
                         dimension_name,
                         criterion.get("name"),
-                        raw_score,
+                        criterion.get("value"),
                     )
-                    continue
                 scores.append(
-                    JudgeScore(
+                    CriterionScore(
+                        step=step_name,
                         dimension=dimension_name,
                         criterion=str(criterion.get("name") or ""),
-                        normalized_score=criterion_value(criterion),
-                        raw_score=float(raw_score),
+                        kind=kind,
+                        value=0.0 if value is None else value,
                     )
                 )
     return tuple(scores)
 
 
-def _collect_step_judge_scores(
+def _collect_trial_criterion_scores(
     step_details: Sequence[tuple[str, Mapping[str, Any] | None]],
-) -> tuple[JudgeScore, ...]:
-    """Every likert criterion the judges scored on the trial, across every step it ran.
+) -> tuple[CriterionScore, ...]:
+    """Every criterion scored on the trial, across every step it ran.
 
     A stepped case is scored once per step against that step's own expectations, so each score
-    carries the step it was given on. The step goes on the criterion rather than on the dimension,
-    which is rewardkit's own name for the directory that scored it: both reports print the criterion,
-    and both key a judge column on the pair, so this is the one place that makes three answers to the
-    same question three answers rather than one column and one cell of repeated numbers.
+    carries the step it was given on: without it the record would hold one criterion three times over
+    with nothing saying which conversation an answer was about, and every reader that keys a column
+    on a criterion would collapse the steps into one.
     """
     return tuple(
-        score.model_copy_update(to_update(score.field_ref().criterion, _step_qualified(step_name, score.criterion)))
-        for step_name, details in step_details
-        for score in collect_judge_scores(details)
+        score for step_name, details in step_details for score in collect_criterion_scores(step_name, details)
     )
+
+
+@pure
+def _dimension_scores(step_name: str, verifier_result: VerifierResult | None) -> tuple[DimensionScore, ...]:
+    """What one verifier result's rewards scored, in sorted key order; nothing for a result that
+    holds none.
+
+    No value is coerced here, unlike a criterion's: this comes out of result.json through harbor's
+    own schema, which types every reward as a number, where reward-details.json is read raw.
+    """
+    rewards = None if verifier_result is None else verifier_result.rewards
+    if rewards is None:
+        return ()
+    return tuple(
+        DimensionScore(step=step_name, dimension=dimension_name, value=float(value))
+        for dimension_name, value in sorted(rewards.items())
+    )
+
+
+@pure
+def collect_dimension_scores(result: TrialResult | None) -> tuple[DimensionScore, ...]:
+    """What every dimension of the trial scored, per step on a stepped trial.
+
+    A stepped trial's own `verifier_result` is the one step harbor selected by the task's reward
+    strategy, so reporting it alone would say nothing about the steps it did not select; the steps
+    are read instead, each under its own name. A step, or a trial, harbor never graded contributes
+    nothing rather than a row of zeros.
+    """
+    if result is None:
+        return ()
+    if result.step_results:
+        return tuple(
+            score
+            for step_result in result.step_results
+            for score in _dimension_scores(step_result.step_name, step_result.verifier_result)
+        )
+    return _dimension_scores("", result.verifier_result)
 
 
 @pure
@@ -446,20 +518,51 @@ def collect_spend(
     return tuple(spend)
 
 
-def read_trial_spend(
-    layout: TrialLayout, price_map: PriceMap, cache_write_ttl: CacheWriteTtl, requested_model: str
-) -> tuple[SpenderCost, ...]:
-    """What one trial spent, per spender; empty when it wrote no usage account at all.
+def read_trial_usage(layout: TrialLayout) -> dict[str, Any] | None:
+    """The driver's token account for one trial, or None when it wrote none at all.
 
-    The account is cumulative across a stepped trial's steps, so the tokens are the last step's.
+    The account is cumulative across a stepped trial's steps, so it is the last step's copy that
+    describes the trial. Read once per trial, because two things come out of it -- what the trial
+    spent, and how long its replies took -- and two reads could answer from two versions of a file
+    a running job is still writing.
 
     Raises JobReadError for a file that is there but unreadable, like every other artifact here.
     """
-    return collect_spend(
-        None if layout.usage_path is None else load_optional_json_object(layout.usage_path),
-        price_map,
-        cache_write_ttl,
-        requested_model,
+    return None if layout.usage_path is None else load_optional_json_object(layout.usage_path)
+
+
+@pure
+def _recorded_seconds(record: Mapping[str, Any], key: str) -> float | None:
+    """One wall-clock figure of a record read without a schema, or None where it does not say.
+
+    A boolean is excluded before the numeric check because `isinstance(True, int)` holds, and
+    anything else unreadable is None rather than zero: a duration nobody recorded is not a duration
+    of no time.
+    """
+    value = record.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+@pure
+def total_reply_seconds(usage: Mapping[str, Any] | None) -> float | None:
+    """How long the trial's replies took in all, summed over every turn the driver recorded.
+
+    None where there is no per-turn record to sum -- a trial that wrote no account, and one written
+    before the turns were recorded -- and 0.0 for a record that holds no turn, which is a trial whose
+    conversation never got a reply. The sum is a floor on the conversation either way: a turn earns a
+    record only once its reply has arrived, so the turn a timed-out trial died on is in none of them.
+    """
+    if usage is None:
+        return None
+    raw_turns = usage.get("per_turn")
+    if not isinstance(raw_turns, list):
+        return None
+    # Seeded with a float, so that a record of no turn at all sums to 0.0 rather than to `sum`'s own
+    # integer zero.
+    return sum(
+        (_recorded_seconds(turn, "reply_seconds") or 0.0 for turn in raw_turns if isinstance(turn, Mapping)), 0.0
     )
 
 
@@ -500,7 +603,7 @@ def _collect_trial_error_entry_ids(layout: TrialLayout) -> tuple[str, ...]:
     for step in layout.steps:
         manifest = load_optional_json_object(step.evidence_manifest_path)
         entry_ids.extend(
-            _step_qualified(step.step_name, entry_id)
+            step_qualified(step.step_name, entry_id)
             for entry_id in collect_error_entry_ids(manifest, step.evidence_manifest_path)
         )
     return tuple(entry_ids)
@@ -642,6 +745,7 @@ def _read_trial_check(trial_dir: Path, price_map: PriceMap) -> TrialCheck:
     layout = resolve_trial_layout(trial_dir)
     result = load_trial_result(layout.result_path)
     state = read_trial_state(layout)
+    usage = read_trial_usage(layout)
     step_details = _read_step_reward_details(layout)
     incompletion_reason = describe_incompletion(result, state)
     state_values = state or {}
@@ -656,12 +760,16 @@ def _read_trial_check(trial_dir: Path, price_map: PriceMap) -> TrialCheck:
         is_gates_passed=_is_every_step_gated_open(step_details),
         error_entry_ids=_collect_trial_error_entry_ids(layout),
         reward=_trial_reward(result),
-        judge_scores=_collect_step_judge_scores(step_details),
+        criterion_scores=_collect_trial_criterion_scores(step_details),
+        dimension_scores=collect_dimension_scores(result),
+        elapsed_seconds=_recorded_seconds(state_values, "elapsed_seconds"),
+        conversation_seconds=_recorded_seconds(state_values, "conversation_seconds"),
+        reply_seconds=total_reply_seconds(usage),
         # Two things about a price the trial's own record decides: which prompt-cache TTL its cache
         # writes are billed at follows the harness it ran, and the model it asked for is what prices a
         # row whose model the harness reported without the gateway that billed it.
-        spend=read_trial_spend(
-            layout,
+        spend=collect_spend(
+            usage,
             price_map,
             cache_write_ttl_for_harness(str(harness_config.get("harness") or "")),
             str(harness_config.get("model") or ""),
@@ -706,10 +814,56 @@ def check_job_directory(job_dir: Path, price_map: PriceMap) -> RunCheck:
 
 
 @pure
-def _format_judge_scores(judge_scores: Sequence[JudgeScore]) -> str:
-    if not judge_scores:
+def _format_dimensions_cell(scores: Sequence[DimensionScore]) -> str:
+    """Each dimension, qualified by the step it was scored on, and its 0-1 value."""
+    if not scores:
         return "-"
-    return ", ".join("{} {:.1f}".format(score.criterion, score.raw_score) for score in judge_scores)
+    return ", ".join("{} {:.2f}".format(step_qualified(score.step, score.dimension), score.value) for score in scores)
+
+
+@pure
+def _format_criteria_cell(scores: Sequence[CriterionScore]) -> str:
+    """Every criterion under the dimension that scored it: `gates: a 1.00, b 1.00; quality: c 0.78`.
+
+    Grouped rather than listed flat because two dimensions can score criteria of one name, and a flat
+    list would print those as one name twice with two numbers; naming the dimension once per group
+    is also what keeps the cell shorter than qualifying every criterion with it. The groups follow
+    the scores' own order, which is step order and then dimension order.
+    """
+    if not scores:
+        return "-"
+    groups: list[tuple[tuple[str, str], list[CriterionScore]]] = []
+    for score in scores:
+        key = (score.step, score.dimension)
+        if not groups or groups[-1][0] != key:
+            groups.append((key, []))
+        groups[-1][1].append(score)
+    return "; ".join(
+        "{}: {}".format(
+            step_qualified(step_name, dimension),
+            ", ".join("{} {:.2f}".format(score.criterion, score.value) for score in members),
+        )
+        for (step_name, dimension), members in groups
+    )
+
+
+@pure
+def _format_seconds(seconds: float | None) -> str:
+    return "-" if seconds is None else "{:.0f}s".format(seconds)
+
+
+@pure
+def _format_time_cell(trial: TrialCheck) -> str:
+    """How long the trial took, in the three spans its records answer for.
+
+    All three, because they answer different questions and the difference between them is where the
+    time went: the whole trial holds the workspace creation and the evidence phase, the conversation
+    holds only what the client waited through, and the replies are what the agent itself took.
+    """
+    figures = (trial.elapsed_seconds, trial.conversation_seconds, trial.reply_seconds)
+    if all(figure is None for figure in figures):
+        return "-"
+    return "elapsed {} / conversation {} / replies {}".format(*(_format_seconds(figure) for figure in figures))
 
 
 @pure
@@ -781,11 +935,11 @@ def render_summary_markdown(run_check: RunCheck) -> str:
         "",
         *((*spend_lines, "") if totals_line else ()),
         "| trial | case | arm | completed | gates | errored evidence | reward | agent cost | harness cost"
-        " | judge scores | modal env | mngr | dwt |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        " | dimensions | criteria | time | modal env | mngr | dwt |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     trial_lines = [
-        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` | `{}` | `{}` |".format(
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` | `{}` | `{}` |".format(
             as_table_cell(trial.trial_name),
             as_table_cell(trial.case_id) or "-",
             as_table_cell(_format_arm_cell(trial)),
@@ -795,7 +949,9 @@ def render_summary_markdown(run_check: RunCheck) -> str:
             "-" if trial.reward is None else "{:.4f}".format(trial.reward),
             as_table_cell(agent_cell),
             as_table_cell(harness_cell),
-            as_table_cell(_format_judge_scores(trial.judge_scores)),
+            as_table_cell(_format_dimensions_cell(trial.dimension_scores)),
+            as_table_cell(_format_criteria_cell(trial.criterion_scores)),
+            _format_time_cell(trial),
             as_table_cell(trial.modal_environment_name) or "-",
             as_table_cell(trial.mngr_sha[:SHORT_SHA_LENGTH]) or "-",
             as_table_cell(trial.dwt_sha[:SHORT_SHA_LENGTH]) or "-",

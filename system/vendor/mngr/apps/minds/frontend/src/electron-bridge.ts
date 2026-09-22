@@ -6,6 +6,8 @@
 // the native file picker, focus, multi-window -- everything else the legacy
 // `window.minds` bridge carried is now owned by the SPA itself.
 
+import type { UiNotificationEntry } from "./channel/messages";
+
 export interface FilePickerOptions {
   title?: string;
   defaultPath?: string;
@@ -19,7 +21,15 @@ export interface FilePickerOptions {
 export type UpdateChannel = "stable" | "beta" | "alpha";
 
 export interface UpdateStatus {
-  type: "idle" | "checking" | "up-to-date" | "parked" | "update-available" | "update-downloaded" | "error" | "disabled";
+  type:
+    | "idle"
+    | "checking"
+    | "up-to-date"
+    | "parked"
+    | "update-available"
+    | "update-downloaded"
+    | "error"
+    | "disabled";
   channel?: UpdateChannel;
   currentVersion?: string;
   /** What the channel serves. Below currentVersion exactly when parked. */
@@ -62,7 +72,19 @@ export interface UpdateState {
    * replaces it.
    */
   downloadedVersion?: string | null;
+  /**
+   * How a staged update gets applied. `on-quit` (macOS) installs when the app
+   * quits or from the restart control; `on-request` (Linux) installs only from
+   * the install control. Optional because the state shape is shared with the
+   * browser build and with tests that stub only part of the surface; silence
+   * reads as on-quit, the policy every macOS build has.
+   */
+  installPolicy?: UpdateInstallPolicy;
+  /** Whether installing raises the system password prompt (a Linux .deb). */
+  needsPasswordToInstall?: boolean;
 }
+
+export type UpdateInstallPolicy = "on-quit" | "on-request";
 
 interface MindsNativeSurface {
   platform: string;
@@ -79,10 +101,21 @@ interface MindsNativeSurface {
   openNotificationSettings(): Promise<boolean>;
   bringAppToFront(): void;
   openWorkspaceInNewWindow(agentId: string): void;
+  openNotificationInExistingWindow?(
+    route: string,
+    entry: UiNotificationEntry,
+  ): Promise<boolean>;
+  onOpenNotification?(callback: (entry: UiNotificationEntry) => void): void;
   onNavigate(callback: (url: string) => void): void;
   onOpenOverlay(callback: (cmd: unknown) => void): void;
   onCloseActiveTab(callback: () => void): void;
   onEscapePressed(callback: () => void): void;
+  // Main relays each window's own focus and blur (the signal the renderer
+  // cannot see while keyboard focus sits inside the workspace iframe).
+  onWindowFocusChanged?(callback: (isFocused: boolean) => void): void;
+  // Main asks this window to flash a plain in-app toast (the "couldn't open
+  // link" fallback).
+  onToast?(callback: (toast: { title: string; body: string }) => void): void;
   // Renderer -> main shell-event relay (workspace_stopped, focus requests).
   // Added alongside the SPA shell; older preloads lack it, hence optional.
   sendShellEvent?(event: { type: string } & Record<string, unknown>): void;
@@ -92,8 +125,16 @@ interface MindsNativeSurface {
   peekUpdateChannels?(): Promise<Record<string, PeekedChannel>>;
   setUpdateChannel?(channel: UpdateChannel): Promise<UpdateState>;
   checkForUpdates?(): Promise<UpdateState>;
-  installUpdate?(): Promise<void>;
+  // Resolves the failure as a payload: a rejected invoke would arrive wrapped
+  // in Electron's "Error invoking remote method" text. A stub that resolves
+  // nothing (the browser build, a partial test surface) reads as success.
+  installUpdate?(): Promise<InstallUpdateOutcome | void>;
   onUpdateStatus?(callback: (status: UpdateStatus) => void): void;
+}
+
+/** Why the main process could not install the staged update, or null when it is quitting into it. */
+export interface InstallUpdateOutcome {
+  error: string | null;
 }
 
 declare global {
@@ -147,6 +188,16 @@ export const electronBridge = {
   openWorkspaceInNewWindow(agentId: string): void {
     native()?.openWorkspaceInNewWindow(agentId);
   },
+  /** Null when unavailable; false when this window should handle the click. */
+  openNotificationInExistingWindow(
+    route: string,
+    entry: UiNotificationEntry,
+  ): Promise<boolean> | null {
+    return native()?.openNotificationInExistingWindow?.(route, entry) ?? null;
+  },
+  onOpenNotification(callback: (entry: UiNotificationEntry) => void): void {
+    native()?.onOpenNotification?.(callback);
+  },
   onNavigate(callback: (url: string) => void): void {
     native()?.onNavigate(callback);
   },
@@ -158,6 +209,12 @@ export const electronBridge = {
   },
   onEscapePressed(callback: () => void): void {
     native()?.onEscapePressed(callback);
+  },
+  onWindowFocusChanged(callback: (isFocused: boolean) => void): void {
+    native()?.onWindowFocusChanged?.(callback);
+  },
+  onToast(callback: (toast: { title: string; body: string }) => void): void {
+    native()?.onToast?.(callback);
   },
   sendShellEvent(event: { type: string } & Record<string, unknown>): void {
     native()?.sendShellEvent?.(event);
@@ -176,8 +233,15 @@ export const electronBridge = {
   async checkForUpdates(): Promise<UpdateState | null> {
     return (await native()?.checkForUpdates?.()) ?? null;
   },
+  /**
+   * Rejects with the main process's own sentence when the install did not go
+   * through. Resolves only when the app is staying up after a successful
+   * install -- the quit was cancelled at the running-workspaces prompt; when
+   * the quit goes ahead the app exits and the call never settles.
+   */
   async installUpdate(): Promise<void> {
-    await native()?.installUpdate?.();
+    const outcome = await native()?.installUpdate?.();
+    if (outcome && outcome.error !== null) throw new Error(outcome.error);
   },
   onUpdateStatus(callback: (status: UpdateStatus) => void): void {
     native()?.onUpdateStatus?.(callback);

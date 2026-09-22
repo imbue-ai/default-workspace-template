@@ -89,6 +89,12 @@ Vocabulary we inherit from the framework, with what it maps to here.
 
 - **reward**: the trial's composed score on 0..1, written by `finalize.py`; see [Grading](#grading).
 
+- **criterion score**: what one criterion scored on one trial, as `check-run` reports it (`CriterionScore`).
+  Rewardkit's normalized 0..1 value, with the step it was scored on and the kind that produced it (`programmatic`, `llm`, `agent`); a judge's own 1-10 likert answer stays in the trial's `reward-details.json`.
+
+- **dimension score**: what one dimension scored on one trial, or on one of its steps, as `check-run` reports it (`DimensionScore`).
+  Read from harbor's `result.json` rather than recomposed, and the composed `reward` is among them.
+
 - **trajectory** (ATIF document): harbor's transcript format, `agent/trajectory.json`.
   The trial's only conversation record and the one every grade-time reader takes the conversation from; see [Expectations and evidence](#expectations-and-evidence) for how ours is built.
 

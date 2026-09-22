@@ -63,6 +63,16 @@ SPEND_LEGEND: Final[str] = (
 
 
 @pure
+def step_qualified(step_name: str, name: str) -> str:
+    """Something a step produced, named with the step it came from. Unqualified for a flat trial,
+    which ran no step to name.
+
+    Shared because both reports print such names and a reader compares them across the two.
+    """
+    return name if not step_name else "{}/{}".format(step_name, name)
+
+
+@pure
 def format_pricing_line(pricing: PricingSource) -> str:
     """Which price map a report's figures were computed from, in one line; empty where the record does
     not say, which is every summary written before the figures carried their source.

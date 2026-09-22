@@ -62,6 +62,7 @@ from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import TrialCheck
 from imbue.minds_evals.data_types import is_model_observable_on_lane
 from imbue.minds_evals.reporting import SHORT_SHA_LENGTH
+from imbue.minds_evals.reporting import step_qualified
 
 # The pattern the notify job downloads every summary artifact under, and the stems of the files
 # inside them. The download merges the artifacts into one flat directory, so a summary file's own
@@ -164,6 +165,10 @@ FAILED_TRIALS_NOTE_HEADING: Final[str] = "note"
 JUDGE_CONTAINER_TITLE: Final[str] = "judge scores"
 JUDGE_CONTAINER_SUBTITLE: Final[str] = "every config and case, criterion by criterion"
 MAX_CONTAINER_CHILD_BLOCKS: Final[int] = 10
+
+# What opens the legend above that table. It states the scale as well as the dimensions, because
+# every cell under it is rewardkit's normalized score rather than the judge's own likert answer.
+CRITERIA_LEGEND_PREFIX: Final[str] = "_criteria by dimension, each scored 0.00-1.00:_"
 
 # Slack refuses a table whose row holds more than this many cells, and it refuses the whole message
 # with it, so a pass that scored more criteria than fit loses its overflow columns rather than its
@@ -345,13 +350,17 @@ class Grid(FrozenModel):
 
 
 class JudgeCriterion(FrozenModel):
-    """One column of a judge table: which dimension scored the criterion, and the criterion itself.
+    """One column of a judge table: which step and dimension scored the criterion, and the criterion
+    itself.
 
     The dimension is part of a column's identity rather than decoration. Two dimensions may score
     criteria of the same name, and the dimension is also what says whether a score is about the
-    product or about the harness that drove it.
+    product or about the harness that drove it. So is the step: a stepped case scores the same
+    criterion once per step, and a column keyed without it would hold one cell of repeated numbers
+    where three conversations were scored.
     """
 
+    step: str = Field(description="The step the criterion was scored on; empty for a flat trial")
     dimension: str = Field(description="The rewardkit dimension the criterion was scored under")
     criterion: str = Field(description="The judge criterion's name, e.g. 'conciseness'")
 
@@ -1449,19 +1458,35 @@ def collect_judge_criteria(trials: Sequence[TrialCheck]) -> tuple[JudgeCriterion
 
     The union across the trials rather than the first trial's own, because a case can be scored on
     criteria another case is not: the dataset's cases carry their own expectations.
+
+    The judges' criteria alone, out of everything the trials were scored on. The checks scored
+    beside them are not all pass/fail -- an outcome class is a ratio over the recorded evidence --
+    so this table is narrower than the whole scoring input rather than a lossless view of it, and
+    what it leaves out is read off the run's own summary, which carries every criterion of every
+    kind. A message that held them all would be a column per criterion of every dimension, which is
+    what the row budget below already has to cut a pass's judges down to fit.
     """
     criteria: list[JudgeCriterion] = []
     for trial in trials:
-        for score in trial.judge_scores:
-            criterion = JudgeCriterion(dimension=score.dimension, criterion=score.criterion)
+        for score in trial.criterion_scores:
+            if not score.kind.is_judge:
+                continue
+            criterion = JudgeCriterion(step=score.step, dimension=score.dimension, criterion=score.criterion)
             if criterion not in criteria:
                 criteria.append(criterion)
     return tuple(criteria)
 
 
 @pure
+def format_criterion_name(criterion: JudgeCriterion) -> str:
+    """The criterion as the table names it: qualified by the step that scored it on a stepped case,
+    bare on a flat one."""
+    return step_qualified(criterion.step, criterion.criterion)
+
+
+@pure
 def format_criterion_heading(criterion: JudgeCriterion) -> str:
-    return "{}: {}".format(criterion.dimension, criterion.criterion)
+    return "{}: {}".format(criterion.dimension, format_criterion_name(criterion))
 
 
 @pure
@@ -1484,11 +1509,13 @@ def format_criterion_column_heading(criterion: JudgeCriterion, criteria: Sequenc
     Bare, because the dimensions are stated once in the legend above the table and qualifying every
     heading makes the columns far wider than the numbers under them. A criterion name that two
     dimensions both scored is the exception: those columns carry their dimension, or the table has
-    two columns of one name and no way to tell which score belongs to which.
+    two columns of one name and no way to tell which score belongs to which. The step is not an
+    exception, since it is already part of the name a stepped case's column is headed with.
     """
-    if sum(1 for other in criteria if other.criterion == criterion.criterion) > 1:
+    name = format_criterion_name(criterion)
+    if sum(1 for other in criteria if format_criterion_name(other) == name) > 1:
         return format_criterion_heading(criterion)
-    return criterion.criterion
+    return name
 
 
 @pure
@@ -1505,15 +1532,19 @@ def format_judge_headings(criteria: Sequence[JudgeCriterion]) -> tuple[str, ...]
 
 @pure
 def format_criterion_score(trial: TrialCheck, criterion: JudgeCriterion) -> str:
-    """One criterion's own likert answer on one trial, as the judge gave it.
+    """What one criterion scored on one trial, on rewardkit's own normalized scale.
 
     A dash rather than a zero where the trial has no such criterion: the columns are the union across
     the pass's trials, and a case that was never scored on a criterion is not a case that scored
     bottom on it.
     """
-    for score in trial.judge_scores:
-        if score.dimension == criterion.dimension and score.criterion == criterion.criterion:
-            return "{:.0f}".format(score.raw_score)
+    for score in trial.criterion_scores:
+        if (score.step, score.dimension, score.criterion) == (
+            criterion.step,
+            criterion.dimension,
+            criterion.criterion,
+        ):
+            return "{:.2f}".format(score.value)
     return MISSING_SCORE_MARK
 
 
@@ -1682,19 +1713,27 @@ def format_dropped_failures_line(table: FailedTrialsTable) -> str:
 @pure
 def format_criteria_legend(criteria: Sequence[JudgeCriterion]) -> str:
     """Which dimension scored which criteria, said once above the table rather than in every
-    heading."""
+    heading, and the scale every cell under them is on.
+
+    The scale belongs here because nothing in a cell shows it: a judge answers on a 1-10 likert and
+    rewardkit normalizes that to 0-1, which is the number reported, so a reader who took `0.78` for
+    a likert answer would read a good score as a poor one.
+    """
     dimensions: list[str] = []
     for criterion in criteria:
         if criterion.dimension not in dimensions:
             dimensions.append(criterion.dimension)
-    return "_criteria by dimension:_ {}".format(
+    return "{} {}".format(
+        CRITERIA_LEGEND_PREFIX,
         "; ".join(
             "{}: {}".format(
                 dimension,
-                ", ".join(criterion.criterion for criterion in criteria if criterion.dimension == dimension),
+                ", ".join(
+                    format_criterion_name(criterion) for criterion in criteria if criterion.dimension == dimension
+                ),
             )
             for dimension in dimensions
-        )
+        ),
     )
 
 

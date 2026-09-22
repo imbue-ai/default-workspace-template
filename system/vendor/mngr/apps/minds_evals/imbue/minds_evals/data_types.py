@@ -1476,15 +1476,59 @@ class DeciderResult(FrozenModel):
     is_fallback: bool = Field(description="Whether the literal fallback message was used")
 
 
-class JudgeScore(FrozenModel):
-    """One likert judge criterion's score on a trial. Reported for the record, never gated."""
+class CriterionKind(LowerCaseStrEnum):
+    """How rewardkit produced one reward: its own `kind`, as reward-details.json spells it.
 
+    LLM and AGENT are its two judge kinds and PROGRAMMATIC is a `.py` check. The kind is recorded
+    beside every score because a number a model gave and a number a check computed are read very
+    differently: only the first drifts between runs of the same code.
+    """
+
+    PROGRAMMATIC = auto()
+    LLM = auto()
+    AGENT = auto()
+
+    @property
+    def is_judge(self) -> bool:
+        """Whether a model answered this criterion rather than a check computing it."""
+        match self:
+            case CriterionKind.LLM | CriterionKind.AGENT:
+                return True
+            case CriterionKind.PROGRAMMATIC:
+                return False
+            case _ as unreachable:
+                assert_never(unreachable)
+
+
+class CriterionScore(FrozenModel):
+    """One criterion's score on one trial, whatever scored it. Reported for the record, never gated.
+
+    Every value is rewardkit's own normalized 0-1 score. A judge's 1-10 likert answer is not carried:
+    it is recoverable from the normalization (`raw = 9 * normalized + 1`) and it is in the trial's
+    own reward-details.json, while a report that mixed two scales would have criteria on one scale
+    next to criteria on another with nothing in a number saying which.
+    """
+
+    # The step is part of the criterion's identity: a stepped case is scored once per step against
+    # that step's own expectations, so the same criterion has one score per conversation.
+    step: str = Field(description="The step the criterion was scored on; empty for a flat trial")
     dimension: str = Field(description="The rewardkit dimension the criterion was scored under")
-    criterion: str = Field(description="The judge criterion's name, e.g. 'conciseness'")
-    # rewardkit normalizes a 1-10 likert to (raw - 1) / 9; both are carried so a reader can compare
-    # across runs without having to know which convention a number is in.
-    normalized_score: float = Field(description="The criterion's contribution to its dimension, 0-1")
-    raw_score: float = Field(description="The judge's own 1-10 likert answer")
+    criterion: str = Field(description="The criterion's name, e.g. 'conciseness'")
+    kind: CriterionKind = Field(description="How rewardkit produced the score: a judge, or a check")
+    value: float = Field(description="The criterion's contribution to its dimension, normalized 0-1")
+
+
+class DimensionScore(FrozenModel):
+    """What one dimension of one step scored, as harbor's own verifier result records it.
+
+    The dimensions are what the criteria above add up to, and the composed `reward` is what the
+    steps' floors and the trial's reward strategy are decided on, so both are reported: a criterion
+    that moved says nothing on its own about the score the run was gated on.
+    """
+
+    step: str = Field(description="The step the dimension was scored on; empty for a flat trial")
+    dimension: str = Field(description="A key of the verifier result's rewards, the composed `reward` included")
+    value: float = Field(description="What that key scored")
 
 
 class TokenSnapshot(FrozenModel):
@@ -1586,9 +1630,10 @@ class TrialCheck(FrozenModel):
     incompletion_reason: str = Field(description="Why the trial did not complete; empty when it did")
     # The two counts are separate because only the first of them can go unknown: harbor records a step
     # result per step it ran, while what the task declared is the driver's to say. Both defaulted, and
-    # `spend` below with them, for the same reason `RunCheck.pricing` is: a summary written before a
-    # field existed has to read back as a trial that recorded nothing for it, not as one that cannot be
-    # parsed at all. The defaults are what this side computes for such a trial anyway.
+    # the defaulted fields below with them, for the same reason `RunCheck.pricing` is: a summary
+    # written before a field existed has to read back as a trial that recorded nothing for it, not as
+    # one that cannot be parsed at all. The defaults are what this side computes for such a trial
+    # anyway.
     step_count: int = Field(
         default=0, description="How many steps the task declared; 0 for a flat trial and where nothing says"
     )
@@ -1596,7 +1641,29 @@ class TrialCheck(FrozenModel):
     is_gates_passed: bool = Field(description="Whether every structural gate criterion scored above zero")
     error_entry_ids: tuple[str, ...] = Field(description="Evidence manifest entries the harness could not measure")
     reward: float | None = Field(description="The trial's final reward; None when it was never graded")
-    judge_scores: tuple[JudgeScore, ...] = Field(description="Every likert judge criterion the verifier recorded")
+    criterion_scores: tuple[CriterionScore, ...] = Field(
+        default=(),
+        description="Every criterion of every dimension of every step the verifier scored, judges and checks alike",
+    )
+    dimension_scores: tuple[DimensionScore, ...] = Field(
+        default=(), description="What every dimension of every step scored, the composed reward among them"
+    )
+    elapsed_seconds: float | None = Field(
+        default=None,
+        description="Wall-clock the whole trial took, workspace creation included and cumulative across a stepped "
+        "trial's steps; None when the driver's state record does not say",
+    )
+    conversation_seconds: float | None = Field(
+        default=None,
+        description="Wall-clock from the first client message to the last reply, cumulative across a stepped trial's "
+        "steps; None when the driver's state record does not say",
+    )
+    reply_seconds: float | None = Field(
+        default=None,
+        description="Wall-clock the replies themselves took, summed over every recorded turn and so cumulative "
+        "across a stepped trial's steps; None when the trial wrote no per-turn record at all, and 0.0 for a "
+        "conversation that drew no reply",
+    )
     spend: tuple[SpenderCost, ...] = Field(
         default=(), description="One entry per spender the trial's usage.json accounts for; empty when it wrote none"
     )

@@ -8,13 +8,19 @@ from typing import Final
 
 import pytest
 
+from imbue.minds_evals.check_run import _format_criteria_cell
 from imbue.minds_evals.check_run import check_job_directory
-from imbue.minds_evals.check_run import collect_judge_scores
+from imbue.minds_evals.check_run import collect_criterion_scores
+from imbue.minds_evals.check_run import collect_dimension_scores
 from imbue.minds_evals.check_run import collect_spend
 from imbue.minds_evals.check_run import is_gates_dimension_passed
+from imbue.minds_evals.check_run import load_trial_result
 from imbue.minds_evals.check_run import render_summary_markdown
+from imbue.minds_evals.check_run import total_reply_seconds
 from imbue.minds_evals.check_run import write_run_check_reports
+from imbue.minds_evals.ci_report import parse_run_check
 from imbue.minds_evals.data_types import CheckStatus
+from imbue.minds_evals.data_types import CriterionKind
 from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import Spender
 from imbue.minds_evals.data_types import TokenSnapshot
@@ -28,6 +34,9 @@ from imbue.minds_evals.testing import FIXTURE_PRICE_MAP
 from imbue.minds_evals.testing import GATES_CRITERION_NAMES
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import StepFixture
+from imbue.minds_evals.testing import TRIAL_CONVERSATION_SECONDS
+from imbue.minds_evals.testing import TRIAL_ELAPSED_SECONDS
+from imbue.minds_evals.testing import TRIAL_REPLY_SECONDS
 from imbue.minds_evals.testing import USAGE_DECIDER_COST_USD
 from imbue.minds_evals.testing import USAGE_VERIFIER_COST_USD
 from imbue.minds_evals.testing import USAGE_VERIFIER_MODEL
@@ -61,15 +70,101 @@ def test_check_job_directory_passes_a_run_whose_every_trial_completed_and_gated_
     )
 
 
-def test_check_job_directory_reports_judge_scores_without_gating_on_them(tmp_path: Path) -> None:
+def test_check_job_directory_reports_every_criterion_without_gating_on_any_of_them(tmp_path: Path) -> None:
+    """Every criterion of every dimension, whatever produced it, each on rewardkit's normalized
+    scale and carrying the kind that says whether a model answered it. A report of the judges alone
+    would leave the checks that moved a dimension out of the only place they are ever read."""
     job_dir = tmp_path / "nightly-run"
     write_trial_dir(job_dir, "todo-app__aaaaaaa", judge_raw_score=1.0)
 
     run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
 
-    # A judge score at the very bottom of the likert scale is recorded and does not fail the run.
+    # A judge score at the very bottom of the scale is recorded and does not fail the run.
     assert run_check.is_passed is True
-    assert [(score.criterion, score.raw_score) for score in run_check.trials[0].judge_scores] == [("conciseness", 1.0)]
+    (trial,) = run_check.trials
+    assert [score.criterion for score in trial.criterion_scores if score.dimension == "gates"] == list(
+        GATES_CRITERION_NAMES
+    )
+    assert [
+        (score.dimension, score.criterion, score.kind, score.value)
+        for score in trial.criterion_scores
+        if score.dimension != "gates"
+    ] == [
+        ("harness_quality", "main_harness_success", CriterionKind.LLM, 0.5),
+        ("harness_quality", "worker_reports_present", CriterionKind.PROGRAMMATIC, 1.0),
+        ("outcome", "app_registered", CriterionKind.PROGRAMMATIC, 1.0),
+        ("outcome", "http_expectations_met", CriterionKind.PROGRAMMATIC, 0.5),
+        ("quality", "wordiness", CriterionKind.PROGRAMMATIC, 1.0),
+        ("quality", "conciseness", CriterionKind.LLM, 0.0),
+    ]
+    # A flat trial ran no step, so nothing names one.
+    assert {score.step for score in trial.criterion_scores} == {""}
+
+
+def test_check_job_directory_reports_what_every_dimension_of_a_flat_trial_scored(tmp_path: Path) -> None:
+    """The dimensions the criteria add up to, and the composed reward beside them: a criterion that
+    moved between two runs says nothing on its own about the score the run was gated on."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa")
+
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    (trial,) = run_check.trials
+    assert [(score.step, score.dimension, score.value) for score in trial.dimension_scores] == [
+        ("", "gates", 1.0),
+        ("", "outcome", 0.7),
+        ("", "quality", 0.8),
+        ("", "reward", 0.75),
+    ]
+
+
+def test_check_job_directory_reports_no_dimension_score_for_a_trial_harbor_never_graded(tmp_path: Path) -> None:
+    """A trial harbor could not run is never graded, and a row of zeros for it would read as a trial
+    that scored nothing rather than as one nothing scored."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", exception_type="DaemonError")
+
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    assert run_check.trials[0].dimension_scores == ()
+
+
+def test_check_job_directory_reports_the_three_spans_a_trial_timed_itself_over(tmp_path: Path) -> None:
+    """Three different questions, and the difference between them is where the time went: the whole
+    trial holds the workspace bring-up and the evidence phase, the conversation holds what the client
+    waited through, and the replies are the turns' own share of that."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", usage=trial_usage_payload())
+
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    (trial,) = run_check.trials
+    assert (trial.elapsed_seconds, trial.conversation_seconds) == (TRIAL_ELAPSED_SECONDS, TRIAL_CONVERSATION_SECONDS)
+    assert trial.reply_seconds == pytest.approx(sum(TRIAL_REPLY_SECONDS))
+
+
+def test_check_job_directory_reports_no_duration_a_trials_records_do_not_carry(tmp_path: Path) -> None:
+    """A state file written before the driver timed a trial, and a trial that wrote no cost account
+    at all. Neither took no time, so neither may read as zero."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", elapsed_seconds=None, conversation_seconds=None)
+
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    (trial,) = run_check.trials
+    assert (trial.elapsed_seconds, trial.conversation_seconds, trial.reply_seconds) == (None, None, None)
+
+
+def test_check_job_directory_reports_no_reply_time_for_a_conversation_that_drew_no_reply(tmp_path: Path) -> None:
+    """A turn earns a record only once its reply has arrived, so a trial whose conversation never got
+    one records the turns it answered as none at all -- which is zero seconds of replies, not an
+    unrecorded span."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", usage=trial_usage_payload(reply_seconds=()))
+
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    assert run_check.trials[0].reply_seconds == 0.0
 
 
 def test_check_job_directory_fails_a_trial_whose_evidence_the_harness_could_not_measure(tmp_path: Path) -> None:
@@ -445,28 +540,77 @@ def test_check_job_directory_fails_a_stepped_trial_whose_gates_held_on_every_ste
     assert run_check.trials[0].is_completed is True
 
 
-def test_check_job_directory_names_the_step_each_judge_score_was_given_on(tmp_path: Path) -> None:
+def test_check_job_directory_names_the_step_each_criterion_was_scored_on(tmp_path: Path) -> None:
     """A stepped case scores the same criterion once per step against that step's own expectations.
     Unqualified, the record would hold one criterion three times over with nothing saying which
-    conversation an answer was about, the row would read `conciseness 8.0, conciseness 8.0`, and the
-    judge table, whose columns are keyed on the dimension and the criterion, would collapse the steps
-    into one column."""
+    conversation an answer was about, and every reader that keys a column on the dimension and the
+    criterion would collapse the steps into one column."""
     job_dir = tmp_path / "nightly-run"
-    write_stepped_trial_dir(job_dir, "todo-app__aaaaaaa", _finished_steps(), judge_raw_score=7.0)
+    write_stepped_trial_dir(
+        job_dir,
+        "todo-app__aaaaaaa",
+        (
+            StepFixture(name="triage", judge_raw_score=7.0),
+            StepFixture(name="build", judge_raw_score=8.0),
+            StepFixture(name="amend", judge_raw_score=10.0),
+        ),
+    )
 
     run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
 
     (trial,) = run_check.trials
-    assert [(score.dimension, score.criterion) for score in trial.judge_scores] == [
-        ("quality", "triage/conciseness"),
-        ("quality", "build/conciseness"),
-        ("quality", "amend/conciseness"),
+    assert [(score.step, score.value) for score in trial.criterion_scores if score.criterion == "conciseness"] == [
+        ("triage", pytest.approx(6 / 9)),
+        ("build", pytest.approx(7 / 9)),
+        ("amend", 1.0),
     ]
-    assert all(score.raw_score == 7.0 for score in trial.judge_scores)
-    assert (
-        read_row_cell(render_summary_markdown(run_check), "todo-app__aaaaaaa", "judge scores")
-        == "triage/conciseness 7.0, build/conciseness 7.0, amend/conciseness 7.0"
+    criteria_cell = read_row_cell(render_summary_markdown(run_check), "todo-app__aaaaaaa", "criteria")
+    assert "triage/quality: wordiness 1.00, conciseness 0.67; " in criteria_cell
+    assert criteria_cell.endswith("amend/quality: wordiness 1.00, conciseness 1.00")
+
+
+def test_check_job_directory_reports_what_every_step_of_a_stepped_trial_scored(tmp_path: Path) -> None:
+    """Harbor's own trial-level result is the one step its reward strategy selected, so reporting it
+    alone would say nothing about the steps it did not select -- including the step a trial stopped
+    at, which is the step a reader goes looking for."""
+    job_dir = tmp_path / "nightly-run"
+    write_stepped_trial_dir(
+        job_dir,
+        "todo-app__aaaaaaa",
+        (
+            StepFixture(name="triage", rewards={"gates": 1.0, "reward": 0.4}),
+            StepFixture(name="build", rewards={"gates": 1.0, "reward": 0.9}),
+        ),
     )
+
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    (trial,) = run_check.trials
+    assert [(score.step, score.dimension, score.value) for score in trial.dimension_scores] == [
+        ("triage", "gates", 1.0),
+        ("triage", "reward", 0.4),
+        ("build", "gates", 1.0),
+        ("build", "reward", 0.9),
+    ]
+    assert read_row_cell(render_summary_markdown(run_check), "todo-app__aaaaaaa", "dimensions") == (
+        "triage/gates 1.00, triage/reward 0.40, build/gates 1.00, build/reward 0.90"
+    )
+
+
+def test_check_job_directory_reports_nothing_for_a_step_that_was_never_graded(tmp_path: Path) -> None:
+    """A step harbor recorded an exception for was never graded, and it is what stops the steps after
+    it: the steps that did score still report theirs."""
+    job_dir = tmp_path / "nightly-run"
+    write_stepped_trial_dir(
+        job_dir,
+        "todo-app__aaaaaaa",
+        (StepFixture(name="triage"), StepFixture(name="build", exception_type="SandboxTimeout")),
+    )
+
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    (trial,) = run_check.trials
+    assert {score.step for score in trial.dimension_scores} == {"triage"}
 
 
 @pytest.mark.parametrize("is_step_recorded", [True, False])
@@ -751,7 +895,7 @@ def test_render_summary_markdown_puts_every_trial_and_the_verdict_in_the_table(t
     assert summary.startswith("## minds-evals: nightly-run -- FAIL")
     assert "| todo-app__aaaaaaa | todo-app |" in summary
     assert expected_modal_environment_name("greeting__bbbbbbb") in summary
-    assert "conciseness 8.0" in summary
+    assert "conciseness 0.78" in summary
     # One header row, one separator, and one row per trial.
     assert len([line for line in summary.splitlines() if line.startswith("|")]) == 4
 
@@ -798,7 +942,7 @@ def test_render_summary_markdown_keeps_a_pipe_in_an_exception_message_inside_its
     trial_row = next(line for line in summary.splitlines() if line.startswith("| todo-app__aaaaaaa"))
     assert "Daemon\\|Error" in trial_row
     # One unescaped pipe per column boundary and no more: a pipe left unescaped would add a column.
-    assert trial_row.count("|") - trial_row.count("\\|") == 14
+    assert trial_row.count("|") - trial_row.count("\\|") == 16
 
 
 def test_render_summary_markdown_keeps_every_free_text_cell_inside_its_column(tmp_path: Path) -> None:
@@ -813,7 +957,7 @@ def test_render_summary_markdown_keeps_every_free_text_cell_inside_its_column(tm
     trial_row = next(line for line in summary.splitlines() if line.startswith("| todo-app__aaaaaaa"))
     assert "todo\\|app" in trial_row
     assert "http\\|0" in trial_row
-    assert trial_row.count("|") - trial_row.count("\\|") == 14
+    assert trial_row.count("|") - trial_row.count("\\|") == 16
 
 
 def _row_cells(row: str) -> list[str]:
@@ -836,6 +980,70 @@ def read_row_cell(summary: str, trial_name: str, heading: str) -> str:
 def read_spend_cells(summary: str, trial_name: str) -> tuple[str, str]:
     """One trial's two cost cells."""
     return (read_row_cell(summary, trial_name, "agent cost"), read_row_cell(summary, trial_name, "harness cost"))
+
+
+def test_render_summary_markdown_gives_a_row_every_scoring_input_and_the_time_it_took(tmp_path: Path) -> None:
+    """The whole of what a reward was composed from, in two cells on the scale rewardkit scored them
+    on, and the trial's three spans in a third."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", usage=trial_usage_payload())
+
+    summary = render_summary_markdown(check_job_directory(job_dir, FIXTURE_PRICE_MAP))
+
+    assert read_row_cell(summary, "todo-app__aaaaaaa", "dimensions") == (
+        "gates 1.00, outcome 0.70, quality 0.80, reward 0.75"
+    )
+    assert read_row_cell(summary, "todo-app__aaaaaaa", "criteria") == (
+        "gates: transcript_has_agent_reply 1.00, agent_engaged_substantively 1.00, all_turns_completed 1.00,"
+        " not_timed_out 1.00; harness_quality: main_harness_success 0.50, worker_reports_present 1.00;"
+        " outcome: app_registered 1.00, http_expectations_met 0.50; quality: wordiness 1.00, conciseness 0.78"
+    )
+    assert read_row_cell(summary, "todo-app__aaaaaaa", "time") == "elapsed 612s / conversation 545s / replies 320s"
+
+
+def test_render_summary_markdown_says_which_of_a_trials_spans_went_unrecorded(tmp_path: Path) -> None:
+    """A trial that wrote no cost account timed no replies, and one whose every span is unrecorded
+    has nothing to print at all -- neither is a trial that took no time."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa")
+    write_trial_dir(job_dir, "greeting__bbbbbbb", case_id="greeting", elapsed_seconds=None, conversation_seconds=None)
+
+    summary = render_summary_markdown(check_job_directory(job_dir, FIXTURE_PRICE_MAP))
+
+    assert read_row_cell(summary, "todo-app__aaaaaaa", "time") == "elapsed 612s / conversation 545s / replies -"
+    assert read_row_cell(summary, "greeting__bbbbbbb", "time") == "-"
+
+
+def test_render_summary_markdown_says_when_a_trial_was_scored_on_nothing(tmp_path: Path) -> None:
+    """A trial harbor never graded has no dimension and no criterion to report, and a dash is how
+    both cells say so rather than reading as a trial that scored zero."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", exception_type="DaemonError")
+
+    summary = render_summary_markdown(check_job_directory(job_dir, FIXTURE_PRICE_MAP))
+
+    assert read_row_cell(summary, "todo-app__aaaaaaa", "dimensions") == "-"
+    assert read_row_cell(summary, "todo-app__aaaaaaa", "criteria") == "-"
+
+
+def test_check_job_directory_reports_every_scoring_input_through_the_json_summary(tmp_path: Path) -> None:
+    """The JSON summary is what the Slack report reads a pass back out of, so every field the report
+    is built from has to survive the round trip through it."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", usage=trial_usage_payload())
+    run_check = check_job_directory(job_dir, FIXTURE_PRICE_MAP)
+
+    parsed = parse_run_check(run_check.model_dump_json())
+
+    (parsed_trial,) = parsed.trials
+    (trial,) = run_check.trials
+    assert parsed_trial.criterion_scores == trial.criterion_scores
+    assert parsed_trial.dimension_scores == trial.dimension_scores
+    assert (parsed_trial.elapsed_seconds, parsed_trial.conversation_seconds, parsed_trial.reply_seconds) == (
+        TRIAL_ELAPSED_SECONDS,
+        TRIAL_CONVERSATION_SECONDS,
+        pytest.approx(sum(TRIAL_REPLY_SECONDS)),
+    )
 
 
 def test_check_job_directory_reports_no_spend_for_a_trial_that_wrote_no_usage_account(tmp_path: Path) -> None:
@@ -1405,55 +1613,121 @@ def test_both_ends_of_a_trial_read_the_structural_gates_the_same_way(reward_deta
     assert is_gates_dimension_passed(reward_details) == finalize._gates_all_passed(reward_details)
 
 
-def test_collect_judge_scores_reports_a_score_whose_normalization_is_unreadable() -> None:
-    scores = collect_judge_scores(
-        {"quality": [{"kind": "llm", "criteria": [{"name": "tone", "value": {}, "raw": 7}]}]}
-    )
+def test_collect_criterion_scores_reports_a_criterion_whose_value_is_unreadable(
+    captured_log_messages: list[str],
+) -> None:
+    """There is always a number to report, because an unreadable value reads as the bottom of the
+    scale -- the same reading the gate verdict takes of one. And it is said out loud, because that
+    bottom score is what a criterion nobody could read and a criterion that scored nothing both
+    print as."""
+    scores = collect_criterion_scores("", {"quality": [{"kind": "llm", "criteria": [{"name": "tone", "value": {}}]}]})
 
-    assert [(score.criterion, score.raw_score, score.normalized_score) for score in scores] == [("tone", 7.0, 0.0)]
-
-
-def test_collect_judge_scores_says_so_when_a_likert_answer_cannot_be_read(captured_log_messages: list[str]) -> None:
-    """The report is the only place a judge score exists, so a criterion dropped in silence leaves a
-    column that reads as a case with no judges rather than as one whose answers went unread."""
-    scores = collect_judge_scores(
-        {"quality": {"kind": "llm", "criteria": [{"name": "conciseness", "raw": "eight", "value": 0.78}]}}
-    )
-
-    assert scores == ()
-    assert any("quality.conciseness" in message for message in captured_log_messages)
+    assert [(score.criterion, score.value) for score in scores] == [("tone", 0.0)]
+    assert any("tone" in message for message in captured_log_messages)
 
 
-def test_collect_judge_scores_ignores_the_programmatic_guards_scored_alongside_the_judges() -> None:
-    scores = collect_judge_scores(
+def test_collect_criterion_scores_records_every_kind_rewardkit_emits() -> None:
+    """rewardkit tags an AgentJudge's rewards `agent`, an LLMJudge's `llm` and a .py criterion's
+    `programmatic`. All three are collected, and the kind is what separates a number a model gave
+    from one a check computed."""
+    scores = collect_criterion_scores(
+        "",
         {
+            "outcome": [{"kind": "agent", "criteria": [{"name": "delivered", "value": 0.5}]}],
             "quality": [
                 {"kind": "programmatic", "criteria": [{"name": "wordiness", "value": 1.0, "raw": True}]},
                 {"kind": "llm", "criteria": [{"name": "conciseness", "value": 0.777, "raw": 8}]},
-            ]
-        }
+            ],
+        },
     )
 
-    assert [(score.dimension, score.criterion, score.raw_score) for score in scores] == [
-        ("quality", "conciseness", 8.0)
+    assert [(score.dimension, score.criterion, score.kind) for score in scores] == [
+        ("outcome", "delivered", CriterionKind.AGENT),
+        ("quality", "wordiness", CriterionKind.PROGRAMMATIC),
+        ("quality", "conciseness", CriterionKind.LLM),
     ]
-    assert scores[0].normalized_score == pytest.approx(0.777)
+    assert scores[-1].value == pytest.approx(0.777)
 
 
-def test_collect_judge_scores_reports_both_judge_kinds_rewardkit_emits() -> None:
-    """rewardkit tags an AgentJudge's rewards `agent` and an LLMJudge's `llm`. Both are judges, so
-    matching only one kind would drop a case's scores from the report with no sign it happened."""
-    scores = collect_judge_scores(
+def test_the_criteria_cell_keeps_two_dimensions_scores_of_one_name_apart() -> None:
+    """A criterion name belongs to the dimension that scored it, not to the case, so two dimensions
+    can both score `conciseness`. Listed flat the cell would read `conciseness 0.70, conciseness
+    0.90` -- one name twice, with nothing saying which number measured the product and which
+    measured the harness that drove it."""
+    scores = collect_criterion_scores(
+        "",
         {
-            "outcome": [{"kind": "agent", "criteria": [{"name": "delivered", "value": 0.5, "raw": 5}]}],
-            "quality": [{"kind": "llm", "criteria": [{"name": "conciseness", "value": 0.777, "raw": 8}]}],
-        }
+            "outcome": {"kind": "llm", "criteria": [{"name": "conciseness", "value": 0.7}]},
+            "quality": {"kind": "llm", "criteria": [{"name": "conciseness", "value": 0.9}]},
+        },
     )
 
-    assert [(score.dimension, score.criterion) for score in scores] == [
-        ("outcome", "delivered"),
-        ("quality", "conciseness"),
-    ]
+    assert _format_criteria_cell(scores) == "outcome: conciseness 0.70; quality: conciseness 0.90"
+
+
+def test_collect_criterion_scores_names_the_step_it_is_given() -> None:
+    scores = collect_criterion_scores(
+        "build", {"quality": {"kind": "llm", "criteria": [{"name": "conciseness", "value": 0.5}]}}
+    )
+
+    assert [(score.step, score.criterion) for score in scores] == [("build", "conciseness")]
+
+
+@pytest.mark.parametrize("reward_dict", [{"kind": "oracle"}, {}], ids=["unknown-kind", "no-kind-at-all"])
+def test_collect_criterion_scores_says_so_when_a_kind_cannot_be_placed(
+    reward_dict: dict[str, Any], captured_log_messages: list[str]
+) -> None:
+    """A kind this side has no member for leaves its criteria nowhere to be recorded. This report is
+    the only place a criterion score exists, so criteria dropped in silence leave a column that reads
+    as a case nothing scored rather than as one whose scores went unread."""
+    scores = collect_criterion_scores(
+        "", {"quality": {**reward_dict, "criteria": [{"name": "conciseness", "value": 0.78}]}}
+    )
+
+    assert scores == ()
+    assert any("conciseness" in message for message in captured_log_messages)
+
+
+def test_collect_criterion_scores_passes_over_the_markers_the_verifier_stamps_in() -> None:
+    """finalize.py stamps `timed_out`, `harness` and `outcome_evidence` into the same file. None of
+    them is a reward, so none has criteria to drop, and none may be reported as a score or announced
+    as one that went unread."""
+    scores = collect_criterion_scores(
+        "",
+        {
+            "timed_out": False,
+            "harness": {"name": "claude", "is_harness_quality_scored": True},
+            "outcome_evidence": {"is_complete": True},
+            "quality": {"kind": "llm", "criteria": [{"name": "conciseness", "value": 0.78}]},
+        },
+    )
+
+    assert [score.criterion for score in scores] == ["conciseness"]
+
+
+def test_collect_dimension_scores_reports_nothing_for_a_trial_that_was_never_graded(tmp_path: Path) -> None:
+    """Two ways a trial reaches this with no scores to report: harbor never wrote a result for it at
+    all, and it wrote one carrying no verifier result."""
+    job_dir = tmp_path / "nightly-run"
+    trial_dir = write_trial_dir(job_dir, "todo-app__aaaaaaa", exception_type="DaemonError")
+
+    assert collect_dimension_scores(None) == ()
+    assert collect_dimension_scores(load_trial_result(trial_dir / "result.json")) == ()
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_seconds"),
+    [
+        pytest.param(None, None, id="no-account-at-all"),
+        pytest.param({"workspace_agent": {}}, None, id="an-account-written-before-the-turns-were"),
+        pytest.param({"per_turn": []}, 0.0, id="an-account-of-no-answered-turn"),
+        pytest.param({"per_turn": [{"reply_seconds": 12.5}, {"reply_seconds": 7.5}]}, 20.0, id="two-answered-turns"),
+    ],
+)
+def test_total_reply_seconds_tells_an_unrecorded_span_from_a_conversation_of_no_replies(
+    usage: dict[str, Any] | None, expected_seconds: float | None
+) -> None:
+    assert total_reply_seconds(usage) == expected_seconds
 
 
 def test_the_workflow_gates_a_cell_on_a_name_this_package_still_writes() -> None:

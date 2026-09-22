@@ -4492,35 +4492,41 @@ class InMemoryAttributionStore:
         )
 
 
-def hold_stable_download_link(url: str | None) -> None:
-    """Put ``url`` -- or "could not be read" -- in the connector's stable-download cache.
+def hold_stable_download_link(url: str | None, platform: str) -> None:
+    """Put ``url`` -- or "could not be read" -- in the connector's stable-download cache for ``platform``.
 
     ``GET /download`` resolves the stable channel manifest over the network, so
-    every test runs with an entry held (see the autouse fixture) and none of
-    them reach the live feed. Tests that care what the link resolves to hold
-    their own; the parsing tests call ``_arm64_dmg_url_from``, which does not
-    read this cache.
+    every test runs with an entry held for every platform (see the autouse
+    fixture) and none of them reach the live feed. Tests that care what the
+    link resolves to hold their own; the parsing tests call
+    ``_artifact_url_from``, which does not read this cache.
     """
+    _stable_download_cache()[hashkey(platform)] = url
+
+
+def hold_no_stable_download_links() -> None:
+    """Hold "could not be read" for every release channel platform, dropping anything held."""
     cache = _stable_download_cache()
     cache.clear()
-    cache[hashkey()] = url
+    for platform in accounts_web_module._RELEASE_CHANNEL_PLATFORMS:
+        cache[hashkey(platform)] = None
 
 
-def clear_stable_download_link() -> None:
-    """Drop the held link, so the next read reaches the live feed."""
-    _stable_download_cache().clear()
+def clear_stable_download_link(platform: str) -> None:
+    """Drop the held link for ``platform``, so the next read reaches the live feed."""
+    _stable_download_cache().pop(hashkey(platform), None)
 
 
-def read_stable_download_link() -> str | None:
-    """What the last resolution left in the cache; ``None`` is a read that failed.
+def read_stable_download_link(platform: str) -> str | None:
+    """What the last resolution for ``platform`` left in the cache; ``None`` is a read that failed.
 
     Reading the cache rather than calling the resolver is what tells a route
     that resolved from one that never asked: the call would fill an empty cache
     itself.
     """
     cache = _stable_download_cache()
-    key = hashkey()
-    assert key in cache, "nothing has resolved the stable download link"
+    key = hashkey(platform)
+    assert key in cache, f"nothing has resolved the stable download link for {platform}"
     return cache[key]
 
 
@@ -4553,7 +4559,7 @@ def _web_template_ref_cache() -> MutableMapping[Any, Any]:
 
 def _stable_download_cache() -> MutableMapping[Any, Any]:
     # `cached` types its cache as optional because passing None disables it.
-    cache = accounts_web_module.stable_mac_arm64_url.cache
+    cache = accounts_web_module.stable_artifact_url.cache
     assert cache is not None, "the stable download resolver is not cached"
     return cache
 

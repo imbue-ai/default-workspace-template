@@ -9,7 +9,6 @@ from typing import Final
 
 from loguru import logger
 
-from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.api.create import bootstrap_backend_for_host_creation
@@ -39,6 +38,7 @@ from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import UncommittedChangesMode
+from imbue.mngr.utils.thread_cleanup import mngr_executor
 from imbue.mngr_mapreduce.data_types import AgentKind
 from imbue.mngr_mapreduce.data_types import AgentMetadata
 from imbue.mngr_mapreduce.data_types import LaunchConfig
@@ -494,7 +494,7 @@ def create_hosts_named(
     hosts: list[OnlineHostInterface] = []
     build = _resolve_build_options(config, mngr_ctx)
     host_environment = _build_host_environment(config)
-    with ConcurrencyGroupExecutor(
+    with mngr_executor(
         parent_cg=mngr_ctx.concurrency_group,
         name="mapreduce_create_hosts",
         max_workers=max_parallel,
@@ -545,7 +545,7 @@ def _create_host_pool(
     hosts: list[OnlineHostInterface] = []
     build = _resolve_build_options(config, mngr_ctx)
 
-    with ConcurrencyGroupExecutor(
+    with mngr_executor(
         parent_cg=mngr_ctx.concurrency_group,
         name="mapreduce_create_hosts",
         max_workers=max_parallel,
@@ -632,7 +632,7 @@ def launch_all_mappers(
             host_pool = _create_host_pool(recipe.name, host_count, launch_config, mngr_ctx, run_name, max_parallel)
 
     used_suffixes: set[str] = set()
-    with ConcurrencyGroupExecutor(
+    with mngr_executor(
         parent_cg=mngr_ctx.concurrency_group,
         name="mapreduce_launch",
         max_workers=max_parallel,
@@ -685,7 +685,7 @@ def _launch_mapper_with_timeout(
     initial_message: str,
 ) -> tuple[MapperInfo, OnlineHostInterface]:
     """Launch a mapper agent with a timeout. Raises TimeoutError if creation takes too long."""
-    with ConcurrencyGroupExecutor(mngr_ctx.concurrency_group, name="launch-mapper", max_workers=1) as executor:
+    with mngr_executor(mngr_ctx.concurrency_group, name="launch-mapper", max_workers=1) as executor:
         future = executor.submit(_launch_mapper, task, agent_name, branch_name, config, mngr_ctx, initial_message)
         return future.result(timeout=_AGENT_CREATION_TIMEOUT_SECONDS)
 
