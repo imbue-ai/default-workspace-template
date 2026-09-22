@@ -151,8 +151,8 @@ from update_environment import default_sweep_homes
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
-    AppReleaseUnavailableError,
-    CeilingUnavailableError,
+    AppVersionNotReleasedError,
+    AppVersionUnavailableError,
     NoUpdateTargetError,
     already_current_message,
     fetch_app_template_ref,
@@ -219,8 +219,8 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
+    app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
+    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
@@ -230,7 +230,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
             {
                 "ref": target.ref,
                 "kind": target.kind,
-                "ceiling": target.ceiling,
+                "ceiling": target.app_version,
                 "exceeds_ceiling": target.exceeds_ceiling,
             }
         )
@@ -665,10 +665,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Read already-fetched local tags instead of querying the remote.",
     )
     resolve_parser.add_argument(
+        "--app-version",
         "--ceiling",
+        dest="app_version",
         default=None,
-        help="Newest template ref to allow (default: ask the running minds app). "
-        "A non-release ref (e.g. a branch) imposes no ceiling.",
+        help="The release to update to, standing in for the running minds app's "
+        "own (default: ask the app). A ref that is not a release tag is a fault: "
+        "pass --override to say what to take instead.",
     )
     resolve_parser.set_defaults(func=_cmd_resolve_target)
 
@@ -905,8 +908,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return args.func(args)
     except (
-        AppReleaseUnavailableError,
-        CeilingUnavailableError,
+        AppVersionNotReleasedError,
+        AppVersionUnavailableError,
         NoUpdateTargetError,
         ApplyPreconditionError,
     ) as e:
