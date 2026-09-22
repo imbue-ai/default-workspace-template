@@ -28,7 +28,7 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
 # or with no manifest at all), and this suite runs there too.
-_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal", "terminal_pty")
+_BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "getting_started", "system_interface", "terminal", "terminal_pty")
 
 
 def _built_in_manifest_paths() -> list[Path]:
@@ -352,6 +352,20 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
+    # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
+    # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
+    assert by_name["getting-started"].critical is False
+    assert by_name["getting-started"].program == "getting-started"
+    assert by_name["getting-started"].priority == "getting-started"
+    assert by_name["getting-started"].launcher_rank == 5
+    assert by_name["getting-started"].launch_paths == ()
+    assert by_name["getting-started"].default_shortcut is not None
+    assert by_name["getting-started"].default_shortcut.launch == "open"
+    assert by_name["getting-started"].default_shortcut.mode == "focus"
+    assert by_name["getting-started"].pin is None
+    # Its preview (update-app's preview_app.py) boots unregistered, so it neither re-points the live row nor opens
+    # the first-visit window.
+    assert by_name["getting-started"].preview.command[:2] == ("getting-started", "--no-register")
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
     for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
@@ -359,7 +373,11 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert by_name[name].default_shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2).
     assert by_name["system_interface"].launch_paths == ()
-    assert [(entry.id, entry.path) for entry in by_name["chat"].launch_paths] == [("root", "/"), ("new", "/new")]
+    assert [(entry.id, entry.path) for entry in by_name["chat"].launch_paths] == [
+        ("root", "/"),
+        ("new", "/new"),
+        ("send", "/send"),
+    ]
     assert by_name["chat"].default_shortcut is not None
     assert by_name["chat"].default_shortcut.launch == "root"
     for name, launch_path in (("terminal", "/new"), ("files", "/"), ("browser", "/new")):
@@ -368,6 +386,15 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         assert by_name[name].default_shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == ["draft"]
     assert [param.name for param in by_name["chat"].launch_paths[1].params] == ["account_id", "message"]
+    assert [param.name for param in by_name["chat"].launch_paths[2].params] == ["message"]
+    # The launcher's free-text rows (launcher-and-getting-started plan section 3.1): the chat's ``new`` takes the
+    # typed text as its first message and its ``send`` as a message to an existing chat; nothing else declares a
+    # text param.
+    assert by_name["chat"].launch_paths[0].text_param is None
+    assert by_name["chat"].launch_paths[1].text_param == "message"
+    assert by_name["chat"].launch_paths[2].text_param == "message"
+    for name in ("terminal", "files", "browser"):
+        assert by_name[name].launch_paths[0].text_param is None, name
     assert [param.name for param in by_name["terminal"].launch_paths[0].params] == ["workdir"]
     assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
     assert [param.name for param in by_name["browser"].launch_paths[0].params] == ["url"]
