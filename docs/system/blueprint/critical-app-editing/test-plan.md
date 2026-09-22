@@ -362,7 +362,9 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
 - **E1 Freshness check.** With `mngr/update-tp1` carrying a chat-only change, the
   reference's `git diff --name-only $BASE HEAD -- ...` is empty. Commit an unrelated
   edit under `system/apps/chat/` on the served branch (then revert it): the diff names
-  it. The check is a command, not a script, so this is the whole test.
+  it. Commit one under `system/apps/system_interface/` instead (then revert it): the
+  diff stays empty, since the pass leases only the chat. The check is a command, not a
+  script, so this is the whole test.
 - **E2 Chat-only apply keeps its point.** Apply with `--keep-rollback-point` and both
   `--worker-bundle` args pointing at the worktree (stand-in for the worker's work_dir).
   Pass: exit 0; `last-good.json` includes chat and shell in `apps` and `programs`,
