@@ -184,7 +184,7 @@ for something that does not exist. `migrate_workspace.py audit-scan
 | `.agents/shared/worker/references/harden-artifact.md` | `harden-creation.md` | |
 | `.agents/shared/worker/references/artifact-skill.md` | `type-skill.md` | |
 | `.agents/shared/worker/references/artifact-service.md` | `type-service.md` (plus a new `type-app.md`) | The old single reference split |
-| `.agents/shared/worker/references/artifact-system-interface.md` | `type-system-interface.md` | |
+| `.agents/shared/worker/references/artifact-system-interface.md` | `type-app.md` (its "Critical apps" section) | The system interface is an app like any other now; its own reference is gone |
 
 The `launch-task` file-staging frontmatter key `source_artifacts_dir` kept its
 name; it is not part of the rename.
