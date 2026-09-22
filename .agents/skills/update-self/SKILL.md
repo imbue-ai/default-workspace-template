@@ -289,13 +289,14 @@ git branch -D mngr/update-self
 ```
 
 Exit 1 means the branch holds commits `HEAD` does not have. Keep them under an
-archive name instead. The results message then carries a plain caveat that
-unfinished work from an earlier update attempt was set aside and kept, and can
-be recovered on request; the archive name itself goes in the tracking ticket's
-close summary, not the message:
+archive name instead (note the name it prints). The results message then
+carries a plain caveat that unfinished work from an earlier update attempt was
+set aside and kept, and can be recovered on request; the archive name itself
+goes in the tracking ticket's close summary, not the message:
 
 ```bash
-git branch -m mngr/update-self "archive/update-self-$(date +%Y%m%d-%H%M%S)"
+ARCHIVE="archive/update-self-$(date +%Y%m%d-%H%M%S)"
+git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
