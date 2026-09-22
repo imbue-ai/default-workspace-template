@@ -385,15 +385,17 @@ def test_forget_clears_a_dead_backups_lock_and_applies_retention(
     repo_dir = tmp_path / "repo"
     source_dir = tmp_path / "source"
     source_dir.mkdir()
-    (source_dir / "f.txt").write_text("data")
     env = _env_for_local_repo(repo_dir)
     assert init_repo(env).returncode == 0
-    assert (
-        restic_backup(
-            source_path=source_dir, excludes=(), tag="t", env_overrides=env
-        ).returncode
-        == 0
-    )
+    # Two snapshots, so keep-*=1 has one to forget once the lock is cleared.
+    snapshot_ids: list[str] = []
+    for version in ("v1", "v2"):
+        (source_dir / "f.txt").write_text(version)
+        result = restic_backup(
+            source_path=source_dir, excludes=(), tag=version, env_overrides=env
+        )
+        assert result.returncode == 0, result.stderr
+        snapshot_ids.append(extract_snapshot_id_from_backup_output(result.stdout))
 
     _leave_a_dead_backups_lock(tmp_path, env)
     assert list((repo_dir / "locks").iterdir()), "the killed backup left no lock"
@@ -408,14 +410,19 @@ def test_forget_clears_a_dead_backups_lock_and_applies_retention(
     state.current_tick_id = "tick-integration"
     _run_forget(
         state=state,
-        config=BackupConfig(),
+        config=BackupConfig(
+            retention=RetentionSettings(
+                keep_hourly=1, keep_daily=1, keep_weekly=1, keep_monthly=1
+            )
+        ),
         env_overrides=env,
     )
 
-    forget_events = [
+    events = [
         json.loads(line)
         for line in (state.events_dir / "events.jsonl").read_text().splitlines()
-        if json.loads(line)["type"] == "FORGET_COMPLETED"
     ]
+    forget_events = [e for e in events if e["type"] == "FORGET_COMPLETED"]
     assert [e["exit_code"] for e in forget_events] == [0], forget_events
+    assert _snapshot_ids(env) == {snapshot_ids[-1]}
     assert list((repo_dir / "locks").iterdir()) == []
