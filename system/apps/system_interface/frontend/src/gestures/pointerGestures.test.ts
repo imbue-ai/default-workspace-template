@@ -215,14 +215,34 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
-  it("a drag whose release the root never saw is cancelled on the next hover, not left hanging", () => {
+  it("a drag whose release the root never saw ends where the pointer last held it, not left hanging", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70);
     pointer("pointermove", title, 150, 70);
-    // The window lost focus mid-drag; the button came up unseen and the pointer hovers back.
+    // The release landed outside the window; the pointer hovers back over the shell well past where it
+    // let go, and the drag settles where it was dropped rather than back where it started.
     pointer("pointermove", title, 190, 70, { buttons: 0 });
-    expect(events).toEqual(["begin:move(win-1):140,50", "move:move(win-1):140,50:40,0", "cancel:move(win-1)"]);
+    expect(events).toEqual([
+      "begin:move(win-1):140,50",
+      "move:move(win-1):140,50:40,0",
+      "end:move(win-1):140,50:40,0",
+    ]);
+  });
+
+  it("a resize whose release the root never saw ends at the edge's last point", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const edge = root.querySelector("#edge") as Element;
+    pointer("pointerdown", edge, 500, 500);
+    pointer("pointermove", edge, 560, 540);
+    // Dragging an edge runs the pointer out to the viewport's rim, where a release is the one most
+    // easily missed; the window keeps the size it was dragged to.
+    pointer("pointermove", edge, 600, 560, { buttons: 0 });
+    expect(events).toEqual([
+      "begin:resize(win-1,se):550,520",
+      "move:resize(win-1,se):550,520:60,40",
+      "end:resize(win-1,se):550,520:60,40",
+    ]);
   });
 
   it("a touch press released over a live page does not block the next finger's press", () => {

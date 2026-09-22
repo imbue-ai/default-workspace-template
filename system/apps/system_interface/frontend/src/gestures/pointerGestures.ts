@@ -100,6 +100,8 @@ interface PendingPress {
   readonly pointerType: string;
   readonly pressClient: PixelPoint;
   readonly press: PixelPoint;
+  /** Where the pointer last was with the button still down: where a release the root never saw left it. */
+  lastPoint: PixelPoint;
   isDragging: boolean;
   longPressTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -164,6 +166,7 @@ export class PointerGestureSource implements GestureSource {
         pointerType: event.pointerType,
         press,
         pressClient,
+        lastPoint: press,
         isDragging: false,
         longPressTimer: null,
       };
@@ -181,13 +184,18 @@ export class PointerGestureSource implements GestureSource {
 
     const onPointerMove = (event: PointerEvent): void => {
       if (pending === null || !isSamePointer(pending, event)) return;
-      // No button held: the press ended where the root could not see it (over a live page, or while the
-      // window had lost focus); the pointer is only hovering now. A drag that had begun is cancelled, so
-      // the listener's begin is always answered by an end or a cancel.
+      // No button held: the press ended where the root could not see it (released outside the window,
+      // or over a live page while the window had lost focus); the pointer is only hovering now. A drag
+      // that had begun ends where the pointer last held it rather than being thrown away -- the user let
+      // go meaning to drop it there, and the hovering the root does see is after the fact. The listener's
+      // begin is still always answered by an end or a cancel.
       if (event.buttons === 0) {
         const held = pending;
         finish();
-        if (held.isDragging) listener.onCancel(held.binding);
+        if (held.isDragging) {
+          const dropped = held.lastPoint;
+          listener.onEnd(held.binding, dropped, { x: dropped.x - held.press.x, y: dropped.y - held.press.y });
+        }
         return;
       }
       const point = pointOf(event);
@@ -211,6 +219,7 @@ export class PointerGestureSource implements GestureSource {
         listener.onBegin(pending.binding, point, pending.press);
       }
       event.preventDefault();
+      pending.lastPoint = point;
       listener.onMove(pending.binding, point, delta);
     };
 
