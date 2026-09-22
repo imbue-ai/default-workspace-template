@@ -25,7 +25,7 @@ three things running:
    Visitors without a session are redirected to the accounts broker and come
    back to `/_auth/callback`, which verifies the broker's 60-second RS256
    handoff token (JWKS, audience, nonce, single-use jti) and sets the
-   workspace-domain session cookie (24h).
+   workspace-domain session cookie (30 days; nothing renews it on use).
 2. **caddy** (`127.0.0.1:8443`): terminates the share's real TLS with the
    cert/key under `data/.secrets/share_tls/` and routes by Host -- the bare
    workspace domain to `system_interface`, `<service>.<domain>` to that
