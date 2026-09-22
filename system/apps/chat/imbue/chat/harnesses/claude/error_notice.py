@@ -57,11 +57,15 @@ _KIND_BY_CLAUDE_ERROR: dict[str, str] = {
 class ErrorNotice(FrozenModel):
     """What one synthetic Claude Code message says went wrong, as the wire's error fields.
 
-    The two families are mutually exclusive: a message offering both a sign-in action and
-    an "it's the provider's fault, retry" note would give the user contradictory next steps.
+    The two families are mutually exclusive as CLASSIFICATIONS: one message says one thing
+    about what went wrong, so it never carries both the named-cause note and the credential
+    one. They are not exclusive as offered ACTIONS -- the recovery links render under every
+    provider failure, since a spent quota and a rejected token are the same dead end from the
+    composer and the classification cannot always tell them apart.
     """
 
-    # The credential is the problem: renders with the sign-in / switch-provider action.
+    # The credential is the problem. Renders as a failure even with no api-error stamp, and marks
+    # the turn as one a chat's pre-login run can hide once the user signs in successfully.
     is_auth_error: bool = False
     # The turn failed against the model API: renders as a failure rather than as prose.
     is_api_error: bool = False

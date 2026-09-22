@@ -691,6 +691,23 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("restarting it is the only way");
   });
 
+  it("offers neither button for a refusal, and closes rather than cancels", async () => {
+    // Nothing on this notice can clear a spent usage limit: the same text earns the same
+    // refusal, and a restart neither refills a quota nor mints a working credential. With both
+    // withheld, closing is the only thing left, so the dismissive button must not read "Cancel".
+    mocks.sendMessage.mockRejectedValueOnce({
+      kind: "rejected_by_agent",
+      toString: () => "You've hit your session limit · resets 3pm",
+    });
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(findButton(after, "Retry")).toBeUndefined();
+    expect(findButton(after, "Force")).toBeUndefined();
+    const text = renderedText(after);
+    expect(text).toContain("hit your session limit");
+    expect(text).toContain("switch to another one");
+    expect(renderedText(findByClass(after, "notice-dismiss"))).toContain("OK");
+  });
+
   it("keeps Retry for a blocked input, which a person can clear", async () => {
     mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
