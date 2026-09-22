@@ -514,14 +514,15 @@ def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
     stdlib-only by contract, and ``layout.py`` is an agent-facing script run from
     any cwd. Comparing the sets is what makes the copies safe; sampling names
     cannot, since any name absent from the sample is free to diverge. Every
-    carrier this repo can reach belongs here: one left out is one free to drift,
+    carrier this repo owns belongs here: one left out is one free to drift,
     which is the state this guard was written to end.
 
-    One carrier is out of reach: ``SEED_APP_RESERVED_NAMES`` in the mngr repo's
+    A fourth carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
     ``apps/minds_evals/imbue/minds_evals/data_types.py``, copied from
     ``validate_service_name`` here so a seeded app's name can be checked before the
-    workspace sees it. This repo only vendors mngr, so that copy is compared and
-    corrected upstream; there is nothing this guard can assert about it.
+    workspace sees it. What sits in this tree under ``system/vendor/mngr/`` is a generated
+    snapshot of it, so only a fix upstream reaches that carrier, and an assertion here
+    would pin the snapshot rather than the set it was taken from.
     """
     forward_port = _load_module("_forward_port_set_drift_check", _SCRIPT)
     layout = _load_module("_layout_set_drift_check", _SCRIPT.parent / "layout.py")
