@@ -272,17 +272,24 @@ mngr destroy update-self --force
 
 Then clear the previous pass's `mngr/update-self` branch, whether or not a
 worker was listed: destroying a worker leaves its branch behind, and the launch
-below cannot create the worker while a branch of that name exists. After a
-landed pass the branch is part of `HEAD` (a rollback is a revert commit on top
-of the merge), so `-d` deletes it; no such branch means there is nothing to
-clear:
+below cannot create the worker while a branch of that name exists. First ask
+whether `HEAD` already has it -- exit 0 yes, 1 no, and a `Not a valid object
+name` error means there is no such branch and nothing to clear:
 
 ```bash
-git branch -d mngr/update-self
+git merge-base --is-ancestor refs/heads/mngr/update-self HEAD
 ```
 
-If git refuses because the branch is not fully merged, it holds commits `HEAD`
-does not have. Keep them under an archive name instead. The results message
+After a landed pass it does (a rollback is a revert commit on top of the
+merge), so delete it. `-D`, because that check is the safety check: `-d` asks
+the branch's pushed copy instead of `HEAD` once GitHub sync has pushed it:
+
+```bash
+git branch -D mngr/update-self
+```
+
+Exit 1 means the branch holds commits `HEAD` does not have. Keep them under an
+archive name instead. The results message
 then carries a plain caveat that unfinished work from an earlier update
 attempt was set aside and kept, and can be recovered on request; the archive
 name itself goes in the tracking ticket's close summary, not the message:
