@@ -111,24 +111,28 @@ before the next turn, at stop, or riding a tool result -- because harnesses diff
 those can reach the model at all. The invariant is only that an agent with open steps is told
 about them before it does more work.
 
-### P8. A chat agent that did work tells the user it is finished
-`agent_notify_user_turn_start.sh`, `agent_notify_user_stop_nudge.sh` -- **soft reminder.**
+### P8. A chat agent is asked, every turn, to tell the user it is finished
+`agent_notify_user_stop_nudge.sh` -- **soft reminder.**
 
 The user may have walked away the moment they sent the message, and nothing about a finished
-turn reaches them on its own. A chat agent that did work and sent no notification is reminded
-to send one (`.agents/skills/notify-user`), so the app's feed -- and its banner, when the user
-is looking elsewhere -- can bring them back to the chat.
+turn reaches them on its own. At the end of every turn a chat agent is asked to send one
+(`.agents/skills/notify-user`), so the app's feed -- and its banner, when the user is looking
+elsewhere -- can bring them back to the chat.
 
-"Did work" is the step discipline's own line: a turn that created, started or closed a step
-record did work; a turn that touched none of them was chitchat, a clarifying question or a
-single quick read. The first script records the step records as the turn opens, the second
-compares them as it ends.
+**The judgement stays with the agent.** Whether a given turn is worth a notification is not
+decidable from outside: a step record is a decent proxy and still wrong on the turns that
+matter. So the reminder is unconditional and the *message* carries the way out -- output
+nothing at all and stop. That costs one short continuation on a turn that wants no
+notification, which is cheaper than being wrong about which turns those are. The agent must
+not narrate the decision: the user never saw the question.
 
-**Chats only, and soft.** A worker's result reaches the user through the chat that launched
-it, and only chats appear in the feed, so the reminder gates on `MNGR_AGENT_ROLE=chat`. It is
-a reminder rather than a gate because whether a given turn is worth a notification is the
-agent's judgement; a reminder is spent on the work it fired for, so an agent that declines can
-stop.
+**Chats only.** A worker's result reaches the user through the chat that launched it, and only
+chats appear in the feed, so it gates on `MNGR_AGENT_ROLE=chat`.
+
+**Ending the asking is the delivery channel's problem.** A Stop hook reaches the model only by
+refusing the stop, so the harness must also offer a way to recognise the continuation it
+caused; without one the reminder is an endless loop rather than a suggestion. A harness that
+cannot do both carries this rule in `AGENTS.md` alone.
 
 ## The rule that keeps this honest
 

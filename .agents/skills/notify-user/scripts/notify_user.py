@@ -26,15 +26,6 @@ Environment:
                                 The per-agent authorization JWT, forwarded when
                                 set (a desktop-hosted gateway needs it; a
                                 VPS-hosted one never injects it).
-    MNGR_AGENT_WORK_DIR,        Where this chat's turn state lives, for the
-    MINDS_CHAT_ID               ``sent`` marker below.
-
-On success this drops a ``sent`` marker in the chat's turn state, which is what
-tells ``agent_notify_user_stop_nudge.sh`` the turn already notified the user.
-That path is spelled out in ``system/scripts/_notify_user_turn_state.sh``; it is
-recomputed here because a shell function cannot be imported, and
-``agent_notify_user_nudge_test.py`` runs this script and then the hook to keep
-the two ends honest.
 
 Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
 ``refresh_workspace_view.py``: the gateway is addressed directly with the same
@@ -53,8 +44,6 @@ import urllib.error
 import urllib.request
 
 ENV_AGENT_ID = "MNGR_AGENT_ID"
-ENV_CHAT_ID = "MINDS_CHAT_ID"
-ENV_WORK_DIR = "MNGR_AGENT_WORK_DIR"
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
 ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
@@ -62,29 +51,6 @@ ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 # One round trip to the desktop app; a wedged app must not stall the agent's
 # turn.
 _TIMEOUT_SECONDS = 10.0
-
-
-def _record_sent(environ: dict[str, str]) -> None:
-    """Mark this turn as notified, so the Stop hook's nudge stays quiet.
-
-    Best-effort by design: the notification has already landed, so a marker
-    that cannot be written must not turn a success into a reported failure.
-    The cost of losing it is one redundant nudge.
-    """
-    work_dir = environ.get(ENV_WORK_DIR, "") or "."
-    key = (environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")).replace(
-        "/", "_"
-    )
-    state_dir = os.path.join(work_dir, "data", ".state", "notify-user", key)
-    try:
-        os.makedirs(state_dir, exist_ok=True)
-        with open(os.path.join(state_dir, "sent"), "w"):
-            pass
-    except OSError as exc:
-        sys.stderr.write(
-            f"notify-user: the notification went out, but this turn could not be marked as "
-            f"notified ({exc}); you may be reminded to send one again.\n"
-        )
 
 
 class HttpClient:
@@ -151,7 +117,6 @@ def notify(
         timeout=_TIMEOUT_SECONDS,
     )
     if status == 200:
-        _record_sent(environ)
         return True
     if status is None:
         sys.stderr.write(
@@ -166,17 +131,11 @@ def notify(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Notify the user from this chat through the Mind app."
-    )
-    parser.add_argument(
-        "--title", default=None, help="Optional title, shown as a prefix on the message"
-    )
+    parser = argparse.ArgumentParser(description="Notify the user from this chat through the Mind app.")
+    parser.add_argument("--title", default=None, help="Optional title, shown as a prefix on the message")
     parser.add_argument("message", help="One sentence summarizing what was done")
     args = parser.parse_args(argv)
-    is_accepted = notify(
-        args.message, args.title, http=HttpClient(), environ=dict(os.environ)
-    )
+    is_accepted = notify(args.message, args.title, http=HttpClient(), environ=dict(os.environ))
     if is_accepted:
         sys.stderr.write("notify-user: notification sent.\n")
     return 0 if is_accepted else 1
