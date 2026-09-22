@@ -294,7 +294,9 @@ export interface MenuOptions {
   /** A fixed width. Unset, the menu sizes to its content (with `minWidth` as a floor). */
   width?: number;
   minWidth?: number;
-  /** Extra classes on the menu card -- a bare marker for tests, most usefully. */
+  /** Extra classes on the menu card -- a bare marker for tests, most usefully. Read on every
+   *  render, so a caller whose one menu wears several names (the desktop's five) may supply it
+   *  as a getter. */
   extraClass?: string;
   /** `menu` when unset. `dialog` for a card that holds a picker rather than a list of verbs. */
   role?: "menu" | "dialog";

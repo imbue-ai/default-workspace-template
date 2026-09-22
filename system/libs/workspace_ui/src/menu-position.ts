@@ -8,7 +8,8 @@
  * submenu SLIDES UP by exactly as much as it takes to fit, keeping its height. Only a list too
  * tall for the window at all is capped, and then it scrolls.
  *
- * Kept free of the DOM so it is unit-testable; the caller measures and feeds it in.
+ * The placement is kept free of the DOM so it is unit-testable; the caller measures and feeds
+ * it in, through `anchorForEvent` or `anchorForPoint`.
  */
 
 /** The part of a ``DOMRect`` the placement needs. A pointer position is one with no width. */
@@ -18,6 +19,16 @@ export interface MenuAnchor {
   top: number;
   bottom: number;
   width: number;
+}
+
+/** The anchor of the element an event fired on. */
+export function anchorForEvent(event: Event): MenuAnchor {
+  return (event.currentTarget as HTMLElement).getBoundingClientRect();
+}
+
+/** A zero-width anchor at a pointer position (a context menu). */
+export function anchorForPoint(x: number, y: number): MenuAnchor {
+  return { left: x, right: x, top: y, bottom: y, width: 0 };
 }
 
 export interface MenuSize {
