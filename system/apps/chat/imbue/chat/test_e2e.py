@@ -362,7 +362,7 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
             "model": "claude-opus-4-6",
             "content": [
                 {"type": "text", "text": "Let me read that file."},
-                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file": "test.txt"}},
+                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file_path": "/tmp/project/test.txt"}},
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -381,21 +381,30 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
-    """Tool calls render as collapsible blocks that expand to show input/output."""
+def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
+    """A turn's tool calls render as a row of chips; picking one opens its detail below."""
     with _running_e2e_server(tmp_path, session_events=_TOOL_CALL_SESSION_EVENTS) as server:
         _open_fixture_chat(page, server)
 
         expect(_chat(page).locator(".message-assistant").first).to_be_visible(timeout=15000)
-        tool_block = _chat(page).locator(".tool-call-block").first
-        expect(tool_block).to_be_visible(timeout=10000)
-        expect(tool_block).to_contain_text("Read")
+        chip = _chat(page).locator(".tool-chip").first
+        expect(chip).to_be_visible(timeout=10000)
+        # The chip says what the call DID, not which tool ran it: a past-tense verb
+        # and the file it acted on, so a row of them can be told apart.
+        expect(chip.locator(".tool-chip-verb")).to_have_text("read")
+        expect(chip.locator(".tool-chip-target")).to_contain_text("test.txt")
 
-        tool_details = _chat(page).locator(".tool-call-details").first
-        expect(tool_details).to_be_hidden()
-        _chat(page).locator(".tool-call-header").first.click()
-        expect(tool_details).to_be_visible()
-        expect(tool_details).to_contain_text("file contents here")
+        # Nothing is open until the reader picks a chip -- the row is a list to
+        # scan, and the payload behind it is fetched on demand.
+        expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
+        chip.click()
+        detail = _chat(page).locator(".tool-chip-detail").first
+        expect(detail).to_be_visible()
+        expect(detail).to_contain_text("file contents here")
+
+        # Picking it again puts it away.
+        chip.click()
+        expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)
