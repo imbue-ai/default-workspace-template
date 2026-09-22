@@ -42,6 +42,13 @@ export interface GestureListener {
   thresholdPx(): number;
   /** Whether a binding may start a drag right now (compact mode turns window drags off). */
   isDraggable(binding: GestureBinding): boolean;
+  /** A press landed on a handle, before it is known to be a drag. The live pages go inert from here
+   *  rather than from ``onBegin``: the threshold is only crossed by moves the root sees, and a press
+   *  a few pixels from a focused page (the resize strips overhang the frame by less than the
+   *  threshold) would otherwise spend those pixels inside that page, where the root sees nothing. */
+  onPressStart(binding: GestureBinding): void;
+  /** The press ended, as a click, a drag, a long press, or an interruption. Always answers a press start. */
+  onPressEnd(binding: GestureBinding): void;
   /** ``point`` is in the root's own coordinates (the backdrop's pixels). */
   onBegin(binding: GestureBinding, point: PixelPoint, pressPoint: PixelPoint): void;
   onMove(binding: GestureBinding, point: PixelPoint, delta: PixelPoint): void;
@@ -137,8 +144,10 @@ export class PointerGestureSource implements GestureSource {
     };
 
     const finish = (): void => {
+      const held = pending;
       clearLongPress();
       pending = null;
+      if (held !== null) listener.onPressEnd(held.binding);
     };
 
     const onPointerDown = (event: PointerEvent): void => {
@@ -170,6 +179,7 @@ export class PointerGestureSource implements GestureSource {
         isDragging: false,
         longPressTimer: null,
       };
+      listener.onPressStart(binding);
       if (event.pointerType !== "mouse") {
         pending.longPressTimer = setTimeout(() => {
           if (pending === null || pending.isDragging) return;
