@@ -48,7 +48,9 @@ def test_resolve_target_takes_the_release_the_app_names() -> None:
     # newer releases sitting right beside it.
     tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.4.0"]
     result = update_target.resolve_target(None, tags, app_version="minds-v0.3.7")
-    assert result == update_target.ResolvedTarget("minds-v0.3.7", "tag", "minds-v0.3.7", False)
+    assert result == update_target.ResolvedTarget(
+        "minds-v0.3.7", "tag", "minds-v0.3.7", False
+    )
 
 
 def test_resolve_target_takes_a_prerelease_app_to_its_own_prerelease_template() -> None:
@@ -64,21 +66,27 @@ def test_a_missing_app_release_is_a_fault_not_a_refusal() -> None:
     # was never published as claimed, so the skill is told, and no other release
     # is quietly substituted.
     try:
-        update_target.resolve_target(None, ["minds-v0.3.8", "minds-v0.4.0"], app_version="minds-v0.3.9")
+        update_target.resolve_target(
+            None, ["minds-v0.3.8", "minds-v0.4.0"], app_version="minds-v0.3.9"
+        )
     except update_target.AppVersionNotReleasedError as exc:
         message = str(exc)
         assert "minds-v0.3.9" in message
         assert "no such tag" in message
         assert not isinstance(exc, update_target.NoUpdateTargetError)
     else:
-        raise AssertionError("expected a fault when the app's release is missing upstream")
+        raise AssertionError(
+            "expected a fault when the app's release is missing upstream"
+        )
 
 
 def test_an_app_naming_no_release_is_a_fault() -> None:
     # A dev build reports its branch. There is no release to match, and which
     # ref such a workspace should take is the skill's call, not this script's.
     try:
-        update_target.resolve_target(None, ["minds-v0.3.9", "minds-v0.4.0"], app_version="main")
+        update_target.resolve_target(
+            None, ["minds-v0.3.9", "minds-v0.4.0"], app_version="main"
+        )
     except update_target.AppVersionNotReleasedError as exc:
         assert "not a release tag" in str(exc)
     else:
@@ -105,14 +113,18 @@ def test_resolve_target_override_known_tag_vs_arbitrary_ref() -> None:
 
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    newer = update_target.resolve_target("minds-v0.4.0", tags, app_version="minds-v0.3.9")
+    newer = update_target.resolve_target(
+        "minds-v0.4.0", tags, app_version="minds-v0.3.9"
+    )
     assert newer.ref == "minds-v0.4.0"
     assert newer.exceeds_ceiling is True
 
 
 def test_override_at_or_below_the_ceiling_is_not_flagged() -> None:
     tags = ["minds-v0.3.6", "minds-v0.3.9"]
-    older = update_target.resolve_target("minds-v0.3.6", tags, app_version="minds-v0.3.9")
+    older = update_target.resolve_target(
+        "minds-v0.3.6", tags, app_version="minds-v0.3.9"
+    )
     assert older.exceeds_ceiling is False
     at_ceiling = update_target.resolve_target(
         "minds-v0.3.9", tags, app_version="minds-v0.3.9"
@@ -5388,6 +5400,50 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
     # restored node_modules rather than wiping it.
     assert len(runner.argvs_starting("npm", "ci")) == 1
     assert (node_modules / "left-pad.js").read_text() == "restored"
+
+
+def test_a_rollback_rebuild_into_a_tree_with_no_node_modules_installs_first(
+    unbuilt_apply_repo: Path, tmp_path: Path
+) -> None:
+    # The forward pass installed the worker's bundles, so it never ran `npm ci`, and no
+    # manifest changed -- yet the tree has no node_modules. With no bundle copy to put
+    # back, recovery has to build, and a build with no dependencies dies on
+    # `tsc: not found`: an emergency instead of the clean rollback it should be.
+    node_modules = unbuilt_apply_repo / update_layout.NPM_ROOT_DIR / "node_modules"
+    shutil.rmtree(node_modules)
+    worker_bundles = _make_worker_bundles(tmp_path, stamp=_FRONTEND_TREE_HASH)
+    runner = _verifiable_runner(_FRONTEND_DIFF, unbuilt_apply_repo)
+    runner.respond(
+        ("npm", "run", "build"), _Result(returncode=127, stderr="sh: 1: tsc: not found")
+    )
+    restarts = {"seen": 0}
+
+    def shell_unhealthy_until_recovery(url: str) -> int | None:
+        if _is_live(url) and restarts["seen"] < 2:
+            return 500
+        return 200
+
+    def install_or_count_restarts(argv: list[str]) -> None:
+        if argv[:2] == ["npm", "ci"]:
+            node_modules.mkdir()
+            runner.respond(("npm", "run", "build"), _Result())
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = install_or_count_restarts
+
+    code = _apply(
+        runner,
+        _FakeHttp(shell_unhealthy_until_recovery),
+        _FakeSpawner(),
+        unbuilt_apply_repo,
+        worker_bundles=worker_bundles,
+    )
+
+    assert code == 2
+    assert runner.argvs_starting("npm") == [["npm", "ci"], ["npm", "run", "build"]]
+    npm_root = str(unbuilt_apply_repo / update_layout.NPM_ROOT_DIR)
+    assert runner.cwds_of("npm") == [npm_root, npm_root]
 
 
 def _make_pre_split_tree(repo_root: Path) -> None:
