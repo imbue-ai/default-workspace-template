@@ -21,6 +21,7 @@ from typing import Final
 from typing import Self
 
 from loguru import logger as _loguru_logger
+from pydantic import AliasChoices
 from pydantic import Field
 from pydantic import ValidationError
 from pydantic import model_validator
@@ -95,7 +96,8 @@ class ChatAgentEntry(FrozenModel):
 
 
 class ChatTransitionRecord(FrozenModel):
-    """What a handoff and a rebind share while a chat converges: the phase, the target, and the sends held.
+    """What a handoff and a rebind share while a chat converges: the phase, the target, the model picked for it,
+    and the sends held.
 
     Both persist on the record so a chat-app restart at any point resumes by reconciling
     against mngr's state rather than replaying steps (spec 5.11); the two subclasses add what
@@ -125,6 +127,14 @@ class ChatTransitionRecord(FrozenModel):
     error: str | None = Field(default=None, description="Why the switch failed, in the failed phase")
     failed_step: HandoffFailedStep | None = Field(
         default=None, description="Which step failed, in the failed phase; a retry reruns from that step"
+    )
+    model_pick: ModelPick | None = Field(
+        default=None,
+        description=(
+            "The model the chat runs on once the switch lands, applied once the agent is up and before the held "
+            "sends: a handoff's successor, or a rebind's restarted agent; None for the harness's default on a "
+            "handoff and the agent's own model on a rebind"
+        ),
     )
 
     @property
@@ -178,10 +188,6 @@ class ChatHandoffRecord(ChatTransitionRecord):
             "successor starts as a new chat would"
         ),
     )
-    model_pick: ModelPick | None = Field(
-        default=None,
-        description="The model the successor runs on, applied after its create; None for the harness's default",
-    )
 
     @property
     def transition_id(self) -> str:
@@ -200,19 +206,32 @@ class ChatRebindRecord(ChatTransitionRecord):
     previous_account_id: str = Field(description="The account the agent ran on before ('' when it carried no label)")
     previous_lane: str = Field(description="The lane the agent ran on before ('' when unknown)")
     target_label: str = Field(description="The account's label as the picker shows it, for the page and the 409s")
-    claude_sessions_config_dir: str | None = Field(
+    sessions_dir: str | None = Field(
         default=None,
+        # CLEANUP: drop the `claude_sessions_config_dir` alias once phase 9 of the chat-agent split has shipped in a
+        # template release: only phases 6 through 8 wrote that name, and a record keeps it only while a rebind
+        # started under one of them is still unfinished.
+        validation_alias=AliasChoices("sessions_dir", "claude_sessions_config_dir"),
         description=(
-            "For claude, the config dir the agent's session files are under while the rebind runs: the dir it ran "
-            "under before, recorded before the env file is rewritten, then the target once the files have moved, so "
-            "a resume or a retry on another account still knows where to look"
+            "Where the agent's session files were before its binding was rewritten, for a harness that files them "
+            "under the account (claude's config dir): recorded before the rewrite, then the target once they have "
+            "moved, so a resume or a retry on another account still knows where to look; None for a harness that "
+            "keeps them in the agent's own state dir"
         ),
     )
     restarted_account_id: str | None = Field(
         default=None,
         description=(
             "The account the agent's restart landed on, written once mngr start succeeded; None until then, and so "
-            "in the failed phase. A resume that finds it naming the target has only the delivery left to do"
+            "in a failed start. A resume that finds it naming the target has only the model pick and the delivery "
+            "left to do"
+        ),
+    )
+    is_model_pick_applied: bool = Field(
+        default=False,
+        description=(
+            "Whether the model pick has reached the restarted agent, so a resume or a retry does not apply it twice; "
+            "the agent keeps it through any later restart, as it keeps every model setting"
         ),
     )
 

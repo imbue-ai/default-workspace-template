@@ -76,6 +76,10 @@
           {
             "type": "command",
             "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_stop_nudge.sh"
+          },
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_notify_user_stop_nudge.sh"
           }
         ]
       }
