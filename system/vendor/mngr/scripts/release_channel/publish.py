@@ -10,7 +10,12 @@ A channel is moved by repointing its entry, never by removing it: nothing here
 deletes an object, so a channel whose entry is gone keeps serving whatever it
 last published. That divergence is reported rather than corrected -- dropping
 ``<channel>-mac.yml`` would leave every client on that channel erroring against a
-feed that serves nothing.
+feed that serves nothing. The same holds per platform: an entry that stops
+listing ``linux`` leaves ``<channel>-linux.yml`` serving its last build.
+
+Every entry names the platforms it publishes for. The field is required, not
+defaulted, because a build cut before Linux shipped has a Linux manifest whose
+binaries cannot run there: absence must not be readable as "every platform".
 
 ``manifest.py`` stays the single-channel primitive; this reads the file, checks
 each entry against reality, and calls it.
@@ -23,6 +28,7 @@ dry-run / no-op / undeclared-channel reporting.
 
 import os
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 from typing import Final
@@ -31,6 +37,7 @@ import click
 from pydantic import StrictStr
 from pydantic import StringConstraints
 from pydantic import ValidationError
+from pydantic import field_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from scripts.r2.client import R2CredentialsError
@@ -40,6 +47,7 @@ from scripts.release_channel.manifest import Fetch
 from scripts.release_channel.manifest import MakeS3Client
 from scripts.release_channel.manifest import Manifest
 from scripts.release_channel.manifest import PUBLISHABLE_CHANNELS
+from scripts.release_channel.manifest import PUBLISHABLE_PLATFORMS
 from scripts.release_channel.manifest import PromotionError
 from scripts.release_channel.manifest import RolloutPercentage
 from scripts.release_channel.manifest import assert_lima_image_published
@@ -65,6 +73,15 @@ from scripts.release_channel.web_channels import undeclared_web_channel_reports
 DeclaredName = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
+class PlatformsDeclarationError(PromotionError, ValueError):
+    """An entry's ``platforms`` list names nothing, something unknown, or the same platform twice.
+
+    A ``ValueError`` raised from the field's validator, so pydantic reports it
+    as a validation failure attributed to ``platforms``, which is how
+    ``parse_channels`` names the offending field.
+    """
+
+
 class ChannelEntry(FrozenModel):
     """One channel's declared state."""
 
@@ -73,6 +90,21 @@ class ChannelEntry(FrozenModel):
     version: DeclaredName
     fallback_branch: DeclaredName
     rollout_percentage: RolloutPercentage
+    platforms: tuple[DeclaredName, ...]
+
+    @field_validator("platforms")
+    @classmethod
+    def _check_platforms_are_known_and_distinct(cls, platforms: tuple[str, ...]) -> tuple[str, ...]:
+        if len(platforms) == 0:
+            raise PlatformsDeclarationError(f"must list at least one of {list(PUBLISHABLE_PLATFORMS)}")
+        unknown = [platform for platform in platforms if platform not in PUBLISHABLE_PLATFORMS]
+        if unknown:
+            raise PlatformsDeclarationError(
+                f"names unknown platform(s) {unknown}; only {list(PUBLISHABLE_PLATFORMS)} are served"
+            )
+        if len(set(platforms)) != len(platforms):
+            raise PlatformsDeclarationError(f"lists a platform twice: {list(platforms)}")
+        return platforms
 
 
 # `channel` names the table rather than sitting inside it.
@@ -161,12 +193,11 @@ def assert_fallback_branch_matches_build(entry: ChannelEntry, manifest_version: 
 
 
 # CLEANUP: the web create pin (``[web_channels.*]``, published by
-# ``web_channels.py``) is applied by its own reader/uploader below rather than
-# as a platform of this entry, so that it neither shares a desktop entry's
-# version nor conflicts textually with the per-platform rewrite of this
-# function on mngr/linux-packaging (imbue-ai/mngr-internal#943). Fold it into
-# that machinery once both branches are on main -- owed by whichever merges
-# second.
+# ``web_channels.py``) is applied by its own reader/uploader in ``main`` rather
+# than as a platform of this entry: a web entry must not share a desktop
+# entry's version, and it was written apart while the per-platform publishing
+# here lived on its own branch. Fold it into this machinery now that both are
+# on main.
 def apply_entry(
     entry: ChannelEntry,
     *,
@@ -180,26 +211,77 @@ def apply_entry(
     from_bucket: bool,
     fetch: Fetch = http_get,
     make_client: MakeS3Client = r2_client,
-) -> str:
-    """Run every gate for one channel, then publish unless this is a dry run."""
-    manifest = rewrite_manifest(fetch_build_manifest(app_id, entry.build_id, fetch=fetch), app_id)
-    assert_plain_release_version(version_of(manifest))
-    assert_version_matches_build(entry, version_of(manifest))
-    assert_fallback_branch_matches_build(entry, version_of(manifest))
-    manifest = with_rollout_percentage(manifest, entry.rollout_percentage)
+) -> Iterator[str]:
+    """Run every gate for one channel, then publish each listed platform unless this is a dry run.
+
+    Every platform's build manifest is fetched and gated, and every platform's
+    served state read and its rollout parsed, before anything is uploaded: a
+    build missing one platform's manifest, or a channel file that cannot be
+    read or declares a rollout the reader refuses, publishes nothing for the
+    entry rather than half of it. The Lima image gate is per entry, not per
+    platform: it is about the tag the build clones, which the platforms share.
+
+    Each platform's report line is yielded as soon as its upload is done, so a
+    platform whose upload fails does not hide what the ones before it wrote.
+    """
+    manifest_by_platform = {
+        platform: rewrite_manifest(
+            fetch_build_manifest(app_id, entry.build_id, platform, fetch=fetch), app_id, platform
+        )
+        for platform in entry.platforms
+    }
+    for manifest in manifest_by_platform.values():
+        assert_plain_release_version(version_of(manifest))
+        assert_version_matches_build(entry, version_of(manifest))
+        assert_fallback_branch_matches_build(entry, version_of(manifest))
 
     if lima_image_base_url:
         assert_lima_image_published(lima_image_base_url, entry.fallback_branch, arches, fetch=fetch)
 
-    current = read_current_channel_manifest(
-        entry.channel,
-        bucket=bucket,
-        feed_base_url=feed_base_url,
-        from_bucket=from_bucket,
-        fetch=fetch,
-        make_client=make_client,
-    )
-    served_description = _describe_served(current, entry.channel)
+    current_by_platform = {
+        platform: read_current_channel_manifest(
+            entry.channel,
+            platform,
+            bucket=bucket,
+            feed_base_url=feed_base_url,
+            from_bucket=from_bucket,
+            fetch=fetch,
+            make_client=make_client,
+        )
+        for platform in entry.platforms
+    }
+    served_description_by_platform = {
+        platform: _describe_served(current, entry.channel, platform)
+        for platform, current in current_by_platform.items()
+    }
+
+    for platform, manifest in manifest_by_platform.items():
+        yield _apply_platform(
+            entry,
+            platform,
+            with_rollout_percentage(manifest, entry.rollout_percentage),
+            current_by_platform[platform],
+            served_description_by_platform[platform],
+            bucket=bucket,
+            cache_seconds=cache_seconds,
+            dry_run=dry_run,
+            make_client=make_client,
+        )
+
+
+def _apply_platform(
+    entry: ChannelEntry,
+    platform: str,
+    manifest: Manifest,
+    current: Manifest | None,
+    served_description: str,
+    *,
+    bucket: str,
+    cache_seconds: int,
+    dry_run: bool,
+    make_client: MakeS3Client,
+) -> str:
+    """Publish one platform's manifest for an already-gated entry over what it serves now, and say what moved."""
     served = version_of(current) if current is not None else None
     backwards = (
         " -- BACKWARDS, so lower the connector download fallback too"
@@ -207,22 +289,30 @@ def apply_entry(
         else ""
     )
 
+    label = f"{entry.channel} ({platform})"
     rollout = f"{entry.rollout_percentage}%"
     if current is not None and current == manifest:
-        return f"{entry.channel}: already serving build {entry.build_id} ({version_of(manifest)}) to {rollout}, nothing to do"
+        return f"{label}: already serving build {entry.build_id} ({version_of(manifest)}) to {rollout}, nothing to do"
     if dry_run:
-        return f"{entry.channel}: would publish {version_of(manifest)} to {rollout} (currently {served_description}){backwards}"
+        return (
+            f"{label}: would publish {version_of(manifest)} to {rollout} (currently {served_description}){backwards}"
+        )
     upload_manifest(
-        manifest, bucket=bucket, channel=entry.channel, cache_seconds=cache_seconds, make_client=make_client
+        manifest,
+        bucket=bucket,
+        channel=entry.channel,
+        platform=platform,
+        cache_seconds=cache_seconds,
+        make_client=make_client,
     )
-    return f"{entry.channel}: published {version_of(manifest)} to {rollout} (was {served_description}){backwards}"
+    return f"{label}: published {version_of(manifest)} to {rollout} (was {served_description}){backwards}"
 
 
-def _describe_served(current: Manifest | None, channel: str) -> str:
-    """What a channel serves today, for the line reporting what it will serve next."""
+def _describe_served(current: Manifest | None, channel: str, platform: str) -> str:
+    """What a channel serves a platform today, for the line reporting what it will serve next."""
     if current is None:
         return "nothing"
-    percentage = read_rollout_percentage(current, channel_filename(channel))
+    percentage = read_rollout_percentage(current, channel_filename(channel, platform))
     if percentage is None:
         return f"{version_of(current)} to {FULL_ROLLOUT_PERCENTAGE}% (declaring no rollout)"
     return f"{version_of(current)} to {percentage}%"
@@ -237,30 +327,33 @@ def undeclared_channel_reports(
     fetch: Fetch = http_get,
     make_client: MakeS3Client = r2_client,
 ) -> tuple[str, ...]:
-    """Name every channel still served by a manifest this file no longer declares.
+    """Name every (channel, platform) still served by a manifest this file no longer declares.
 
-    Removing an entry publishes nothing, so the channel keeps serving its last
-    build -- which makes the one edit a reader would reach for to withdraw a bad
-    promotion a run that reports success having changed nothing.
+    Removing an entry -- or dropping a platform from one -- publishes nothing,
+    so the channel keeps serving its last build there, which makes the one edit
+    a reader would reach for to withdraw a bad promotion a run that reports
+    success having changed nothing.
     """
-    declared = {entry.channel for entry in entries}
+    declared = {(entry.channel, platform) for entry in entries for platform in entry.platforms}
     reports = []
     for channel in PUBLISHABLE_CHANNELS:
-        if channel in declared:
-            continue
-        current = read_current_channel_manifest(
-            channel,
-            bucket=bucket,
-            feed_base_url=feed_base_url,
-            from_bucket=from_bucket,
-            fetch=fetch,
-            make_client=make_client,
-        )
-        if current is not None:
-            reports.append(
-                f"{channel}: declared by no entry, but still serving {version_of(current)}. Removing an entry "
-                f"withdraws nothing; repoint it at another build to move the channel."
+        for platform in PUBLISHABLE_PLATFORMS:
+            if (channel, platform) in declared:
+                continue
+            current = read_current_channel_manifest(
+                channel,
+                platform,
+                bucket=bucket,
+                feed_base_url=feed_base_url,
+                from_bucket=from_bucket,
+                fetch=fetch,
+                make_client=make_client,
             )
+            if current is not None:
+                reports.append(
+                    f"{channel} ({platform}): declared by no entry, but still serving {version_of(current)}. "
+                    f"Removing an entry or a platform withdraws nothing; repoint it at another build to move the channel."
+                )
     return tuple(reports)
 
 
@@ -310,19 +403,18 @@ def main(
             # an error -- so the gate's absence has to be visible in the run.
             click.echo("No --lima-image-base-url given: this tier configures no image, so the image gate is skipped.")
         for entry in entries:
-            click.echo(
-                apply_entry(
-                    entry,
-                    app_id=app_id,
-                    bucket=bucket,
-                    feed_base_url=feed_base_url,
-                    lima_image_base_url=lima_image_base_url,
-                    arches=arches,
-                    cache_seconds=cache_seconds,
-                    dry_run=dry_run,
-                    from_bucket=from_bucket,
-                )
-            )
+            for report in apply_entry(
+                entry,
+                app_id=app_id,
+                bucket=bucket,
+                feed_base_url=feed_base_url,
+                lima_image_base_url=lima_image_base_url,
+                arches=arches,
+                cache_seconds=cache_seconds,
+                dry_run=dry_run,
+                from_bucket=from_bucket,
+            ):
+                click.echo(report)
         for report in undeclared_channel_reports(
             entries, bucket=bucket, feed_base_url=feed_base_url, from_bucket=from_bucket
         ):

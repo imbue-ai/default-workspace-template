@@ -14,8 +14,10 @@ from threading import Lock
 from typing import Any
 from typing import cast
 
+import gevent
 import httpx
 import pytest
+from gevent.hub import Hub
 from loguru import logger
 from pydantic import AnyUrl
 from pydantic import Field
@@ -56,8 +58,10 @@ from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudUnreachableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudWorkspaceHeldError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudWorkspaceRetiredError
 from imbue.mngr_imbue_cloud.errors import UnrecognizedWorkspaceStatusError
 from imbue.mngr_imbue_cloud.errors import WORKSPACE_HELD_MESSAGE
+from imbue.mngr_imbue_cloud.errors import WORKSPACE_RETIRED_MESSAGE
 from imbue.mngr_imbue_cloud.errors import WorkspaceStartFailedError
 from imbue.mngr_imbue_cloud.hosts.host import ImbueCloudHost
 from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
@@ -211,12 +215,10 @@ def test_build_offline_details_from_lease_preserves_host_and_failure_reason(tmp_
     assert agent_details_list[0].host == host_details
 
 
-# =============================================================================
 # _release_lease_on_failure -- the reliability invariant that a failure after a
 # successful lease releases the host back to the pool exactly once (so failed
 # fast/slow-path builds never leak a paid lease), while a success releases
 # nothing and lets the wrapped result/exception flow through untouched.
-# =============================================================================
 
 
 class _RecordingReleaseClient:
@@ -280,11 +282,9 @@ def test_release_lease_on_failure_does_not_release_on_success() -> None:
     assert provider._cleanup_calls == []
 
 
-# =============================================================================
 # rename_host -- the workspace-name refactor exposes host rename for imbue_cloud.
 # The lease's host_db_id is the durable identity; only the friendly host_name
 # changes (via the connector), so a rename never touches the VPS/container.
-# =============================================================================
 
 
 class _RecordingRenameClient:
@@ -316,7 +316,6 @@ def test_rename_host_raises_when_lease_not_found() -> None:
     assert client.rename_calls == []
 
 
-# =============================================================================
 # Restart routing + re-bootstrap: a stopped leased container must (1) resolve
 # via get_host to an OFFLINE host so ensure_host_started routes ``mngr start``
 # through start_host, and (2) have start_host relaunch the container's sshd over
@@ -326,7 +325,6 @@ def test_rename_host_raises_when_lease_not_found() -> None:
 # must be relaunched. Without (1), start_host is never reached; without (2), the
 # container comes back with no sshd. Either way a stopped leased mind is left
 # unrecoverable.
-# =============================================================================
 
 
 _RESTART_CONTAINER_ID = "container-xyz"
@@ -399,7 +397,7 @@ class _FakeImbueCloudProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     def _wait_for_container_sshd(self, leased: LeasedHostInfo) -> None:
         self._waited_for.append(leased.vps_address)
 
-    def _build_host_object(self, lease: LeasedHostInfo, *, adopt_pre_baked_agent: bool = True) -> ImbueCloudHost:
+    def _build_host_object(self, lease: LeasedHostInfo) -> ImbueCloudHost:
         assert self._built is not None
         return self._built
 
@@ -572,13 +570,11 @@ def test_start_host_rebootstraps_container_ssh(tmp_path: Path, temp_mngr_ctx: Mn
     assert result is built
 
 
-# =============================================================================
 # _list_leased_hosts_cached -- discovery-time error narrowing. A transport-level
 # failure reaching the connector (flaky wifi / connector down) must surface as
 # ProviderUnavailableError so recovery UIs can tell "the provider is unreachable,
 # don't bother restarting" apart from auth/account problems, which keep their own
 # types and fall through to the generic "can't reach your workspace" handling.
-# =============================================================================
 
 
 class _ListHostsClient:
@@ -1003,6 +999,39 @@ def test_discover_hosts_and_agents_caches_every_hosts_listing_under_concurrency(
         assert provider._listing_raw_cache[host_id] == raw_by_host_id[host_id]
 
 
+class _HubCreatingDiscoveryProvider(_MultiHostDiscoveryProvider):
+    """Records the gevent Hub each per-host read creates on its worker thread,
+    standing in for the pyinfra command the real outer listing runs."""
+
+    _hubs: list[Hub] = []
+
+    def _collect_listing_raw_via_outer(self, lease: LeasedHostInfo) -> tuple[dict[str, Any] | None, str | None, bool]:
+        with self._in_flight_lock:
+            self._hubs.append(gevent.get_hub())
+        return super()._collect_listing_raw_via_outer(lease)
+
+
+# this tests: IF each host's read touches gevent on its worker thread (as pyinfra does)
+# THEN: every one of those per-thread hubs is destroyed by the time discovery returns
+def test_discover_hosts_and_agents_destroys_each_worker_threads_gevent_hub(temp_mngr_ctx: MngrContext) -> None:
+    """A hub left behind by a discovery worker pins a pipe pair and its object graph for the
+    life of the process; a long-running ``mngr observe`` polls this every 30s, so it grows
+    without bound."""
+    leases = [_make_lease(HostId.generate()) for _ in range(3)]
+    provider = _HubCreatingDiscoveryProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _leases=leases,
+        _raw_by_host_id={HostId(lease.host_id): _running_raw() for lease in leases},
+        _hubs=[],
+    )
+
+    provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group)
+
+    assert len(provider._hubs) == len(leases)
+    assert all(hub.loop is None for hub in provider._hubs), "a discovery worker thread left its gevent Hub alive"
+
+
 class _LogCapture:
     """Captures loguru messages and levels for test assertions."""
 
@@ -1268,7 +1297,6 @@ def test_fast_path_rejects_image_swap_and_names_only_the_image(temp_mngr_ctx: Mn
     assert not provider._did_reach_fast_path
 
 
-# =============================================================================
 # Sticky agent labels (husk fix): discovery persists the identity (name +
 # certified_data) of the agents seen in the last successful outer-listing pass,
 # and re-attaches that full set -- each marked ``"stale": true`` -- in the two
@@ -1277,7 +1305,6 @@ def test_fast_path_rejects_image_swap_and_names_only_the_image(temp_mngr_ctx: Mn
 # ``is_primary``), so it never collapses to a single label-less "husk" agent and
 # vanishes from consumers that filter on labels. Persisting to disk lets the
 # identity survive an app/forward relaunch into a flaky-network window.
-# =============================================================================
 
 
 _STICKY_PROVIDER_NAME = ProviderInstanceName("imbue-cloud-test")
@@ -1512,13 +1539,11 @@ def test_reattached_identity_flows_through_to_agent_details(temp_mngr_ctx: MngrC
     assert agent_details.labels["is_primary"] == "true"
 
 
-# =============================================================================
 # Sticky host_dir: a container is baked with one host_dir layout and keeps it
 # for life, but the provider config is account-wide. Discovery resolves the real
 # location as part of its one outer-SSH pass; recording it per host is what lets
 # the later operations (`mngr exec`, `mngr start`, the minds SSH broker) address
 # the same directory rather than the account-wide default.
-# =============================================================================
 
 
 def _raw_at_host_dir(host_dir: str) -> dict[str, Any]:
@@ -1796,16 +1821,26 @@ def test_advance_workspace_start_requests_the_start_once_the_stop_lands() -> Non
     assert state.is_start_requested is True
 
 
-@pytest.mark.parametrize("held_kind", ["maintenance", "suspension"])
+@pytest.mark.parametrize(
+    ("held_kind", "expected_error", "expected_sentence"),
+    [
+        ("maintenance", ImbueCloudWorkspaceHeldError, WORKSPACE_HELD_MESSAGE),
+        ("suspension", ImbueCloudWorkspaceHeldError, WORKSPACE_HELD_MESSAGE),
+        ("retired", ImbueCloudWorkspaceRetiredError, WORKSPACE_RETIRED_MESSAGE),
+    ],
+)
 @pytest.mark.parametrize("status", ["stopping", "stopped"])
-def test_advance_workspace_start_refuses_a_held_stop_without_asking(held_kind: str, status: str) -> None:
+def test_advance_workspace_start_refuses_a_held_stop_without_asking(
+    held_kind: str, expected_error: type[ImbueCloudWorkspaceHeldError], expected_sentence: str, status: str
+) -> None:
     # An operator hold is not the owner's to end: the poll refuses at once,
-    # with the connector's own sentence, instead of waiting out the stop or
-    # requesting a start the server would refuse anyway.
+    # with the connector's own sentence (the retired verdict has its own),
+    # instead of waiting out the stop or requesting a start the server would
+    # refuse anyway.
     state = _WorkspaceStartPollState()
     outcome, client = _advance_once(_make_workspace_info(status, with_placement=False, stop_kind=held_kind), state)
-    assert isinstance(outcome, ImbueCloudWorkspaceHeldError)
-    assert str(outcome).startswith(WORKSPACE_HELD_MESSAGE)
+    assert isinstance(outcome, expected_error)
+    assert str(outcome).startswith(expected_sentence)
     assert client.start_request_count == 0
 
 
@@ -2119,3 +2154,31 @@ def test_destroy_host_of_a_workspace_the_connector_does_not_know_runs_local_clea
 
     assert client.release_calls == []
     assert provider._cleanup_calls == [host_id]
+
+
+# this tests: IF a host object is built from a lease (any create path, the slow path's rebuilt container included)
+# THEN: the lease's agent id rides along as the pre-baked id, so the services agent is created at that id
+def test_build_host_object_always_pins_the_lease_agent_id(temp_mngr_ctx: MngrContext) -> None:
+    """The agent id the connector knows the lease by (record stub, share coordinate, the
+    lease-record sweep's join) is the pool row's agent id. A slow-path rebuild
+    that let mngr mint a fresh id left every one of those out of step (a
+    record-less lease, a duplicate list entry), so the id must be pinned on
+    every path -- the host decides adopt-vs-full-create from its on-disk state,
+    never from this object."""
+    provider = ImbueCloudProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        host_dir=Path("/tmp/imbue-cloud-test-host-dir"),
+        config=ImbueCloudProviderConfig(account=ImbueCloudAccount("alice@example.com")),
+    )
+    host_id = HostId.generate()
+    # An OVH-style lease (container port equal to the configured publish
+    # port) so no slice adoption is attempted: the build stays local.
+    lease = _make_lease(host_id).model_copy_update(
+        to_update(_make_lease(host_id).field_ref().container_ssh_port, provider.config.container_ssh_port)
+    )
+
+    host = provider._build_host_object(lease)
+
+    assert host.pre_baked_agent_id == AgentId(lease.agent_id)
+    assert host.id == host_id

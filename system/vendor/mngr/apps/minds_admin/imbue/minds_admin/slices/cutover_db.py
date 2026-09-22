@@ -54,8 +54,12 @@ _PARK_POOL_HOST_SQL: Final[str] = (
 # Correct a gen-1 row's ``disk_gb`` from 039's unmeasured fallback to its
 # measured data disk plus the base (see ``restamped_gen1_disk_gb_or_none``); the
 # WHERE pins the fallback value so a concurrent change is never overwritten.
-_RESTAMP_UNMEASURED_GEN1_DISK_GB_SQL: Final[str] = (
+_RESTAMP_LEASED_GEN1_DISK_GB_SQL: Final[str] = (
     "UPDATE pool_hosts SET disk_gb = %s WHERE id = %s AND disk_gb = %s AND box_generation < 2 AND status = 'leased'"
+)
+
+_ROLLBACK_RESTORE_DISK_GB_SQL: Final[str] = (
+    "UPDATE pool_hosts SET disk_gb = %s WHERE id = %s AND disk_gb = %s AND box_generation < 2"
 )
 
 _FINISH_RESTORE_POOL_HOST_SQL: Final[str] = (
@@ -199,6 +203,23 @@ def fetch_pool_row(conn: Any, row_id: str) -> CutoverPoolRow | None:
     return _pool_row_from_tuple(row) if row is not None else None
 
 
+class TransitionFailure(FrozenModel):
+    """The connector's record of a row's failed transitions: how many in a row, and the last error."""
+
+    count: int = Field(description="pool_hosts.transition_failure_count (consecutive failed drives)")
+    error: str | None = Field(description="pool_hosts.transition_error (the last failure's message)")
+
+
+def fetch_transition_failure(conn: Any, row_id: str) -> TransitionFailure:
+    """The row's failure record; a vanished row reads as no failures."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT transition_failure_count, transition_error FROM pool_hosts WHERE id = %s", (row_id,))
+        row = cur.fetchone()
+    if row is None:
+        return TransitionFailure(count=0, error=None)
+    return TransitionFailure(count=int(row[0] or 0), error=row[1])
+
+
 def fetch_gen1_pool_rows_for_user(conn: Any, user_id_prefix: str) -> list[CutoverPoolRow]:
     """Every gen-1 pool row leased to one user (any status), oldest first."""
     with conn.cursor() as cur:
@@ -220,13 +241,22 @@ def park_pool_host(conn: Any, row_id: str) -> bool:
     return is_parked
 
 
-def restamp_unmeasured_gen1_disk_gb(conn: Any, row_id: str, *, unmeasured_disk_gb: int, disk_gb: int) -> bool:
-    """Replace a leased gen-1 row's unmeasured ``disk_gb`` stamp with ``disk_gb``; True when this call changed it."""
+def restamp_leased_gen1_disk_gb(conn: Any, row_id: str, *, expected_disk_gb: int, disk_gb: int) -> bool:
+    """Replace a leased gen-1 row's ``disk_gb`` (currently ``expected_disk_gb``) with ``disk_gb``; True when this call changed it."""
     with conn.cursor() as cur:
-        cur.execute(_RESTAMP_UNMEASURED_GEN1_DISK_GB_SQL, (disk_gb, row_id, unmeasured_disk_gb))
+        cur.execute(_RESTAMP_LEASED_GEN1_DISK_GB_SQL, (disk_gb, row_id, expected_disk_gb))
         is_restamped = cur.rowcount == 1
     conn.commit()
     return is_restamped
+
+
+def rollback_restore_disk_gb(conn: Any, row_id: str, *, expected_disk_gb: int, disk_gb: int) -> bool:
+    """Put a rolled-back gen-1 row's pre-shrink ``disk_gb`` back (from the shrunk ``expected_disk_gb``); True when changed."""
+    with conn.cursor() as cur:
+        cur.execute(_ROLLBACK_RESTORE_DISK_GB_SQL, (disk_gb, row_id, expected_disk_gb))
+        is_restored = cur.rowcount == 1
+    conn.commit()
+    return is_restored
 
 
 def rollback_park_pool_host(conn: Any, row_id: str, *, memory_units: int) -> bool:

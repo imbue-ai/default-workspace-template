@@ -77,6 +77,8 @@ from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPerm
 from imbue.minds.desktop_client.latchkey.machine_operations import MachineOperator
 from imbue.minds.desktop_client.latchkey.pending_requests import PendingRequestsInterface
 from imbue.minds.desktop_client.latchkey.response_events import RequestStatus
+from imbue.minds.desktop_client.local_prerequisites import HostProbeInterface
+from imbue.minds.desktop_client.local_prerequisites import SubprocessHostProbe
 from imbue.minds.desktop_client.machine_stop_kinds import MachineStopKindTracker
 from imbue.minds.desktop_client.mind_liveness import compute_mind_liveness_by_agent_id
 from imbue.minds.desktop_client.minds_config import DEFAULT_NOTIFICATION_STYLE
@@ -85,6 +87,7 @@ from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.notification_feed import NotificationDispatchPreferences
 from imbue.minds.desktop_client.notification_feed import NotificationFeed
+from imbue.minds.desktop_client.notification_feed import SystemEventCard
 from imbue.minds.desktop_client.provider_display import friendly_provider_label
 from imbue.minds.desktop_client.report_collector import submit_report_with_attachments
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
@@ -119,6 +122,7 @@ from imbue.minds.desktop_client.ui_api import serve_spa_index
 from imbue.minds.desktop_client.ui_api_inbox import build_notification_card
 from imbue.minds.desktop_client.ui_api_inbox import displayable_pending_requests
 from imbue.minds.desktop_client.ui_api_inbox import primary_agent_ids_by_workspace_name
+from imbue.minds.desktop_client.ui_api_inbox import workspace_name_for_request
 from imbue.minds.desktop_client.ui_api_updates import build_workspace_updates_message
 from imbue.minds.desktop_client.ui_api_updates import format_update_window
 from imbue.minds.desktop_client.ui_channel import UiChannelBroadcaster
@@ -138,6 +142,7 @@ from imbue.minds.desktop_client.ui_models import UiWorkspaceUpdatesMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspacesMessage
 from imbue.minds.desktop_client.ui_publisher import UiStatePublisher
 from imbue.minds.desktop_client.update_apply_window import UpdateApplyWindowManager
+from imbue.minds.desktop_client.update_dismissal_store import UpdateDismissalStore
 from imbue.minds.desktop_client.update_schedule_store import UpdateScheduleStore
 from imbue.minds.desktop_client.update_scheduler import UpdateScheduler
 from imbue.minds.desktop_client.update_service import WorkspaceUpdateService
@@ -205,9 +210,7 @@ def _get_mngr_forward_origin() -> str:
     return f"https://localhost:{port}"
 
 
-# -- Auth helpers --
-
-
+# Auth helpers
 def _required_one_time_code() -> OneTimeCode:
     """Parse the required ``one_time_code`` query param, aborting 422 when absent.
 
@@ -237,9 +240,7 @@ def _is_request_authenticated() -> bool:
     )
 
 
-# -- Route handlers (module-level; deps read from get_state()) --
-
-
+# Route handlers (module-level; deps read from get_state())
 def _handle_forward_bridge() -> Response:
     """Bounce an authenticated browser into a forward-plugin session.
 
@@ -649,7 +650,7 @@ def _handle_help_assist() -> Response:
     unreachable -- so we never spawn a chat that could only hang. Then we ask it which signed-in account the chat
     should run on, and return 409 if it names none or 502 if that probe could not run either. Otherwise the
     desktop app runs ``mngr create`` inside that workspace's container (via ``mngr exec``) to spawn a new chat seeded
-    with ``/assist <description>``; the system interface auto-opens its tab. The call blocks until
+    with ``/assist <description>``; the workspace's desktop opens its window. The call blocks until
     ``mngr create`` finishes so the get-help modal can hold its "starting..." state until the chat
     exists, then returns 200 on success or 502 if the spawn failed.
     """
@@ -939,12 +940,6 @@ def _handle_post_login_redirect() -> Response:
     has_any_workspace = bool(backend_resolver.list_active_workspace_ids())
     destination = "/accounts" if has_any_workspace else "/"
     return make_response(status_code=302, headers={"Location": destination})
-
-
-# -- Agent create-attempt route handlers --
-
-
-# -- Agent destruction route handlers --
 
 
 def _finalize_and_mark_destroying(
@@ -1325,7 +1320,7 @@ def _build_requests_payload(
     pending_requests: PendingRequestsInterface | None,
     backend_resolver: BackendResolverInterface,
 ) -> dict[str, Any]:
-    """Build the content-based requests payload pushed over the chrome SSE.
+    """Build the pending requests summary pushed over the UI channel.
 
     The chrome's live request UI (badge, panel refresh) must react to any
     change in the *set* of pending requests, not merely its size. A bare
@@ -1344,10 +1339,16 @@ def _build_requests_payload(
     """
     pending = displayable_pending_requests(pending_requests, backend_resolver)
     request_ids = [req.request_id for req in pending]
-    return {"count": len(request_ids), "request_ids": request_ids}
+    primary_ids = primary_agent_ids_by_workspace_name(backend_resolver)
+    workspace_ids = {
+        primary_id
+        for req in pending
+        if (primary_id := primary_ids.get(workspace_name_for_request(req, backend_resolver))) is not None
+    }
+    return {"count": len(request_ids), "request_ids": request_ids, "workspace_agent_ids": sorted(workspace_ids)}
 
 
-# -- System-interface health probing --
+# System-interface health probing
 #
 # The probe loop's own timeout is all that lives here. The recovery page's route
 # is registered with the rest of the SPA routes further down, and its data calls
@@ -1362,9 +1363,7 @@ def _build_requests_payload(
 _WORKSPACE_PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
 
 
-# -- Account management routes --
-
-
+# Account management routes
 def _handle_account_trim_backups(user_id: str) -> Response:
     """Start the over-quota backup trim flow for one account (idempotent while running)."""
     if not _is_request_authenticated():
@@ -1385,7 +1384,7 @@ def _handle_account_trim_backups(user_id: str) -> Response:
         account_email=str(account.email),
         cli=cli,
         paths=paths,
-        notification_dispatcher=get_state().notification_dispatcher,
+        notification_feed=get_state().notification_feed,
     )
     return make_response(status_code=303, headers={"Location": "/accounts"})
 
@@ -1610,12 +1609,6 @@ def _handle_account_logout(
     return make_response(status_code=303, headers={"Location": "/accounts"})
 
 
-# -- Workspace settings routes --
-
-
-# -- Inbox routes --
-
-
 def _handle_sharing_redirect(
     agent_id: str,
     service_name: str = "",
@@ -1697,9 +1690,7 @@ def _dispatch_request_action(
     return make_json_error_response(f"Unsupported action '{action}'", status_code=500)
 
 
-# -- /ui channel publisher wiring --
-
-
+# /ui channel publisher wiring
 def _ui_workspace_entry_from_legacy_dict(entry: Mapping[str, str]) -> UiWorkspaceEntry:
     """Convert one ``_build_workspace_list`` row into the typed channel entry.
 
@@ -1809,7 +1800,11 @@ def _derive_ui_requests_message(
 ) -> UiRequestsMessage:
     with app.app_context():
         payload = _build_requests_payload(get_state().pending_requests, backend_resolver)
-        return UiRequestsMessage(count=payload["count"], request_ids=tuple(payload["request_ids"]))
+        return UiRequestsMessage(
+            count=payload["count"],
+            request_ids=tuple(payload["request_ids"]),
+            workspace_agent_ids=tuple(payload["workspace_agent_ids"]),
+        )
 
 
 # How a recorded response's status becomes a feed outcome. A status outside
@@ -1851,6 +1846,13 @@ def _derive_ui_notifications_message(
         return feed.reconcile(
             pending_cards=pending_cards,
             responses_by_request_id=responses_by_request_id,
+            # An agent message whose workspace is gone has nowhere to land, so
+            # it leaves the feed -- but dropping it is unrecoverable, so this is
+            # the restorable set (live plus the persisted last-good topology,
+            # both minus hosts observed DESTROYED) rather than the live one: a
+            # partial or failed listing is not evidence that a workspace is
+            # gone, and a flap must not destroy an unread message.
+            known_workspace_agent_ids={str(aid) for aid in backend_resolver.list_restorable_workspace_ids()},
         )
 
 
@@ -2126,7 +2128,10 @@ def _build_workspace_update_machinery(
     ):
         return None
     schedule_store = UpdateScheduleStore(records_dir=paths.data_dir / "update_schedules")
-    state_store = WorkspaceUpdateStateStore(schedule_store=schedule_store)
+    state_store = WorkspaceUpdateStateStore(
+        schedule_store=schedule_store,
+        dismissal_store=UpdateDismissalStore(records_dir=paths.data_dir / "update_dismissals"),
+    )
     apply_window = UpdateApplyWindowManager(
         tracker=system_interface_health_tracker,
         store=state_store,
@@ -2241,9 +2246,7 @@ def _ui_health_message(tracker: SystemInterfaceHealthTracker, agent_id: str, sta
     )
 
 
-# -- App factory --
-
-
+# App factory
 def create_desktop_client(
     auth_store: AuthStoreInterface,
     backend_resolver: BackendResolverInterface,
@@ -2274,6 +2277,7 @@ def create_desktop_client(
     mngr_caller: MngrCaller | None = None,
     sync_scheduler: WorkspaceSyncScheduler | None = None,
     connectivity_detector: ConnectivityDetector | None = None,
+    host_probe: HostProbeInterface | None = None,
     sleep_tracker: SleepTracker | None = None,
     folder_sync_manager: FolderSyncManager | None = None,
     device_id: str = "",
@@ -2417,7 +2421,18 @@ def create_desktop_client(
         get_connected_focused_workspace_agent_ids=_ConnectedFocusedWorkspaceAgentIdsReader(
             broadcaster=ui_channel_broadcaster
         ),
+        cleared_request_ids_path=None if paths is None else paths.data_dir / "cleared_notification_requests.json",
+        # An append or clear changes the feed outside the reconcile, so it has
+        # to wake the publisher itself for the frame to go out.
+        on_change=ui_publisher.notify_change,
     )
+    # The creator was built before the feed existed (it predates the app), so
+    # its backup-setup failures are bound to the feed here, the same way the
+    # stop-kind tracker's change callback is bound to the publisher above.
+    if agent_creator is not None:
+        agent_creator.report_backup_setup_failure = _BackupSetupFailureReporter(
+            notification_feed=notification_feed, backend_resolver=backend_resolver
+        )
 
     # Folder syncs shell out to long-lived ``mngr pair`` subprocesses, which
     # the root concurrency group owns; without one there is nowhere to run
@@ -2461,6 +2476,13 @@ def create_desktop_client(
         machine_operator=machine_operator,
         discovery_health_watchdog=discovery_health_watchdog,
         connectivity_detector=connectivity_detector,
+        # The real machine's probe needs a group to run commands under; an app
+        # built without one gets no probe and the create form reports nothing.
+        host_probe=(
+            host_probe
+            if host_probe is not None or root_concurrency_group is None
+            else SubprocessHostProbe(concurrency_group=root_concurrency_group)
+        ),
         mngr_caller=mngr_caller,
         sync_scheduler=sync_scheduler,
         folder_sync_manager=folder_sync_manager,
@@ -2660,8 +2682,35 @@ class _NotificationDispatchPreferencesReader(FrozenModel):
         # One atomic read (not two separate locked getters): a concurrent
         # set_notification_prefs() write landing between two separate calls could
         # otherwise produce an (is_enabled, style) pair never actually persisted together.
-        is_enabled, style, _is_os_hint_dismissed = self.minds_config.get_notification_prefs()
+        is_enabled, style = self.minds_config.get_notification_prefs()
         return NotificationDispatchPreferences(is_enabled=is_enabled, style=style)
+
+
+class _BackupSetupFailureReporter(FrozenModel):
+    """Lands a detached backup-setup task's final failure for a workspace in the notification feed.
+
+    Resolves the workspace's display name and accent at report time (the
+    creator does not hold the resolver), so the entry reads like every other
+    workspace-scoped one and its click lands on that workspace's backups page.
+    """
+
+    model_config = {"arbitrary_types_allowed": True, "frozen": True, "extra": "forbid"}
+
+    notification_feed: NotificationFeed = Field(frozen=True, description="The feed the event is appended to")
+    backend_resolver: BackendResolverInterface = Field(frozen=True, description="Resolves the workspace's display")
+
+    def __call__(self, agent_id: AgentId, detail: str) -> None:
+        workspace_name = self.backend_resolver.get_workspace_name(agent_id) or str(agent_id)[:8]
+        accent = self.backend_resolver.get_workspace_color(agent_id) or DEFAULT_WORKSPACE_COLOR
+        self.notification_feed.append_system_event(
+            SystemEventCard(
+                title="Backup setup failed",
+                body=detail,
+                workspace_agent_id=str(agent_id),
+                workspace_name=workspace_name,
+                workspace_accent=accent,
+            )
+        )
 
 
 class _ConnectedFocusedWorkspaceAgentIdsReader(FrozenModel):

@@ -60,12 +60,12 @@ belong in tested code rather than agent prose:
     the worker's "what's new" report.
 
 ``surface-chat-tab``
-    Open this run's own chat tab in the workspace UI, so a user sent into the
+    Open this run's own chat window in the workspace UI, so a user sent into the
     workspace by the minds app lands on the conversation performing the update.
-    The interface can only place a tab in front of a client that is connected,
+    The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
-    and returns at once; the open is a no-op on a tab that is already there.
+    and returns at once; the open focuses a window that is already there.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
@@ -85,7 +85,7 @@ belong in tested code rather than agent prose:
     Land a prepared merge and make the live workspace consistent with it, as
     one atomic, idempotent, rollback-on-failure motion inside a single
     near-OOM-exempt process: merge (fast-forward for update-self, ordinary for
-    update-system-interface), pre-apply state snapshots, dependency refresh,
+    the careful flow for a critical app), pre-apply state snapshots, dependency refresh,
     provisioner run, frontend build (or the worker's already-built bundle),
     pre-flight, restart, health probes, the VERSION_HISTORY.md ledger entry,
     and ``env-converge upgrade``. On any failure it reverts the entire merge
@@ -139,7 +139,7 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from update_apply import apply_update, recover
+from update_apply import apply_update, confirm_last, recover, rollback_last
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
@@ -343,9 +343,9 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     return 0
 
 
-# How long the detached helper keeps trying to place the tab. Generous enough
+# How long the detached helper keeps trying to open the window. Generous enough
 # to cover a user arriving after a stopped machine's cold boot; past it the
-# app's own copy naming the tab is the fallback.
+# app's own copy naming the window is the fallback.
 SURFACE_CHAT_TAB_DEADLINE_SECONDS = 600.0
 
 SURFACE_CHAT_TAB_RETRY_SECONDS = 5.0
@@ -360,7 +360,7 @@ def wait_and_open_chat_tab(
 ) -> bool:
     """Call ``try_open`` until it succeeds or the deadline passes; whether it did.
 
-    Stops on the first success: a tab is surfaced once, and re-opening it later
+    Stops on the first success: a window is surfaced once, and re-opening it later
     would yank a user who has since moved on back to it.
     """
     started_at = monotonic()
@@ -372,13 +372,16 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
-def _try_open_chat_tab(repo_root: Path, chat_id: str) -> bool:
-    result = subprocess.run(
+def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
+    """One attempt at opening the chat's window through the desktop's ``open`` op; whether the shell took it."""
+    result = runner.run(
         [
             sys.executable,
             "system/scripts/layout.py",
             "open",
-            f"app:chat?instance={chat_id}",
+            "chat",
+            "--path",
+            f"/?chat={chat_id}",
         ],
         cwd=repo_root,
         capture_output=True,
@@ -392,7 +395,7 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         return (
             0
             if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.chat_id),
+                lambda: _try_open_chat_tab(repo_root, args.chat_id, Runner()),
                 deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
                 retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
             )
@@ -513,6 +516,13 @@ def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
+    if args.ff_only and args.keep_rollback_point:
+        # rollback-last reverts the kept point with `git revert -m 1`, which only a merge
+        # commit takes; a fast-forward lands none, so the point could never be taken back.
+        raise SystemExit(
+            "error: --keep-rollback-point needs an ordinary merge to roll back later; "
+            "it cannot be combined with --ff-only."
+        )
     return apply_update(
         args.merge_ref,
         _repo_root(args).resolve(),
@@ -523,7 +533,16 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         http=HttpClient(),
         spawner=Spawner(),
         sweep_homes=default_sweep_homes(),
+        keep_rollback_point=args.keep_rollback_point,
     )
+
+
+def _cmd_rollback_last(args: argparse.Namespace) -> int:
+    return rollback_last(_repo_root(args).resolve(), runner=Runner(), http=HttpClient())
+
+
+def _cmd_confirm_last(args: argparse.Namespace) -> int:
+    return confirm_last(_repo_root(args).resolve())
 
 
 def _cmd_run_status_start(args: argparse.Namespace) -> int:
@@ -719,7 +738,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     surface_parser = sub.add_parser(
         "surface-chat-tab",
-        help="Open this run's own chat tab once a workspace client can show it.",
+        help="Open this run's own chat window once a workspace client can show it.",
         parents=[common],
     )
     surface_parser.add_argument(
@@ -771,7 +790,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Require a fast-forward landing (the update-self flow; the worker "
         "branched off this HEAD). Default is an ordinary merge "
-        "(update-system-interface).",
+        "(the careful flow for a critical app).",
     )
     apply_parser.add_argument(
         "--worker-bundle",
@@ -791,7 +810,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         "`env-converge upgrade`, and refuses a merge ref that re-merges this "
         "target after a rollback of it without reverting the rollback first.",
     )
+    apply_parser.add_argument(
+        "--keep-rollback-point",
+        action="store_true",
+        help="Keep the pre-apply copies and record what the apply touched (the "
+        "careful flow for a critical app): the shell raises a notice offering "
+        "the previous version back until a person confirms the update, and the "
+        "next apply replaces the point.",
+    )
     apply_parser.set_defaults(func=_cmd_apply)
+
+    rollback_parser = sub.add_parser(
+        "rollback-last",
+        help="Take the kept rollback point back: forward-revert the merge, restore "
+        "the copies, restart only the touched programs, and record the outcome in "
+        "the notice.",
+        parents=[common],
+    )
+    rollback_parser.set_defaults(func=_cmd_rollback_last)
+
+    confirm_parser = sub.add_parser(
+        "confirm-last",
+        help="Close the notice: drop the rollback-point record, and the kept copies "
+        "with it unless a rollback already ran on the point (it discarded them if it "
+        "worked, and kept them for an agent if it did not).",
+        parents=[common],
+    )
+    confirm_parser.set_defaults(func=_cmd_confirm_last)
 
     recover_parser = sub.add_parser(
         "recover",
@@ -955,7 +1000,7 @@ def _shed_protection_target(argv: Sequence[str]) -> Path | None:
         if subcommand is None and not token.startswith("-"):
             subcommand = token
         index += 1
-    if subcommand in ("apply", "recover"):
+    if subcommand in ("apply", "recover", "rollback-last"):
         return repo_root
     return None
 

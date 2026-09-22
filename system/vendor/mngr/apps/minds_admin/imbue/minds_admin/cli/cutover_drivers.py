@@ -63,6 +63,7 @@ from imbue.minds_admin.cli.server import estimate_gen2_machine_capacity
 from imbue.minds_admin.cli.server import run_outcome_workers_in_bounded_threads
 from imbue.minds_admin.cli.server import run_root_script_over_ssh
 from imbue.minds_admin.cli.server import setup_server_to_ready
+from imbue.minds_admin.primitives import derive_user_id_prefix
 from imbue.minds_admin.slices.bare_metal_db import destroy_eligible_pool_host_statuses
 from imbue.minds_admin.slices.bare_metal_db import fetch_server_by_id
 from imbue.minds_admin.slices.bare_metal_db import update_server
@@ -70,22 +71,26 @@ from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_LIMA_VERSION
 from imbue.minds_admin.slices.bare_metal_prep import build_storage_partition_size_bytes_command
 from imbue.minds_admin.slices.box_access import resolve_server_management_dial
 from imbue.minds_admin.slices.cutover_db import CutoverPoolRow
+from imbue.minds_admin.slices.cutover_db import TransitionFailure
 from imbue.minds_admin.slices.cutover_db import fetch_gen1_pool_rows_for_user
 from imbue.minds_admin.slices.cutover_db import fetch_gen1_servers
 from imbue.minds_admin.slices.cutover_db import fetch_pool_row
 from imbue.minds_admin.slices.cutover_db import fetch_pool_rows_on_server
+from imbue.minds_admin.slices.cutover_db import fetch_transition_failure
 from imbue.minds_admin.slices.cutover_db import fetch_unplaced_gen1_pool_rows
 from imbue.minds_admin.slices.cutover_db import finish_restore_pool_host
 from imbue.minds_admin.slices.cutover_db import park_pool_host
-from imbue.minds_admin.slices.cutover_db import restamp_unmeasured_gen1_disk_gb
+from imbue.minds_admin.slices.cutover_db import restamp_leased_gen1_disk_gb
 from imbue.minds_admin.slices.cutover_db import rollback_park_pool_host
 from imbue.minds_admin.slices.cutover_db import rollback_restore_artifact
+from imbue.minds_admin.slices.cutover_db import rollback_restore_disk_gb
 from imbue.minds_admin.slices.cutover_scripts import LATCHKEY_DISK_REPLAY_TAR_PATH
 from imbue.minds_admin.slices.cutover_scripts import LATCHKEY_TMPFS_REPLAY_TAR_PATH
 from imbue.minds_admin.slices.cutover_scripts import ROOT_AUTHORIZED_KEYS_PATH
 from imbue.minds_admin.slices.cutover_scripts import SSHD_HOST_KEY_PATH
 from imbue.minds_admin.slices.cutover_scripts import TRANSPLANT_DONE_MARKER
 from imbue.minds_admin.slices.cutover_scripts import authorized_keys_without
+from imbue.minds_admin.slices.cutover_scripts import build_autostart_start_command
 from imbue.minds_admin.slices.cutover_scripts import build_banner_wait_command
 from imbue.minds_admin.slices.cutover_scripts import build_container_id_command
 from imbue.minds_admin.slices.cutover_scripts import build_container_key_harvest_command
@@ -94,12 +99,15 @@ from imbue.minds_admin.slices.cutover_scripts import build_disk_materialize_comm
 from imbue.minds_admin.slices.cutover_scripts import build_docker_create_args
 from imbue.minds_admin.slices.cutover_scripts import build_docker_inspect_command
 from imbue.minds_admin.slices.cutover_scripts import build_gen1_datadisk_info_command
+from imbue.minds_admin.slices.cutover_scripts import build_gen1_datadisk_used_bytes_command
 from imbue.minds_admin.slices.cutover_scripts import build_git_describe_command
 from imbue.minds_admin.slices.cutover_scripts import build_home_layout_probe_command
 from imbue.minds_admin.slices.cutover_scripts import build_image_load_command
 from imbue.minds_admin.slices.cutover_scripts import build_image_publish_command
+from imbue.minds_admin.slices.cutover_scripts import build_latchkey_curl_shim_command
 from imbue.minds_admin.slices.cutover_scripts import build_latchkey_replay_tar
 from imbue.minds_admin.slices.cutover_scripts import build_latchkey_tar_extract_command
+from imbue.minds_admin.slices.cutover_scripts import build_mngr_tool_resync_command
 from imbue.minds_admin.slices.cutover_scripts import build_replayed_container_files
 from imbue.minds_admin.slices.cutover_scripts import build_stage_replayed_container_files_command
 from imbue.minds_admin.slices.cutover_scripts import build_supervisorctl_status_command
@@ -115,6 +123,7 @@ from imbue.minds_admin.slices.cutover_scripts import container_name_from_inspect
 from imbue.minds_admin.slices.cutover_scripts import cutover_image_object_key
 from imbue.minds_admin.slices.cutover_scripts import cutover_transplant_dir
 from imbue.minds_admin.slices.cutover_scripts import extract_template_replay_inputs
+from imbue.minds_admin.slices.cutover_scripts import harvested_latchkey_curl_path_or_none
 from imbue.minds_admin.slices.cutover_scripts import home_layout_error_or_none
 from imbue.minds_admin.slices.cutover_scripts import latchkey_gateway_files_error_or_none
 from imbue.minds_admin.slices.cutover_scripts import latchkey_replay_detail
@@ -126,8 +135,10 @@ from imbue.minds_admin.slices.cutover_scripts import parse_marked_files
 from imbue.minds_admin.slices.cutover_scripts import parse_qemu_img_info
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_not_running
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_unhealthy
+from imbue.minds_admin.slices.cutover_scripts import parse_used_bytes
 from imbue.minds_admin.slices.cutover_scripts import render_gen2_disk_transplant_script
 from imbue.minds_admin.slices.cutover_scripts import replayed_container_dirs
+from imbue.minds_admin.slices.cutover_scripts import split_unhealthy_by_template
 from imbue.minds_admin.slices.cutover_scripts import staged_container_dir_path
 from imbue.minds_admin.slices.cutover_state import CutoverStateStore
 from imbue.minds_admin.slices.cutover_types import BoxOutcome
@@ -140,6 +151,7 @@ from imbue.minds_admin.slices.cutover_types import CutoverWorkspaceState
 from imbue.minds_admin.slices.cutover_types import HarvestedFile
 from imbue.minds_admin.slices.cutover_types import HarvestedKeys
 from imbue.minds_admin.slices.cutover_types import HarvestedLatchkeyState
+from imbue.minds_admin.slices.cutover_types import HealthProbeFindings
 from imbue.minds_admin.slices.cutover_types import LatchkeyReplayPlan
 from imbue.minds_admin.slices.cutover_types import PreflightReport
 from imbue.minds_admin.slices.cutover_types import RowClassification
@@ -156,6 +168,8 @@ from imbue.minds_admin.slices.cutover_types import classify_unplaced_gen1_row
 from imbue.minds_admin.slices.cutover_types import gen1_data_disk_size_error_or_none
 from imbue.minds_admin.slices.cutover_types import parse_version_tag
 from imbue.minds_admin.slices.cutover_types import restamped_gen1_disk_gb_or_none
+from imbue.minds_admin.slices.cutover_types import shrink_fit_error_or_none
+from imbue.minds_admin.slices.cutover_types import shrunk_gen1_disk_gib_or_none
 from imbue.minds_admin.slices.cutover_types import version_tag_error_or_none
 from imbue.minds_admin.slices.operator_identity import ManagementIdentityResolver
 from imbue.mngr.config.data_types import MngrConfig
@@ -188,6 +202,7 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_CPU_OVERCOMMI
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_image_cache_dir_for_generation
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_service_user
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
+from imbue.mngr_imbue_cloud.slices.box_image_cache import TransferKey
 from imbue.mngr_imbue_cloud.slices.box_image_cache import box_image_tar_name
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import build_qemu_slice_env_file
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.errors import Gen2ScriptError
@@ -208,6 +223,7 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import GEN2_BOOT_DISK_GIB
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_box_total_units
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_box_unit_budget_mib
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_gen2_disk_budget_gib
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_machine_data_disk_gib
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_machine_guest_memory_mib
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_machine_vcpus
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.ssh_ca import is_same_ssh_public_key
@@ -227,6 +243,7 @@ from imbue.mngr_imbue_cloud.slices.ssh_box_image_cache import SshBoxImageCache
 from imbue.mngr_imbue_cloud.wire_types import WorkspaceStopKind
 from imbue.mngr_latchkey.remote.errors import RemoteGatewayError
 from imbue.mngr_latchkey.remote.provisioning import GATEWAY_PROGRAM_NAME
+from imbue.mngr_latchkey.remote.provisioning import LATCHKEY_CURL_PATH
 from imbue.mngr_latchkey.remote.provisioning import REMOTE_FILE_MODE
 from imbue.mngr_latchkey.remote.provisioning import TUNNEL_PROGRAM_NAME
 from imbue.mngr_latchkey.remote.provisioning import ensure_latchkey_installed
@@ -280,36 +297,47 @@ _STAGE_FAILURE_EXCEPTIONS: Final[tuple[type[Exception], ...]] = (
 )
 
 
-class CutoverContext(FrozenModel):
-    """Everything a cutover stage needs from the activated env, resolved once per command."""
+class OperatorBoxContext(FrozenModel):
+    """What any operator command that dials boxes and VMs and drives the product's lifecycle needs from the activated env.
+
+    The cutover's stages and the workspace archive share it (and the helpers
+    typed against it): the pool DB, the management identities, a minimal mngr
+    context for ``OuterHost``, and the connector's admin API when the command
+    stops or starts workspaces through the product.
+    """
 
     env_name: str = Field(description="The activated env")
     dsn: str = Field(description="The pool DB DSN")
+    identities: ManagementIdentityResolver = Field(
+        description="The keys boxes and VMs are dialed with: the operator certificate on gen-2, the pool key on gen-1"
+    )
+    mngr_ctx: MngrContext = Field(description="A minimal mngr context for OuterHost (its concurrency group)")
+    connector_url: str | None = Field(
+        default=None, description="The tier's connector base URL (resolved when the command drives stops/starts)"
+    )
+    admin_api_key: SecretStr | None = Field(
+        default=None, description="The connector admin API key (resolved when the command drives stops/starts)"
+    )
+
+
+class CutoverContext(OperatorBoxContext):
+    """Everything a cutover stage needs from the activated env, resolved once per command."""
+
     pool_public_key: str = Field(
         description=(
             "The tier's gen-1 pool management public key: stripped from a harvested gen-1 workspace's "
             "authorized_keys when it lands on a gen-2 target, which authorizes no static management key"
         )
     )
-    identities: ManagementIdentityResolver = Field(
-        description="The keys boxes and VMs are dialed with: the operator certificate on gen-2, the pool key on gen-1"
-    )
     ssh_ca_public_key: str | None = Field(
         description="The tier's committed SSH CA public key (deploy.toml [ssh_ca]); a gen-2 target needs it"
     )
     storage: WorkspaceStorageConfig = Field(description="The tier bucket + KEK")
     state: CutoverStateStore = Field(description="The state dir")
-    mngr_ctx: MngrContext = Field(description="A minimal mngr context for OuterHost (its concurrency group)")
-    connector_url: str | None = Field(
-        default=None, description="The tier's connector base URL (resolved for migrate/rollback only)"
-    )
-    admin_api_key: SecretStr | None = Field(
-        default=None, description="The connector admin API key (resolved for migrate/rollback only)"
-    )
 
 
-def _admin_client(ctx: CutoverContext) -> tuple[ImbueCloudConnectorClient, SecretStr]:
-    """The connector admin client + key; migrate/rollback commands resolve them into the context."""
+def admin_client(ctx: OperatorBoxContext) -> tuple[ImbueCloudConnectorClient, SecretStr]:
+    """The connector admin client + key; the commands that stop or start workspaces through the product resolve them into the context."""
     if ctx.connector_url is None or ctx.admin_api_key is None:
         raise CutoverError("this stage needs the connector admin API; the command did not resolve it")
     return ImbueCloudConnectorClient(base_url=AnyUrl(ctx.connector_url)), ctx.admin_api_key
@@ -338,7 +366,7 @@ def minimal_mngr_context(profile_dir: Path) -> Iterator[MngrContext]:
 
 
 @contextmanager
-def _pool_connection(ctx: CutoverContext) -> Iterator[Any]:
+def pool_connection(ctx: OperatorBoxContext) -> Iterator[Any]:
     """A pool DB connection for one short read or CAS, closed on the way out."""
     conn = psycopg2.connect(ctx.dsn)
     try:
@@ -347,7 +375,7 @@ def _pool_connection(ctx: CutoverContext) -> Iterator[Any]:
         conn.close()
 
 
-def _box_client(ctx: CutoverContext, server: BareMetalServer) -> SliceVmClientInterface:
+def box_client_for_server(ctx: OperatorBoxContext, server: BareMetalServer) -> SliceVmClientInterface:
     dial = resolve_server_management_dial(server)
     return build_slice_vm_client(
         box_generation=server.box_generation,
@@ -359,17 +387,17 @@ def _box_client(ctx: CutoverContext, server: BareMetalServer) -> SliceVmClientIn
     )
 
 
-def _run_on_box_checked(client: SliceVmClientInterface, command: str, *, timeout: float, label: str) -> str:
+def run_on_box_checked(client: SliceVmClientInterface, command: str, *, timeout: float, label: str) -> str:
     exit_code, stdout, stderr = client.run_on_box(command, timeout=timeout, label=label)
     if exit_code != 0:
         raise CutoverError(f"box command {label!r} failed (exit {exit_code}): {stderr.strip() or stdout.strip()}")
     return stdout
 
 
-def _write_box_file(client: SliceVmClientInterface, path: str, content: str, *, label: str) -> None:
+def write_box_file(client: SliceVmClientInterface, path: str, content: str, *, label: str) -> None:
     encoded = base64.b64encode(content.encode()).decode()
     quoted = shlex.quote(path)
-    _run_on_box_checked(
+    run_on_box_checked(
         client,
         f"umask 077 && mkdir -p {shlex.quote(str(Path(path).parent))} && echo {shlex.quote(encoded)} | base64 -d > {quoted}",
         timeout=_SHORT_TIMEOUT_SECONDS,
@@ -377,7 +405,7 @@ def _write_box_file(client: SliceVmClientInterface, path: str, content: str, *, 
     )
 
 
-def _remove_box_transfer_dirs(client: SliceVmClientInterface, dirs: Sequence[str], *, what: str) -> None:
+def remove_box_transfer_dirs(client: SliceVmClientInterface, dirs: Sequence[str], *, what: str) -> None:
     """Best-effort removal of transfer dirs (the env file holds S3 creds + identity) once their work is done."""
     try:
         exit_code, _out, stderr = client.run_on_box(
@@ -409,9 +437,25 @@ def unreachable_vm_error(public_address: str, ssh_port: int, row_status: str, ro
     return message
 
 
+def served_vm_host_key(server: BareMetalServer, row: CutoverPoolRow) -> tuple[int, str]:
+    """The row's VM-root port and the host key its sshd serves right now (the pinned key of every VM dial).
+
+    Raises ``CutoverError`` when the row has no VM ssh port or the VM's root
+    sshd does not answer.
+    """
+    if row.ssh_port is None:
+        raise CutoverError(f"row {row.id} has no VM ssh port")
+    served_key = read_served_host_key_or_none(
+        str(server.public_address), row.ssh_port, timeout_seconds=_HOST_KEY_PROBE_TIMEOUT_SECONDS
+    )
+    if served_key is None:
+        raise CutoverError(unreachable_vm_error(str(server.public_address), row.ssh_port, row.status, row.id))
+    return row.ssh_port, served_key
+
+
 @contextmanager
 def vm_root_outer(
-    ctx: CutoverContext, *, address: str, port: int, host_public_key: str, box_generation: int
+    ctx: OperatorBoxContext, *, address: str, port: int, host_public_key: str, box_generation: int
 ) -> Iterator[OuterHost]:
     """An ``OuterHost`` on the slice VM's root sshd, strictly pinned to ``host_public_key``.
 
@@ -438,7 +482,7 @@ def vm_root_outer(
         shutil.rmtree(known_hosts_dir, ignore_errors=True)
 
 
-def _run_on_vm_checked(
+def run_on_vm_checked(
     outer: OuterHostInterface, command: str, *, timeout: float, label: str, is_stdout_secret: bool = False
 ) -> str:
     """Run ``command`` as VM root and return its stdout, raising ``CutoverError`` on failure.
@@ -482,7 +526,7 @@ def unwrap_age_identity(storage: WorkspaceStorageConfig, wrapped: str) -> str:
     return unwrap_dek(kek, base64.b64decode(wrapped)).decode("utf-8")
 
 
-def _transfer_env_text(
+def transfer_env_text(
     storage: WorkspaceStorageConfig, *, key_prefix: str, instance_name: str, age_recipient: str, age_identity: str
 ) -> str:
     return render_transfer_env(
@@ -503,8 +547,8 @@ def _transfer_env_text(
 # Probes shared by preflight and restore.
 
 
-def _container_id_on_vm(outer: OuterHostInterface, host_id: str) -> str:
-    stdout = _run_on_vm_checked(
+def container_id_on_vm(outer: OuterHostInterface, host_id: str) -> str:
+    stdout = run_on_vm_checked(
         outer, build_container_id_command(host_id), timeout=_SHORT_TIMEOUT_SECONDS, label="container-id"
     )
     container_ids = stdout.split()
@@ -516,37 +560,47 @@ def _container_id_on_vm(outer: OuterHostInterface, host_id: str) -> str:
 
 
 def probe_workspace_health(
-    outer: OuterHostInterface, container_name: str, *, is_latchkey_gateway_expected: bool
-) -> list[str]:
-    """One health pass: running container, every in-container supervisord program RUNNING or EXITED, the UI answering.
+    outer: OuterHostInterface,
+    container_name: str,
+    *,
+    is_latchkey_gateway_expected: bool,
+    # The template's supervisord programs; None (the preflight, which knows
+    # no version yet) makes every program blocking.
+    template_program_names: AbstractSet[str] | None,
+) -> HealthProbeFindings:
+    """One health pass: running container, every template supervisord program RUNNING or EXITED, the UI answering.
 
-    When the migrate replayed the machine's latchkey gateway, the VM's own
-    ``latchkey-gateway`` and ``latchkey-tunnel`` programs must be RUNNING and
-    the gateway must be bound on its loopback port.
+    A supervisord program the owner added is reported, not required (see
+    ``split_unhealthy_by_template``). When the migrate replayed the machine's
+    latchkey gateway, the VM's own ``latchkey-gateway`` and ``latchkey-tunnel``
+    programs must be RUNNING and the gateway must be bound on its loopback port.
     """
-    warnings: list[str] = []
+    blocking: list[str] = []
     running = outer.execute_idempotent_command(
         build_container_running_command(container_name), timeout_seconds=_SHORT_TIMEOUT_SECONDS
     )
     if not running.success or running.stdout.strip() != "true":
-        warnings.append(f"container {container_name} is not running")
-        return warnings
+        return HealthProbeFindings(blocking=(f"container {container_name} is not running",), user_program_notes=())
     supervisor = outer.execute_idempotent_command(
         build_supervisorctl_status_command(container_name), timeout_seconds=_SHORT_TIMEOUT_SECONDS
     )
-    unhealthy = parse_supervisorctl_unhealthy(supervisor.stdout)
     if not supervisor.success and not supervisor.stdout.strip():
-        warnings.append(f"supervisorctl status failed: {supervisor.stderr.strip()}")
-    for entry in unhealthy:
-        warnings.append(f"supervisord not healthy: {entry}")
+        blocking.append(f"supervisorctl status failed: {supervisor.stderr.strip()}")
+    unhealthy_blocking, user_program_notes = split_unhealthy_by_template(
+        parse_supervisorctl_unhealthy(supervisor.stdout), template_program_names
+    )
+    blocking.extend(f"supervisord not healthy: {entry}" for entry in unhealthy_blocking)
     ui = outer.execute_idempotent_command(
         build_system_interface_probe_command(container_name), timeout_seconds=_SHORT_TIMEOUT_SECONDS
     )
     if not ui.success:
-        warnings.append("system_interface is not answering on :8000")
+        blocking.append("system_interface is not answering on :8000")
     if is_latchkey_gateway_expected:
-        warnings.extend(_probe_vm_latchkey_gateway(outer))
-    return warnings
+        blocking.extend(_probe_vm_latchkey_gateway(outer))
+    return HealthProbeFindings(
+        blocking=tuple(blocking),
+        user_program_notes=tuple(f"owner-added program not running: {entry}" for entry in user_program_notes),
+    )
 
 
 def _probe_vm_latchkey_gateway(outer: OuterHostInterface) -> list[str]:
@@ -570,31 +624,49 @@ def _probe_vm_latchkey_gateway(outer: OuterHostInterface) -> list[str]:
 class _HealthProbeHistory(MutableModel):
     """The last health pass's findings, kept across the poll so a timeout can report them."""
 
-    last_warnings: list[str] = Field(default_factory=list, description="The most recent probe's warnings")
+    last_findings: HealthProbeFindings = Field(
+        default=HealthProbeFindings(blocking=(), user_program_notes=()), description="The most recent probe's findings"
+    )
 
 
 def _probe_workspace_health_once(
-    outer: OuterHostInterface, container_name: str, history: _HealthProbeHistory, *, is_latchkey_gateway_expected: bool
+    outer: OuterHostInterface,
+    container_name: str,
+    history: _HealthProbeHistory,
+    *,
+    is_latchkey_gateway_expected: bool,
+    template_program_names: AbstractSet[str],
 ) -> bool | None:
-    history.last_warnings = probe_workspace_health(
-        outer, container_name, is_latchkey_gateway_expected=is_latchkey_gateway_expected
+    history.last_findings = probe_workspace_health(
+        outer,
+        container_name,
+        is_latchkey_gateway_expected=is_latchkey_gateway_expected,
+        template_program_names=template_program_names,
     )
-    return True if not history.last_warnings else None
+    return True if history.last_findings.is_healthy else None
 
 
 def _wait_for_workspace_health(
-    outer: OuterHostInterface, container_name: str, *, is_latchkey_gateway_expected: bool
-) -> list[str]:
-    """Poll the health pass until it is clean or the budget runs out; returns the last warnings."""
+    outer: OuterHostInterface,
+    container_name: str,
+    *,
+    is_latchkey_gateway_expected: bool,
+    template_program_names: AbstractSet[str],
+) -> HealthProbeFindings:
+    """Poll the health pass until nothing blocks or the budget runs out; returns the last findings."""
     history = _HealthProbeHistory()
-    is_healthy, _polls, _elapsed = poll_for_value(
+    poll_for_value(
         lambda: _probe_workspace_health_once(
-            outer, container_name, history, is_latchkey_gateway_expected=is_latchkey_gateway_expected
+            outer,
+            container_name,
+            history,
+            is_latchkey_gateway_expected=is_latchkey_gateway_expected,
+            template_program_names=template_program_names,
         ),
         timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
         poll_interval=_HEALTH_PROBE_INTERVAL_SECONDS,
     )
-    return [] if is_healthy else history.last_warnings
+    return history.last_findings
 
 
 def _preflight_candidate(
@@ -639,21 +711,25 @@ def _preflight_candidate(
             host_public_key=served_key,
             box_generation=server.box_generation,
         ) as outer:
-            container_id = _container_id_on_vm(outer, row.host_id)
+            container_id = container_id_on_vm(outer, row.host_id)
             describe = outer.execute_idempotent_command(
                 build_git_describe_command(container_id), timeout_seconds=_SHORT_TIMEOUT_SECONDS
             )
-            layout_text = _run_on_vm_checked(
+            layout_text = run_on_vm_checked(
                 outer,
                 build_home_layout_probe_command(container_id),
                 timeout=_SHORT_TIMEOUT_SECONDS,
                 label="home-layout",
             )
-            inspect_output = _run_on_vm_checked(
+            inspect_output = run_on_vm_checked(
                 outer, build_docker_inspect_command(container_id), timeout=_SHORT_TIMEOUT_SECONDS, label="inspect"
             )
             container_name = container_name_from_inspect(parse_docker_inspect(inspect_output))
-            health_warnings = probe_workspace_health(outer, container_name, is_latchkey_gateway_expected=False)
+            health_warnings = list(
+                probe_workspace_health(
+                    outer, container_name, is_latchkey_gateway_expected=False, template_program_names=None
+                ).blocking
+            )
     except (MngrError, CutoverError, OSError) as exc:
         return base.model_copy_update(
             to_update(base.field_ref().is_host_key_rotated, is_rotated),
@@ -670,7 +746,7 @@ def _preflight_candidate(
     disk_format: str | None = None
     disk_virtual_gib: int | None = None
     try:
-        info_output = _run_on_box_checked(
+        info_output = run_on_box_checked(
             client,
             build_gen1_datadisk_info_command(row.slice_disk_name),
             timeout=_SHORT_TIMEOUT_SECONDS,
@@ -719,9 +795,9 @@ def _classified_workspace_preflight(row: CutoverPoolRow, classification: RowClas
 def _preflight_box(ctx: CutoverContext, server: BareMetalServer, rows: Sequence[CutoverPoolRow]) -> BoxPreflight:
     workspaces: list[WorkspacePreflight] = []
     try:
-        client = _box_client(ctx, server)
+        client = box_client_for_server(ctx, server)
         # A cheap reachability probe before the per-row work.
-        _run_on_box_checked(client, "true", timeout=_SHORT_TIMEOUT_SECONDS, label="box-reachability")
+        run_on_box_checked(client, "true", timeout=_SHORT_TIMEOUT_SECONDS, label="box-reachability")
     except (MngrError, CutoverError, ProcessTimeoutError, OSError) as exc:
         return BoxPreflight(
             server_id=str(server.id),
@@ -753,7 +829,7 @@ def run_preflight(ctx: CutoverContext, server_ids: Sequence[str]) -> PreflightRe
     stops -- migratable, the migrate admin-starts them first). ``--server-id``
     scopes the run to boxes, so they are left out of it.
     """
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         servers = [
             server
             for server in fetch_gen1_servers(conn)
@@ -856,27 +932,26 @@ def _harvest_workspace(
     row: CutoverPoolRow,
     *,
     target_server_id: str,
+    # Transplant a data disk larger than the default gen-2 size into a
+    # default-size one (and restamp the row) when its contents fit.
+    is_shrink_oversized_disks: bool,
 ) -> tuple[CutoverWorkspaceState, HarvestedKeys, dict[str, Any], HarvestedLatchkeyState]:
     """Read the keys, the container inspect, the version and the latchkey state off a live gen-1 workspace."""
     if row.ssh_port is None or row.container_ssh_port is None or row.slice_instance_name is None:
         raise CutoverError(f"row {row.id} lacks its ports or slice instance name")
     if row.slice_disk_name is None:
         raise CutoverError(f"row {row.id} lacks its slice disk name")
-    served_key = read_served_host_key_or_none(
-        str(server.public_address), row.ssh_port, timeout_seconds=_HOST_KEY_PROBE_TIMEOUT_SECONDS
-    )
-    if served_key is None:
-        raise CutoverError(unreachable_vm_error(str(server.public_address), row.ssh_port, row.status, row.id))
+    vm_port, served_key = served_vm_host_key(server, row)
     is_rotated = not is_same_ssh_public_key(served_key, row.outer_host_public_key or "")
     with vm_root_outer(
         ctx,
         address=str(server.public_address),
-        port=row.ssh_port,
+        port=vm_port,
         host_public_key=served_key,
         box_generation=server.box_generation,
     ) as outer:
         vm_files = parse_marked_files(
-            _run_on_vm_checked(
+            run_on_vm_checked(
                 outer,
                 build_vm_key_harvest_command(),
                 timeout=_SHORT_TIMEOUT_SECONDS,
@@ -884,9 +959,9 @@ def _harvest_workspace(
                 is_stdout_secret=True,
             )
         )
-        container_id = _container_id_on_vm(outer, row.host_id)
+        container_id = container_id_on_vm(outer, row.host_id)
         container_files = parse_marked_files(
-            _run_on_vm_checked(
+            run_on_vm_checked(
                 outer,
                 build_container_key_harvest_command(container_id),
                 timeout=_SHORT_TIMEOUT_SECONDS,
@@ -895,18 +970,33 @@ def _harvest_workspace(
             )
         )
         inspect_entry = parse_docker_inspect(
-            _run_on_vm_checked(
+            run_on_vm_checked(
                 outer, build_docker_inspect_command(container_id), timeout=_SHORT_TIMEOUT_SECONDS, label="inspect"
             )
         )
-        describe_text = _run_on_vm_checked(
+        data_disk_used_gib = (
+            -(
+                -parse_used_bytes(
+                    run_on_vm_checked(
+                        outer,
+                        build_gen1_datadisk_used_bytes_command(row.slice_disk_name),
+                        timeout=_SHORT_TIMEOUT_SECONDS,
+                        label="datadisk-used",
+                    )
+                )
+                // 1024**3
+            )
+            if is_shrink_oversized_disks
+            else None
+        )
+        describe_text = run_on_vm_checked(
             outer, build_git_describe_command(container_id), timeout=_SHORT_TIMEOUT_SECONDS, label="git-describe"
         ).strip()
-        layout_text = _run_on_vm_checked(
+        layout_text = run_on_vm_checked(
             outer, build_home_layout_probe_command(container_id), timeout=_SHORT_TIMEOUT_SECONDS, label="home-layout"
         )
         latchkey_state = parse_latchkey_harvest_output(
-            _run_on_vm_checked(
+            run_on_vm_checked(
                 outer,
                 build_vm_latchkey_harvest_command(),
                 timeout=_SHORT_TIMEOUT_SECONDS,
@@ -947,7 +1037,7 @@ def _harvest_workspace(
         len(latchkey_state.supervisor_confs),
         len(latchkey_state.tmpfs_files),
     )
-    info_output = _run_on_box_checked(
+    info_output = run_on_box_checked(
         client,
         build_gen1_datadisk_info_command(row.slice_disk_name),
         timeout=_SHORT_TIMEOUT_SECONDS,
@@ -961,9 +1051,9 @@ def _harvest_workspace(
     migrated_disk_gb = row.disk_gb
     restamped_disk_gb = restamped_gen1_disk_gb_or_none(disk_virtual_gib, row.disk_gb)
     if restamped_disk_gb is not None:
-        with _pool_connection(ctx) as conn:
-            is_restamped = restamp_unmeasured_gen1_disk_gb(
-                conn, row.id, unmeasured_disk_gb=UNMEASURED_GEN1_DISK_GB_STAMP, disk_gb=restamped_disk_gb
+        with pool_connection(ctx) as conn:
+            is_restamped = restamp_leased_gen1_disk_gb(
+                conn, row.id, expected_disk_gb=UNMEASURED_GEN1_DISK_GB_STAMP, disk_gb=restamped_disk_gb
             )
         if not is_restamped:
             raise CutoverError(f"could not restamp the unmeasured disk_gb of row {row.id} (it changed underneath)")
@@ -975,9 +1065,39 @@ def _harvest_workspace(
             disk_virtual_gib,
         )
         migrated_disk_gb = restamped_disk_gb
-    disk_size_error = gen1_data_disk_size_error_or_none(disk_virtual_gib, migrated_disk_gb)
-    if disk_size_error is not None:
-        raise CutoverError(disk_size_error)
+    # An oversized disk (a box that carved big slices) is transplanted into a
+    # default-size one when asked and when its contents fit; otherwise the
+    # measured disk must agree with the stamp the transplant is sized from.
+    shrunk_gib = (
+        shrunk_gen1_disk_gib_or_none(data_disk_virtual_gib=disk_virtual_gib, memory_units=DEFAULT_MACHINE_UNITS)
+        if is_shrink_oversized_disks
+        else None
+    )
+    if shrunk_gib is not None:
+        if data_disk_used_gib is None:
+            raise CutoverError(f"row {row.id}: the shrink needs the data disk's used bytes, which were not measured")
+        fit_error = shrink_fit_error_or_none(data_disk_used_gib=data_disk_used_gib, shrunk_gib=shrunk_gib)
+        if fit_error is not None:
+            raise CutoverError(f"row {row.id}: {fit_error}")
+        with pool_connection(ctx) as conn:
+            is_shrunk = restamp_leased_gen1_disk_gb(
+                conn, row.id, expected_disk_gb=migrated_disk_gb, disk_gb=shrunk_gib
+            )
+        if not is_shrunk:
+            raise CutoverError(f"could not restamp the shrunk disk_gb of row {row.id} (it changed underneath)")
+        logger.warning(
+            "Shrinking row {} disk_gb {} -> {}: its {} GiB gen-1 data disk holds {} GiB, which fits the default size",
+            row.id,
+            migrated_disk_gb,
+            shrunk_gib,
+            disk_virtual_gib,
+            data_disk_used_gib,
+        )
+    else:
+        disk_size_error = gen1_data_disk_size_error_or_none(disk_virtual_gib, migrated_disk_gb)
+        if disk_size_error is not None:
+            raise CutoverError(disk_size_error)
+    transplant_disk_gb = migrated_disk_gb if shrunk_gib is None else shrunk_gib
     state = CutoverWorkspaceState(
         host_db_id=row.id,
         host_id=row.host_id,
@@ -995,7 +1115,8 @@ def _harvest_workspace(
         version_tag=describe_text,
         gen1_data_disk_virtual_gib=disk_virtual_gib,
         gen1_data_disk_format=disk_format,
-        migrated_data_disk_gib=migrated_disk_gb,
+        migrated_data_disk_gib=transplant_disk_gb,
+        origin_disk_gb=migrated_disk_gb if shrunk_gib is not None else None,
         memory_units=DEFAULT_MACHINE_UNITS,
         latchkey_replay_plan=latchkey_state.replay_plan,
         stage=CutoverStage.HARVESTED,
@@ -1003,35 +1124,73 @@ def _harvest_workspace(
     return state, keys, inspect_entry, latchkey_state
 
 
+@pure
+def failed_transition_error_or_none(
+    row_status: str, fallback_status: str | None, failure: TransitionFailure, baseline: TransitionFailure | None
+) -> str | None:
+    """Why the transition being waited on has failed, or None while it may still succeed.
+
+    The connector lands a failed drive back on the status it started from
+    (a failed start goes back to ``stopped``) with the error recorded and the
+    failure count raised, so a poller that only watches for the target status
+    would wait out its whole timeout. ``baseline`` is the record as it stood
+    once the transition was accepted (the accepting CAS zeroes the count and
+    clears the error), so a row back on ``fallback_status`` whose count rose
+    or whose error changed since then has failed.
+    """
+    if fallback_status is None or baseline is None or row_status != fallback_status:
+        return None
+    is_count_raised = failure.count > baseline.count
+    is_error_new = failure.error is not None and failure.error != baseline.error
+    if not is_count_raised and not is_error_new:
+        return None
+    return failure.error or "the connector recorded a failed transition without a message"
+
+
 def _poll_row_status_once(
-    ctx: CutoverContext,
+    ctx: OperatorBoxContext,
     row_id: str,
     success_statuses: tuple[str, ...],
     failure_statuses: tuple[str, ...],
     what: str,
+    fallback_status: str | None,
+    failure_baseline: TransitionFailure | None,
 ) -> CutoverPoolRow | None:
     """One poll of the row: the row once it reaches a success status, None while it works; raises on failure."""
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         row = fetch_pool_row(conn, row_id)
+        failure = fetch_transition_failure(conn, row_id)
     if row is None:
         raise CutoverError(f"pool row {row_id} vanished while waiting for {what}")
     if row.status in failure_statuses:
         raise CutoverError(f"row {row_id} reached {row.status!r} while waiting for {what}")
+    failed_error = failed_transition_error_or_none(row.status, fallback_status, failure, failure_baseline)
+    if failed_error is not None:
+        raise CutoverError(f"{what} of row {row_id} failed (the row is back on {row.status!r}): {failed_error}")
     return row if row.status in success_statuses else None
 
 
 def _await_row_status(
-    ctx: CutoverContext,
+    ctx: OperatorBoxContext,
     row_id: str,
     *,
     success_statuses: tuple[str, ...],
     failure_statuses: tuple[str, ...],
     timeout_seconds: float,
     what: str,
+    fallback_status: str | None = None,
+    failure_baseline: TransitionFailure | None = None,
 ) -> CutoverPoolRow:
-    """Poll the pool row until it reaches a success status; raise on a failure status or timeout."""
+    """Poll the pool row until it reaches a success status; raise on a failure status, a recorded failure, or timeout.
+
+    ``fallback_status`` with ``failure_baseline`` (the row's failure record
+    once the transition was accepted) makes a drive the connector failed
+    back onto that status surface at once, with its recorded error.
+    """
     row, _polls, _elapsed = poll_for_value(
-        lambda: _poll_row_status_once(ctx, row_id, success_statuses, failure_statuses, what),
+        lambda: _poll_row_status_once(
+            ctx, row_id, success_statuses, failure_statuses, what, fallback_status, failure_baseline
+        ),
         timeout=timeout_seconds,
         poll_interval=_ROW_POLL_SECONDS,
     )
@@ -1042,19 +1201,27 @@ def _await_row_status(
     return row
 
 
-def _ensure_workspace_running(ctx: CutoverContext, row: CutoverPoolRow) -> CutoverPoolRow:
+def ensure_workspace_running(ctx: OperatorBoxContext, row: CutoverPoolRow) -> CutoverPoolRow:
     """Admin-start a stopped gen-1 row and wait for ``leased``; a leased row passes through.
 
     The migrate needs a live VM and container to harvest keys and the
-    ``docker inspect`` from (no offline boot-disk harvest exists), so every
-    stopped candidate goes through the product's own start first.
+    ``docker inspect`` from (no offline boot-disk harvest exists), and the
+    archive reads the running workspace, so every stopped candidate goes
+    through the product's own start first.
     """
     if row.status == "leased":
         return row
     if row.status != "stopped":
-        raise CutoverError(f"row {row.id} is {row.status}; only leased or stopped workspaces can be migrated")
-    client, admin_key = _admin_client(ctx)
+        raise CutoverError(
+            f"row {row.id} is {row.status}; only a leased or stopped workspace can be used (a stopped one is admin-started first)"
+        )
+    client, admin_key = admin_client(ctx)
     client.admin_start_workspace(admin_key, row.id)
+    # Read once the start is accepted: the accepting CAS zeroes the failure
+    # count and clears the error, so a record read before it would hide a
+    # failure that lands the row back on the same count.
+    with pool_connection(ctx) as conn:
+        failure_baseline = fetch_transition_failure(conn, row.id)
     return _await_row_status(
         ctx,
         row.id,
@@ -1062,6 +1229,8 @@ def _ensure_workspace_running(ctx: CutoverContext, row: CutoverPoolRow) -> Cutov
         failure_statuses=("crashed",),
         timeout_seconds=_TRANSFER_WAIT_SECONDS,
         what="the pre-migration start",
+        fallback_status="stopped",
+        failure_baseline=failure_baseline,
     )
 
 
@@ -1074,7 +1243,7 @@ def _stop_workspace_via_product(ctx: CutoverContext, row_id: str) -> CutoverPool
     the hold on the floor, so it is probed for them right here, before every
     stop, where the row is running by construction (specs/workspace-stop-kinds.md S12).
     """
-    client, admin_key = _admin_client(ctx)
+    client, admin_key = admin_client(ctx)
     require_connector_stop_kinds(client, admin_key, row_id)
     client.admin_stop_workspace(admin_key, row_id, _MIGRATION_STOP_KIND)
     return _await_row_status(
@@ -1208,7 +1377,7 @@ def _save_product_artifact(ctx: CutoverContext, row: CutoverPoolRow) -> SavedPro
 
 def _destroy_gen1_instance_on_box(ctx: CutoverContext, server_id: str, instance_name: str) -> None:
     """Destroy a gen-1 lima instance (and its disk) on its box; a box or instance already gone counts as done."""
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         server = fetch_server_by_id(conn, BareMetalServerDbId(server_id))
     if server is None or not server.public_address:
         logger.info("Origin box {} is gone; nothing to destroy for {}", server_id, instance_name)
@@ -1216,12 +1385,12 @@ def _destroy_gen1_instance_on_box(ctx: CutoverContext, server_id: str, instance_
     if server.box_generation >= FIRST_QEMU_BOX_GENERATION:
         logger.info("Origin box {} was repaved; the gen-1 instance {} went with it", server_id, instance_name)
         return
-    _box_client(ctx, server).destroy_instance(VpsInstanceId(instance_name))
+    box_client_for_server(ctx, server).destroy_instance(VpsInstanceId(instance_name))
 
 
 def _destroy_gen2_slice_on_box(ctx: CutoverContext, server_id: str, instance_name: str) -> None:
     """Destroy a gen-2 slice (and its staged transplant dir) on its target box; one already gone counts as done."""
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         server = fetch_server_by_id(conn, BareMetalServerDbId(server_id))
     if server is None or not server.public_address:
         logger.info("Target box {} is gone; nothing to destroy for {}", server_id, instance_name)
@@ -1229,12 +1398,12 @@ def _destroy_gen2_slice_on_box(ctx: CutoverContext, server_id: str, instance_nam
     if server.box_generation < FIRST_QEMU_BOX_GENERATION:
         logger.info("Target box {} is not gen-2; nothing to destroy for {}", server_id, instance_name)
         return
-    client = _box_client(ctx, server)
+    client = box_client_for_server(ctx, server)
     client.destroy_instance(VpsInstanceId(instance_name))
     # The transplant staging dir lives outside the slice dir the destroy
     # removes; a rollback must not leave the decrypted data disk behind (a
     # re-migration would target a fresh artifact anyway).
-    _run_on_box_checked(
+    run_on_box_checked(
         client,
         build_transplant_clear_command(cutover_transplant_dir(instance_name)),
         timeout=_SHORT_TIMEOUT_SECONDS,
@@ -1392,7 +1561,7 @@ def _repave_box_unguarded(ctx: CutoverContext, server: BareMetalServer, *, is_dr
             stage=None,
             detail=f"in-flight migrations reference this box ({', '.join(in_flight)}); finish or roll them back first",
         )
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         remaining_rows = fetch_pool_rows_on_server(conn, server.id)
     if remaining_rows:
         return BoxOutcome(
@@ -1407,7 +1576,7 @@ def _repave_box_unguarded(ctx: CutoverContext, server: BareMetalServer, *, is_dr
         return BoxOutcome(
             server_id=str(server.id), stage=CutoverBoxStage.REPAVED, detail=repave_dry_run_detail(server)
         )
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         update_server(conn, server.id, **repave_pre_reinstall_server_fields(server))
     setup_server_to_ready(
         server_id=str(server.id),
@@ -1421,12 +1590,12 @@ def _repave_box_unguarded(ctx: CutoverContext, server: BareMetalServer, *, is_dr
         database_url=ctx.dsn,
         extra_prep_script=None,
     )
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         repaved = fetch_server_by_id(conn, server.id)
     if repaved is None:
         raise CutoverError(f"box row {server.id} vanished during the repave")
-    size_text = _run_on_box_checked(
-        _box_client(ctx, repaved),
+    size_text = run_on_box_checked(
+        box_client_for_server(ctx, repaved),
         build_storage_partition_size_bytes_command(),
         timeout=_SHORT_TIMEOUT_SECONDS,
         label="storage-df",
@@ -1456,7 +1625,7 @@ def run_repave(ctx: CutoverContext, server_ids: Sequence[str], *, is_dry_run: bo
     """
     if not server_ids:
         raise CutoverError("repave requires --server-id (there is no default scope; repaving reinstalls the box)")
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         candidates = [fetch_server_by_id(conn, BareMetalServerDbId(server_id)) for server_id in server_ids]
     servers = [server for server in candidates if server is not None and server.public_address]
     require_named_servers_selected(server_ids, servers, reason="no bare_metal_servers row with a public address")
@@ -1534,14 +1703,25 @@ def _bake_pool_rows_from_tag(
 
 
 def _read_template_replay_inputs_for_tag(version_tag: str) -> TemplateReplayInputs:
-    """Clone the tag and read the autostart installer and the slice provider's home path out of its settings.toml."""
+    """Clone the tag and read the autostart installer, the slice provider's home path and the shipped supervisord programs."""
     with _template_checkout_for_tag(version_tag) as bake_source:
         settings_text = (bake_source.workspace_dir / ".mngr" / "settings.toml").read_text()
-    return extract_template_replay_inputs(settings_text)
+        supervisord_conf_texts = [
+            path.read_text() for path in template_supervisord_conf_paths(bake_source.workspace_dir / "system")
+        ]
+    return extract_template_replay_inputs(settings_text, supervisord_conf_texts)
+
+
+def template_supervisord_conf_paths(system_dir: Path) -> list[Path]:
+    """The template's supervisord.conf plus the drop-ins its ``[include]`` pulls in (``supervisord.conf.d/*.conf``), sorted."""
+    conf_path = system_dir / "supervisord.conf"
+    if not conf_path.is_file():
+        raise CutoverError(f"the default-workspace-template checkout has no {conf_path}")
+    return [conf_path, *sorted((system_dir / "supervisord.conf.d").glob("*.conf"))]
 
 
 def _pool_row_ids_on_server(ctx: CutoverContext, server: BareMetalServer) -> set[str]:
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         return {row.id for row in fetch_pool_rows_on_server(conn, server.id)}
 
 
@@ -1595,16 +1775,16 @@ def ensure_image_tar_published(ctx: CutoverContext, server: BareMetalServer, ver
         logger.info("Image tar for {} already published", version_tag)
         return object_key
     image_tag = f"{DEFAULT_WORKSPACE_TEMPLATE_IMAGE_REPOSITORY}:{version_tag}"
-    client = _box_client(ctx, server)
+    client = box_client_for_server(ctx, server)
     cache_dir = box_image_cache_dir_for_generation(server.box_generation, box_service_user(server))
     cache = SshBoxImageCache(slice_client=client, cache_dir=cache_dir)
     if not cache.has_tar(image_tag):
         _seed_image_tar_on_box(ctx, server, cache, image_tag=image_tag, version_tag=version_tag)
     transfer_dir = box_transfer_dir(client.box_ssh_user, _IMAGES_TRANSFER_INSTANCE)
-    _write_box_file(
+    write_box_file(
         client,
         f"{transfer_dir}/env",
-        _transfer_env_text(
+        transfer_env_text(
             ctx.storage,
             key_prefix=ctx.storage.key_prefix,
             instance_name=_IMAGES_TRANSFER_INSTANCE,
@@ -1614,7 +1794,7 @@ def ensure_image_tar_published(ctx: CutoverContext, server: BareMetalServer, ver
         label="write-images-env",
     )
     try:
-        _run_on_box_checked(
+        run_on_box_checked(
             client,
             build_image_publish_command(
                 transfer_dir_path=transfer_dir,
@@ -1625,7 +1805,7 @@ def ensure_image_tar_published(ctx: CutoverContext, server: BareMetalServer, ver
             label=f"publish-image:{version_tag}",
         )
     finally:
-        _remove_box_transfer_dirs(client, (transfer_dir,), what=f"the image publish of {version_tag}")
+        remove_box_transfer_dirs(client, (transfer_dir,), what=f"the image publish of {version_tag}")
     return object_key
 
 
@@ -1640,19 +1820,8 @@ def _load_workspace_image(
     if state.target_vm_ssh_port is None:
         raise CutoverError(f"workspace {state.host_db_id} has no reserved target ports")
     target_vm_ssh_port = state.target_vm_ssh_port
-    cache = SshBoxImageCache(
-        slice_client=client,
-        cache_dir=box_image_cache_dir_for_generation(server.box_generation, box_service_user(server)),
-    )
-    transfer_key = cache.create_transfer_key()
-    try:
-        _run_on_vm_checked(
-            outer,
-            f"install -d -m 700 /root/.ssh && printf '%s\\n' {shlex.quote(transfer_key.public_key)} >> /root/.ssh/authorized_keys",
-            timeout=_SHORT_TIMEOUT_SECONDS,
-            label="authorize-transfer-key",
-        )
-        _run_on_box_checked(
+    with vm_transfer_key(client, outer, server, what=f"the image load of {state.host_id}") as transfer_key:
+        run_on_box_checked(
             client,
             build_image_load_command(
                 transfer_dir_path=box_transfer_dir(client.box_ssh_user, state.slice_instance_name),
@@ -1663,6 +1832,32 @@ def _load_workspace_image(
             timeout=_IMAGE_LOAD_TIMEOUT_SECONDS,
             label=f"load-image:{state.host_id}",
         )
+
+
+@contextmanager
+def vm_transfer_key(
+    client: SliceVmClientInterface, outer: OuterHostInterface, server: BareMetalServer, *, what: str
+) -> Iterator[TransferKey]:
+    """A box-side SSH key the VM root authorizes for the block, so the box can stream to or from the VM over its loopback.
+
+    The key lives in the box's image cache dir (the cache mints it) and is
+    removed, and de-authorized on the VM, on the way out; a failed
+    de-authorization is logged, never raised, so it cannot mask the block's
+    own error.
+    """
+    cache = SshBoxImageCache(
+        slice_client=client,
+        cache_dir=box_image_cache_dir_for_generation(server.box_generation, box_service_user(server)),
+    )
+    transfer_key = cache.create_transfer_key()
+    try:
+        run_on_vm_checked(
+            outer,
+            f"install -d -m 700 /root/.ssh && printf '%s\\n' {shlex.quote(transfer_key.public_key)} >> /root/.ssh/authorized_keys",
+            timeout=_SHORT_TIMEOUT_SECONDS,
+            label="authorize-transfer-key",
+        )
+        yield transfer_key
     finally:
         cache.destroy_transfer_key(transfer_key)
         deauthorize = outer.execute_idempotent_command(
@@ -1673,8 +1868,8 @@ def _load_workspace_image(
         )
         if not deauthorize.success:
             logger.warning(
-                "Could not remove the image transfer key from the VM root's authorized_keys of {}: {}",
-                state.host_id,
+                "Could not remove the transfer key of {} from the VM root's authorized_keys: {}",
+                what,
                 deauthorize.stderr.strip(),
             )
 
@@ -1725,7 +1920,7 @@ def _recreate_container(
         ssh_ca_public_key=_require_ssh_ca_public_key(ctx),
         pool_public_key=ctx.pool_public_key,
     )
-    _run_on_vm_checked(
+    run_on_vm_checked(
         outer,
         build_stage_replayed_container_files_command(staging_dir, replayed_files),
         timeout=_SHORT_TIMEOUT_SECONDS,
@@ -1736,7 +1931,7 @@ def _recreate_container(
             outer,
             ["cp", f"{staged_container_dir_path(staging_dir, container_dir)}/.", f"{container_name}:{container_dir}"],
         )
-    _run_on_vm_checked(outer, f"rm -rf {shlex.quote(staging_dir)}", timeout=_SHORT_TIMEOUT_SECONDS, label="rm-staging")
+    run_on_vm_checked(outer, f"rm -rf {shlex.quote(staging_dir)}", timeout=_SHORT_TIMEOUT_SECONDS, label="rm-staging")
     start_container(outer, container_name)
     # mngr's container setup, not the image, points the home directory at the
     # volume, so the replay recreates that link.
@@ -1747,13 +1942,49 @@ def _recreate_container(
     )
     start_container_sshd(outer, container_name)
     for index, command in enumerate(replay_inputs.installer_commands):
-        _run_on_vm_checked(
+        run_on_vm_checked(
             outer,
             f"bash -c {shlex.quote(command)}",
             timeout=_SLOW_COMMAND_TIMEOUT_SECONDS,
             label=f"autostart-installer-{index}",
         )
+    _start_autostart_resyncing_mngr_tool_on_failure(outer, container_name)
     return container_name
+
+
+def _start_autostart_resyncing_mngr_tool_on_failure(outer: OuterHostInterface, container_name: str) -> None:
+    """Start the autostart unit; when it fails, rebuild the workspace's mngr tool from its own tree and retry once.
+
+    Three production migrations failed here the same way: the workspace had
+    self-updated (or rolled an update back) after its bake, so the tool
+    environment the release image ships no longer matched the vendored mngr
+    on the volume and ``mngr start`` died at import. The one-time repair the
+    operators applied by hand each time is the template's own installer
+    procedure, so the replay runs it itself before giving up.
+    """
+    try:
+        run_on_vm_checked(
+            outer, build_autostart_start_command(), timeout=_SLOW_COMMAND_TIMEOUT_SECONDS, label="autostart-start"
+        )
+    except CutoverError as exc:
+        logger.warning(
+            "The autostart start in {} failed ({}); re-syncing the workspace's mngr tool from its vendored tree "
+            "and plugin manifest, then retrying once",
+            container_name,
+            exc,
+        )
+        run_on_vm_checked(
+            outer,
+            build_mngr_tool_resync_command(container_name),
+            timeout=_SLOW_COMMAND_TIMEOUT_SECONDS,
+            label="mngr-tool-resync",
+        )
+        run_on_vm_checked(
+            outer,
+            build_autostart_start_command(),
+            timeout=_SLOW_COMMAND_TIMEOUT_SECONDS,
+            label="autostart-start-after-resync",
+        )
 
 
 def _require_ssh_ca_public_key(ctx: CutoverContext) -> str:
@@ -1839,7 +2070,7 @@ def _reserve_slice_on_target(
     transfer_dir: str,
 ) -> tuple[int, int, int]:
     """Run the reserve on the target box; returns the (vm_port, container_port, ordinal) it claimed."""
-    _write_box_file(
+    write_box_file(
         client,
         f"{transfer_dir}/reserve.sh",
         _render_migrate_reserve_script(
@@ -1866,8 +2097,8 @@ def _reserve_slice_on_target(
     return reservation
 
 
-def _fetch_row_or_raise(ctx: CutoverContext, row_id: str) -> CutoverPoolRow:
-    with _pool_connection(ctx) as conn:
+def fetch_row_or_raise(ctx: OperatorBoxContext, row_id: str) -> CutoverPoolRow:
+    with pool_connection(ctx) as conn:
         row = fetch_pool_row(conn, row_id)
     if row is None:
         raise CutoverError(f"pool row {row_id} is gone")
@@ -1939,7 +2170,7 @@ def is_parked_row_shape(row: CutoverPoolRow) -> bool:
 
 def _require_parked_row_or_none_when_done(ctx: CutoverContext, state: CutoverWorkspaceState) -> CutoverPoolRow | None:
     """The workspace's parked row; None when it is already leased on gen-2 (an earlier run finished it)."""
-    row = _fetch_row_or_raise(ctx, state.host_db_id)
+    row = fetch_row_or_raise(ctx, state.host_db_id)
     if row.status == "leased" and row.box_generation >= FIRST_QEMU_BOX_GENERATION:
         return None
     if row.status != "stopped" or row.bare_metal_server_id is not None or row.vps_address is not None:
@@ -1966,7 +2197,7 @@ def _ensure_transplanted_disk(
     itself (root over the management dial) is then skipped when the prepared
     disk is present (the script gives it that name only once it is complete).
     """
-    _run_on_box_checked(
+    run_on_box_checked(
         client,
         build_transplant_rescue_command(state.slice_instance_name, transplant_dir),
         timeout=_SLOW_COMMAND_TIMEOUT_SECONDS,
@@ -2027,21 +2258,23 @@ def _boot_and_replay_workspace(
     *,
     ordinal: int,
     transplant_dir: str,
-) -> None:
-    """Materialize the disks, start the unit, then in the VM: latchkey software and files, image, container, gateway, probe."""
+) -> HealthProbeFindings:
+    """Materialize the disks, start the unit, then in the VM: latchkey software and files, image, container, gateway, probe.
+
+    Returns the passing probe's findings (its owner-added program notes are
+    what the outcome reports); raises when the probe never passes.
+    """
     if state.target_vm_ssh_port is None or state.target_container_ssh_port is None:
         raise CutoverError(f"workspace {state.host_db_id} has no reserved target ports")
-    _run_on_box_checked(
+    run_on_box_checked(
         client,
         build_disk_materialize_command(state.slice_instance_name, transplant_dir),
         timeout=_RESERVE_TIMEOUT_SECONDS,
         label="materialize",
     )
-    _run_on_box_checked(client, build_unit_enable_command(ordinal), timeout=_SHORT_TIMEOUT_SECONDS, label="enable")
-    _run_on_box_checked(
-        client, build_qemu_start_command(ordinal), timeout=_SLOW_COMMAND_TIMEOUT_SECONDS, label="start"
-    )
-    _run_on_box_checked(
+    run_on_box_checked(client, build_unit_enable_command(ordinal), timeout=_SHORT_TIMEOUT_SECONDS, label="enable")
+    run_on_box_checked(client, build_qemu_start_command(ordinal), timeout=_SLOW_COMMAND_TIMEOUT_SECONDS, label="start")
+    run_on_box_checked(
         client,
         build_banner_wait_command(state.target_vm_ssh_port, _BANNER_WAIT_SECONDS),
         timeout=_BANNER_WAIT_SECONDS + 60,
@@ -2062,7 +2295,7 @@ def _boot_and_replay_workspace(
             _replay_latchkey_disk_state(outer, latchkey_state)
         _load_workspace_image(ctx, client, outer, server, state)
         container_name = _recreate_container(ctx, outer, state, keys, inspect_entry, replay_inputs)
-        _run_on_box_checked(
+        run_on_box_checked(
             client,
             build_banner_wait_command(state.target_container_ssh_port, _BANNER_WAIT_SECONDS),
             timeout=_BANNER_WAIT_SECONDS + 60,
@@ -2072,11 +2305,15 @@ def _boot_and_replay_workspace(
             # The tunnel program dials the container's sshd, so it starts only
             # once the container is up.
             _start_latchkey_gateway(outer, latchkey_state)
-        warnings = _wait_for_workspace_health(
-            outer, container_name, is_latchkey_gateway_expected=latchkey_plan == LatchkeyReplayPlan.FULL
+        findings = _wait_for_workspace_health(
+            outer,
+            container_name,
+            is_latchkey_gateway_expected=latchkey_plan == LatchkeyReplayPlan.FULL,
+            template_program_names=frozenset(replay_inputs.template_program_names),
         )
-    if warnings:
-        raise CutoverError("health probe did not converge: " + "; ".join(warnings))
+    if not findings.is_healthy:
+        raise CutoverError("health probe did not converge: " + "; ".join(findings.blocking))
+    return findings
 
 
 def _replay_latchkey_files(
@@ -2088,7 +2325,7 @@ def _replay_latchkey_files(
         build_latchkey_replay_tar(files, is_including_latchkey_dirs=is_including_latchkey_dirs),
         mode=REMOTE_FILE_MODE,
     )
-    _run_on_vm_checked(
+    run_on_vm_checked(
         outer, build_latchkey_tar_extract_command(tar_path), timeout=_SHORT_TIMEOUT_SECONDS, label="latchkey-extract"
     )
 
@@ -2118,6 +2355,24 @@ def _replay_latchkey_disk_state(outer: OuterHostInterface, latchkey_state: Harve
             tar_path=LATCHKEY_DISK_REPLAY_TAR_PATH,
             is_including_latchkey_dirs=True,
         )
+    # The run script is the owner's desktop's: a desktop build that installs
+    # its curl shim under another name than this checkout's provisioning does
+    # would leave the gateway refusing to start on the new VM.
+    expected_curl_path = harvested_latchkey_curl_path_or_none(latchkey_state)
+    if expected_curl_path is not None and expected_curl_path != LATCHKEY_CURL_PATH:
+        logger.warning(
+            "The harvested gateway run script of {} names its curl at {}, which this build installs at {}; "
+            "linking the former onto the latter",
+            outer.get_name(),
+            expected_curl_path,
+            LATCHKEY_CURL_PATH,
+        )
+        run_on_vm_checked(
+            outer,
+            build_latchkey_curl_shim_command(expected_curl_path, LATCHKEY_CURL_PATH),
+            timeout=_SHORT_TIMEOUT_SECONDS,
+            label="latchkey-curl-shim",
+        )
 
 
 def _start_latchkey_gateway(outer: OuterHostInterface, latchkey_state: HarvestedLatchkeyState) -> None:
@@ -2142,7 +2397,7 @@ def _finish_restore(
     """
     if state.target_vm_ssh_port is None or state.target_container_ssh_port is None:
         raise CutoverError(f"workspace {state.host_db_id} has no reserved target ports")
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         is_finished = finish_restore_pool_host(
             conn,
             state.host_db_id,
@@ -2193,8 +2448,8 @@ def _restore_workspace_on_target(
     target_server: BareMetalServer,
     state: CutoverWorkspaceState,
     replay_inputs: TemplateReplayInputs,
-) -> CutoverWorkspaceState:
-    """Transplant -> reserve -> boot -> image -> container -> probe -> CAS on the target box; returns the updated state."""
+) -> tuple[CutoverWorkspaceState, HealthProbeFindings]:
+    """Transplant -> reserve -> boot -> image -> container -> probe -> CAS on the target box; returns the updated state and the probe's findings."""
     saved = state.saved_artifact
     keys = ctx.state.read_keys(state.host_db_id)
     inspect_entry = ctx.state.read_inspect(state.host_db_id)
@@ -2205,14 +2460,14 @@ def _restore_workspace_on_target(
         raise CutoverError(
             f"state dir lacks the harvested latchkey files for {state.host_db_id} (its record says {state.latchkey_replay_plan})"
         )
-    client = _box_client(ctx, target_server)
+    client = box_client_for_server(ctx, target_server)
     transfer_dir = box_transfer_dir(client.box_ssh_user, state.slice_instance_name)
     transplant_dir = cutover_transplant_dir(state.slice_instance_name)
     try:
-        _write_box_file(
+        write_box_file(
             client,
             f"{transfer_dir}/env",
-            _transfer_env_text(
+            transfer_env_text(
                 ctx.storage,
                 key_prefix=saved.key_prefix,
                 instance_name=state.slice_instance_name,
@@ -2232,7 +2487,7 @@ def _restore_workspace_on_target(
             to_update(state.field_ref().target_container_ssh_port, container_port),
         )
         ctx.state.write_workspace(state)
-        _boot_and_replay_workspace(
+        findings = _boot_and_replay_workspace(
             ctx,
             client,
             target_server,
@@ -2258,10 +2513,10 @@ def _restore_workspace_on_target(
         # The staged env holds the unwrapped age identity; a re-run rewrites it,
         # so it must not linger on the box behind a FAILED workspace. The
         # transplant dir stays: the re-run resumes from its prepared disk.
-        _remove_box_transfer_dirs(client, (transfer_dir,), what=f"the failed restore of {state.host_id}")
+        remove_box_transfer_dirs(client, (transfer_dir,), what=f"the failed restore of {state.host_id}")
         raise
-    _remove_box_transfer_dirs(client, (transfer_dir, transplant_dir), what=f"the restore of {state.host_id}")
-    return state
+    remove_box_transfer_dirs(client, (transfer_dir, transplant_dir), what=f"the restore of {state.host_id}")
+    return state, findings
 
 
 def _migrate_workspace(
@@ -2270,6 +2525,7 @@ def _migrate_workspace(
     row: CutoverPoolRow,
     *,
     is_keep_origin_vm: bool,
+    is_shrink_oversized_disks: bool,
     replay_inputs_cache: dict[str, TemplateReplayInputs],
 ) -> WorkspaceOutcome:
     """Migrate one workspace onto the target box, resuming from its state file; never raises."""
@@ -2291,18 +2547,18 @@ def _migrate_workspace(
                 f"workspace {row.id} is mid-migration onto box {state.target_server_id}; "
                 "finish it there (or roll it back) instead of retargeting"
             )
-        target_client = _box_client(ctx, target_server)
+        target_client = box_client_for_server(ctx, target_server)
         if state is None:
             capacity_error = _target_capacity_error_or_none(ctx, target_server, target_client)
             if capacity_error is not None:
                 raise CutoverError(capacity_error)
-            fresh = _ensure_workspace_running(ctx, _fetch_row_or_raise(ctx, row.id))
+            fresh = ensure_workspace_running(ctx, fetch_row_or_raise(ctx, row.id))
             if fresh.slice_instance_name is not None:
                 # A rolled-back earlier migration may have left its prepared
                 # disk in the target's transplant dir, which the transplant
                 # would silently reuse (stale pre-rollback data). Cleared
                 # before any state is recorded, so a failure here is retried.
-                _run_on_box_checked(
+                run_on_box_checked(
                     target_client,
                     build_transplant_clear_command(cutover_transplant_dir(fresh.slice_instance_name)),
                     timeout=_SHORT_TIMEOUT_SECONDS,
@@ -2310,20 +2566,25 @@ def _migrate_workspace(
                 )
             if fresh.bare_metal_server_id is None:
                 raise CutoverError(f"row {row.id} is leased but has no box; cannot harvest")
-            with _pool_connection(ctx) as conn:
+            with pool_connection(ctx) as conn:
                 origin_server = fetch_server_by_id(conn, BareMetalServerDbId(fresh.bare_metal_server_id))
             if origin_server is None or not origin_server.public_address:
                 raise CutoverError(f"origin box {fresh.bare_metal_server_id} of row {row.id} is unreachable")
-            origin_client = _box_client(ctx, origin_server)
+            origin_client = box_client_for_server(ctx, origin_server)
             state, keys, inspect_entry, latchkey_state = _harvest_workspace(
-                ctx, origin_client, origin_server, fresh, target_server_id=str(target_server.id)
+                ctx,
+                origin_client,
+                origin_server,
+                fresh,
+                target_server_id=str(target_server.id),
+                is_shrink_oversized_disks=is_shrink_oversized_disks,
             )
             ctx.state.write_keys(row.id, keys)
             ctx.state.write_latchkey_state(row.id, latchkey_state)
             ctx.state.write_inspect(row.id, inspect_entry)
             state = state.model_copy_update(to_update(state.field_ref().is_origin_vm_kept, is_keep_origin_vm))
             ctx.state.write_workspace(state)
-        fresh = _fetch_row_or_raise(ctx, row.id)
+        fresh = fetch_row_or_raise(ctx, row.id)
         # The version's release image is seeded before the workspace is stopped:
         # a version whose image cannot be built (a template the operator's mngr
         # cannot bake) then fails here, with the workspace still running for its
@@ -2352,12 +2613,12 @@ def _migrate_workspace(
                 to_update(state.field_ref().last_error, None),
             )
             ctx.state.write_workspace(state)
-        current = _fetch_row_or_raise(ctx, row.id)
+        current = fetch_row_or_raise(ctx, row.id)
         is_already_migrated = current.status == "leased" and current.box_generation >= FIRST_QEMU_BOX_GENERATION
         if not is_already_migrated and not is_parked_row_shape(current):
             # Reached both on the normal path (right after the save) and on a
             # resume that crashed between the save and the park.
-            with _pool_connection(ctx) as conn:
+            with pool_connection(ctx) as conn:
                 is_parked = park_pool_host(conn, row.id)
             if not is_parked:
                 raise CutoverError(f"park CAS matched no row for {row.id} (status changed underneath the migrate)")
@@ -2365,8 +2626,12 @@ def _migrate_workspace(
             state = state.model_copy_update(to_update(state.field_ref().stage, CutoverStage.PARKED))
             ctx.state.write_workspace(state)
         parked_row = _require_parked_row_or_none_when_done(ctx, state)
+        user_program_notes: tuple[str, ...] = ()
         if parked_row is not None:
-            state = _restore_workspace_on_target(ctx, target_server, state, replay_inputs)
+            state, findings = _restore_workspace_on_target(ctx, target_server, state, replay_inputs)
+            user_program_notes = findings.user_program_notes
+            for note in user_program_notes:
+                logger.warning("Workspace {} came back with an {} (the owner's program, left to them)", row.id, note)
         if not state.is_origin_vm_kept:
             try:
                 _destroy_gen1_instance_on_box(ctx, state.origin_server_id, state.slice_instance_name)
@@ -2401,6 +2666,8 @@ def _migrate_workspace(
         )
         if state.is_origin_vm_kept:
             detail += "; origin VM kept (finalize it by hand before baking on its box)"
+        if user_program_notes:
+            detail += "; " + "; ".join(user_program_notes)
         return WorkspaceOutcome(host_db_id=row.id, host_id=row.host_id, stage=CutoverStage.RESTORED, detail=detail)
     except (
         MngrError,
@@ -2432,9 +2699,9 @@ def _migrate_workspace(
 
 def _resolve_user_id_prefix(ctx: CutoverContext, email: str) -> str:
     """The 16-hex lease-namespace prefix of an account, resolved through the admin accounts API."""
-    client, admin_key = _admin_client(ctx)
+    client, admin_key = admin_client(ctx)
     account = client.admin_get_account(admin_key, email)
-    return str(account.user_id).replace("-", "")[:16]
+    return derive_user_id_prefix(str(account.user_id))
 
 
 class ParkedSweepRows(FrozenModel):
@@ -2503,7 +2770,7 @@ def resolve_migration_rows(
         else None
     )
     rows_by_id: dict[str, CutoverPoolRow] = {}
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         for workspace_id in workspace_ids:
             row = fetch_pool_row(conn, workspace_id)
             if row is None:
@@ -2625,7 +2892,11 @@ def require_connector_stop_kinds(client: ImbueCloudConnectorClient, admin_key: S
 
 @pure
 def _dry_run_migration_detail(
-    row: CutoverPoolRow, recorded: CutoverWorkspaceState | None, target_server_id: str
+    row: CutoverPoolRow,
+    recorded: CutoverWorkspaceState | None,
+    target_server_id: str,
+    *,
+    is_shrink_oversized_disks: bool,
 ) -> str:
     """What a dry run says one selected row would go through: a fresh migration, or the resume of a parked one."""
     if _is_migration_state_in_flight(recorded):
@@ -2634,10 +2905,16 @@ def _dry_run_migration_detail(
             f"would resume the migration onto box {target_server_id} from its {recorded.stage} record "
             f"({row.status} row parked off box {recorded.origin_server_id})"
         )
+    is_oversized = row.disk_gb > compute_machine_data_disk_gib(DEFAULT_MACHINE_UNITS)
+    shrink_note = (
+        f"; would shrink its {row.disk_gb} GiB disk to the default size if the contents fit"
+        if is_shrink_oversized_disks and is_oversized
+        else ""
+    )
     return (
         f"would harvest (keys, inspect, version, latchkey state), product-stop, park, transplant onto "
         f"box {target_server_id} at fresh ports, replay (container, latchkey gateway), re-lease "
-        f"({row.status} row{'; admin-start first' if row.status != 'leased' else ''})"
+        f"({row.status} row{'; admin-start first' if row.status != 'leased' else ''}){shrink_note}"
     )
 
 
@@ -2649,6 +2926,7 @@ def run_migrate(
     user_email: str | None,
     source_server_id: str | None,
     is_keep_origin_vm: bool,
+    is_shrink_oversized_disks: bool,
     is_publish_image_tars: bool,
     is_dry_run: bool,
 ) -> StageReport:
@@ -2660,7 +2938,7 @@ def run_migrate(
     """
     if source_server_id is not None and source_server_id == target_server_id:
         raise CutoverError("--source-server-id equals --target-server-id; a migration moves between boxes")
-    with _pool_connection(ctx) as conn:
+    with pool_connection(ctx) as conn:
         target_server = fetch_server_by_id(conn, BareMetalServerDbId(target_server_id))
     target_refusal = target_box_refusal_or_none(target_server)
     if target_refusal is not None:
@@ -2681,7 +2959,12 @@ def run_migrate(
                 host_db_id=row.id,
                 host_id=row.host_id,
                 stage=CutoverStage.RESTORED,
-                detail=_dry_run_migration_detail(row, ctx.state.read_workspace(row.id), target_server_id),
+                detail=_dry_run_migration_detail(
+                    row,
+                    ctx.state.read_workspace(row.id),
+                    target_server_id,
+                    is_shrink_oversized_disks=is_shrink_oversized_disks,
+                ),
             )
             for row in candidates
         ]
@@ -2706,7 +2989,7 @@ def run_migrate(
         # is the probe _stop_workspace_via_product repeats before every stop.
         running_candidates = [row for row in candidates if row.status == "leased"]
         if running_candidates:
-            probe_client, probe_admin_key = _admin_client(ctx)
+            probe_client, probe_admin_key = admin_client(ctx)
             require_connector_stop_kinds(probe_client, probe_admin_key, running_candidates[0].id)
         if is_publish_image_tars:
             # Pre-warm from the best version signal available without touching
@@ -2730,6 +3013,7 @@ def run_migrate(
                 target_server,
                 row,
                 is_keep_origin_vm=is_keep_origin_vm,
+                is_shrink_oversized_disks=is_shrink_oversized_disks,
                 replay_inputs_cache=replay_inputs_cache,
             )
             outcomes.append(outcome)
@@ -2779,7 +3063,7 @@ def _rollback_workspace(ctx: CutoverContext, state: CutoverWorkspaceState) -> Wo
         saved = state.saved_artifact
         if saved is None:
             raise CutoverError(f"workspace {state.host_db_id} has no saved artifact; nothing to roll back to")
-        row = _fetch_row_or_raise(ctx, state.host_db_id)
+        row = fetch_row_or_raise(ctx, state.host_db_id)
         if row.status == "leased" and row.box_generation < FIRST_QEMU_BOX_GENERATION:
             # The product restore already brought it back (a crash after the
             # start but before the state write, or a plain re-run).
@@ -2793,13 +3077,26 @@ def _rollback_workspace(ctx: CutoverContext, state: CutoverWorkspaceState) -> Wo
                     "that work with the stale copy; re-run migrate (it re-saves the current artifact) or "
                     "leave the row as it is"
                 )
-            with _pool_connection(ctx) as conn:
+            with pool_connection(ctx) as conn:
                 is_parked = rollback_park_pool_host(conn, state.host_db_id, memory_units=DEFAULT_MACHINE_UNITS)
             if not is_parked:
                 raise CutoverError(
                     f"rollback park CAS matched no row for {state.host_db_id} (status {row.status}); "
                     "only stopped or leased-on-gen-2 rows roll back"
                 )
+            if state.origin_disk_gb is not None and row.disk_gb != state.origin_disk_gb:
+                with pool_connection(ctx) as conn:
+                    is_disk_restored = rollback_restore_disk_gb(
+                        conn,
+                        state.host_db_id,
+                        expected_disk_gb=state.migrated_data_disk_gib,
+                        disk_gb=state.origin_disk_gb,
+                    )
+                if not is_disk_restored:
+                    raise CutoverError(
+                        f"could not put row {state.host_db_id} disk_gb back to {state.origin_disk_gb} "
+                        f"from {state.migrated_data_disk_gib} (it changed underneath)"
+                    )
             # The gen-2 slice (when the restore half got that far) and the
             # origin leftover (when --keep-origin-vm skipped its deletion) must
             # both be gone before the product restore reserves gen-1 ports and
@@ -2809,7 +3106,7 @@ def _rollback_workspace(ctx: CutoverContext, state: CutoverWorkspaceState) -> Wo
             # Still held for a mid-migration failure; a completed migration
             # shredded them after stamping the row at its finish CAS.
             keys = ctx.state.read_keys(state.host_db_id)
-            with _pool_connection(ctx) as conn:
+            with pool_connection(ctx) as conn:
                 is_artifact_restored = rollback_restore_artifact(
                     conn,
                     state.host_db_id,
@@ -2821,7 +3118,7 @@ def _rollback_workspace(ctx: CutoverContext, state: CutoverWorkspaceState) -> Wo
                 )
             if not is_artifact_restored:
                 raise CutoverError(f"rollback artifact CAS matched no parked gen-1 row for {state.host_db_id}")
-            client, admin_key = _admin_client(ctx)
+            client, admin_key = admin_client(ctx)
             client.admin_start_workspace(admin_key, state.host_db_id)
             row = _await_row_status(
                 ctx,

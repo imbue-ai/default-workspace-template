@@ -36,6 +36,18 @@ public); there is no reverse import of public PRs.
   first sync, steady-state exports (scrubbing, block-strip, private-skip, tag
   creation, trailer-based baseline), and optionally (`--build`) the
   public-tree buildability checks.
+- `../scripts/mirror_tag.py` (run by `.github/workflows/mirror-tags.yml`) —
+  re-points `minds-v*` release tags onto the mirror. Copybara creates only
+  the `v*` tags named by a `RELEASE_TAG` trailer on the exported commit; a
+  `minds-v*` tag names an older `main` SHA, so the script maps it through the
+  `GitOrigin-RevId` trailer: it finds the first-parent commit of `main` that
+  carries the tag (the tagged commit, or the `--no-ff` merge that landed a
+  release branch), walks `main`'s first-parent history from there past
+  private-only commits to the nearest exported one, waits for the mirror push
+  to catch up first, and pushes the annotated tag with the sync App
+  credential. Dispatch the workflow with an empty tag to backfill every
+  `minds-v*` tag the mirror lacks; tags not reachable from `main` (test tags)
+  are skipped.
 - `pypi_trusted_publishers.md` — the PyPI trusted-publisher checklist for
   every publishable package.
 

@@ -520,7 +520,7 @@ So each compliance source has a **health fact** beside it, and a health miss is 
 | `process.worker_launch_count@work` | `1` | `agent.worker_launched` |
 | `evidence.statuses@work` | the process entries: the required `build-app` `passed`, the required nonce `failed`, the forbidden nonce `passed`, the launch count `passed`; and the always-on `file_inventory` entry `passed`, which every step's manifest carries whatever the case declares | `agent.invoked_skill`, `agent.worker_launched` |
 
-Dollar figures are recorded, never asserted: a greeting on an unpriced default model (pi on OpenRouter greets on `moonshotai/kimi-k2.6`) leaves the trial's cost `null` on a perfectly healthy trial.
+No fact here is a dollar figure: a trial records tokens and `minds-evals check-run` prices them, so a greeting on a model the price map does not carry (pi on OpenRouter greets on `moonshotai/kimi-k2.6`) leaves that report's agent-cost cell reading `? unpriced` on a perfectly healthy trial.
 
 **Measured.**
 The first cut's cells (mngr `f2632ae2`, dwt `main@aecc8b84`) came out `passed` on claude `haiku` (25 min, $1.30, of which the template's fast-mode greeting $0.65 and the `opus[1m]` worker $0.47), `known` on codex `gpt-5.6-luna` for exactly its declared defects (28 min, unmetered), and `passed` on pi `gpt-5-mini` (38 min, cents plus the unpriced greeting).

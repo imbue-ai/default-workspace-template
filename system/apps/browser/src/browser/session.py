@@ -56,30 +56,23 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
-from app_instances.interfaces import InstanceNudgerInterface
-from app_instances.nudge import SilentNudger
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
-from browser.cdp_client import CdpClient, CdpError
+from browser.cdp_client import CdpClient
 from browser.cdp_proxy import BrowserProxy, ProxyServer
-from browser.data_types import BrowserController, BrowserLifecycle, BrowserSnapshot
-from browser.errors import (
-    BrowserHeldByAgentError,
-    BrowserNotDrivableError,
-    NavigationFailedError,
-    UnknownBrowserError,
-)
+from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
-from browser.primitives import BrowserName
+from browser.primitives import APP_NAME, SESSION_QUERY_KEY
+from app_manifest.shell_windows import read_app_window_paths, window_query_value
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
@@ -142,7 +135,7 @@ def proxy_server() -> "ProxyServer | None":
 # bare dev boxes) so those still run. Force either mode with BROWSER_HEADLESS=1/0.
 _HEADLESS = os.environ.get("BROWSER_HEADLESS", "0" if os.environ.get("DISPLAY") else "1") != "0"
 
-# --- pixelflux media path --------------------------------------------------------
+# pixelflux media path
 # Every browser renders headful onto its OWN private Xvfb and is captured/encoded by
 # pixelflux (see videopipe.py). This is the ONLY pixel transport -- the human sees
 # Chrome's real chrome (tabs + omnibox) as pixels; there is no CDP-screencast path.
@@ -324,7 +317,11 @@ _CAST_QUEUE_MAX_SIZE = 16
 
 # Each live session = one headful Chromium on its own Xvfb; cap the concurrent count so
 # a small compute (e.g. 4 GB) can't be OOM-ed. Override via BROWSER_MAX_SESSIONS.
-_MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "2"))
+_MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "1"))
+
+# The safety net behind the shell's close hint (docs/system/specs/window-bound-resources.md): how
+# often the fleet reads the shell's windows and stops a browser no window shows any more.
+_WINDOW_SWEEP_INTERVAL_SECONDS = float(os.environ.get("BROWSER_WINDOW_SWEEP_SECONDS", "90"))
 
 # Names whose background launch FAILED are remembered briefly so a late/retrying optimistic
 # viewer (still in 1013 reconnect-backoff when the launch failed, so it never registered a
@@ -415,7 +412,7 @@ _MANIFEST_CHECKPOINT_SECONDS = float(os.environ.get("BROWSER_CHECKPOINT_SECONDS"
 
 def _stopped_hint(browser_id: str) -> str:
     """How to bring a stopped browser back, for an agent told it is stopped."""
-    return f"start it from its tab, or with `layout.py start app:browser?instance={browser_id}`"
+    return f"start it from its window's Start button, or with `POST /browsers/{browser_id}/start` on the browser daemon"
 
 
 # Lock files Chromium leaves in a profile; a hard kill (crash/OOM/container stop)
@@ -610,16 +607,16 @@ class LiveBrowser(MutableModel):
     # relaunches it (``init`` again). All transitions stay on the single loop thread, so
     # this plain field needs no lock (cooperative single-thread atomicity).
     _lifecycle: Lifecycle = PrivateAttr(default="init")
+    # Whether a desktop window has shown this browser. Only a browser some window showed is
+    # stopped once none does (the window sweep); one nobody ever looked at -- an agent's with
+    # nobody connected, a window still settling at ``/new`` -- outlives every sweep. Rides the
+    # manifest (``window_seen``) so a daemon restart neither forgets nor invents it.
+    _is_window_seen: bool = PrivateAttr(default=False)
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
     # crash so a browser that died is dropped from the manifest promptly (not only on
     # the next ~10s checkpoint tick), so an ungraceful kill right after a crash doesn't
     # restore the dead browser as healthy next boot.
     _crash_save_hook: "Callable[[], None] | None" = PrivateAttr(default=None)
-    # Tells the shell this browser's instance changed (its status derives from the controller
-    # and the lifecycle, so every ownership write and every lifecycle flip reports). Installed
-    # by the manager at registration; the default reports to nobody, which is what a
-    # LiveBrowser built on its own (tests) wants.
-    _nudger: InstanceNudgerInterface = PrivateAttr(default_factory=SilentNudger)
 
     @property
     def _crashed(self) -> bool:
@@ -635,7 +632,6 @@ class LiveBrowser(MutableModel):
         if value:
             if self._lifecycle != "crashed":
                 self._lifecycle = "crashed"
-                self._nudger.nudge()
         elif self._lifecycle == "crashed":
             self._lifecycle = "init"
 
@@ -758,10 +754,9 @@ class LiveBrowser(MutableModel):
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         self._lifecycle = "running"
         self._broadcast(self._control_message())
-        self._nudger.nudge()
         logger.info("LiveBrowser {} started (cdp={})", self.browser_id, self._chrome.http_endpoint)
 
-    # --- the proxy's callbacks into ownership --------------------------------
+    # the proxy's callbacks into ownership
 
     async def _token_may_drive(self, token: str) -> bool:
         """Whether a frame bearing ``token`` may be forwarded right now.
@@ -863,7 +858,20 @@ class LiveBrowser(MutableModel):
             index = active_tab if 0 <= active_tab < len(targets) else 0
             await self._focus_and_foreground(targets[index]["targetId"])
 
-    # --- tabs (the fleet's own CDP client is the single source of truth) --------
+    async def open_tab(self, url: str) -> None:
+        """Open ``url`` as a new, foregrounded tab: the launch path's start page on a browser already up."""
+        if self._cdp is None:
+            return
+        async with self._lock:
+            notify_chromium_processes_expected()
+            try:
+                target_id = await asyncio.wait_for(self._cdp.create_target(url), timeout=_RESTORE_NAV_TIMEOUT)
+            except (asyncio.TimeoutError, *_BROWSER_ERRORS) as e:
+                logger.debug("new tab for {} on {} ignored ({})", url, self.browser_id, e)
+                return
+            await self._focus_and_foreground(target_id)
+
+    # tabs (the fleet's own CDP client is the single source of truth)
 
     def _active_target(self) -> str | None:
         """The tab the pane is showing. Was browser-use's ``agent_focus_target_id``;
@@ -1032,7 +1040,7 @@ class LiveBrowser(MutableModel):
         :meth:`acquire`."""
         return self.controller == "human" and self.human_pinned
 
-    # --- ownership state machine ----------------------------------------------
+    # ownership state machine
 
     def _state_tuple(self) -> tuple[ControlOwner, str | None, bool]:
         return (self.controller, self.owner_agent_id, self.human_pinned)
@@ -1082,7 +1090,6 @@ class LiveBrowser(MutableModel):
             self._input_gate.clear()
             self._lease_touched_at = time.monotonic()  # start the sticky-lease idle clock
         self._broadcast(self._control_message())
-        self._nudger.nudge()
 
     def _waiting_names(self) -> list[str]:
         """Display names of every agent queued for this browser: the resume queue
@@ -1564,53 +1571,7 @@ class LiveBrowser(MutableModel):
         """Human hands control back: un-pin (only if currently pinned). Frees any waiter."""
         return await self._transition(to="human", pinned=False, expect=("human", None, True))
 
-    async def navigate_active_tab(self, url: str) -> None:
-        """Point the tab the pane shows at ``url``.
-
-        Refused while an agent holds the browser (agents are never preempted) and while
-        Chromium is not up. Runs under ``_lock`` like every
-        other direct browser action; the CDP calls are bounded so a stalled renderer cannot
-        wedge the loop.
-        """
-        if self._crashed:
-            raise BrowserNotDrivableError(f"browser {self.browser_id} crashed and is gone")
-        if self._lifecycle == "stopped":
-            raise BrowserNotDrivableError(f"browser {self.browser_id} is stopped; start it first")
-        if not self._is_running:
-            raise BrowserNotDrivableError(f"browser {self.browser_id} is still starting")
-        async with self._control_lock:
-            if self.controller == "agent":
-                holder = self.owner_agent_name or self.owner_agent_id or "an agent"
-                raise BrowserHeldByAgentError(f"browser {self.browser_id} is held by {holder}")
-        async with self._lock:
-            target_id = await self._target_to_navigate()
-            try:
-                await asyncio.wait_for(self._cdp_or_raise().navigate(target_id, url), timeout=_RESTORE_NAV_TIMEOUT)
-            except (CdpError, TimeoutError) as e:
-                raise NavigationFailedError(f"could not navigate browser {self.browser_id} to {url}: {e}") from e
-            self._active_target_id = target_id
-        # A navigation can swap in a fresh renderer, which self-writes its oom_score_adj.
-        notify_chromium_processes_expected()
-
-    def _cdp_or_raise(self) -> CdpClient:
-        if self._cdp is None:
-            raise BrowserNotDrivableError(f"browser {self.browser_id} has no Chromium connection")
-        return self._cdp
-
-    async def _target_to_navigate(self) -> str:
-        """The active tab, else the first real page (a restored browser may not have foregrounded one yet)."""
-        active = self._active_target()
-        if active is not None:
-            return active
-        try:
-            targets = await self._cdp_or_raise().page_targets()
-        except CdpError as e:
-            raise NavigationFailedError(f"could not list the tabs of browser {self.browser_id}: {e}") from e
-        if not targets:
-            raise NavigationFailedError(f"browser {self.browser_id} has no tab to navigate")
-        return targets[0]["targetId"]
-
-    # --- socket bookkeeping ---------------------------------------------------
+    # socket bookkeeping
 
     async def register_cast_queue(self) -> "queue.Queue[str | None]":
         """Register a new cast WebSocket and SEED its initial sync, atomically on the loop.
@@ -1847,13 +1808,18 @@ class LiveBrowser(MutableModel):
             await asyncio.to_thread(_stop_xvfb, xvfb)
 
 
-def _snapshot_of(browser: LiveBrowser) -> BrowserSnapshot:
-    """The instances adapter's view of one browser. Read ON the loop thread, where every field is written."""
-    return BrowserSnapshot(
-        name=BrowserName(browser.browser_id),
-        lifecycle=BrowserLifecycle(browser._lifecycle),
-        controller=BrowserController(browser.controller),
-    )
+def closed_window_browser(hint_body: object) -> str | None:
+    """The browser a closed window showed, from the ``path`` of the shell's close hint.
+
+    None for a window at a launch path (``/new?...`` names no browser) or a body of another shape than the
+    shell posts.
+    """
+    if not isinstance(hint_body, dict):
+        return None
+    path = hint_body.get("path")
+    if not isinstance(path, str):
+        return None
+    return window_query_value(path, SESSION_QUERY_KEY)
 
 
 class BrowserSessionManager(MutableModel):
@@ -1902,6 +1868,9 @@ class BrowserSessionManager(MutableModel):
     _last_manifest_json: str | None = PrivateAttr(default=None)
     _closed: bool = PrivateAttr(default=False)
     _checkpoint_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+    _window_sweep_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+    # Serializes window sweeps: a close hint landing mid-sweep runs one more after it, never beside it.
+    _window_sweep_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
     _bg_save_tasks: set[Any] = PrivateAttr(default_factory=set)  # strong refs for _spawn_save
     # Bounded ring of names whose background launch FAILED (finding [7]). A late/retrying
     # optimistic viewer that was in 1013 reconnect-backoff when the launch failed never
@@ -1916,20 +1885,6 @@ class BrowserSessionManager(MutableModel):
     # retry (1013) forever, stuck on "Starting browser...". Consulting this closes it 1008
     # (terminal) instead. Re-creating the name clears it (see _register_init_locked).
     _closed_names: "deque[str]" = PrivateAttr(default_factory=lambda: deque(maxlen=_FAILED_LAUNCH_MEMORY))
-    # Tells the shell the instance list changed (a registration, a close, a launch that
-    # failed) and is handed to every browser for its own status changes. The runner installs
-    # the real one at startup; until then, and in tests, nobody is told.
-    _nudger: InstanceNudgerInterface = PrivateAttr(default_factory=SilentNudger)
-
-    def set_nudger(self, nudger: InstanceNudgerInterface) -> None:
-        """Install the nudger every fleet event reaches the shell through, on the manager and every registered browser."""
-        self._nudger = nudger
-        for browser in self._browsers.values():
-            browser._nudger = nudger
-
-    def nudge(self) -> None:
-        self._nudger.nudge()
-
     def _register_init_locked(self, name: str) -> LiveBrowser:
         """Construct a LiveBrowser in ``init`` and add it to the registry. Caller must
         hold ``self._lock``, so the cap check + name resolution + insert are atomic (no
@@ -1937,9 +1892,7 @@ class BrowserSessionManager(MutableModel):
         kicks :meth:`_launch` off as a background task after releasing the lock."""
         session = LiveBrowser(browser_id=name)
         session._crash_save_hook = self._spawn_save  # checkpoint promptly if it crashes
-        session._nudger = self._nudger
         self._browsers[name] = session
-        self._nudger.nudge()
         # A fresh registration supersedes any earlier launch-failure OR close for this name
         # (the user re-created it, or restore is retrying it), so it's no longer terminal for
         # a viewer -- drop it from both terminal rings so the cast handler stops 1008-ing it.
@@ -2017,7 +1970,6 @@ class BrowserSessionManager(MutableModel):
                     return
                 logger.warning("browser {} failed to launch ({}); removing it", session.browser_id, e)
                 self._browsers.pop(session.browser_id, None)
-                self._nudger.nudge()
                 # Remember the name as launch-failed (finding [7]) so a late/retrying
                 # optimistic viewer -- one still in 1013 reconnect-backoff when this failed,
                 # which never registered a cast queue and so missed the launch_failed
@@ -2141,6 +2093,109 @@ class BrowserSessionManager(MutableModel):
         on-disk claims (see :meth:`_persisted_names`)."""
         return first_free_numbered_browser_name(set(self._browsers) | persisted_names)
 
+    def the_browser(self) -> LiveBrowser | None:
+        """The fleet's one browser (docs/system/specs/window-bound-resources.md section 4.4): the one that runs
+        or is launching, else the first by name (stopped or crashed); None when the fleet is empty."""
+        by_name = sorted(self._browsers.items())
+        live = next((browser for _, browser in by_name if browser._lifecycle in ("init", "running")), None)
+        if live is not None:
+            return live
+        return by_name[0][1] if by_name else None
+
+    async def ensure_browser(self, start_url: str | None) -> LiveBrowser:
+        """What ``/new`` and a nameless ``POST /browsers`` answer: the one browser, created when there is none,
+        relaunched when it was stopped (or crashed), with ``start_url`` opened in it as a new tab when given.
+
+        A browser still launching is answered as it is; a start page asked for then is dropped with a debug
+        log, since its launch already carries the tabs it will open.
+        """
+        browser = self.the_browser()
+        if browser is None:
+            return await self.create(None, start_url)
+        if browser._is_running:
+            if start_url is not None:
+                await browser.open_tab(start_url)
+            return browser
+        if browser._lifecycle == "init":
+            if start_url is not None:
+                logger.debug("start page {} for launching browser {} dropped", start_url, browser.browser_id)
+            return browser
+        if start_url is not None:
+            # Relaunched on its tabs plus the start page, which comes up in front.
+            browser._last_known_tabs.append(start_url)
+            browser._last_known_active_tab = len(browser._last_known_tabs) - 1
+        await self.start_browser(browser.browser_id)
+        return browser
+
+    async def sweep_windows(self, window_paths: Sequence[str]) -> list[str]:
+        """Mark every browser a window shows, and stop the ones a window showed once and none shows now.
+
+        ``window_paths`` is what the shell reports for this app; a path naming no browser (a window still
+        settling at ``/new``) shows nothing. Answers the names stopped. A browser still launching waits for a
+        later sweep, a stopped one is stopped already, and a crashed one is left to its own cleanup.
+        """
+        shown = {name for path in window_paths if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None}
+        stopped: list[str] = []
+        is_changed = False
+        for name, browser in sorted(self._browsers.items()):
+            if name in shown:
+                if not browser._is_window_seen:
+                    browser._is_window_seen = True
+                    is_changed = True
+            elif browser._is_window_seen and browser._is_running:
+                await self.stop_browser(name)
+                stopped.append(name)
+        if is_changed:
+            self._spawn_save()
+        return stopped
+
+    def mark_window_seen(self, name: str) -> bool:
+        """Record that a desktop window showed the browser, so a sweep stops it once none does.
+
+        The shell's close hint names the closed window's path, so a browser whose window closed before any sweep
+        saw it still counts as shown. Answers whether a browser was marked; an unknown or already marked name is
+        a no-op.
+        """
+        browser = self._browsers.get(name)
+        if browser is None or browser._is_window_seen:
+            return False
+        browser._is_window_seen = True
+        self._spawn_save()
+        return True
+
+    async def sweep_after_window_closed(self, closed_name: str | None, shell_url: str) -> list[str] | None:
+        """The shell says a window closed: mark the browser its path named (None when it named none), then run
+        one sweep over what the shell shows now. Answers what :meth:`sweep_from_shell` answers."""
+        if closed_name is not None and self.mark_window_seen(closed_name):
+            logger.debug("marked {} window-seen from the shell's close hint", closed_name)
+        return await self.sweep_from_shell(shell_url)
+
+    async def sweep_from_shell(self, shell_url: str) -> list[str] | None:
+        """One sweep over the shell's windows: the browsers stopped, or None when the shell could not be read
+        (or the sweep failed) and nothing was done."""
+        async with self._window_sweep_lock:
+            window_paths = await asyncio.to_thread(read_app_window_paths, shell_url, APP_NAME)
+            if window_paths is None:
+                return None
+            try:
+                stopped = await self.sweep_windows(window_paths)
+            except (OSError, *_BROWSER_ERRORS) as e:
+                logger.warning("window sweep failed ({}); the next one will retry", e)
+                return None
+        if stopped:
+            logger.info("stopped {} browser(s) no window shows: {}", len(stopped), ", ".join(stopped))
+        return stopped
+
+    def start_window_sweeping(self, shell_url: str, interval_seconds: float) -> None:
+        """Begin the periodic window sweep (the safety net behind the shell's close hint)."""
+        if self._window_sweep_task is None:
+            self._window_sweep_task = asyncio.create_task(self._window_sweep_loop(shell_url, interval_seconds))
+
+    async def _window_sweep_loop(self, shell_url: str, interval_seconds: float) -> None:
+        while not self._closed:
+            await asyncio.sleep(interval_seconds)
+            await self.sweep_from_shell(shell_url)
+
     def get(self, browser_id: str) -> LiveBrowser:
         """The live browser of that name; an unknown or closed name raises UnknownBrowserError (a 404)."""
         browser = self._browsers.get(browser_id)
@@ -2166,7 +2221,6 @@ class BrowserSessionManager(MutableModel):
         session = self._browsers.pop(browser_id, None)
         if session is None:
             return
-        self._nudger.nudge()
         # Remember it as terminally gone so a still-open viewer tab is closed 1008 rather
         # than looping on 1013 "Starting browser..." (cleared if the name is re-created).
         self._closed_names.append(browser_id)
@@ -2223,7 +2277,6 @@ class BrowserSessionManager(MutableModel):
     def _broadcast_starting(self, session: LiveBrowser) -> None:
         """Tell the browser's viewers it is launching again, so a stopped overlay gives way to the starting one."""
         session._broadcast(session._control_message())
-        session._nudger.nudge()
 
     def _launched_count(self) -> int:
         """How many browsers hold (or are about to hold) a Chromium: the ones the cap counts."""
@@ -2249,25 +2302,7 @@ class BrowserSessionManager(MutableModel):
         # rmtree of a fat profile blocks; keep it off the loop.
         await asyncio.to_thread(self.forget_profile_dir, browser_id)
 
-    async def snapshot_browsers(self) -> list[BrowserSnapshot]:
-        """Every browser's name, lifecycle, and controller, by name; ON the loop so the read is race-free."""
-        return [_snapshot_of(browser) for _, browser in sorted(self._browsers.items())]
-
-    async def create_snapshot(self, start_url: str | None = None) -> BrowserSnapshot:
-        """:meth:`create` with a daemon-minted name, snapshotted ON the loop before the launch can flip anything."""
-        return _snapshot_of(await self.create(None, start_url))
-
-    async def navigate_browser(self, browser_id: str, url: str) -> None:
-        """Navigate a browser's active tab (see :meth:`LiveBrowser.navigate_active_tab`), then
-        checkpoint the manifest so the new tab URL is what a restart restores.
-        UnknownBrowserError for a name no browser has."""
-        browser = self._browsers.get(browser_id)
-        if browser is None:
-            raise UnknownBrowserError(f"no browser named {browser_id!r}")
-        await browser.navigate_active_tab(url)
-        self._spawn_save()
-
-    # --- persistence: profiles (Tier A) + manifest (Tier B) -------------------
+    # persistence: profiles (Tier A) + manifest (Tier B)
 
     def live_browsers(self) -> list[LiveBrowser]:
         """Non-crashed sessions (init + running + stopped), by name -- the set the
@@ -2310,7 +2345,11 @@ class BrowserSessionManager(MutableModel):
         ``LiveBrowser.tab_urls()`` (async: a light targets query)."""
         urls, active_tab = await browser.tab_urls()
         return fleet_manifest.ManifestEntry(
-            id=browser.browser_id, tabs=urls, active_tab=active_tab, stopped=browser._lifecycle == "stopped"
+            id=browser.browser_id,
+            tabs=urls,
+            active_tab=active_tab,
+            stopped=browser._lifecycle == "stopped",
+            window_seen=browser._is_window_seen,
         )
 
     async def _snapshot_manifest_locked(self) -> fleet_manifest.Manifest:
@@ -2417,7 +2456,9 @@ class BrowserSessionManager(MutableModel):
         """Delete a browser's persistent profile (called on explicit `close`)."""
         shutil.rmtree(_profile_dir(browser_id), ignore_errors=True)
 
-    async def _launch_one_restore(self, name: str, restore_tabs: list[str] | None, active_tab: int) -> bool:
+    async def _launch_one_restore(
+        self, name: str, restore_tabs: list[str] | None, active_tab: int, window_seen: bool
+    ) -> bool:
         """Relaunch one saved browser through the SAME register-init -> serialized-launch
         path as ``create``: register it ``init`` under a BRIEF ``_lock`` hold, then await
         its serialized launch (so restore stays eager-sequential -- one Chromium at a
@@ -2432,6 +2473,7 @@ class BrowserSessionManager(MutableModel):
                 logger.warning("restore hit the fleet cap; deferring browser {}", name)
                 return False
             session = self._register_init_locked(name)
+            session._is_window_seen = window_seen
         # Await the serialized launch (restore is eager-sequential). persist=False: the
         # post-restore reconcile owns the manifest, so a per-launch save can't race it
         # and drop a flaked-but-wanted browser's preserved entry. On failure ``_launch``
@@ -2448,6 +2490,7 @@ class BrowserSessionManager(MutableModel):
             session._lifecycle = "stopped"
             session._last_known_tabs = list(entry.tabs)
             session._last_known_active_tab = entry.active_tab
+            session._is_window_seen = entry.window_seen
 
     async def restore(self) -> None:
         """Bring the fleet back on daemon startup: relaunch saved browsers EAGER-
@@ -2469,10 +2512,12 @@ class BrowserSessionManager(MutableModel):
         if saved is not None:
             for entry in sorted(saved.browsers, key=lambda e: e.id):
                 wanted_names.add(entry.id)
-                if entry.stopped:
+                # A saved browser the cap leaves no room for (a workspace saved under a larger cap)
+                # comes back stopped, with its tabs and profile, rather than being refused.
+                if entry.stopped or self._launched_count() >= _MAX_SESSIONS:
                     await self._register_stopped_restore(entry)
                     continue
-                await self._launch_one_restore(entry.id, entry.tabs or None, entry.active_tab)
+                await self._launch_one_restore(entry.id, entry.tabs or None, entry.active_tab, entry.window_seen)
         else:
             # No (current-version) manifest. If name-valid profiles survived on the
             # volume, relaunch them (tabs unknown -> home) rather than wiping the saved
@@ -2480,7 +2525,7 @@ class BrowserSessionManager(MutableModel):
             # _scan_profile_names and swept below.
             for profile_name in self._scan_profile_names():
                 wanted_names.add(profile_name)
-                await self._launch_one_restore(profile_name, None, 0)
+                await self._launch_one_restore(profile_name, None, 0, False)
 
         # Reconcile the manifest: fresh snapshots of live browsers + the saved entries
         # for wanted names that FAILED to relaunch (kept so they retry next boot), then
@@ -2529,6 +2574,8 @@ class BrowserSessionManager(MutableModel):
         self._closed = True
         if self._checkpoint_task is not None:
             self._checkpoint_task.cancel()
+        if self._window_sweep_task is not None:
+            self._window_sweep_task.cancel()
         # Final checkpoint so a clean stop captures the latest tabs before teardown.
         try:
             await self._save_manifest()

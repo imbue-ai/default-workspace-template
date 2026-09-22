@@ -59,6 +59,7 @@ from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncConflictError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudUnreachableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudWorkspaceHeldError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudWorkspaceRetiredError
 from imbue.mngr_imbue_cloud.errors import WorkspaceHasNoStopError
 from imbue.mngr_imbue_cloud.errors import WorkspaceStopKindRouteUnavailableError
 from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
@@ -187,9 +188,7 @@ class ImbueCloudConnectorClient(MutableModel):
         ),
     )
 
-    # ------------------------------------------------------------------
     # URL + header helpers
-    # ------------------------------------------------------------------
 
     def _url(self, path: str) -> str:
         return str(self.base_url).rstrip("/") + path
@@ -255,8 +254,24 @@ class ImbueCloudConnectorClient(MutableModel):
                 str(detail.get("message", "This account is suspended. Contact support@imbue.com."))
             )
 
+    def _raise_if_auth_upstream_unavailable(self, response: httpx.Response) -> None:
+        """Raise the transport-style unreachable error when a 503 carries the connector's ``auth_upstream_unavailable`` detail.
+
+        The connector answers it when its SuperTokens core is down mid-session
+        check: nothing about the account or the request is wrong, so callers
+        treat it exactly like not reaching the connector at all (a retryable
+        ``ProviderUnavailableError`` in the provider, never a sign-out).
+        """
+        if response.status_code != 503:
+            return
+        detail = _detail_dict_from_response(response)
+        if detail is not None and detail.get("code") == "auth_upstream_unavailable":
+            raise ImbueCloudUnreachableError(
+                str(detail.get("message", "The Imbue Cloud authentication service is temporarily unavailable."))
+            )
+
     def _raise_if_workspace_held(self, response: httpx.Response) -> None:
-        """Raise the typed hold error when a 409 carries the connector's ``workspace_under_maintenance`` detail.
+        """Raise the typed hold error when a 409 carries the connector's ``workspace_under_maintenance`` or ``workspace_retired`` detail.
 
         The owner start's mapping only: the admin start answers the same detail
         for a parked row, but to the operator that is a plain connector refusal
@@ -265,6 +280,8 @@ class ImbueCloudConnectorClient(MutableModel):
         if response.status_code != 409:
             return
         detail = _detail_dict_from_response(response)
+        if detail is not None and detail.get("code") == "workspace_retired":
+            raise ImbueCloudWorkspaceRetiredError(str(detail.get("message", "")))
         if detail is not None and detail.get("code") == "workspace_under_maintenance":
             raise ImbueCloudWorkspaceHeldError(str(detail.get("message", "")))
 
@@ -288,17 +305,16 @@ class ImbueCloudConnectorClient(MutableModel):
     def _check(self, response: httpx.Response, exc_cls: type[Exception]) -> dict[str, Any]:
         """Raise ``exc_cls`` on non-2xx, otherwise return parsed JSON.
 
-        Special-cases the structured quota rejection ->
-        ImbueCloudQuotaExceededError (and the grant-budget rejection ->
-        ImbueCloudCleanupGrantBudgetError), then 401/403 ->
-        ImbueCloudAuthError so callers can treat them uniformly across all
-        endpoints.
+        The connector's structured refusals (the ``_raise_if_*`` helpers) are
+        mapped to their typed errors first, then 401/403 -> ImbueCloudAuthError,
+        so callers can treat them uniformly across all endpoints.
         """
         self._raise_if_client_too_old(response)
         self._raise_if_quota_exceeded(response)
         self._raise_if_grant_budget_exhausted(response)
         self._raise_if_email_not_verified(response)
         self._raise_if_account_suspended(response)
+        self._raise_if_auth_upstream_unavailable(response)
         if response.status_code in (401, 403):
             raise ImbueCloudAuthError(f"Unauthenticated ({response.status_code}): {response.text[:300]}")
         if response.status_code in (200, 201, 202, 204):
@@ -379,9 +395,7 @@ class ImbueCloudConnectorClient(MutableModel):
                 f"could not reach the imbue_cloud connector at {url} after {attempt_count} attempt(s): {exc}"
             ) from exc
 
-    # ------------------------------------------------------------------
     # Auth (no bearer token required)
-    # ------------------------------------------------------------------
 
     def auth_signup(self, email: str, password: str) -> AuthRawResponse:
         # A post-send retry could create a duplicate account.
@@ -596,9 +610,7 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         return self._check(response, ImbueCloudAuthError)
 
-    # ------------------------------------------------------------------
     # Hosts (lease pool)
-    # ------------------------------------------------------------------
 
     def lease_host(
         self,
@@ -633,6 +645,10 @@ class ImbueCloudConnectorClient(MutableModel):
             json=body,
             timeout=self.timeout_seconds,
         )
+        # The lease route's own 503 means the pool is exhausted; the
+        # connector's structured auth-outage 503 must not read that way (it
+        # would send the provider down the slow path for nothing).
+        self._raise_if_auth_upstream_unavailable(response)
         if response.status_code == 503:
             try:
                 detail = response.json().get("detail", "No matching pool host available.")
@@ -725,9 +741,7 @@ class ImbueCloudConnectorClient(MutableModel):
         items = body.get("hosts") if isinstance(body, dict) else body
         return parse_wire_entries(LeasedHostInfo, items, "GET /hosts", ImbueCloudConnectorError)
 
-    # ------------------------------------------------------------------
     # Workspaces (full-lifecycle listing + stop/start)
-    # ------------------------------------------------------------------
 
     def _check_workspaces_supported(self, response: httpx.Response) -> None:
         # An old connector has no /workspaces routes. Surface that as its own
@@ -874,9 +888,7 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         self._check(response, ImbueCloudConnectorError)
 
-    # ------------------------------------------------------------------
     # Keys (LiteLLM)
-    # ------------------------------------------------------------------
 
     def create_litellm_key(
         self,
@@ -959,9 +971,7 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         self._check(response, ImbueCloudKeyError)
 
-    # ------------------------------------------------------------------
     # Shares (self-hosted relays)
-    # ------------------------------------------------------------------
 
     def create_share(
         self,
@@ -1063,6 +1073,7 @@ class ImbueCloudConnectorClient(MutableModel):
         """Validate a bucket-route response, mapping status codes to typed errors."""
         self._raise_if_client_too_old(response)
         self._raise_if_quota_exceeded(response)
+        self._raise_if_auth_upstream_unavailable(response)
         if response.status_code in (200, 201, 204):
             if not response.content:
                 return {}
@@ -1146,9 +1157,7 @@ class ImbueCloudConnectorClient(MutableModel):
         body = self._check_bucket(response)
         return parse_wire_entries(R2KeyInfo, body, f"GET {path}", ImbueCloudBucketError)
 
-    # ------------------------------------------------------------------
     # Account (plan + entitlements + usage)
-    # ------------------------------------------------------------------
 
     def get_account(self, access_token: SecretStr) -> AccountInfo:
         """Fetch the account's plan, entitlement values, and live usage."""
@@ -1227,9 +1236,7 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         return validate_wire(StorageRecheckResult, self._check(response, ImbueCloudAccountError))
 
-    # ------------------------------------------------------------------
     # Relay fleet admin (MINDS_ADMIN_KEY authenticated)
-    # ------------------------------------------------------------------
 
     def admin_list_relays(self, admin_api_key: SecretStr) -> list[RelayAdminInfo]:
         response = self._send(
@@ -1284,9 +1291,7 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         return self._check(response, ImbueCloudShareError)
 
-    # ------------------------------------------------------------------
     # Account admin (email-addressed, MINDS_ADMIN_KEY authenticated)
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _admin_account_path(email: str) -> str:
@@ -1389,8 +1394,8 @@ class ImbueCloudConnectorClient(MutableModel):
         """Operator force-stop of one workspace with the given stop kind (idempotent on the transition).
 
         ``kind`` is ``maintenance`` (an operator hold), ``idle`` (the user may
-        start it) or ``suspension``; a row already stopping or stopped takes
-        the kind without a new transition.
+        start it), ``suspension`` or ``retired`` (never started again); a row
+        already stopping or stopped takes the kind without a new transition.
         """
         response = self._send(
             "POST",
@@ -1471,9 +1476,7 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         return self._check(response, ImbueCloudAccountError)
 
-    # ------------------------------------------------------------------
     # Workspace sync (records + account key bundle)
-    # ------------------------------------------------------------------
 
     def list_sync_records(self, access_token: SecretStr) -> list[SyncWorkspaceRecord]:
         response = self._send(
@@ -1623,9 +1626,7 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         self._check(response, ImbueCloudSyncError)
 
-    # ------------------------------------------------------------------
     # Paid lists (admin-key authenticated)
-    # ------------------------------------------------------------------
     #
     # These take the fixed admin API key (NOT a SuperTokens
     # session token); the connector authenticates them against

@@ -9,6 +9,7 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import _authenticate_supertokens
+from imbue.remote_service_connector.auth import call_supertokens_core
 from imbue.remote_service_connector.auth import clear_paid_status_cache
 from imbue.remote_service_connector.auth import get_backfill_email
 from imbue.remote_service_connector.auth import is_email_paid
@@ -17,6 +18,7 @@ from imbue.remote_service_connector.auth import require_ally_eligible
 from imbue.remote_service_connector.auth import require_verified_email
 from imbue.remote_service_connector.auth import resolve_account_email
 from imbue.remote_service_connector.errors import EmailNotVerifiedError
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 from imbue.remote_service_connector.testing import _ADMIN_KEY_TEST_VALUE
 from imbue.remote_service_connector.testing import _FakeLoginMethod
 from imbue.remote_service_connector.testing import _admin_key_headers
@@ -24,6 +26,7 @@ from imbue.remote_service_connector.testing import _make_paid_crud_test_client
 from imbue.remote_service_connector.testing import _make_pool_test_client
 from imbue.remote_service_connector.testing import _make_test_client
 from imbue.remote_service_connector.testing import make_fake_pool_backend
+from imbue.remote_service_connector.testing import make_supertokens_core_status_exception
 
 
 class _FakeSession:
@@ -442,3 +445,136 @@ def test_authenticate_supertokens_threads_check_database_to_the_session_getter(
         email_resolver=lambda _user_id: ("alice@example.com", True),
     )
     assert seen_kwargs["check_database"] is False
+
+
+def _core_verify_502() -> Exception:
+    return make_supertokens_core_status_exception(method="POST", path="/recipe/session/verify", status_code=502)
+
+
+def test_call_supertokens_core_returns_the_result_after_one_transient_core_5xx() -> None:
+    """A single core 502 is retried and the second attempt's result is returned."""
+    outcomes: list[Exception | str] = [_core_verify_502(), "session-ok-7f21"]
+    call_count = 0
+
+    def _flaky_operation() -> str:
+        nonlocal call_count
+        call_count += 1
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    assert call_supertokens_core(_flaky_operation, caller="test") == "session-ok-7f21"
+    assert call_count == 2
+
+
+def test_call_supertokens_core_raises_core_unavailable_after_the_retry_fails_too() -> None:
+    """Two consecutive core 502s become the typed, 503-mapped error carrying the path and status."""
+    raised: list[Exception] = []
+
+    def _always_502() -> str:
+        raised.append(_core_verify_502())
+        raise raised[-1]
+
+    with pytest.raises(SuperTokensCoreUnavailableError) as exc_info:
+        call_supertokens_core(_always_502, caller="test")
+    assert len(raised) == 2
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.path == "/recipe/session/verify"
+    assert exc_info.value.__cause__ is raised[-1]
+
+
+def test_call_supertokens_core_treats_an_unreachable_core_as_unavailable() -> None:
+    """The querier's exhausted-hosts message (no status code) is also a core outage."""
+
+    def _unreachable() -> str:
+        raise Exception("No SuperTokens core available to query")
+
+    with pytest.raises(SuperTokensCoreUnavailableError) as exc_info:
+        call_supertokens_core(_unreachable, caller="test")
+    assert exc_info.value.status_code is None
+    assert exc_info.value.path is None
+
+
+@pytest.mark.parametrize(
+    "unrelated_exception",
+    [
+        # A core 4xx is a bug in our request, not an outage.
+        make_supertokens_core_status_exception(method="POST", path="/recipe/session/verify", status_code=400),
+        # A bare Exception with some other message.
+        Exception("something else entirely 9d3a"),
+        # A subclass of Exception whose message happens to match the shape.
+        RuntimeError(str(_core_verify_502())),
+        # The SDK's own typed errors keep their existing handling.
+        SuperTokensGeneralError("Initialisation not done"),
+        SuperTokensSessionError("bad session"),
+        ValueError("not a jwt"),
+    ],
+)
+def test_call_supertokens_core_reraises_everything_else_unchanged_without_retrying(
+    unrelated_exception: Exception,
+) -> None:
+    call_count = 0
+
+    def _raise_unrelated() -> str:
+        nonlocal call_count
+        call_count += 1
+        raise unrelated_exception
+
+    with pytest.raises(type(unrelated_exception)) as exc_info:
+        call_supertokens_core(_raise_unrelated, caller="test")
+    assert exc_info.value is unrelated_exception
+    assert call_count == 1
+
+
+def test_authenticate_supertokens_raises_core_unavailable_when_verify_keeps_failing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A core outage on session verify is neither a 401 nor an unexpected 500: it is the retryable error."""
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
+
+    def _raise_502(**kwargs: object) -> None:
+        raise _core_verify_502()
+
+    with pytest.raises(SuperTokensCoreUnavailableError):
+        _authenticate_supertokens("valid-token", session_getter=_raise_502)
+
+
+def test_authenticate_supertokens_survives_one_core_5xx_on_verify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = "a1b2c3d4-e5f6-7890-abcd-1234567890ab"
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
+    outcomes: list[Exception | _FakeSession] = [_core_verify_502(), _FakeSession(user_id)]
+
+    def _flaky_getter(**kwargs: object) -> _FakeSession:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    result = _authenticate_supertokens(
+        "valid-token",
+        session_getter=_flaky_getter,
+        email_resolver=lambda _user_id: ("alice@example.com", True),
+    )
+    assert result.user_id == user_id
+    assert outcomes == []
+
+
+def test_resolve_account_email_propagates_a_core_outage_instead_of_reporting_no_email() -> None:
+    """A core 502 on the user lookup must not read as "no email" (which would 401 a valid session)."""
+
+    def _raise_502(_user_id: str) -> None:
+        raise make_supertokens_core_status_exception(method="GET", path="/user/id", status_code=502)
+
+    with pytest.raises(SuperTokensCoreUnavailableError):
+        resolve_account_email("user-123", user_getter=_raise_502)
+
+
+def test_get_backfill_email_propagates_a_core_outage() -> None:
+    def _raise_503(_user_id: str) -> None:
+        raise make_supertokens_core_status_exception(method="GET", path="/user/id", status_code=503)
+
+    with pytest.raises(SuperTokensCoreUnavailableError):
+        get_backfill_email("user-123", user_getter=_raise_503)

@@ -23,6 +23,7 @@ import tarfile
 import tomllib
 from collections.abc import Mapping
 from collections.abc import Sequence
+from typing import AbstractSet
 from typing import Any
 from typing import Final
 from typing import assert_never
@@ -369,6 +370,117 @@ def build_transplant_clear_command(transplant_dir_path: str) -> str:
 @pure
 def build_unit_enable_command(ordinal: int) -> str:
     return f"sudo /usr/bin/systemctl enable {shlex.quote(slice_unit_name(ordinal))}"
+
+
+# The boot-time unit every default-workspace-template's pool_host installer
+# writes on the VM to start the workspace's services agent.
+MINDS_AUTOSTART_SERVICE_UNIT: Final[str] = "minds-autostart.service"
+
+
+@pure
+def build_autostart_start_command() -> str:
+    """Start the template's boot-time autostart unit on the already-booted VM, when the installer wrote one.
+
+    A template's installer may only enable the unit for the next boot
+    (``minds-v0.3.11`` does; later tags start it themselves), and the migrate
+    runs the installer after the VM has booted, so the services agent has to
+    be started the way a boot would. ``systemctl start`` is a no-op on a unit
+    that is already active and joins a start the installer queued.
+    """
+    unit = shlex.quote(MINDS_AUTOSTART_SERVICE_UNIT)
+    return f"if systemctl cat {unit} >/dev/null 2>&1; then systemctl start {unit}; fi"
+
+
+# The workspace checkout inside the container: the vendored mngr the tool is
+# installed from and the manifest naming the plugins it carries (the same
+# inputs the template's own ``system/scripts/install_mngr.py`` reads).
+CONTAINER_WORKSPACE_DIR: Final[str] = "/home/user/workspace"
+MNGR_PLUGIN_MANIFEST_PATH: Final[str] = "system/config/mngr_plugins.toml"
+VENDORED_MNGR_SOURCE_DIR: Final[str] = "system/vendor/mngr/libs/mngr"
+
+
+@pure
+def render_mngr_tool_resync_script(workspace_dir: str) -> str:
+    """Rebuild the workspace's ``mngr`` uv tool from its own vendored tree and plugin manifest.
+
+    The replayed container's tool environment comes from the release image,
+    while the checkout on the volume may have moved on (a self-update, or one
+    rolled back) and left the two disagreeing: the tool then registers a
+    plugin entry point the vendored tree cannot import, or lacks a module it
+    needs, and ``mngr start`` dies at import. The template's own installer
+    (``install_mngr.py``, 0.6.x) repairs exactly this with one ``uv tool
+    install --reinstall`` of the vendored mngr plus the manifest's plugins
+    for the ``mngr`` tool, pinned to the home whose ``.local/bin/mngr`` a
+    login shell runs (``TOOL_ENV_HOME`` overrides the detection, as it does
+    there). Older templates ship no installer, so the script carries the
+    same procedure itself.
+    """
+    manifest = shlex.quote(MNGR_PLUGIN_MANIFEST_PATH)
+    parse_plugins = (
+        "import sys, tomllib; manifest = tomllib.loads(open(sys.argv[1]).read()); "
+        'print(" ".join("--with-editable " + str(entry["path"]) for entry in manifest.get("plugins", []) '
+        'if "mngr" in entry.get("tools", [])))'
+    )
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            f"cd {shlex.quote(workspace_dir)}",
+            f'[ -f {manifest} ] || {{ echo "no {MNGR_PLUGIN_MANIFEST_PATH} in the workspace checkout" >&2; exit 1; }}',
+            "MNGR_BIN=$(bash -lc 'command -v mngr' 2>/dev/null || true)",
+            'case "$MNGR_BIN" in */.local/bin/mngr) DETECTED_HOME=${MNGR_BIN%/.local/bin/mngr} ;; *) DETECTED_HOME=/root ;; esac',
+            "TOOL_HOME=${TOOL_ENV_HOME:-$DETECTED_HOME}",
+            f"PLUGIN_ARGS=$(python3 -c {shlex.quote(parse_plugins)} {manifest})",
+            f'[ -n "$PLUGIN_ARGS" ] || {{ echo "{MNGR_PLUGIN_MANIFEST_PATH} lists no plugins for the mngr tool" >&2; exit 1; }}',
+            'echo "re-syncing the mngr tool under $TOOL_HOME with $PLUGIN_ARGS"',
+            'HOME="$TOOL_HOME" UV_TOOL_DIR="$TOOL_HOME/.local/share/uv/tools" UV_TOOL_BIN_DIR="$TOOL_HOME/.local/bin" '
+            f"uv tool install -e {shlex.quote(VENDORED_MNGR_SOURCE_DIR)} $PLUGIN_ARGS --reinstall",
+        ]
+    )
+
+
+_GATEWAY_RUN_SCRIPT_CURL_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*export\s+LATCHKEY_CURL=[\"']?(?P<path>/[^\s\"']+)[\"']?\s*$", re.MULTILINE
+)
+
+
+@pure
+def harvested_latchkey_curl_path_or_none(latchkey_state: HarvestedLatchkeyState) -> str | None:
+    """The curl the harvested gateway run script names as ``LATCHKEY_CURL``, or None when it names none.
+
+    The run script is the owner's desktop's, written by whatever minds build
+    the desktop runs, and it exports ``LATCHKEY_CURL`` unconditionally; the
+    gateway refuses to start when that path is missing. The build that names
+    it may install the shim under a different name than the migrate's own
+    latchkey provisioning does, so the replay reads the name back off the
+    harvested script.
+    """
+    run_script_path = f"{VM_LATCHKEY_DIR}/{GATEWAY_RUN_SCRIPT_FILENAME}"
+    for harvested in latchkey_state.disk_files:
+        if harvested.path == run_script_path:
+            match = _GATEWAY_RUN_SCRIPT_CURL_RE.search(harvested.content.decode("utf-8", errors="replace"))
+            return match.group("path") if match is not None else None
+    return None
+
+
+@pure
+def build_latchkey_curl_shim_command(expected_curl_path: str, installed_curl_path: str) -> str:
+    """Give the harvested run script the curl it names: a symlink onto the installed shim when the path is absent.
+
+    A desktop build that installs its curl shim under another name replaces
+    the link on its next provisioning pass (its version stamp differs, so it
+    reinstalls over it); until then the installed shim, which is curl-compatible
+    and passes plain requests through to the system curl, serves the gateway.
+    """
+    expected = shlex.quote(expected_curl_path)
+    installed = shlex.quote(installed_curl_path)
+    return f"if [ ! -e {expected} ]; then ln -s {installed} {expected}; fi; test -e {expected}"
+
+
+@pure
+def build_mngr_tool_resync_command(container_name: str) -> str:
+    """Run ``render_mngr_tool_resync_script`` inside the replayed container, from the VM."""
+    script = render_mngr_tool_resync_script(CONTAINER_WORKSPACE_DIR)
+    return f"docker exec --workdir / {shlex.quote(container_name)} bash -lc {shlex.quote(script)}"
 
 
 @pure
@@ -837,6 +949,21 @@ def build_gen1_datadisk_info_command(disk_name: str) -> str:
 
 
 @pure
+def build_gen1_datadisk_used_bytes_command(disk_name: str) -> str:
+    """Bytes in use on the lima data disk's filesystem, read inside the VM (lima mounts each extra disk at ``/mnt/lima-<disk>``)."""
+    return f"df -B1 --output=used /mnt/lima-{shlex.quote(disk_name)} | tail -n 1"
+
+
+@pure
+def parse_used_bytes(output: str) -> int:
+    """The byte count ``build_gen1_datadisk_used_bytes_command`` prints."""
+    text = output.strip()
+    if not text.isdigit():
+        raise CutoverError(f"df printed no byte count for the data disk: {output[:200]!r}")
+    return int(text)
+
+
+@pure
 def parse_qemu_img_info(output: str) -> tuple[str, int]:
     """(format, virtual-size bytes) from ``qemu-img info --output=json``; the top-level keys only."""
     try:
@@ -884,6 +1011,54 @@ def _parse_supervisorctl_outside_states(output: str, healthy_states: frozenset[s
 def parse_supervisorctl_unhealthy(output: str) -> list[str]:
     """The supervisord programs whose state is neither RUNNING nor EXITED, plus any non-program line (supervisord unreachable)."""
     return _parse_supervisorctl_outside_states(output, _SUPERVISOR_HEALTHY_STATES)
+
+
+@pure
+def _is_supervisorctl_program_entry(entry: str) -> bool:
+    """Whether an unhealthy entry names a program (``<name> <STATE>``) rather than supervisorctl complaining."""
+    parts = entry.split()
+    return len(parts) == 2 and parts[1] in _SUPERVISOR_STATES
+
+
+@pure
+def split_unhealthy_by_template(
+    unhealthy: Sequence[str], template_program_names: AbstractSet[str] | None
+) -> tuple[list[str], list[str]]:
+    """Split the unhealthy entries into the ones that block the migration and the owner-added programs.
+
+    The migrate verifies its own replay: a template-shipped program that is not
+    running means the workspace did not come back. A program the owner added
+    to supervisord is theirs (gVisor refuses some, such as anything using
+    ``ionice``), so it is reported rather than parking the workspace for it.
+    A supervisorctl complaint (no program at all) always blocks. ``None``
+    means the template's programs are unknown, so every entry blocks.
+    """
+    if template_program_names is None:
+        return list(unhealthy), []
+    blocking: list[str] = []
+    user_program_notes: list[str] = []
+    for entry in unhealthy:
+        if _is_supervisorctl_program_entry(entry) and entry.split()[0] not in template_program_names:
+            user_program_notes.append(entry)
+        else:
+            blocking.append(entry)
+    return blocking, user_program_notes
+
+
+_SUPERVISORD_PROGRAM_SECTION_RE: Final[re.Pattern[str]] = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)
+
+
+@pure
+def extract_template_program_names(supervisord_conf_texts: Sequence[str]) -> frozenset[str]:
+    """The ``[program:<name>]`` sections across a template's supervisord.conf and its drop-ins."""
+    names = {
+        match.group(1).strip()
+        for text in supervisord_conf_texts
+        for match in _SUPERVISORD_PROGRAM_SECTION_RE.finditer(text)
+    }
+    if not names:
+        raise CutoverError("the default-workspace-template's supervisord configuration names no [program:*] sections")
+    return frozenset(names)
 
 
 @pure
@@ -1100,10 +1275,13 @@ def extract_slice_volume_home_path(settings: Mapping[str, Any]) -> str:
 
 
 @pure
-def extract_template_replay_inputs(settings_toml_text: str) -> TemplateReplayInputs:
-    """Everything the restore replays from one version's ``.mngr/settings.toml``."""
+def extract_template_replay_inputs(
+    settings_toml_text: str, supervisord_conf_texts: Sequence[str]
+) -> TemplateReplayInputs:
+    """Everything the restore replays and verifies from one version's ``.mngr/settings.toml`` and supervisord configuration."""
     settings = _parse_template_settings(settings_toml_text)
     return TemplateReplayInputs(
         installer_commands=extract_autostart_installer_commands(settings),
         container_home_path=extract_slice_volume_home_path(settings),
+        template_program_names=tuple(sorted(extract_template_program_names(supervisord_conf_texts))),
     )

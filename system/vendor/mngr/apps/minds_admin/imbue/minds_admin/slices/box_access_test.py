@@ -13,6 +13,7 @@ from imbue.minds_admin.slices.box_access import _DIAL_BY_BOX_KEY
 from imbue.minds_admin.slices.box_access import _DialCacheKey
 from imbue.minds_admin.slices.box_access import _resolve_single_flight
 from imbue.minds_admin.slices.box_access import _spawn_verified_tunnel_or_none
+from imbue.minds_admin.slices.box_access import assert_dial_reaches_locked_down_box
 from imbue.minds_admin.slices.box_access import build_onetun_command
 from imbue.minds_admin.slices.box_access import choose_box_management_address
 from imbue.minds_admin.slices.box_access import close_box_management_tunnels
@@ -21,6 +22,7 @@ from imbue.minds_admin.slices.box_access import is_tcp_port_reachable
 from imbue.minds_admin.slices.box_access import match_operator_identity_or_none
 from imbue.minds_admin.slices.box_access import probe_ssh_banner
 from imbue.minds_admin.slices.box_access import resolve_box_management_dial
+from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 
 
 def test_choose_box_management_address_prefers_a_reachable_overlay_address() -> None:
@@ -400,3 +402,17 @@ def test_resolve_single_flight_resolves_different_keys_concurrently() -> None:
         43132: BoxManagementDial(host="127.0.0.1", port=43132),
     }
     assert len(cache) == 2
+
+
+def test_assert_dial_reaches_locked_down_box_refuses_only_the_public_address_fallback() -> None:
+    # A userspace tunnel (a local forward) and an overlay route both reach a
+    # locked-down box; only the fall-through to the public address does not.
+    assert_dial_reaches_locked_down_box(BoxManagementDial(host="127.0.0.1", port=48211), "203.0.113.10")
+    assert_dial_reaches_locked_down_box(BoxManagementDial(host="10.64.1.13", port=22), "203.0.113.10")
+
+    with pytest.raises(BareMetalProvisioningError) as exc_info:
+        assert_dial_reaches_locked_down_box(BoxManagementDial(host="203.0.113.10", port=22), "203.0.113.10")
+    message = str(exc_info.value)
+    assert "203.0.113.10" in message
+    assert "udp/51820" in message
+    assert "resumes at the prep" in message
