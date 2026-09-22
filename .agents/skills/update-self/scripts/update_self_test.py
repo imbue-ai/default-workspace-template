@@ -1694,14 +1694,7 @@ class _Clock:
 
 # Every supervised program a fixture tree can run, so the canned status answers
 # whatever set the verdict asks about.
-_FIXTURE_PROGRAMS = (
-    "system_interface",
-    "chat",
-    "terminal",
-    "terminal-pty",
-    "files",
-    "browser",
-)
+_FIXTURE_PROGRAMS = ("system_interface", "chat", "terminal", "terminal-pty", "files", "browser")
 
 
 def _supervisor_status(
@@ -3308,9 +3301,7 @@ def test_read_critical_programs_holds_every_critical_program_once_the_sidecars_i
     _write_openable_app(repo_root, "terminal")
     _write_openable_app(repo_root, "chat")
     _write_openable_app(repo_root, "files", is_critical=False)
-    _write_openable_app(
-        repo_root, "terminal_pty", is_internal=True, program="terminal-pty"
-    )
+    _write_openable_app(repo_root, "terminal_pty", is_internal=True, program="terminal-pty")
     _write_openable_app(repo_root, "chat_helper", is_internal=True, program="chat")
 
     assert update_probes.read_critical_programs(repo_root) == (
@@ -3326,15 +3317,9 @@ def test_the_health_probe_url_follows_the_registry_row(tmp_path: Path) -> None:
     # An app with no row is not reachable yet, and a corrupt or absent registry reads
     # the same way; a row's trailing slash does not double up.
     assert update_probes.health_probe_url(tmp_path, "chat") is None
-    _write_registry(
-        tmp_path, {"terminal": _TERMINAL_ROW_URL, "chat": _CHAT_ROW_URL + "/"}
-    )
-    assert update_probes.health_probe_url(tmp_path, "terminal") == _health_url(
-        _TERMINAL_ROW_URL
-    )
-    assert update_probes.health_probe_url(tmp_path, "chat") == _health_url(
-        _CHAT_ROW_URL
-    )
+    _write_registry(tmp_path, {"terminal": _TERMINAL_ROW_URL, "chat": _CHAT_ROW_URL + "/"})
+    assert update_probes.health_probe_url(tmp_path, "terminal") == _health_url(_TERMINAL_ROW_URL)
+    assert update_probes.health_probe_url(tmp_path, "chat") == _health_url(_CHAT_ROW_URL)
     (tmp_path / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
     assert update_probes.health_probe_url(tmp_path, "chat") is None
 
@@ -6696,29 +6681,17 @@ def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:
     assert calls == 3
 
 
-def test_try_open_chat_tab_opens_the_chats_window_through_the_desktops_open(
-    tmp_path: Path,
-) -> None:
+def test_try_open_chat_tab_opens_the_chats_window_through_the_desktops_open(tmp_path: Path) -> None:
     """The one contract the flow has with layout.py's grammar: the chat app at its chat's page, run from the repo root."""
     runner = _RecordingRunner()
 
     assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is True
 
     assert runner.calls == [
-        [
-            sys.executable,
-            "system/scripts/layout.py",
-            "open",
-            "chat",
-            "--path",
-            "/?chat=chat-9",
-        ]
+        [sys.executable, "system/scripts/layout.py", "open", "chat", "--path", "/?chat=chat-9"]
     ]
     assert runner.cwds == [str(tmp_path)]
-    runner.respond(
-        (sys.executable, "system/scripts/layout.py"),
-        _Result(returncode=1, stderr="no client"),
-    )
+    runner.respond((sys.executable, "system/scripts/layout.py"), _Result(returncode=1, stderr="no client"))
     assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is False
 
 
