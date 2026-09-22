@@ -302,8 +302,8 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
               type: "button",
               class: `${CHIP_BASE} ${tone} ${fill}`,
               "aria-pressed": isOpen ? "true" : "false",
-              // The untruncated phrase, plus the tool it came from -- which the
-              // chip itself no longer says anywhere.
+              // The untruncated phrase, plus the tool it came from, which the
+              // chip itself does not say anywhere.
               title: `${chipTitle(text)}\n${chip.call.tool_name}`,
               key: chip.call.tool_call_id,
               onclick: () => {

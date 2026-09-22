@@ -10,7 +10,7 @@
  *
  * Lives apart from any one view because both things that show a tool call need
  * it: the inline chips' detail panel (views/ToolChipGroup.ts) and the
- * collapsible block that markdown fences and system chips still use.
+ * collapsible block that markdown fences and system chips render.
  */
 
 import type { ToolCall, ToolResultEvent } from "../models/Response";
