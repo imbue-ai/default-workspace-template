@@ -12,6 +12,7 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
+import type { AppRecord } from "../model/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
@@ -1016,5 +1017,97 @@ describe("desktops and shortcuts", () => {
     api.refusal = "critical";
     await store.setAppLifecycle("docs", "stop");
     expect(notices).toEqual(["Failed to stop docs: critical"]);
+  });
+});
+
+describe("focus-chat", () => {
+  /** An app that holds chats: it declares a launch path taking a ``message``, and pins a window. */
+  function chatAppRecord(overrides: Partial<AppRecord> = {}): AppRecord {
+    return appRecord("buddy", {
+      pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
+      launch_paths: [
+        launchPathRecord({ id: "root", path: "/", params: ["draft"] }),
+        launchPathRecord({ id: "new", path: "/new", params: ["message"] }),
+      ],
+      ...overrides,
+    });
+  }
+
+  async function chatStore(apps: readonly AppRecord[] = [appRecord("docs"), chatAppRecord()]): Promise<DesktopStore> {
+    const store = makeStore();
+    await store.start(NO_LINK);
+    socket.deliver().onAppsUpdated([...apps]);
+    return store;
+  }
+
+  it("raises the window already showing the chat, switching to the desktop that holds it", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" })],
+      }),
+      desktopRecord("work", { windows: [windowRecord("win-4", "buddy", "/chat-7")] }),
+    ];
+    const store = await chatStore();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(await store.focusChat("chat-7")).toBe(true);
+    // The chat is already on screen somewhere: it is switched to, and nothing is opened or moved.
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
+    expect(placementOf(store.getState().layout, "win-4").is_minimized).toBe(false);
+  });
+
+  it("reads a subagent view of the chat as showing it", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
+          windowRecord("win-4", "buddy", "/chat-7.agent-2.sess-3"),
+        ],
+      }),
+    ];
+    const store = await chatStore();
+    expect(await store.focusChat("chat-7")).toBe(true);
+    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
+  });
+
+  it("points this client's pinned chat window at a chat nothing is showing", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
+        ],
+      }),
+    ];
+    const store = await chatStore();
+    expect(await store.focusChat("chat-7")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
+      `reportWindowLocation:home:win-9:${CLIENT}:/chat-7:Buddy`,
+    );
+    // The chat lands where this viewer reads chats, shown, and as this client's own navigation for the follow.
+    expect(store.getState().layout.window_paths["win-9"]?.path).toBe("/chat-7");
+    expect(placementOf(store.getState().layout, "win-9").is_minimized).toBe(false);
+    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/chat-7" });
+    // And a second ask for the chat it now shows moves nothing.
+    const callsBefore = api.calls.length;
+    expect(await store.focusChat("chat-7")).toBe(true);
+    expect(api.calls.length).toBe(callsBefore);
+  });
+
+  it("opens the chat in a window of its own when no pinned window takes it", async () => {
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+    const store = await chatStore([appRecord("docs"), chatAppRecord({ pin: null })]);
+    expect(await store.focusChat("chat-7")).toBe(true);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([
+      "openWindow:home:buddy:/chat-7:focus:-",
+    ]);
+  });
+
+  it("answers false when no app on this machine holds chats", async () => {
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+    const store = await chatStore([appRecord("docs")]);
+    expect(await store.focusChat("chat-7")).toBe(false);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
   });
 });

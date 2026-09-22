@@ -397,14 +397,17 @@ container build/launch parameter a running container cannot adopt: say it
 stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
-**When the update touches `system/apps/system_interface/`,
-`system/apps/chat/frontend/`, `system/libs/workspace_ui/`, or
+**When the update touches a critical app (`system/apps/system_interface/`,
+`system/apps/chat/`, `system/apps/terminal/`), `system/libs/workspace_ui/`, or
 `system/package.json` / `system/package-lock.json` at all** (the trees the
-shell's bundle is stamped over, the same set `update-system-interface`'s
-freshness check names), also take the `editing service system_interface` lease
-through the apply, as `update-system-interface` does: check `tk ready` for a foreign one (surface
-instead of proceeding), then `tk create "editing service system_interface" -t
+critical bundles are built from, the same set the careful flow's freshness
+check names), also take the `editing critical apps` lease through the apply, as
+`update-app/references/critical-app.md` does: check `tk ready` for a foreign one
+(surface instead of proceeding), then `tk create "editing critical apps" -t
 chore` and `tk start` it, each as its own command. Release it afterwards.
+
+The apply run from here keeps its own run record and raises no "recently
+updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
 
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
@@ -512,16 +515,17 @@ exists, offered in the same breath).
 
 ## 6. Teardown
 
-If a stray system-interface preview is registered (an older pass may have left
-one; `update-system-interface` refuses its next pass while one is):
+If a stray preview of a critical app is registered (an older pass may have left
+one; the careful flow refuses its next pass on that app while one is), tear it
+down with the preview script and close its window:
 
 ```bash
-python3 system/scripts/layout.py close si-preview
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
+python3 system/scripts/layout.py close <name>-preview
+uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 ```
 
 The close goes first: nothing takes a window away when its app leaves the registry, so
-once `unpreview` has deregistered the row the preview's window would stay on the desktop
+once `down` has deregistered the row the preview's window would stay on the desktop
 pointing at a page nothing serves.
 
 **The rest is only for a successful apply (exit 0).** After a rollback the

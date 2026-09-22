@@ -135,7 +135,7 @@ _RETIRED_VERBS = {
 # than waited for.
 _APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 _MAX_APP_NAME_LENGTH = 32
-_RESERVED_APP_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github"})
+_RESERVED_APP_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 _RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
 # A window id as the shell mints it.
 _WINDOW_ID_PATTERN = re.compile(r"^win-[0-9a-f]{16}$")

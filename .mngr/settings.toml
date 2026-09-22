@@ -1651,9 +1651,14 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 # and fails loudly on a miss). It is harness-neutral: claude takes it as its
 # native `outputStyle` setting, codex -- which has no output-style concept --
 # gets the same file's body as developer instructions.
+#
+# `MNGR_AGENT_ROLE=chat` marks the agent as a chat (as opposed to a worker or
+# a bare `mngr create` agent) for any tooling that wants to tell them apart;
+# AGENTS.md's finish-notification rule is addressed to chats and is prose-only.
 [create_templates.chat]
 transfer = "none"
 output_style = "Engineering Subordinate"
+env__extend = ["MNGR_AGENT_ROLE=chat"]
 
 # Welcome: the greeting a chat that starts with nothing to say gets. The chat app
 # stacks it (`-t chat -t welcome --type <harness>`) on every chat launched without
