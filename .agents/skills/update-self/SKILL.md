@@ -27,9 +27,8 @@ launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
 The default target is **the release the Mind app driving this workspace was
-built against** -- the `minds-v*` tag it names, and only that one, because the
-template ships the code that app talks to and no other pairing was verified;
-see `references/version-ceiling.md`. Once the target is resolved,
+built against**, and only that one: the template ships the code that app talks
+to, and no other pairing was verified. See `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, so fixes
@@ -130,13 +129,11 @@ record the verdict it calls for -- never resolve a ref by hand:
 
 - **Already on the release it may take.** Nothing is wrong with the workspace:
   `run-status verdict ALREADY_CURRENT`.
-- **A fault**: the Mind app could not be reached, is too old to report its
-  version, named a release the upstream does not carry, or named no release at
-  all. The pair this workspace is supposed to run was never published as
-  claimed, so say so plainly and record `run-status verdict STUCK --detail
-  "<the error line, in plain terms>"`. Do **not** pick another release to
-  update to; only a version the user names becomes an `--override`, and an
-  operator testing a dev build is exactly who names one.
+- **A fault**: the app could not be reached, is too old to report its version,
+  named a release the upstream does not carry, or named none at all. Say so
+  plainly and record `run-status verdict STUCK --detail "<the error line, in
+  plain terms>"`. Do **not** pick another release; only a version the user
+  names becomes an `--override`, as an operator testing a dev build would.
 - **Anything else**: `run-status verdict REFUSED --detail "<the error line, in
   plain terms>"`.
 
@@ -191,15 +188,18 @@ cat /tmp/update-self-recheck.json
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
-`exceeds_ceiling` is `true` here and Step 2 chose `$REF` without `--override`,
-the user never asked for it: do not name it, set `$REF` to the capped ref
-(re-run without `--override` to learn it; an error there is handled as in
-Step 2), tell the user that capped version is the one you are updating to --
-an initiator too old to know the ceiling has already announced the other one --
-and **re-run §2a** before dispatching (the staged copy must match the target). If the user named it and has not already confirmed it, take that
-confirmation now as in Step 2, offering the capped ref; if they take it, set
-`$REF` to it and re-run §2a the same way. If they decline every option, record
-`run-status verdict REFUSED --detail "..."` as in Step 2.
+`exceeds_ceiling` is `true` here, it matters who chose `$REF`.
+
+**Step 2 chose it, without `--override`:** the user never asked for it. Do not
+name it. Set `$REF` to the capped ref (re-run without `--override` to learn it;
+an error there is handled as in Step 2), tell the user that version is the one
+you are updating to -- an initiator too old to know the ceiling has already
+announced the other -- and **re-run §2a** before dispatching, so the staged copy
+matches the target.
+
+**The user named it:** take the confirmation now as in Step 2, offering the
+capped ref; if they take it, set `$REF` to it and re-run §2a the same way. If
+they decline every option, record `run-status verdict REFUSED --detail "..."`.
 
 ### 3b. Launch
 
