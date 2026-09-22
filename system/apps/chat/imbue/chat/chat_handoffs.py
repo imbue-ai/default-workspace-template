@@ -63,6 +63,7 @@ from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import SummaryOutcome
+from imbue.chat.models import UndeliveredSend
 from imbue.chat.primitives import ChatId
 from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.event_utils import ShutdownEvent
@@ -344,6 +345,9 @@ class HandoffDeps(FrozenModel):
     # with the message route's hold, so a send can never be appended to a handoff that just
     # finished. Raises ``HandoffCancelledError`` for another handoff.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
+    # Park a send that could not be delivered on the chat record, for the composer to take
+    # back. The switch entry is gone by then, so its ``returned_block`` cannot carry this.
+    park_undelivered_send: Callable[[ChatId, UndeliveredSend], None]
     get_agent_state: Callable[[str], AgentStateItem | None]
     get_agent_info: Callable[[str], AgentInfo | None]
     resolve_account: Callable[[str], Account]
@@ -938,17 +942,23 @@ class HandoffRunner:
             )
         self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            deliver_held_send(self._deps.deliver, successor_info, held, chat_id)
+            undelivered = deliver_held_send(self._deps.deliver, successor_info, held, chat_id)
+            if undelivered is not None:
+                self._deps.park_undelivered_send(chat_id, undelivered)
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
 
 
 def deliver_held_send(
     deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend, chat_id: ChatId
-) -> None:
+) -> UndeliveredSend | None:
     """Hand one held send to an agent through the message route's path.
 
-    A refusal or a miss is logged rather than raised: the send was answered 202 when it was
-    held, and one that cannot land must not stop the ones behind it.
+    Returns the send WITH the refusal that stopped it when it did not land, and None when it
+    did. A refusal or a miss is reported rather than raised: the send was answered 202 when it
+    was held, and one that cannot land must not stop the ones behind it. Returning it is what
+    keeps it from being lost -- the caller owes it a way back to the composer, since the user
+    was told it was accepted and nothing else holds a copy. The reason travels with it so the
+    caller can say why, rather than sliding the text back with no explanation.
     """
     try:
         outcome = deliver(agent_info, held.text, held.message_id)
@@ -960,7 +970,7 @@ def deliver_held_send(
             agent_info.id,
             e.detail,
         )
-        return
+        return UndeliveredSend(send=held, detail=e.detail, kind=e.kind)
     if outcome is not SendOutcome.OK:
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} did not land ({})",
@@ -969,6 +979,16 @@ def deliver_held_send(
             agent_info.id,
             outcome.value,
         )
+        # The detail is read by whoever the send goes back to, so it says what happened in
+        # words rather than in the outcome's name, and carries the kind the outcome already is.
+        match outcome:
+            case SendOutcome.NOT_READY:
+                return UndeliveredSend(
+                    send=held, detail="The agent was still starting up and could not take it.", kind="not_ready"
+                )
+            case _:
+                return UndeliveredSend(send=held, detail="The agent could not take it.")
+    return None
 
 
 @pure
