@@ -414,7 +414,7 @@ def _user_message_events(timestamp: str, text: str | None, client_id: str | None
     return [build_user_turn_event(timestamp, text, event_id)]
 
 
-# --- Queue ledger (the codex analogue of Claude's queue-operation records) ---
+# Queue ledger (the codex analogue of Claude's queue-operation records)
 #
 # A message the user submits while a turn is running is held in codex's TUI queue and
 # does not reach the rollout until the turn ends. The patched codex binary writes a full
@@ -444,7 +444,7 @@ def parse_lines(
         return []
     payload_type = payload.get("type")
 
-    # --- turn_context: the per-turn effective model/effort (§4b) ---
+    # turn_context: the per-turn effective model/effort (§4b)
     # Not a transcript event (returns []), but its ``model`` / ``effort`` are the truth of what the
     # turn ran on. Record them in ``turn_state`` so the following assistant messages are stamped and
     # the watcher can reflect a fallback in the model bar.
@@ -457,7 +457,7 @@ def parse_lines(
                 turn_state["effort"] = context_effort if isinstance(context_effort, str) and context_effort else None
         return []
 
-    # --- event_msg: the clean human prompt + the turn-abort marker ---
+    # event_msg: the clean human prompt + the turn-abort marker
     if outer == "event_msg":
         # The clean human prompt. Older codex emitted it as ``user_message``; newer
         # codex folds every display echo into ``item_completed`` carrying a typed
@@ -547,7 +547,7 @@ def parse_lines(
         # session_meta / other non-content records -> drop (turn_context handled above).
         return []
 
-    # --- reasoning: codex's readable thinking summaries ---
+    # reasoning: codex's readable thinking summaries
     # A reasoning item precedes the assistant output it belongs to. It is not itself a
     # transcript event; the watcher consumes this internal marker to remember the line as
     # the NEXT assistant event's thinking source (has_thinking + the detail endpoint).
@@ -560,7 +560,7 @@ def parse_lines(
     effective_model = turn_state.get("model") if turn_state is not None else None
     effective_model = effective_model if isinstance(effective_model, str) and effective_model else _UNKNOWN_MODEL
 
-    # --- response_item: assistant messages + tool calls/results ---
+    # response_item: assistant messages + tool calls/results
     if payload_type == "message":
         if payload.get("role") == "assistant":
             # codex re-serialises history; each copy shares the message ``id``, so
