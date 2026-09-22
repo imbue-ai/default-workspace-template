@@ -292,14 +292,20 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.request_id == "evt-9"
 
 
-def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() -> None:
-    """``system/scripts/message_chat.py --system`` wraps a nudge in the tag this module recognises; the script
-    is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
-    script = Path(__file__).resolve().parents[5] / "scripts" / "message_chat.py"
-    spec = importlib.util.spec_from_file_location("message_chat_for_tag_pin", script)
+def _load_system_script(filename: str) -> Any:
+    """A standard-library-only script from ``system/scripts/``, which this package cannot import."""
+    script = Path(__file__).resolve().parents[5] / "scripts" / filename
+    spec = importlib.util.spec_from_file_location(f"{script.stem}_for_tag_pin", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() -> None:
+    """``system/scripts/message_chat.py --system`` wraps a nudge in the tag this module recognises; the script
+    is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
+    module = _load_system_script("message_chat.py")
 
     assert module.SYSTEM_MESSAGE_TAG == BROWSER_FLEET_TAG
     decision = classify_user_message(module.wrap_system_message("Browser b1 was handed back to you."))
@@ -307,19 +313,10 @@ def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() ->
     assert decision.display is DisplayKind.CHIP
 
 
-def _load_run_in_background_script() -> Any:
-    script = Path(__file__).resolve().parents[5] / "scripts" / "run_in_background.py"
-    spec = importlib.util.spec_from_file_location("run_in_background_for_tag_pin", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None:
     """``system/scripts/run_in_background.py`` is standard-library only and cannot import this package,
     so its copy of the tag is pinned here by classifying a report it composed."""
-    module = _load_run_in_background_script()
+    module = _load_system_script("run_in_background.py")
     report = module.compose_report(
         description="Wait for the background agent",
         command=["uv", "run", "create_worker.py", "await", "--name", "fix-login"],
