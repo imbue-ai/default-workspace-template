@@ -564,38 +564,53 @@ def _forget_exit_codes(state: _LoopState) -> list[object]:
     ]
 
 
-def test_run_forget_unlocks_and_retries_once_on_a_stale_lock(tmp_path: Path) -> None:
-    """A lock-blocked forget runs `restic unlock` and retries; the retry's result is recorded."""
-    forget = _ScriptedRestic(
-        [_completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR), _completed(0)]
-    )
-    unlock = _ScriptedRestic([_completed(0)])
-    state = _retention_state(tmp_path)
-
-    _run_forget(
-        state=state,
-        config=_build_config(),
-        env_overrides={},
-        forget_fn=forget,
-        unlock_fn=unlock,
-    )
-
-    assert forget.calls == 2
-    assert unlock.calls == 1
-    assert _forget_exit_codes(state) == [0]
+_FORGET_LOCKED = _completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR)
 
 
-def test_run_forget_retries_only_once_when_the_lock_is_still_held(
+@pytest.mark.parametrize(
+    ("forget_results", "unlock_results", "expected_unlock_calls", "expected_exit_code"),
+    [
+        pytest.param(
+            [_FORGET_LOCKED, _completed(0)],
+            [_completed(0)],
+            1,
+            0,
+            id="stale-lock-cleared-retry-wins",
+        ),
+        pytest.param(
+            [_FORGET_LOCKED, _FORGET_LOCKED],
+            [_completed(0)],
+            1,
+            11,
+            id="live-lock-kept-one-retry-only",
+        ),
+        pytest.param(
+            [_FORGET_LOCKED],
+            [_completed(1, stderr="unable to open repository")],
+            1,
+            11,
+            id="unlock-failed-no-retry",
+        ),
+        pytest.param(
+            [_completed(1, stderr="network unreachable")],
+            [],
+            0,
+            1,
+            id="unrelated-failure-no-unlock",
+        ),
+    ],
+)
+def test_run_forget_unlock_and_retry(
     tmp_path: Path,
+    forget_results: list[subprocess.CompletedProcess[str]],
+    unlock_results: list[subprocess.CompletedProcess[str]],
+    expected_unlock_calls: int,
+    expected_exit_code: int,
 ) -> None:
-    """A lock `restic unlock` leaves in place (a live one) gets one retry, then the failure is recorded."""
-    forget = _ScriptedRestic(
-        [
-            _completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR),
-            _completed(11, stderr=_NON_EXCLUSIVE_LOCK_STDERR),
-        ]
-    )
-    unlock = _ScriptedRestic([_completed(0)])
+    """Only a lock error runs `restic unlock`; forget is retried once, and only after
+    a successful unlock. The recorded exit code is the last forget's."""
+    forget = _ScriptedRestic(forget_results)
+    unlock = _ScriptedRestic(unlock_results)
     state = _retention_state(tmp_path)
 
     _run_forget(
@@ -606,27 +621,9 @@ def test_run_forget_retries_only_once_when_the_lock_is_still_held(
         unlock_fn=unlock,
     )
 
-    assert forget.calls == 2
-    assert unlock.calls == 1
-    assert _forget_exit_codes(state) == [11]
-
-
-def test_run_forget_does_not_unlock_on_unrelated_failure(tmp_path: Path) -> None:
-    forget = _ScriptedRestic([_completed(1, stderr="network unreachable")])
-    unlock = _ScriptedRestic([])
-    state = _retention_state(tmp_path)
-
-    _run_forget(
-        state=state,
-        config=_build_config(),
-        env_overrides={},
-        forget_fn=forget,
-        unlock_fn=unlock,
-    )
-
-    assert forget.calls == 1
-    assert unlock.calls == 0
-    assert _forget_exit_codes(state) == [1]
+    assert forget.calls == len(forget_results)
+    assert unlock.calls == expected_unlock_calls
+    assert _forget_exit_codes(state) == [expected_exit_code]
 
 
 def test_prune_unlocks_and_retries_on_a_stale_lock_and_records_the_prune(
