@@ -293,6 +293,44 @@ def abort_in_progress_merge(repo_root: Path, runner: Runner) -> bool:
     return True
 
 
+_SERVICES_AGENT_NAME_FALLBACK = "system-services"
+
+
+def resolve_services_agent_name(
+    runner: Runner, fallback: str = _SERVICES_AGENT_NAME_FALLBACK
+) -> str:
+    """The id of this workspace's single always-running services agent (the
+    one hosting bootstrap and supervisord), resolved by its stable ``type``
+    (``main``) rather than by its display name.
+
+    A user or the Minds app can rename an agent at any time; a hardcoded
+    ``"system-services"`` lookup then finds nothing, which is exactly what
+    turned an apply failure into an unrecoverable emergency in practice (the
+    forward apply's restart step failed to find the agent, and the rollback's
+    own recovery restart then failed the identical way). Resolving by type
+    survives a rename.
+
+    Falls back to ``fallback`` on any resolution trouble (``mngr`` not on
+    PATH, zero or more than one ``main``-type agent, a malformed or empty
+    result) rather than raising, so this can only ever recover a rename it
+    did not already recover -- never introduce a new failure mode of its own.
+    """
+    try:
+        result = runner.run(
+            ["mngr", "list", "--include", 'type == "main"', "--ids"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return fallback
+    if getattr(result, "returncode", 0) != 0:
+        return fallback
+    ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    return ids[0] if len(ids) == 1 else fallback
+
+
 def run_checked(
     runner: Runner,
     argv: Sequence[str],

@@ -123,6 +123,7 @@ from update_runtime import (
     detail_block,
     diff_name_status,
     git_out,
+    resolve_services_agent_name,
     run_checked,
 )
 
@@ -647,7 +648,7 @@ def _recover_running_state(
         if live_service_restarted:
             run_checked(
                 runner,
-                ["mngr", "start", "--restart", "system-services"],
+                ["mngr", "start", "--restart", resolve_services_agent_name(runner)],
                 repo_root,
                 "mngr start --restart",
             )
@@ -1121,7 +1122,7 @@ def apply_update(
         write_marker(marker, repo_root, now)
         run_checked(
             runner,
-            ["mngr", "start", "--restart", "system-services"],
+            ["mngr", "start", "--restart", resolve_services_agent_name(runner)],
             repo_root,
             "mngr start --restart",
             live_service_restarted=True,
