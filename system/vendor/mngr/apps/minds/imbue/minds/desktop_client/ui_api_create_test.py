@@ -14,7 +14,6 @@ from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
 from imbue.minds.desktop_client.conftest import build_desktop_client_for_test
 from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_session_store_for_test
-from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptRecord
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptRequest
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptState
@@ -78,6 +77,45 @@ def test_form_defaults_exclude_byok_only_launch_modes_and_carry_region_context(t
     assert payload["color"].startswith("#")
     assert payload["prefill"] is None
     assert payload["accounts"] == []
+
+
+def test_form_defaults_report_what_each_local_backend_needs_from_this_machine(tmp_path: Path) -> None:
+    """The form annotates the local backends from these, so every one must be described.
+
+    The test app's FakeHostProbe describes a bare Linux machine (nothing on
+    PATH, no devices), so every backend is missing and the local preset falls
+    back to Linux's first choice, Docker.
+    """
+    client, _app, _auth_store = build_desktop_client_for_test(tmp_path, is_authenticated=True)
+
+    response = client.get("/ui/api/create/form-defaults")
+
+    assert response.status_code == 200
+    payload = json.loads(response.get_data(as_text=True))
+    by_key = {entry["key"]: entry for entry in payload["local_prerequisites"]}
+    assert set(by_key) == {"DOCKER", "RUNSC", "LIMA"}
+    for entry in by_key.values():
+        assert not entry["is_available"]
+        assert entry["summary"]
+        assert entry["docs_url"].startswith("https://")
+    assert payload["local_launch_mode"] == "DOCKER"
+    assert payload["local_launch_mode"] in payload["launch_modes"]
+
+
+def test_form_defaults_describe_no_local_backend_when_the_app_has_no_probe(tmp_path: Path) -> None:
+    """An app built without a probe (no concurrency group to run one under) still answers.
+
+    It reports no prerequisites rather than reaching for docker, and the local
+    preset's launch mode still has to be one the form offers.
+    """
+    client, _app, _auth_store = build_desktop_client_for_test(tmp_path, is_authenticated=True, host_probe=None)
+
+    response = client.get("/ui/api/create/form-defaults")
+
+    assert response.status_code == 200
+    payload = json.loads(response.get_data(as_text=True))
+    assert payload["local_prerequisites"] == []
+    assert payload["local_launch_mode"] in payload["launch_modes"]
 
 
 def test_form_defaults_seed_the_shipped_template_repo_and_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,7 +287,6 @@ def _record(
 def _make_client_with_store(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
     mngr_caller: MngrCaller | None = None,
 ) -> tuple[FlaskClient, PendingCreateAttemptStore, AgentCreator]:
     """A desktop-client test app whose agent creator carries a pending-create-attempt store.
@@ -261,7 +298,6 @@ def _make_client_with_store(
     creator = AgentCreator(
         paths=InstallationPaths(data_dir=tmp_path / "minds"),
         root_concurrency_group=root_concurrency_group,
-        notification_dispatcher=notification_dispatcher,
         system_interface_health_tracker=SystemInterfaceHealthTracker(),
         pending_create_attempt_store=store,
     )
@@ -279,7 +315,6 @@ def _make_client_with_store(
 def test_form_defaults_prefill_the_form_from_a_known_retry_record(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
     """A ?retry naming a pending record restores the stored request into the prefill.
 
@@ -287,7 +322,7 @@ def test_form_defaults_prefill_the_form_from_a_known_retry_record(
     has none configured), so the prefill drops it while still threading the
     stored machine size through.
     """
-    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group, notification_dispatcher)
+    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group)
     create_attempt_id = str(CreateAttemptId.generate())
     store.write_record(
         _record(
@@ -316,9 +351,8 @@ def test_form_defaults_prefill_the_form_from_a_known_retry_record(
 def test_create_attempt_detail_carries_error_and_log_tail_for_a_failed_record(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
-    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group, notification_dispatcher)
+    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group)
     create_attempt_id = str(CreateAttemptId.generate())
     store.write_record(
         _record(
@@ -344,9 +378,8 @@ def test_create_attempt_detail_carries_error_and_log_tail_for_a_failed_record(
 def test_create_attempt_detail_reports_an_in_flight_record_without_a_live_thread_as_interrupted(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
-    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group, notification_dispatcher)
+    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group)
     create_attempt_id = str(CreateAttemptId.generate())
     store.write_record(_record(create_attempt_id, PendingCreateAttemptState.IN_FLIGHT))
 
@@ -366,7 +399,6 @@ def test_create_attempt_detail_reports_an_in_flight_record_without_a_live_thread
 def test_create_attempt_detail_carries_the_request_summary_for_a_live_attempt(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
     """A live (in-flight) attempt's detail restates the settings it was submitted with.
 
@@ -375,7 +407,7 @@ def test_create_attempt_detail_carries_the_request_summary_for_a_live_attempt(
     live -- tracked by get_create_attempt_info -- for the brief window this
     test reads it in, same as the creation page's own polling would.
     """
-    client, _store, creator = _make_client_with_store(tmp_path, root_concurrency_group, notification_dispatcher)
+    client, _store, creator = _make_client_with_store(tmp_path, root_concurrency_group)
     create_attempt_id = creator.start_create_attempt(
         "file:///nonexistent-repo-for-request-summary-test",
         host_name="request-summary-test",
@@ -408,9 +440,8 @@ def test_create_attempt_detail_carries_the_request_summary_for_a_live_attempt(
 def test_create_attempt_detail_carries_the_request_summary_for_a_record(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
-    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group, notification_dispatcher)
+    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group)
     create_attempt_id = str(CreateAttemptId.generate())
     store.write_record(
         _record(create_attempt_id, PendingCreateAttemptState.FAILED, error="boom", instance_type="t3.large")
@@ -446,13 +477,10 @@ def _done_record(create_attempt_id: str) -> PendingCreateAttemptRecord:
 def test_the_welcome_chat_is_seeded_in_the_finished_attempts_workspace(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
     """A DONE record names the workspace; the conversation goes to it through the template's script."""
     caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout='{"chat_id": "agent-seeded"}\n'))
-    client, store, _creator = _make_client_with_store(
-        tmp_path, root_concurrency_group, notification_dispatcher, mngr_caller=caller
-    )
+    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group, mngr_caller=caller)
     create_attempt_id = str(CreateAttemptId.generate())
     store.write_record(_done_record(create_attempt_id))
 
@@ -468,12 +496,9 @@ def test_the_welcome_chat_is_seeded_in_the_finished_attempts_workspace(
 def test_the_welcome_chat_is_refused_while_the_attempt_has_no_workspace(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
     caller = RecordingMngrCaller()
-    client, store, _creator = _make_client_with_store(
-        tmp_path, root_concurrency_group, notification_dispatcher, mngr_caller=caller
-    )
+    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group, mngr_caller=caller)
     in_flight = str(CreateAttemptId.generate())
     store.write_record(_record(in_flight, PendingCreateAttemptState.IN_FLIGHT))
 
@@ -491,7 +516,6 @@ def test_the_welcome_chat_is_refused_while_the_attempt_has_no_workspace(
 def test_the_welcome_chat_refuses_a_body_without_turns_and_reports_a_workspace_that_would_not_take_it(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
-    notification_dispatcher: NotificationDispatcher,
 ) -> None:
     caller = RecordingMngrCaller(
         result=MngrCallResult(
@@ -503,9 +527,7 @@ def test_the_welcome_chat_refuses_a_body_without_turns_and_reports_a_workspace_t
             is_mngr_output=True,
         )
     )
-    client, store, _creator = _make_client_with_store(
-        tmp_path, root_concurrency_group, notification_dispatcher, mngr_caller=caller
-    )
+    client, store, _creator = _make_client_with_store(tmp_path, root_concurrency_group, mngr_caller=caller)
     create_attempt_id = str(CreateAttemptId.generate())
     store.write_record(_done_record(create_attempt_id))
     path = f"/ui/api/create/attempts/{create_attempt_id}/welcome-chat"

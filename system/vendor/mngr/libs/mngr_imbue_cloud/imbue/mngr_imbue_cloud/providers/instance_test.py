@@ -14,8 +14,10 @@ from threading import Lock
 from typing import Any
 from typing import cast
 
+import gevent
 import httpx
 import pytest
+from gevent.hub import Hub
 from loguru import logger
 from pydantic import AnyUrl
 from pydantic import Field
@@ -395,7 +397,7 @@ class _FakeImbueCloudProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     def _wait_for_container_sshd(self, leased: LeasedHostInfo) -> None:
         self._waited_for.append(leased.vps_address)
 
-    def _build_host_object(self, lease: LeasedHostInfo, *, adopt_pre_baked_agent: bool = True) -> ImbueCloudHost:
+    def _build_host_object(self, lease: LeasedHostInfo) -> ImbueCloudHost:
         assert self._built is not None
         return self._built
 
@@ -995,6 +997,39 @@ def test_discover_hosts_and_agents_caches_every_hosts_listing_under_concurrency(
     for lease in leases:
         host_id = HostId(lease.host_id)
         assert provider._listing_raw_cache[host_id] == raw_by_host_id[host_id]
+
+
+class _HubCreatingDiscoveryProvider(_MultiHostDiscoveryProvider):
+    """Records the gevent Hub each per-host read creates on its worker thread,
+    standing in for the pyinfra command the real outer listing runs."""
+
+    _hubs: list[Hub] = []
+
+    def _collect_listing_raw_via_outer(self, lease: LeasedHostInfo) -> tuple[dict[str, Any] | None, str | None, bool]:
+        with self._in_flight_lock:
+            self._hubs.append(gevent.get_hub())
+        return super()._collect_listing_raw_via_outer(lease)
+
+
+# this tests: IF each host's read touches gevent on its worker thread (as pyinfra does)
+# THEN: every one of those per-thread hubs is destroyed by the time discovery returns
+def test_discover_hosts_and_agents_destroys_each_worker_threads_gevent_hub(temp_mngr_ctx: MngrContext) -> None:
+    """A hub left behind by a discovery worker pins a pipe pair and its object graph for the
+    life of the process; a long-running ``mngr observe`` polls this every 30s, so it grows
+    without bound."""
+    leases = [_make_lease(HostId.generate()) for _ in range(3)]
+    provider = _HubCreatingDiscoveryProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _leases=leases,
+        _raw_by_host_id={HostId(lease.host_id): _running_raw() for lease in leases},
+        _hubs=[],
+    )
+
+    provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group)
+
+    assert len(provider._hubs) == len(leases)
+    assert all(hub.loop is None for hub in provider._hubs), "a discovery worker thread left its gevent Hub alive"
 
 
 class _LogCapture:
@@ -2119,3 +2154,31 @@ def test_destroy_host_of_a_workspace_the_connector_does_not_know_runs_local_clea
 
     assert client.release_calls == []
     assert provider._cleanup_calls == [host_id]
+
+
+# this tests: IF a host object is built from a lease (any create path, the slow path's rebuilt container included)
+# THEN: the lease's agent id rides along as the pre-baked id, so the services agent is created at that id
+def test_build_host_object_always_pins_the_lease_agent_id(temp_mngr_ctx: MngrContext) -> None:
+    """The agent id the connector knows the lease by (record stub, share coordinate, the
+    lease-record sweep's join) is the pool row's agent id. A slow-path rebuild
+    that let mngr mint a fresh id left every one of those out of step (a
+    record-less lease, a duplicate list entry), so the id must be pinned on
+    every path -- the host decides adopt-vs-full-create from its on-disk state,
+    never from this object."""
+    provider = ImbueCloudProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        host_dir=Path("/tmp/imbue-cloud-test-host-dir"),
+        config=ImbueCloudProviderConfig(account=ImbueCloudAccount("alice@example.com")),
+    )
+    host_id = HostId.generate()
+    # An OVH-style lease (container port equal to the configured publish
+    # port) so no slice adoption is attempted: the build stays local.
+    lease = _make_lease(host_id).model_copy_update(
+        to_update(_make_lease(host_id).field_ref().container_ssh_port, provider.config.container_ssh_port)
+    )
+
+    host = provider._build_host_object(lease)
+
+    assert host.pre_baked_agent_id == AgentId(lease.agent_id)
+    assert host.id == host_id

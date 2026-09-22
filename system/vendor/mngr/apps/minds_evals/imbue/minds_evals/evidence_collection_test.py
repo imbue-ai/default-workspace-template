@@ -3751,7 +3751,6 @@ def _timing_turn(index: int, sent_at: str, replied_at: str) -> TurnRecord:
         agent_message_count=1,
         message_count=0,
         tokens=TokenBuckets(input=0, output=0, cache_read=0, cache_write=0),
-        cost_usd=None,
     )
 
 

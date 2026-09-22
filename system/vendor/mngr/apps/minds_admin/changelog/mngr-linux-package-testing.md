@@ -1,0 +1,1 @@
+Merges `mngr/linux-dev-packaging` (see `mngr-linux-dev-packaging.md`): the `minds-admin env deactivate` docstring now says a deactivated shell's `minds run` targets production, while `env deploy` / `destroy` still refuse without an activated env.

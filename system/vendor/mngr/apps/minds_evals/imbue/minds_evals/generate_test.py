@@ -1263,6 +1263,17 @@ def test_the_oracles_per_step_state_satisfies_that_steps_turn_gate(tmp_path: Pat
         assert gate_checks.is_every_entry_completed(state, case_json), name
 
 
+def test_the_oracles_state_records_no_duration_at_all(tmp_path: Path) -> None:
+    """The oracle boots no workspace and runs no conversation, so it times nothing. A figure here
+    would reach the run summary as a measured span instead of the unrecorded one it is."""
+    task_dir = _generate_one_task(tmp_path, _valid_config())
+
+    state = _oracle_state((task_dir / "solution" / "solve.sh").read_text())
+
+    assert "elapsed_seconds" not in state
+    assert "conversation_seconds" not in state
+
+
 def test_generate_dataset_keeps_a_flat_case_single_step(tmp_path: Path) -> None:
     """A case that declares no steps must generate exactly what it did before: a top-level
     instruction, tests and solution, no steps/ directory, and no multi-step reward strategy."""

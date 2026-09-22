@@ -3,6 +3,8 @@ import {
   MAX_WINDOW_PATH_LENGTH,
   appLaunchesOf,
   freeTextRowsOf,
+  chatPath,
+  isPathShowingChat,
   launchPathOf,
   launchPathWithParams,
   launchRowKindOf,
@@ -86,5 +88,18 @@ describe("the text path", () => {
 
   it("stands down for a launch path with no text param", () => {
     expect(textPathOf(launchPathRecord(), "hi").kind).toBe("disabled");
+  });
+});
+
+describe("the path a chat is shown at", () => {
+  it("reads the chat's own page and its subagent views as showing it, and nothing else", () => {
+    expect(chatPath("chat-7")).toBe("/chat-7");
+    expect(isPathShowingChat("/chat-7", "chat-7")).toBe(true);
+    expect(isPathShowingChat("/chat-7.agent-2.sess-3", "chat-7")).toBe(true);
+    expect(isPathShowingChat("/chat-7?draft=hi", "chat-7")).toBe(true);
+    // The chat list, another chat, and a chat whose id merely starts with this one are not it.
+    expect(isPathShowingChat("/", "chat-7")).toBe(false);
+    expect(isPathShowingChat("/chat-8", "chat-7")).toBe(false);
+    expect(isPathShowingChat("/chat-70", "chat-7")).toBe(false);
   });
 });

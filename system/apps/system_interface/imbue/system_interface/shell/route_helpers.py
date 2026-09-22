@@ -26,6 +26,7 @@ LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "l
 
 HTTP_OK: Final[int] = 200
 HTTP_CREATED: Final[int] = 201
+HTTP_ACCEPTED: Final[int] = 202
 HTTP_NO_CONTENT: Final[int] = 204
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_FORBIDDEN: Final[int] = 403

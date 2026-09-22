@@ -51,7 +51,6 @@ from pydantic import PrivateAttr
 from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -105,6 +104,7 @@ from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import VolumeId
+from imbue.mngr.primitives import read_checked_out_branch
 from imbue.mngr.providers.base_provider import BaseProviderInstance
 from imbue.mngr.providers.host_dir_layouts import host_dir_fallbacks
 from imbue.mngr.providers.listing_utils import build_outer_listing_collection_script
@@ -118,6 +118,7 @@ from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.mngr.utils.polling import poll_for_value
 from imbue.mngr.utils.ssh import build_ssh_connect_command
+from imbue.mngr.utils.thread_cleanup import mngr_executor
 from imbue.mngr_imbue_cloud.config import ImbueCloudProviderConfig
 from imbue.mngr_imbue_cloud.config import get_provider_data_dir
 from imbue.mngr_imbue_cloud.connector.auth_helper import get_active_token
@@ -821,12 +822,13 @@ class ImbueCloudProvider(BaseProviderInstance):
         # connector is unreachable" apart from "auth/account problem": a
         # transport-level failure (connection refused, DNS, timeout -- the
         # flaky-wifi / connector-down case, whether raised raw by httpx or as
-        # the client's typed unreachable error once its bounded retry is
-        # exhausted) becomes ProviderUnavailableError, which recovery UIs
-        # treat as "don't bother restarting, just retry". A connector status
-        # error (ImbueCloudConnectorError) or an auth failure
-        # (ImbueCloudAuthError) keeps its own type and falls through to the
-        # generic "can't reach your workspace" handling instead. The curated
+        # the client's typed unreachable error, which also covers the
+        # connector's own auth-upstream-down 503) becomes
+        # ProviderUnavailableError, which recovery UIs treat as "don't bother
+        # restarting, just retry". Any other connector status error
+        # (ImbueCloudConnectorError) or an auth failure (ImbueCloudAuthError)
+        # keeps its own type and falls through to the generic "can't reach
+        # your workspace" handling instead. The curated
         # user_help_text keeps ProviderUnavailableError from telling a cloud
         # user to "start Docker".
         try:
@@ -950,7 +952,7 @@ class ImbueCloudProvider(BaseProviderInstance):
         cache_lock = Lock()
         if leased:
             with log_span("Reading outer listings from {} leased host(s) in parallel", len(leased)):
-                with ConcurrencyGroupExecutor(
+                with mngr_executor(
                     parent_cg=cg,
                     name=f"{type(self).__name__}-discover_outer_listing",
                     max_workers=min(len(leased), _DISCOVERY_MAX_WORKERS),
@@ -1522,7 +1524,7 @@ class ImbueCloudProvider(BaseProviderInstance):
             type=agent_type,
             command=command,
             work_dir=Path(agent_data.get("work_dir", "/")),
-            initial_branch=agent_data.get("created_branch_name"),
+            initial_branch=read_checked_out_branch(agent_data),
             create_time=create_time,
             start_on_boot=agent_data.get("start_on_boot", False),
             state=lifecycle.state,
@@ -1541,15 +1543,17 @@ class ImbueCloudProvider(BaseProviderInstance):
             plugin={},
         )
 
-    def _build_host_object(self, lease: LeasedHostInfo, *, adopt_pre_baked_agent: bool = True) -> ImbueCloudHost:
+    def _build_host_object(self, lease: LeasedHostInfo) -> ImbueCloudHost:
         """Construct the ``ImbueCloudHost`` for a leased host.
 
-        ``adopt_pre_baked_agent`` records whether the leased container still
-        carries the bake's pre-provisioned agent state to adopt. The fast path
-        (and discovery) leaves it True; the slow path passes False because it
-        tore down the baked container and rebuilt it, so there is nothing to
-        adopt -- ``pre_baked_agent_id=None`` then makes ``create_agent_*`` /
-        ``provision_agent`` all fall through to mngr's standard full create.
+        The lease's ``agent_id`` is always carried as ``pre_baked_agent_id``:
+        it is the leased host's durable identity on the connector (its record
+        stub, share coordinate, and lease-record sweep are all keyed by it), so the
+        services agent must come out with that id on every create path. The
+        host decides between adopting the bake's agent state and a full create
+        by whether that state is still on disk (see ``hosts/host.py``): the
+        slow path's rebuilt container has none, so it takes the full create
+        with the id pinned.
         """
         host_id = HostId(lease.host_id)
         agent_id = AgentId(lease.agent_id)
@@ -1598,7 +1602,7 @@ class ImbueCloudProvider(BaseProviderInstance):
             connector=connector,
             provider_instance=self,
             mngr_ctx=self.mngr_ctx,
-            pre_baked_agent_id=agent_id if adopt_pre_baked_agent else None,
+            pre_baked_agent_id=agent_id,
             lease_db_id=host_db_id,
             host_dir_override=self._load_resolved_host_dir(host_id),
         )
@@ -2036,11 +2040,11 @@ class ImbueCloudProvider(BaseProviderInstance):
             self._record_host_key(
                 host_id, lease_result.vps_address, lease_result.container_ssh_port, rebuilt_container_public_key
             )
-            # The container was torn down and rebuilt -- there is no baked agent
-            # state to adopt, so don't mark the host as pre-baked. This makes
-            # mngr run its standard full create + provision (matching this
-            # method's "fresh OVH host" contract) instead of the adopt path.
-            host = self._build_host_object(self._leased_info_from_result(lease_result), adopt_pre_baked_agent=False)
+            # The rebuilt container carries no baked agent state, so the host's
+            # create hooks fall through to mngr's standard full create +
+            # provision (this method's "fresh OVH host" contract) while still
+            # minting the services agent at the lease's agent id.
+            host = self._build_host_object(self._leased_info_from_result(lease_result))
         logger.info(
             "imbue_cloud[{}] SLOW PATH: rebuilt container on leased host {} (lease {}); "
             "mngr will now run full client-side setup",
@@ -2796,8 +2800,9 @@ class ImbueCloudProvider(BaseProviderInstance):
         # ``config.container_ssh_port``; an external client reaches it at the
         # lease's ``container_ssh_port`` (equal for an OVH VPS, but a distinct
         # box-forwarded port for a slice). A service running *on the outer host*
-        # (the VPS-resident latchkey gateway) must reverse-tunnel into the
-        # container on the fixed publish port, not the external one.
+        # that still has to reverse-tunnel into the container (the VPS-resident
+        # latchkey gateway, for a container that predates its docker-bridge
+        # route) must do so on the fixed publish port, not the external one.
         return self.config.container_ssh_port
 
     @contextmanager
@@ -2923,7 +2928,7 @@ class ImbueCloudProvider(BaseProviderInstance):
         # locally-updated lease to avoid an extra round-trip.
         updated_lease = lease.model_copy_update(to_update(lease.field_ref().host_name, str(name)))
         self.reset_caches()
-        return self._build_host_object(updated_lease, adopt_pre_baked_agent=False)
+        return self._build_host_object(updated_lease)
 
     # pyinfra connector lookup
 

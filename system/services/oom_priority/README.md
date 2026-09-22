@@ -16,7 +16,7 @@ into one of a few bands.
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
   services and apps (`SERVICE_BANDS`, 5-75, keyed by service name and by the
   `priority` an app's manifest declares; the chat app sits at 25, just above
-  the shell) <
+  the agent observer at 24, itself just above the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
   at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker

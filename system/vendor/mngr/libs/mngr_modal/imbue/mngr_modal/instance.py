@@ -33,7 +33,6 @@ from tenacity import stop_after_attempt
 from tenacity import wait_exponential
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import info_span
 from imbue.imbue_common.logging import log_span
@@ -96,6 +95,7 @@ from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import VolumeId
+from imbue.mngr.primitives import read_checked_out_branch
 from imbue.mngr.providers.base_provider import BaseProviderInstance
 from imbue.mngr.providers.host_key_store import has_host_key_store
 from imbue.mngr.providers.host_key_store import remove_host_key_record
@@ -112,12 +112,13 @@ from imbue.mngr.providers.ssh_host_setup import build_start_volume_sync_command
 from imbue.mngr.providers.ssh_host_setup import parse_warnings_from_output
 from imbue.mngr.providers.ssh_host_setup import resolve_host_log_dir
 from imbue.mngr.utils.ssh import build_ssh_connect_command
+from imbue.mngr.utils.thread_cleanup import mngr_executor
 from imbue.mngr_modal.config import ModalProviderConfig
 from imbue.mngr_modal.errors import ModalMngrError
 from imbue.mngr_modal.errors import ModalSandboxDiedMngrError
 from imbue.mngr_modal.errors import ModalSandboxTimeoutMngrError
 from imbue.mngr_modal.errors import NoSnapshotsModalMngrError
-from imbue.mngr_modal.routes.deployment import deploy_function
+from imbue.mngr_modal.routes.deployment import ensure_function_deployed
 from imbue.mngr_modal.routes.deployment import get_function_url
 from imbue.mngr_modal.ssh_utils import add_host_to_known_hosts
 from imbue.mngr_modal.ssh_utils import create_pyinfra_host
@@ -546,9 +547,7 @@ class ModalProviderInstance(BaseProviderInstance):
         """Get the path to the known_hosts file for this provider instance."""
         return self._keys_dir / "known_hosts"
 
-    # =========================================================================
     # Host Volume Methods
-    # =========================================================================
 
     @property
     def _host_volume_prefix(self) -> str:
@@ -729,9 +728,7 @@ class ModalProviderInstance(BaseProviderInstance):
             return None
         return HostVolume.model_construct(volume=volume)
 
-    # =========================================================================
     # Volume-based Host Record Methods
-    # =========================================================================
 
     def get_state_volume(self) -> ModalVolume:
         """Get the state volume for persisting host records and agent data.
@@ -894,9 +891,7 @@ class ModalProviderInstance(BaseProviderInstance):
 
             futures: list[Future[HostRecord | None]] = []
             future_by_host_id: dict[HostId, Future[list[dict[str, Any]]]] = {}
-            with ConcurrencyGroupExecutor(
-                parent_cg=cg, name="modal_list_all_host_records", max_workers=32
-            ) as executor:
+            with mngr_executor(parent_cg=cg, name="modal_list_all_host_records", max_workers=32) as executor:
                 # List files in the /hosts/ directory on the volume
                 with log_span("Listing /hosts/ directory on state volume"):
                     try:
@@ -1272,13 +1267,11 @@ class ModalProviderInstance(BaseProviderInstance):
             if self.config.is_persistent:
                 snapshot_url_future = Future()
                 if os.environ.get("MNGR_MODAL_DISABLE_SNAPSHOT_DEPLOY", "0") != "1":
-                    # it's a little sad that we're constantly re-deploying this, but it's a bit too easy to make mistakes otherwise
-                    #  (eg, we might end up with outdated code at that endpoint, which would be hard to debug)
                     concurrency_group.start_new_thread(
                         _set_result,
                         (
                             snapshot_url_future,
-                            lambda: deploy_function(
+                            lambda: ensure_function_deployed(
                                 "snapshot_and_shutdown", self.app_name, self.environment_name, self._modal_interface
                             ),
                         ),
@@ -1586,9 +1579,7 @@ log "=== Shutdown script completed ==="
             docker_build_args=tuple(parsed.docker_build_arg),
         )
 
-    # =========================================================================
     # Tag Management Helpers
-    # =========================================================================
 
     def _build_sandbox_tags(
         self,
@@ -1893,9 +1884,7 @@ log "=== Shutdown script completed ==="
             )
         )
 
-    # =========================================================================
     # Name Uniqueness
-    # =========================================================================
 
     def _check_host_name_is_unique(self, name: HostName) -> None:
         """Check that no non-destroyed host on this provider already uses the given name."""
@@ -1907,9 +1896,7 @@ log "=== Shutdown script completed ==="
 
         check_host_name_is_unique(self.name, name, host_records, running_host_ids)
 
-    # =========================================================================
     # Core Lifecycle Methods
-    # =========================================================================
 
     @handle_modal_auth_error
     def create_host(
@@ -2431,9 +2418,7 @@ log "=== Shutdown script completed ==="
         self._evict_cached_host(host_id)
         self._host_record_cache_by_id.pop(host_id, None)
 
-    # =========================================================================
     # Discovery Methods
-    # =========================================================================
 
     def to_offline_host(self, host_id: HostId) -> OfflineHost:
         host_record = self._read_host_record(host_id)
@@ -2527,9 +2512,7 @@ log "=== Shutdown script completed ==="
         # Fetch sandboxes and host records in parallel since they are independent.
         # This reduces discover_hosts latency by ~1.5s by overlapping the network calls.
         try:
-            with ConcurrencyGroupExecutor(
-                parent_cg=cg, name=f"modal_discover_hosts_{self.name}", max_workers=2
-            ) as executor:
+            with mngr_executor(parent_cg=cg, name=f"modal_discover_hosts_{self.name}", max_workers=2) as executor:
                 sandboxes_future = executor.submit(self._list_sandboxes)
                 host_records_future = executor.submit(self._list_all_host_records, cg)
 
@@ -2552,7 +2535,7 @@ log "=== Shutdown script completed ==="
                 continue
 
         host_futures_with_records: list[Future[tuple[HostInterface | None, HostState | None]]] = []
-        with ConcurrencyGroupExecutor(
+        with mngr_executor(
             parent_cg=cg, name=f"modal_discover_hosts_{self.name}_missing_records", max_workers=2
         ) as executor:
             # First, process host records (includes both running and stopped hosts)
@@ -2582,7 +2565,7 @@ log "=== Shutdown script completed ==="
         # Second, include any running sandboxes that don't have host records yet
         # (handles eventual consistency of volume or legacy sandboxes)
         other_host_futures: list[tuple[HostId, Future[Host | None]]] = []
-        with ConcurrencyGroupExecutor(
+        with mngr_executor(
             parent_cg=cg, name=f"modal_discover_hosts_{self.name}_missing_records", max_workers=2
         ) as executor:
             for host_id, sandbox in running_sandbox_by_host_id.items():
@@ -2682,7 +2665,7 @@ log "=== Shutdown script completed ==="
             # Fetch tags for all sandboxes in parallel
             with log_span("Fetching tags for {} sandbox(es)", len(sandboxes)):
                 tag_futures: list[Future[dict[str, str]]] = []
-                with ConcurrencyGroupExecutor(parent_cg=cg, name="fetch_sandbox_tags", max_workers=32) as executor:
+                with mngr_executor(parent_cg=cg, name="fetch_sandbox_tags", max_workers=32) as executor:
                     for sandbox in sandboxes:
                         tag_futures.append(executor.submit(sandbox.get_tags))
 
@@ -2745,7 +2728,7 @@ log "=== Shutdown script completed ==="
         with log_span("Modal discover_hosts_and_agents for provider={}", self.name):
             try:
                 with log_span("Parallel fetch: sandbox IDs + host/agent records"):
-                    with ConcurrencyGroupExecutor(
+                    with mngr_executor(
                         parent_cg=cg, name=f"modal_discover_hosts_and_agents_{self.name}", max_workers=3
                     ) as executor:
                         running_ids_future = executor.submit(self._list_running_host_ids, cg)
@@ -2867,9 +2850,7 @@ log "=== Shutdown script completed ==="
             gpu=None,
         )
 
-    # =========================================================================
     # Optimized Listing
-    # =========================================================================
 
     def get_host_and_agent_details(
         self,
@@ -3178,7 +3159,7 @@ log "=== Shutdown script completed ==="
             type=agent_type,
             command=command,
             work_dir=Path(agent_data.get("work_dir", "/")),
-            initial_branch=agent_data.get("created_branch_name"),
+            initial_branch=read_checked_out_branch(agent_data),
             create_time=create_time,
             start_on_boot=agent_data.get("start_on_boot", False),
             state=lifecycle.state,
@@ -3197,9 +3178,7 @@ log "=== Shutdown script completed ==="
             plugin={},
         )
 
-    # =========================================================================
     # Snapshot Methods
-    # =========================================================================
 
     def _record_snapshot(
         self,
@@ -3380,9 +3359,7 @@ log "=== Shutdown script completed ==="
 
         logger.info("Deleted snapshot", snapshot_id=str(snapshot_id))
 
-    # =========================================================================
     # Volume Methods
-    # =========================================================================
 
     @staticmethod
     def _volume_id_for_name(modal_volume_name: str) -> VolumeId:
@@ -3439,9 +3416,7 @@ log "=== Shutdown script completed ==="
                 return
         raise MngrError(f"Volume {volume_id} not found")
 
-    # =========================================================================
     # Host Mutation Methods
-    # =========================================================================
 
     def get_host_tags(
         self,
@@ -3588,9 +3563,7 @@ log "=== Shutdown script completed ==="
 
         return host_obj
 
-    # =========================================================================
     # Connector Method
-    # =========================================================================
 
     def get_connector(
         self,
@@ -3624,9 +3597,7 @@ log "=== Shutdown script completed ==="
             private_key_path,
         )
 
-    # =========================================================================
     # Lifecycle Methods
-    # =========================================================================
 
     def close(self) -> None:
         """Clean up the Modal app context.

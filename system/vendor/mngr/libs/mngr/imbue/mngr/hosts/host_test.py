@@ -28,6 +28,7 @@ from pyinfra.api.host import Host as PyinfraHost
 from pyinfra.connectors.util import CommandOutput
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.concurrency_group.errors import ProcessTimeoutError
 from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.config.data_types import AgentTypeConfig
 from imbue.mngr.config.data_types import EnvVar
@@ -94,7 +95,9 @@ from imbue.mngr.primitives import TmuxWidth
 from imbue.mngr.primitives import TmuxWindowSize
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
+from imbue.mngr.utils.command_logging import commands_kept_out_of_logs
 from imbue.mngr.utils.testing import HostSubclassT
+from imbue.mngr.utils.testing import capture_loguru
 from imbue.mngr.utils.testing import get_cleanup_failures
 from imbue.mngr.utils.testing import get_short_random_string
 from imbue.mngr.utils.testing import make_local_host_of_class
@@ -481,6 +484,30 @@ def test_create_agent_state_stores_created_branch_name(
     assert agent.get_created_branch_name() == "mngr/my-branch"
 
 
+def test_create_agent_state_records_a_checked_out_branch_it_did_not_create(
+    local_host: Host,
+    temp_host_dir: Path,
+    temp_work_dir: Path,
+) -> None:
+    """The two branch answers are persisted separately, and must stay separate.
+
+    Teardown deletes the created branch, so that one has to stay null for a branch
+    the user already had -- while the checked-out branch still names where this
+    agent's work_dir sits.
+    """
+    host = local_host
+    options = CreateAgentOptions(
+        name=AgentName("test-checked-out-branch-store"),
+        agent_type=AgentTypeName("generic"),
+        command=CommandString("sleep 1"),
+    )
+
+    agent = host.create_agent_state(temp_work_dir, options, checked_out_branch_name="already/mine")
+
+    assert agent.get_created_branch_name() is None
+    assert agent.get_checked_out_branch_name() == "already/mine"
+
+
 def test_create_agent_state_uses_explicit_agent_id(
     local_host: Host,
     temp_host_dir: Path,
@@ -663,6 +690,33 @@ def test_ensure_work_dir_exists_raises_with_recovery_command(
     agent = host.create_agent_state(missing_dir, options, created_branch_name="mngr/my-branch")
 
     with pytest.raises(AgentStartError, match="git worktree add.*mngr/my-branch"):
+        host._ensure_work_dir_exists(agent)
+
+
+def test_ensure_work_dir_exists_recovers_a_branch_mngr_did_not_create(
+    local_provider: LocalProviderInstance,
+    temp_host_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """The recovery command is owed to an agent attached to a pre-existing branch too.
+
+    ``git worktree add`` restores the work_dir from that branch just as well, and the
+    created-branch answer is deliberately None here -- so reading it would tell exactly
+    these users that no branch is recorded while one is.
+    """
+    missing_dir = tmp_path / "worktrees" / "also-gone"
+    host = local_provider.create_host(HostName(LOCAL_HOST_NAME))
+    assert isinstance(host, Host)
+
+    options = CreateAgentOptions(
+        name=AgentName("test-recovery-cmd-existing-branch"),
+        agent_type=AgentTypeName("generic"),
+        command=CommandString("sleep 1"),
+    )
+    agent = host.create_agent_state(missing_dir, options, checked_out_branch_name="already/mine")
+
+    assert agent.get_created_branch_name() is None
+    with pytest.raises(AgentStartError, match="git worktree add.*already/mine"):
         host._ensure_work_dir_exists(agent)
 
 
@@ -1773,6 +1827,36 @@ def test_execute_idempotent_command_raises_command_timeout_error_on_local_timeou
     # Opt-in: the same timeout is raised loudly as CommandTimeoutError.
     with pytest.raises(CommandTimeoutError):
         local_host.execute_idempotent_command("sleep 10", timeout_seconds=1, raise_on_timeout=True)
+
+
+def test_host_keeps_a_secret_bearing_command_and_its_parameters_out_of_the_logs(local_host: Host) -> None:
+    """Neither the command body nor the env it resolved is traced inside the scope."""
+    secret_command = "echo marker-27594"
+    with capture_loguru(level="TRACE") as log_output:
+        with commands_kept_out_of_logs("a script carrying a key"):
+            result = local_host.execute_idempotent_command(secret_command, env={"SECRET_KEY": "marker-73160"})
+    assert result.success
+    logged = log_output.getvalue()
+    assert "marker-27594" not in logged
+    assert "marker-73160" not in logged
+    assert f"<a script carrying a key, {len(secret_command)} bytes, not logged>" in logged
+
+
+def test_a_timeout_error_names_the_stand_in_rather_than_the_command_it_withholds(local_host: Host) -> None:
+    """The loud timeout error carries the command's text, so the scope has to reach it too."""
+    secret_command = "echo marker-63108 >/dev/null && sleep 10"
+    with commands_kept_out_of_logs("a script carrying a key"):
+        with pytest.raises(CommandTimeoutError) as timeout_error:
+            local_host.execute_idempotent_command(secret_command, timeout_seconds=1, raise_on_timeout=True)
+    stand_in = f"<a script carrying a key, {len(secret_command)} bytes, not logged>"
+    assert "marker-63108" not in str(timeout_error.value)
+    assert stand_in in str(timeout_error.value)
+    # The backend's own timeout error is chained onto this one, so a traceback render or a
+    # Sentry report reaches it too -- it has to withhold the command just as loudly.
+    cause = timeout_error.value.__cause__
+    assert isinstance(cause, ProcessTimeoutError)
+    assert "marker-63108" not in str(cause)
+    assert cause.display_command == stand_in
 
 
 class _FakeLockChannel:

@@ -33,6 +33,7 @@ import os
 import re
 import secrets
 import threading
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime
@@ -64,6 +65,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from supertokens_python.async_to_sync_wrapper import sync as _supertokens_sync_run
 from supertokens_python.exceptions import GeneralError as SuperTokensGeneralError
@@ -91,7 +93,7 @@ from supertokens_python.recipe.thirdparty.providers.config_utils import find_and
 from supertokens_python.syncio import delete_user
 from supertokens_python.types import RecipeUserId
 from tenacity import retry
-from tenacity import retry_if_exception_type
+from tenacity import retry_if_exception
 from tenacity import stop_after_attempt
 from tenacity import wait_fixed
 
@@ -114,6 +116,7 @@ from imbue.remote_service_connector.entitlements import SIGNUP_SELECTABLE_PLAN_N
 from imbue.remote_service_connector.entitlements import create_entitlements_row_from_plan
 from imbue.remote_service_connector.errors import DownloadLinkError
 from imbue.remote_service_connector.errors import MissingShareConfigError
+from imbue.remote_service_connector.errors import SuperTokensCoreUnavailableError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
 logger = logging.getLogger(__name__)
@@ -171,24 +174,16 @@ OAUTH_GOOGLE_CALLBACK_PATH: Final[str] = "/share/oauth/google/callback"
 # back to the ASGI scheme rather than being spliced into the base URL verbatim.
 _TRUSTED_FORWARDED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
 
-# The only platform that tracks a release channel meaningfully.
-_MAC_ARM64_PLATFORM: Final[str] = "mac-arm64"
-
-# Default per-platform installer links.
-_DEFAULT_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
-    # For _MAC_ARM64_PLATFORM, this is the hardcoded fallback, used only when the live manifest is down.
-    _MAC_ARM64_PLATFORM: (
-        "https://download.todesktop.com/26032588hqdzk/Mind%200.6.2%20-%20Build%20260917ohslvgoyj-arm64.dmg"
-    ),
-    "source": "https://github.com/imbue-ai/mngr",
-}
-
-_STABLE_CHANNEL_MANIFEST_URL: Final[str] = "https://updates.imbueminds.com/stable-mac.yml"
+# Where the stable release channel publishes each platform's manifest.
+_STABLE_CHANNEL_FEED_BASE_URL: Final[str] = "https://updates.imbueminds.com"
 _STABLE_CHANNEL_CACHE_SECONDS: Final[float] = 60.0
 _STABLE_CHANNEL_FETCH_TIMEOUT_SECONDS: Final[float] = 2.0
 _STABLE_CHANNEL_FETCH_ATTEMPTS: Final[int] = 2
 _STABLE_CHANNEL_RETRY_SECONDS: Final[float] = 0.25
-_ARM64_DMG_SUFFIX: Final[str] = "-arm64.dmg"
+# One entry per platform that resolves (three today, and the concurrent misses
+# for a platform coalesce into one), so any bound above the platform count
+# means nothing is ever evicted early; 8 leaves room for a few more platforms.
+_STABLE_CHANNEL_CACHE_SIZE: Final[int] = 8
 _MANIFEST_FETCH_FAILURES: Final[tuple[type[Exception], ...]] = (
     # socket level errors
     OSError,
@@ -212,32 +207,102 @@ _MANIFEST_PARSE_FAILURES: Final[tuple[type[Exception], ...]] = (
 _TODESKTOP_DOWNLOAD_PREFIX: Final[str] = "https://download.todesktop.com/"
 
 
+class ReleaseChannelPlatform(BaseModel):
+    """How one download platform is read out of the stable release channel."""
+
+    model_config = ConfigDict(frozen=True)
+
+    channel_file: str = Field(description="The stable channel manifest for this platform, by file name")
+    artifact_suffix: str = Field(description="What the one artifact this platform installs from ends in")
+    fallback_url: str | None = Field(
+        description=(
+            "What to serve while the channel cannot be read; None means 404, which is where a platform "
+            "stays until stable has served it once (every Linux platform, until stable's platforms list "
+            "first includes linux)"
+        )
+    )
+
+
+_MAC_ARM64_PLATFORM: Final[str] = "mac-arm64"
+_LINUX_DEB_X64_PLATFORM: Final[str] = "linux-deb-x64"
+_LINUX_APPIMAGE_X64_PLATFORM: Final[str] = "linux-appimage-x64"
+
+# The platforms whose installer is whatever the stable release channel serves.
+_RELEASE_CHANNEL_PLATFORMS: Final[dict[str, ReleaseChannelPlatform]] = {
+    _MAC_ARM64_PLATFORM: ReleaseChannelPlatform(
+        channel_file="stable-mac.yml",
+        artifact_suffix="-arm64.dmg",
+        # Bumped by hand at every stable promotion, and drift-tested against the
+        # build apps/minds/release-channels.toml declares for stable.
+        fallback_url=(
+            "https://download.todesktop.com/26032588hqdzk/Mind%200.6.2%20-%20Build%20260917ohslvgoyj-arm64.dmg"
+        ),
+    ),
+    _LINUX_DEB_X64_PLATFORM: ReleaseChannelPlatform(
+        channel_file="stable-linux.yml", artifact_suffix=".deb", fallback_url=None
+    ),
+    _LINUX_APPIMAGE_X64_PLATFORM: ReleaseChannelPlatform(
+        channel_file="stable-linux.yml", artifact_suffix=".AppImage", fallback_url=None
+    ),
+}
+
+# Installer links that are not read out of a release channel.
+_STATIC_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
+    "source": "https://github.com/imbue-ai/mngr",
+}
+
+# Friendly aliases resolve server-side so marketing links stay stable if a
+# platform's default target ever changes (e.g. "mac" moving off arm64, or
+# "linux" moving off the .deb).
+_DOWNLOAD_PLATFORM_BY_ALIAS: Final[dict[str, str]] = {
+    "mac": _MAC_ARM64_PLATFORM,
+    "linux": _LINUX_DEB_X64_PLATFORM,
+}
+
+
+def _is_retryable_manifest_fetch_failure(exc: BaseException) -> bool:
+    """Whether a failed manifest read is worth a second attempt.
+
+    A 4xx answer is the feed's settled verdict on the file (for a Linux channel
+    file stable has not published yet, a 404 on every read), so repeating the
+    request only adds a wait to the request path; everything else in
+    ``_MANIFEST_FETCH_FAILURES`` is transient.
+    """
+    if (
+        isinstance(exc, urllib.error.HTTPError)
+        and http.HTTPStatus.BAD_REQUEST <= exc.code < http.HTTPStatus.INTERNAL_SERVER_ERROR
+    ):
+        return False
+    return isinstance(exc, _MANIFEST_FETCH_FAILURES)
+
+
 # CLEANUP: ``web_template_channel.py`` reads the release feed's
 # ``<channel>-web.json`` with its own copy of this fetch/retry/cache shape,
-# written apart from this reader so it neither depends on the per-platform
-# rewrite of it on mngr/linux-packaging (imbue-ai/mngr-internal#943) nor
-# conflicts with it textually. Consolidate the two into one feed reader once
-# both branches are on main -- owed by whichever merges second.
+# written apart from this reader while the per-platform rewrite here lived on
+# its own branch. Consolidate the two into one feed reader now that both are
+# on main.
 @retry(
-    retry=retry_if_exception_type(_MANIFEST_FETCH_FAILURES),
+    retry=retry_if_exception(_is_retryable_manifest_fetch_failure),
     stop=stop_after_attempt(_STABLE_CHANNEL_FETCH_ATTEMPTS),
     wait=wait_fixed(_STABLE_CHANNEL_RETRY_SECONDS),
     reraise=True,
 )
-def _fetch_stable_channel_manifest() -> str:
-    """Read the manifest, retrying a failed read.
+def _fetch_stable_channel_manifest(channel_file: str) -> str:
+    """Read the manifest, retrying a read that failed for a transient reason.
 
     Capped at ``_STABLE_CHANNEL_FETCH_ATTEMPTS`` because the route is sync: each
     attempt holds a worker thread the rest of the connector shares.
     """
     # The feed's CDN answers 403 to `Python-urllib/<version>` by name.
-    request = urllib.request.Request(_STABLE_CHANNEL_MANIFEST_URL, headers={"User-Agent": "minds-connector"})
+    request = urllib.request.Request(
+        f"{_STABLE_CHANNEL_FEED_BASE_URL}/{channel_file}", headers={"User-Agent": "minds-connector"}
+    )
     with urllib.request.urlopen(request, timeout=_STABLE_CHANNEL_FETCH_TIMEOUT_SECONDS) as response:
         return response.read().decode()
 
 
-def _arm64_dmg_url_from(manifest: str) -> str:
-    """Extract exactly one arm64 .dmg url from the channel manifest."""
+def _artifact_url_from(manifest: str, artifact_suffix: str) -> str:
+    """Extract exactly one url ending in ``artifact_suffix`` from the channel manifest."""
     try:
         document = yaml.safe_load(manifest)
     except _MANIFEST_PARSE_FAILURES as exc:
@@ -251,38 +316,68 @@ def _arm64_dmg_url_from(manifest: str) -> str:
         if not isinstance(entry, dict):
             continue
         url = str(entry.get("url", ""))
-        if url.startswith(_TODESKTOP_DOWNLOAD_PREFIX) and url.endswith(_ARM64_DMG_SUFFIX):
+        if url.startswith(_TODESKTOP_DOWNLOAD_PREFIX) and url.endswith(artifact_suffix):
             urls.add(url)
 
     if len(urls) != 1:
-        raise DownloadLinkError(f"Malformed manifest: expected 1 arm64 .dmg url, found {len(urls)}")
+        raise DownloadLinkError(f"Malformed manifest: expected 1 {artifact_suffix} url, found {len(urls)}")
     return urls.pop()
+
+
+# Reads one channel file by name; injectable so tests can serve a manifest
+# without a feed.
+_FetchChannelManifest = Callable[[str], str]
+
+
+def _is_unpublished_channel_file(exc: Exception, channel_platform: ReleaseChannelPlatform) -> bool:
+    """Whether a read failed because stable has never published this platform's channel file.
+
+    A 404 for a platform that pins no fallback is expected: the feed holds no
+    channel file for it, and nothing is pinned to serve instead. A platform
+    that does pin one has had its channel file published, so its 404 is a read
+    failure like any other.
+    """
+    return (
+        isinstance(exc, urllib.error.HTTPError)
+        and exc.code == http.HTTPStatus.NOT_FOUND
+        and channel_platform.fallback_url is None
+    )
+
+
+def _resolve_stable_artifact_url(platform: str, fetch: _FetchChannelManifest) -> str | None:
+    """Read ``platform``'s installer out of the stable channel, or None when it cannot be."""
+    channel_platform = _RELEASE_CHANNEL_PLATFORMS[platform]
+    try:
+        return _artifact_url_from(fetch(channel_platform.channel_file), channel_platform.artifact_suffix)
+    except (*_MANIFEST_FETCH_FAILURES, DownloadLinkError) as exc:
+        if _is_unpublished_channel_file(exc, channel_platform):
+            logger.warning(
+                "Served no stable download link for %s: %s is not published",
+                platform,
+                channel_platform.channel_file,
+            )
+            return None
+        # error, not warning: the feed is expected to be readable, and while it
+        # is not, downloads serve the fallback, or 404 where none is pinned.
+        logger.error("Could not resolve the stable download link for %s", platform, exc_info=exc)
+        return None
 
 
 # The condition serialises concurrent misses, so a cold container hit by several
 # downloads at once reads the feed once rather than once per request.
-@cached(cache=TTLCache(maxsize=1, ttl=_STABLE_CHANNEL_CACHE_SECONDS), condition=threading.Condition())
-def stable_mac_arm64_url() -> str | None:
-    """The arm64 .dmg the stable channel serves, or None to fall back.
+@cached(
+    cache=TTLCache(maxsize=_STABLE_CHANNEL_CACHE_SIZE, ttl=_STABLE_CHANNEL_CACHE_SECONDS),
+    condition=threading.Condition(),
+)
+def stable_artifact_url(platform: str) -> str | None:
+    """The installer the stable channel serves for ``platform``, or None to fall back.
 
     Each container caches independently, so a promotion reaches every one of
     them within the TTL. A read that fails is cached too, so an outage costs one
     download the fetch rather than every one.
     """
-    try:
-        return _arm64_dmg_url_from(_fetch_stable_channel_manifest())
-    except (*_MANIFEST_FETCH_FAILURES, DownloadLinkError) as exc:
-        # error, not warning: the feed is expected to be readable, and while it
-        # is not, every download serves the fallback.
-        logger.error("Could not resolve the stable download link", exc_info=exc)
-        return None
+    return _resolve_stable_artifact_url(platform, _fetch_stable_channel_manifest)
 
-
-# Friendly aliases resolve server-side so marketing links stay stable if a
-# platform's default target ever changes (e.g. "mac" moving off arm64).
-_DOWNLOAD_PLATFORM_BY_ALIAS: Final[dict[str, str]] = {
-    "mac": _MAC_ARM64_PLATFORM,
-}
 
 # Caps on the campaign context carried through the OAuth state JWT: the whole
 # state rides Google's authorize URL, so keep it comfortably small.
@@ -340,12 +435,17 @@ def _resolve_browser_identity(request: Request) -> tuple[str, str, bool] | None:
     """Return ``(user_id, email, is_email_verified)`` for the browser session, or None.
 
     Shared with the share broker's ``/share/authorize`` so the app-login and
-    share-visit flows resolve the exact same session.
+    share-visit flows resolve the exact same session. A core outage raises
+    ``SuperTokensCoreUnavailableError`` (a retryable 503) rather than reading
+    as "signed out": a false 401 would be indistinguishable from a real
+    sign-out for every client, whereas the 503 tells them to retry.
     """
     if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
         return None
     try:
-        session = _sdk_get_browser_session(request)
+        session = auth_module.call_supertokens_core(
+            lambda: _sdk_get_browser_session(request), caller="browser_session"
+        )
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         logger.debug("Browser session resolution failed: %s", exc)
         return None
@@ -356,8 +456,10 @@ def _resolve_browser_identity(request: Request) -> tuple[str, str, bool] | None:
         # revocation must not turn the caller's request into a 500 (the next
         # resolution attempt re-revokes).
         try:
-            revoke_session(session.get_handle())
-        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+            auth_module.call_supertokens_core(
+                lambda: revoke_session(session.get_handle()), caller="browser_session_revoke"
+            )
+        except (SuperTokensSessionError, SuperTokensGeneralError, SuperTokensCoreUnavailableError) as exc:
             logger.warning("Could not revoke an over-max-age browser session", exc_info=exc)
         return None
     user_id = session.get_user_id()
@@ -967,7 +1069,9 @@ def accounts_signout(request: Request) -> dict[str, object]:
         require_supertokens_configured()
         _reject_cross_site_post(request)
         try:
-            session = _sdk_get_browser_session(request)
+            session = auth_module.call_supertokens_core(
+                lambda: _sdk_get_browser_session(request), caller="browser_session"
+            )
         except TryRefreshTokenError as exc:
             # An expired-but-refreshable access token is NOT "already signed
             # out": answering OK would leave the refresh token alive. A 401
@@ -1640,11 +1744,10 @@ def download_redirect(request: Request) -> RedirectResponse:
     with handle_endpoint_errors():
         raw_platform = request.query_params.get("platform", "")
         platform = _DOWNLOAD_PLATFORM_BY_ALIAS.get(raw_platform, raw_platform)
-        if platform not in _DEFAULT_TARGET_BY_PLATFORM:
-            raise HTTPException(status_code=404, detail="Unknown platform")
-        target_url = _DEFAULT_TARGET_BY_PLATFORM[platform]
-        if platform == _MAC_ARM64_PLATFORM:
-            target_url = stable_mac_arm64_url() or target_url
+        target_url = _download_target_for(platform)
+        if target_url is None:
+            # Nothing to send the person to, so nothing to count as a download.
+            raise HTTPException(status_code=404, detail="No installer for this platform")
         record_download_event(
             cookie_value=request.cookies.get(ATTRIBUTION_COOKIE_NAME),
             request_query=request.url.query,
@@ -1652,6 +1755,23 @@ def download_redirect(request: Request) -> RedirectResponse:
             user_agent=request.headers.get("user-agent", ""),
         )
         return RedirectResponse(url=target_url, status_code=302)
+
+
+def _download_target_for(platform: str) -> str | None:
+    """Where ``/download`` sends ``platform``, or None when there is nowhere to send it.
+
+    A release channel platform serves what stable serves, then its pinned
+    fallback; a platform stable does not publish and that pins no fallback --
+    every Linux platform until stable ships Linux -- has no target at all.
+    """
+    if platform in _STATIC_TARGET_BY_PLATFORM:
+        return _STATIC_TARGET_BY_PLATFORM[platform]
+    if platform not in _RELEASE_CHANNEL_PLATFORMS:
+        return None
+    resolved = stable_artifact_url(platform)
+    if resolved is not None:
+        return resolved
+    return _RELEASE_CHANNEL_PLATFORMS[platform].fallback_url
 
 
 def _mark_next_confirmed(next_path: str) -> str:

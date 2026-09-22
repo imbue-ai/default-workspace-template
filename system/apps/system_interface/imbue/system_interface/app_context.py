@@ -45,6 +45,10 @@ class SystemInterfaceState(MutableModel):
         description="The bundle directory the shell routes serve from: the package's own static/ unless the "
         "state is built with another (a test serving a shell it wrote)",
     )
+    # A preview shell is the real desktop with one app swapped, booted over a copy of the
+    # live state: it refuses the verbs that would reach the live workspace (an app's stop
+    # and start, the update notice's), tells its page so, and raises no staleness banner.
+    is_preview: bool = Field(default=False, description="Whether this shell is a preview of a proposed change")
 
     def shutdown(self) -> None:
         """Tear down every owned resource. Idempotent."""

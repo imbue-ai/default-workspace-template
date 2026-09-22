@@ -6,7 +6,9 @@ import pytest
 
 from imbue.minds.config.data_types import WireguardOperatorConfig
 from imbue.minds.config.data_types import management_overlay_for_tier
+from imbue.minds_admin.slices.management_plane import MANAGEMENT_LOCKDOWN_MARKER
 from imbue.minds_admin.slices.management_plane import build_operator_wireguard_client_config
+from imbue.minds_admin.slices.management_plane import is_management_lockdown_in_prep_output
 from imbue.minds_admin.slices.management_plane import next_free_box_wireguard_address
 from imbue.minds_admin.slices.management_plane import parse_wireguard_public_key_from_prep_output
 from imbue.minds_admin.slices.management_plane import render_management_lockdown_prep_section
@@ -27,8 +29,12 @@ def _assert_bash_syntax_ok(script: str) -> None:
 
 def _operators() -> tuple[WireguardOperatorConfig, ...]:
     return (
-        WireguardOperatorConfig.model_validate({"name": "josh", "public_key": "opkeyjosh=", "address": "10.112.0.2"}),
-        WireguardOperatorConfig.model_validate({"name": "alex", "public_key": "opkeyalex=", "address": "10.112.0.3"}),
+        WireguardOperatorConfig.model_validate(
+            {"name": "josh", "public_key": "wee0+EFoclrCL2Pdf3oT3dKtL3Z2W2Tr9JsbvLzqwLc=", "address": "10.112.0.2"}
+        ),
+        WireguardOperatorConfig.model_validate(
+            {"name": "alex", "public_key": "aAWhPfhifGs/d9CO0mkiyJc96qHKK8mmeiM7UXSAi3g=", "address": "10.112.0.3"}
+        ),
     )
 
 
@@ -75,9 +81,9 @@ def test_wireguard_prep_section_generates_once_and_echoes_the_public_key() -> No
     # carries a placeholder spliced on-box.
     assert "__MNGR_WG_PRIVATE_KEY__" in section
     # One peer block per operator, pinned to their /32.
-    assert "PublicKey = opkeyjosh=" in section
+    assert "PublicKey = wee0+EFoclrCL2Pdf3oT3dKtL3Z2W2Tr9JsbvLzqwLc=" in section
     assert "AllowedIPs = 10.112.0.2/32" in section
-    assert "PublicKey = opkeyalex=" in section
+    assert "PublicKey = aAWhPfhifGs/d9CO0mkiyJc96qHKK8mmeiM7UXSAi3g=" in section
     assert "AllowedIPs = 10.112.0.3/32" in section
     assert "Address = 10.112.1.5/16" in section
     assert "ListenPort = 51820" in section
@@ -98,6 +104,54 @@ def test_wireguard_prep_section_restarts_only_on_config_change() -> None:
     # The unchanged branch must not bounce a live interface (operators may be
     # connected over it while sync-peers runs).
     assert "systemctl start wg-quick@wg0" in section
+
+
+def test_wireguard_prep_section_validates_the_rendered_config_with_wg_before_installing_it() -> None:
+    section = render_wireguard_prep_section(
+        wireguard_address="10.112.1.5", listen_port=51820, operators=_operators(), overlay_prefix_length=16
+    )
+
+    _assert_bash_syntax_ok(section)
+    # wg parses the rendered file on a scratch interface (ListenPort dropped,
+    # the live interface holds it) before the mv; a rejection exits without
+    # touching the installed config.
+    check_idx = section.index('ip link add "$check_interface" type wireguard')
+    setconf_idx = section.index('wg setconf "$check_interface" /dev/stdin')
+    install_idx = section.index("mv /etc/wireguard/wg0.conf.mngr-tmp /etc/wireguard/wg0.conf")
+    assert check_idx < setconf_idx < install_idx
+    assert "sed '/^ListenPort/d'" in section
+    assert "wg rejected the rendered wg0.conf" in section
+
+
+def test_wireguard_prep_section_applies_peer_only_changes_live_with_wg_syncconf() -> None:
+    section = render_wireguard_prep_section(
+        wireguard_address="10.112.1.5", listen_port=51820, operators=_operators(), overlay_prefix_length=16
+    )
+
+    _assert_bash_syntax_ok(section)
+    # The operator's own session rides wg0: a restart severs it and costs tens
+    # of seconds of tunnel recovery, so peer changes reload in place and only
+    # an [Interface] change (compared section for section) restarts.
+    assert "wg syncconf wg0 <(wg-quick strip wg0)" in section
+    assert "interface_section" in section
+    assert "elif ! systemctl restart wg-quick@wg0; then" in section
+    assert "wg syncconf refused the rendered wg0.conf; restored the previous config" in section
+
+
+def test_wireguard_prep_section_restores_the_previous_config_when_the_restart_fails() -> None:
+    section = render_wireguard_prep_section(
+        wireguard_address="10.112.1.5", listen_port=51820, operators=_operators(), overlay_prefix_length=16
+    )
+
+    # The overlay is the only operator path to a locked-down box, so a config
+    # wg-quick will not come up on must not stay installed.
+    assert "cp -a /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.mngr-previous" in section
+    assert "systemctl restart wg-quick@wg0; then" in section
+    assert "mv /etc/wireguard/wg0.conf.mngr-previous /etc/wireguard/wg0.conf" in section
+    assert "restored the previous config" in section
+    # A first prep has no previous config to fall back on; the message says so
+    # rather than claiming a restore.
+    assert "(no previous config to restore)" in section
 
 
 def test_management_nftables_policy_scopes_the_drop_to_port_22() -> None:
@@ -206,3 +260,16 @@ def test_operator_client_config_refuses_an_unprepped_box() -> None:
         build_operator_wireguard_client_config(
             operator=_operators()[0], tier="dev", boxes=[unprepped], listen_port=51820
         )
+
+
+def test_lockdown_section_echoes_the_marker_only_when_it_installs_the_lockdown() -> None:
+    assert MANAGEMENT_LOCKDOWN_MARKER in render_management_lockdown_prep_section(("203.0.113.10",))
+    assert MANAGEMENT_LOCKDOWN_MARKER not in render_management_lockdown_prep_section(())
+
+
+def test_is_management_lockdown_in_prep_output_requires_the_exact_marker_line() -> None:
+    locked_down = f"MNGR_WIREGUARD_PUBLIC_KEY boxpub123=\n  {MANAGEMENT_LOCKDOWN_MARKER}  \nMNGR_BOX_PREP_DONE\n"
+    assert is_management_lockdown_in_prep_output(locked_down)
+    # The marker text inside another line (e.g. the echoed script) is not the marker.
+    assert not is_management_lockdown_in_prep_output(f'echo "{MANAGEMENT_LOCKDOWN_MARKER}"\nMNGR_BOX_PREP_DONE\n')
+    assert not is_management_lockdown_in_prep_output("MNGR_WIREGUARD_PUBLIC_KEY boxpub123=\nMNGR_BOX_PREP_DONE\n")

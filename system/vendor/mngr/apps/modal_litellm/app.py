@@ -79,8 +79,9 @@ _MIN_CONTAINERS = read_min_containers("MINDS_LITELLM_PROXY_MIN_CONTAINERS")
 # Idle-before-scaledown window (seconds). ``minds-admin env deploy`` threads the
 # tier's ``[scaledown_window].litellm_proxy`` here at ``modal deploy`` time.
 # Dev tiers set this high (~10 min) so the no-warm-pool proxy stays hot
-# across a dev session; staging / production leave it unset and rely on
-# ``min_containers``. None (from the unset/0 default, the ci/test tier)
+# across a dev session; staging / production set the same window so a
+# container the autoscaler added for a burst is not retired with requests
+# still in flight. None (from the unset/0 default, the ci/test tier)
 # means "don't pin it" -- Modal uses its own default.
 _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_LITELLM_PROXY_SCALEDOWN_WINDOW")
 

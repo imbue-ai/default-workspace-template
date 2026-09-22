@@ -193,6 +193,19 @@ export interface AvatarStatus {
   readonly is_stale: boolean;
 }
 
+/** The update notice as the shell sends it (``GET /api/updates/pending`` and ``update_notice_changed``): the
+ *  rollback point the last update-app careful-flow apply kept, or null once it is cleared. */
+export interface UpdateNoticeWire {
+  readonly merge_sha: string;
+  readonly applied_at: number;
+  readonly driven_by: string;
+  readonly apps: readonly string[];
+  readonly programs: readonly string[];
+  readonly needs_system_services_restart: boolean;
+  readonly progress: string | null;
+  readonly outcome: string | null;
+}
+
 /** One design as ``GET /api/avatars`` lists it; ``source_path`` is null for a bundled one. */
 export interface AvatarDesign {
   readonly id: string;
@@ -458,6 +471,29 @@ export function parseAvatarStatus(raw: unknown): AvatarStatus {
 export function parseAvatarSelectionChanged(raw: unknown): string {
   const record = asObject(raw, "avatar selection");
   return asString(record.design, "avatar selection.design");
+}
+
+export function parseUpdateNoticeChanged(raw: unknown): UpdateNoticeWire | null {
+  const record = asObject(raw, "update notice change");
+  if (record.notice === null || record.notice === undefined) return null;
+  const notice = asObject(record.notice, "update notice");
+  return {
+    merge_sha: asString(notice.merge_sha, "update notice.merge_sha"),
+    applied_at: asNumber(notice.applied_at, "update notice.applied_at"),
+    driven_by: asString(notice.driven_by, "update notice.driven_by"),
+    apps: asArray(notice.apps, "update notice.apps").map((app, index) =>
+      asString(app, `update notice.apps[${index}]`),
+    ),
+    programs: asArray(notice.programs, "update notice.programs").map((program, index) =>
+      asString(program, `update notice.programs[${index}]`),
+    ),
+    needs_system_services_restart: asBoolean(
+      notice.needs_system_services_restart,
+      "update notice.needs_system_services_restart",
+    ),
+    progress: asOptionalString(notice.progress, "update notice.progress"),
+    outcome: asOptionalString(notice.outcome, "update notice.outcome"),
+  };
 }
 
 export function parseAvatarDesign(raw: unknown): AvatarDesign {

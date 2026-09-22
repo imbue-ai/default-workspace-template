@@ -363,6 +363,61 @@ def test_register_refuses_a_gen2_service_user_override_before_any_db_connection(
     assert GEN2_SLICE_SERVICE_USER in result.output
 
 
+def _order_args(storage: str, *varied_args: str, plan_code: str = "24sys03-v1-us") -> list[str]:
+    """An `order` invocation for a plausible box, minus the options a test varies."""
+    return [
+        "order",
+        "--plan-code",
+        plan_code,
+        "--region",
+        "hil",
+        "--memory-gb",
+        "128",
+        "--storage",
+        storage,
+        "--dry-run",
+        *varied_args,
+    ]
+
+
+def test_order_refuses_unsupported_storage_before_touching_ovh_unless_overridden(
+    _cleared_ovh_and_activation_env: None,
+) -> None:
+    # A SATA mirror, a 3-disk mirror and a hybrid pair are all shapes the gen-2
+    # reinstall layout cannot produce; each is refused as a usage error before
+    # any credential is resolved or any cart is built (so no charge, no prompt).
+    for storage in ("softraid-3x4000sa", "softraid-3x1920nvme", "hybridsoftraid-2x6000sa-2x960nvme"):
+        refused = CliRunner().invoke(server, _order_args(storage))
+        assert refused.exit_code == 2, refused.output
+        assert "two-drive NVMe software mirror" in refused.output
+        assert "--allow-unsupported-storage" in refused.output
+    # With the override, or a 2x NVMe mirror, the guard steps aside and the command
+    # reaches credential resolution, which (with no credentials in the environment)
+    # is the first thing to fail.
+    for varied_args in (("softraid-3x4000sa", "--allow-unsupported-storage"), ("softraid-2x1920nvme",)):
+        passed_guard = CliRunner().invoke(server, _order_args(*varied_args))
+        assert passed_guard.exit_code == 1, passed_guard.output
+        assert "two-drive NVMe software mirror" not in passed_guard.output
+        assert "No OVH credentials found" in passed_guard.output
+
+
+def test_order_refuses_game_range_plans_before_touching_ovh_with_no_override(
+    _cleared_ovh_and_activation_env: None,
+) -> None:
+    refused = CliRunner().invoke(server, _order_args("softraid-2x960nvme", plan_code="24risegame022-v1-us"))
+    assert refused.exit_code == 2, refused.output
+    assert "GAME-range" in refused.output
+    assert "No OVH credentials found" not in refused.output
+    # There is deliberately no flag that lets a GAME-range order through.
+    assert "--allow" not in refused.output
+
+
+def test_pricing_command_exposes_the_any_storage_flag() -> None:
+    result = CliRunner().invoke(server, ["pricing", "--help"])
+    assert result.exit_code == 0
+    assert "--any-storage" in result.output
+
+
 def test_order_command_exposes_dry_run_flag() -> None:
     # `order --dry-run` is the no-charge price/spec preview the deployment playbook
     # relies on; guard that the flag stays on the CLI surface with its no-charge contract.

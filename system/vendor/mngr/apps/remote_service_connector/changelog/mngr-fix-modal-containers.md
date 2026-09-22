@@ -1,0 +1,7 @@
+Connector `POST /frps/auth/*` and `GET /shares/assignment` no longer answer 500 from Modal autoscaler churn or from Neon sockets that hang until the function timeout (imbue-ai/mngr-internal#1158):
+
+- The web function's concurrency cap rises from 8 to 32 inputs per container with an autoscaler target of 16 (`API_MAX_CONCURRENT_INPUTS` / `API_TARGET_CONCURRENT_INPUTS` in `deploy_constants.py`). At 8, one synchronized frps heartbeat burst filled a container, so the autoscaler added a container per burst and retired it 60 s later with requests still in flight; those requests were the sub-second 500s. The app's startup now raises anyio's sync-route worker-thread limit to 64 so admitted requests never queue for a thread, and the per-container DB pool's idle capacity follows the same cap.
+
+- Every pooled Neon connection carries libpq socket bounds (`connect_timeout`, TCP keepalives, `tcp_user_timeout`), so a peer that vanished without closing the connection surfaces as an `OperationalError` in about 20 s instead of blocking the request for Modal's 300 s function timeout. Connections idle longer than five minutes are closed rather than reused (a `db_pooled_connection_discarded` metric with reason `idle_age`), since the LIFO pool's deepest entries were the ones going half-open in clusters.
+
+- The frps `Ping` heartbeat now fails open on any connector-internal error raised by the share lookup, not only `psycopg2.Error`; each fail-open still logs a warning (a Bugsink event) and a `frps_ping_fail_open` metric.

@@ -1,10 +1,20 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it (and one shaped like the
  * chat's manifest), a desktop, a window, a placement, a launch path, a client record, a layout, the
- * avatar state, and the theme metrics. Each takes overrides so a test spells only what it is about.
+ * avatar state, the theme metrics, and the update notice as the shell sends it. Each takes
+ * overrides so a test spells only what it is about.
  */
 
-import type { AppRecord, ClientRecord, Desktop, LaunchPath, Layout, Placement, WindowRecord } from "../model/records";
+import type {
+  AppRecord,
+  ClientRecord,
+  Desktop,
+  LaunchPath,
+  Layout,
+  Placement,
+  UpdateNoticeWire,
+  WindowRecord,
+} from "../model/records";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
 import type { AvatarState } from "../reducers/desktopState";
@@ -131,6 +141,21 @@ export function layoutRecord(placements: readonly Placement[], updatedAt: string
 /** A shown, normal placement at the first cascade frame. */
 export function placementRecord(windowId: string, overrides: Partial<Placement> = {}): Placement {
   return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
+}
+
+/** An open notice (no rollback started) for an apply that touched ``apps``, one program each. */
+export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> = {}): UpdateNoticeWire {
+  return {
+    merge_sha: "abc1234abc1234abc1234abc1234abc1234abc12",
+    applied_at: 1_780_000_000,
+    driven_by: "mngr/update-widgets",
+    apps,
+    programs: apps,
+    needs_system_services_restart: false,
+    progress: null,
+    outcome: null,
+    ...overrides,
+  };
 }
 
 /** The theme metrics at the contract's default (non-compact) values. */

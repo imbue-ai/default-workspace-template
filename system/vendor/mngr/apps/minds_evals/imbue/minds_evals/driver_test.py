@@ -20,6 +20,7 @@ from imbue.minds_evals import diagnostic_probe
 from imbue.minds_evals import evidence_collection
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.check_run import collect_spend
 from imbue.minds_evals.clock import ClockInterface
 from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
@@ -32,6 +33,7 @@ from imbue.minds_evals.data_types import ObservedHarnessModels
 from imbue.minds_evals.data_types import PromptEntry
 from imbue.minds_evals.data_types import SeedBuildRecord
 from imbue.minds_evals.data_types import SeedBuildStatus
+from imbue.minds_evals.data_types import Spender
 from imbue.minds_evals.data_types import StepBoxFile
 from imbue.minds_evals.data_types import StepBoxSeedApp
 from imbue.minds_evals.data_types import StepPosition
@@ -127,8 +129,10 @@ from imbue.minds_evals.mock_turn_source_test import ScriptedSourceDriver
 from imbue.minds_evals.mock_turn_source_test import ScriptedTurnSource
 from imbue.minds_evals.mock_turn_source_test import done
 from imbue.minds_evals.mock_turn_source_test import say
+from imbue.minds_evals.pricing import CacheWriteTtl
 from imbue.minds_evals.testing import BOX_COMMON_TRANSCRIPT_PATH
 from imbue.minds_evals.testing import BOX_WORKSPACE_TRAJECTORY_PATH
+from imbue.minds_evals.testing import FIXTURE_PRICE_MAP
 from imbue.minds_evals.testing import TEMPLATE_SUPERVISORD_CONF
 from imbue.minds_evals.testing import TICKET_FILE_TEXT_BY_NAME
 from imbue.minds_evals.testing import WORKER_AGENT_ID
@@ -405,11 +409,10 @@ def _turn_record(index: int, sent_at: str, replied_at: str) -> TurnRecord:
         agent_message_count=1,
         message_count=0,
         tokens=TokenBuckets(input=0, output=0, cache_read=0, cache_write=0),
-        cost_usd=None,
     )
 
 
-def test_build_turn_record_times_the_turn_and_prices_only_its_own_slice() -> None:
+def test_build_turn_record_times_the_turn_and_counts_only_its_own_slice() -> None:
     events = [
         {"type": "assistant_message", "text": "an earlier turn", "model": "claude-opus-4-8", "usage": _turn_usage(7)},
         {"type": "user_message", "content": "our turn"},
@@ -434,15 +437,14 @@ def test_build_turn_record_times_the_turn_and_prices_only_its_own_slice() -> Non
     assert record.replied_at == "2026-09-14T12:03:20+00:00"
     assert record.reply_seconds == 200.0
     # The empty-usage message is one of the two the reply was made of, and is not one of the messages
-    # the spend is derived from.
+    # the token counts are derived from.
     assert record.agent_message_count == 2
     assert record.message_count == 1
-    # The earlier turn's 7 output tokens are before the baseline and stay out of this turn's cost.
+    # The earlier turn's 7 output tokens are before the baseline and stay out of this turn's own count.
     assert record.tokens.output == 50
-    assert record.cost_usd is not None and record.cost_usd > 0
 
 
-def test_build_turn_record_of_a_turn_nobody_metered_reports_unknown_cost() -> None:
+def test_build_turn_record_of_a_turn_nobody_metered_records_no_metered_message() -> None:
     record = build_turn_record(
         message_index=1,
         entry_index=0,
@@ -457,8 +459,8 @@ def test_build_turn_record_of_a_turn_nobody_metered_reports_unknown_cost() -> No
     assert record.reply_seconds == 12.0
     assert record.agent_message_count == 1
     assert record.message_count == 0
-    # A turn whose stream reported no usage did not cost nothing -- we do not know what it cost.
-    assert record.cost_usd is None
+    # A turn whose stream reported no usage consumed nothing this can count, which is not zero spend.
+    assert record.tokens.output == 0
 
 
 def test_conversation_seconds_spans_the_first_message_to_the_last_reply() -> None:
@@ -1219,7 +1221,8 @@ def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separat
     assert context.n_input_tokens == 15 + 11_000 + 2_000
     assert context.n_cache_tokens == 11_000
     assert context.n_output_tokens == 150
-    assert context.cost_usd is not None and context.cost_usd > 0
+    # A trial prices nothing, so harbor's cost field stays empty whatever the tokens say.
+    assert context.cost_usd is None
 
     # Both turns are literal, so the decider never ran -- and its (empty) accounting is metadata,
     # never folded into the agent's own numbers.
@@ -1231,13 +1234,20 @@ def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separat
 
     # The breakdown is also its own artifact, and the trajectory carries the same totals.
     usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
-    assert usage_artifact["workspace_agent"]["cost_usd"] == context.cost_usd
+    # Tokens per model and no money anywhere in the file: a price belongs to whoever reads it, and one
+    # written here would be frozen into the trial at the rate of the day it ran.
+    assert usage_artifact["workspace_agent"]["tokens"]["cache_read"] == 11_000
+    assert [block for block in usage_artifact.values() if isinstance(block, dict) and "cost_usd" in block] == []
+    # One block per spender, the verification agent's among them, and the per-turn breakdown beside
+    # them: the eval's own spend is reported beside the agent under test's and never folded into it.
+    assert set(usage_artifact) == {"workspace_agent", "decider", "verifier_agent", "per_turn"}
+    assert usage_artifact["verifier_agent"] == context.metadata["verifier_agent_usage"]
     trajectory = json.loads((driver.logs_dir / "trajectory.json").read_text())
     assert trajectory["final_metrics"]["total_cached_tokens"] == 11_000
-    assert trajectory["final_metrics"]["total_cost_usd"] == context.cost_usd
+    assert "total_cost_usd" not in trajectory["final_metrics"]
 
 
-def test_driver_records_each_answered_turns_wall_clock_and_spend(tmp_path: Path) -> None:
+def test_driver_records_each_answered_turns_wall_clock_and_tokens(tmp_path: Path) -> None:
     conversation = ConversationModel(
         chat_agent_id="chat-1",
         turn_reply_events=[
@@ -1256,11 +1266,10 @@ def test_driver_records_each_answered_turns_wall_clock_and_spend(tmp_path: Path)
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
     turns = state["turns"]
     assert [(turn["index"], turn["entry_index"], turn["exchange"]) for turn in turns] == [(1, 0, 0), (2, 1, 0)]
-    # Each turn is priced over its own slice of the stream, so the second one carries its own reply's
+    # Each turn is metered over its own slice of the stream, so the second one carries its own reply's
     # tokens rather than the conversation's running total.
     assert [turn["tokens"]["output"] for turn in turns] == [100, 50]
     assert [turn["message_count"] for turn in turns] == [1, 1]
-    assert all(turn["cost_usd"] > 0 for turn in turns)
     assert turns[0]["sent_at"] < turns[0]["replied_at"] <= turns[1]["sent_at"]
 
     # The trial's elapsed time also holds workspace bring-up, so it bounds the conversation's span.
@@ -1364,16 +1373,14 @@ def test_driver_reports_the_proxys_account_everywhere_when_a_proxy_metered_the_t
     assert context.n_output_tokens == 470
     assert context.n_cache_tokens == 10_000
     assert context.n_input_tokens == 47 + 10_000 + 3_000
-    assert context.cost_usd is not None and context.cost_usd > 0
 
     # Harbor's own fields, the usage artifact, and the trajectory all describe one trial.
     usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
-    assert usage_artifact["workspace_agent"]["cost_usd"] == context.cost_usd
+    assert usage_artifact["workspace_agent"]["tokens"]["output"] == context.n_output_tokens
     final_metrics = json.loads((driver.logs_dir / "trajectory.json").read_text())["final_metrics"]
     assert final_metrics["total_completion_tokens"] == context.n_output_tokens
     assert final_metrics["total_cached_tokens"] == context.n_cache_tokens
     assert final_metrics["total_prompt_tokens"] == context.n_input_tokens
-    assert final_metrics["total_cost_usd"] == context.cost_usd
 
 
 def test_driver_leaves_usage_unset_when_the_transcript_carries_none(tmp_path: Path) -> None:
@@ -1386,11 +1393,11 @@ def test_driver_leaves_usage_unset_when_the_transcript_carries_none(tmp_path: Pa
         timeout_seconds=1800.0,
     )
 
-    # An unknown cost must stay unknown rather than being reported as zero.
+    # Unknown usage must stay unknown rather than being reported as zero.
     assert context.n_input_tokens is None
     assert context.cost_usd is None
     assert context.metadata is not None
-    assert context.metadata["workspace_usage"]["cost_usd"] is None
+    assert context.metadata["workspace_usage"]["per_model"] == []
 
 
 def test_driver_marks_timed_out_when_no_reply_arrives(tmp_path: Path) -> None:
@@ -1530,7 +1537,6 @@ def test_driver_publishes_the_workspace_trajectory_for_grading(tmp_path: Path) -
         "total_prompt_tokens": 1_010,
         "total_completion_tokens": 40,
         "total_cached_tokens": 1_000,
-        "total_cost_usd": context.cost_usd,
         "total_steps": 2,
     }
     assert trajectory["extra"]["minds_evals"]["source"] == "workspace"
@@ -2161,7 +2167,7 @@ def test_driver_reports_the_verification_agents_spend_separately_from_the_agent_
         {"outcome": "A working to-do web app.", "deliverable": {"kind": "minds-app"}}, "todo-app"
     )
 
-    _driver, _environment, context = _run_driver(
+    driver, _environment, context = _run_driver(
         tmp_path,
         ("Build it",),
         conversation,
@@ -2174,9 +2180,13 @@ def test_driver_reports_the_verification_agents_spend_separately_from_the_agent_
     # Harness spend has its own key beside the decider's; the agent under test's cost fields must
     # never absorb the cost of measuring it.
     verifier_usage = context.metadata["verifier_agent_usage"]
-    assert verifier_usage["model"] == _driver._decider_model
+    assert verifier_usage["model"] == driver._decider_model
     assert verifier_usage["call_count"] == 0
     assert "verifier_agent_usage" in context.metadata and "decider_usage" in context.metadata
+    # The usage artifact carries the same block, so a reader of the trial's own cost account sees
+    # every spender the metadata does.
+    usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage_artifact["verifier_agent"] == verifier_usage
 
 
 def _goal_conversation(reply_texts: tuple[str, ...]) -> ConversationModel:
@@ -2909,6 +2919,9 @@ def test_driver_runs_one_conversation_across_two_steps(tmp_path: Path) -> None:
     state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
     assert state["test_state"] == "finished"
     assert state["step_name"] == "step-2"
+    # How many steps the task declared, which harbor's own record cannot say: it lists the steps that
+    # ran, so a trial stopped at a reward floor is told from one that ran them all only by this key.
+    assert state["step_count"] == 2
     # Entries and messages accumulate across the steps, so the final step's state.json reconciles
     # with the task-level case.json the structural gates read (which holds the WHOLE case).
     assert state["num_turns"] == 4
@@ -3297,13 +3310,18 @@ def test_a_step_that_collected_no_evidence_does_not_report_the_previous_steps(tm
     analyst reads to decide whether a step's evidence can be trusted. The flow agent's spend goes
     with them: each step's collection builds its own agent, so re-reporting an earlier step's would
     count that harness spend twice over the trial."""
-    _driver, _environment, contexts = _run_two_steps_where_the_first_raises(tmp_path, "project-roadmap__evidence1")
+    driver, _environment, contexts = _run_two_steps_where_the_first_raises(tmp_path, "project-roadmap__evidence1")
 
     assert contexts[0].metadata is not None and contexts[0].metadata["verification"]["entry_count"] > 0
     assert contexts[0].metadata["verifier_agent_usage"] != {}
     # The second step's workspace was gone before it started, so it has nothing of its own to report.
     assert contexts[1].metadata is not None and contexts[1].metadata["verification"] == {}
     assert contexts[1].metadata["verifier_agent_usage"] == {}
+    # The usage artifact describes the whole trial, so the step that collected nothing leaves the
+    # earlier step's spend standing in it: the artifact is the only record of what the trial cost,
+    # and a phase that ran is money spent whether or not a later step ran one too.
+    usage_artifact = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage_artifact["verifier_agent"] == contexts[0].metadata["verifier_agent_usage"]
 
 
 def test_a_step_tears_the_workspace_down_even_when_writing_its_records_fails(tmp_path: Path) -> None:
@@ -4796,14 +4814,21 @@ def test_the_openai_lane_runs_a_trial_on_codex_and_reads_its_harness_back(tmp_pa
         "is_model_confirmed": None,
     }
     # Unknown rather than free: a cost of zero would average into an arm comparison as if the trial
-    # had been measured, which is the one reading of a codex trial that would mislead.
-    workspace_usage = json.loads((driver.logs_dir / "usage.json").read_text())["workspace_agent"]
-    assert workspace_usage["cost_usd"] is None
-    assert workspace_usage["message_count"] == 0
+    # had been measured, which is the one reading of a codex trial that would mislead. The artifact
+    # holds tokens only, so the reading is made where the figures are: pricing the block at check
+    # time yields no figure for the workspace agent.
+    usage = json.loads((driver.logs_dir / "usage.json").read_text())
+    assert usage["workspace_agent"]["message_count"] == 0
+    (workspace_spend,) = [
+        entry
+        for entry in collect_spend(usage, FIXTURE_PRICE_MAP, CacheWriteTtl.FIVE_MINUTES)
+        if entry.spender is Spender.WORKSPACE_AGENT
+    ]
+    assert workspace_spend.cost_usd is None
     # is_cost_complete asks only whether delegated and worker traffic is accounted for, so it stays
     # true on a trial that accounted for nothing at all. A filter reading it alone takes this trial
-    # for a measurement, which is why `cost_usd` is the field that has to be read.
-    assert workspace_usage["is_cost_complete"] is True
+    # for a measurement, which is why the priced figure is what has to be read.
+    assert usage["workspace_agent"]["is_cost_complete"] is True
     assert context.metadata is not None
     assert context.metadata["test_state"] == "finished"
 

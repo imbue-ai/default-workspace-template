@@ -7,18 +7,21 @@ here.
 
 Promotion is a metadata operation, never a rebuild. ToDesktop already published
 a complete update manifest for every build it made -- released or not -- at
-``<feed>/latest-mac-build-<buildId>.yml``, carrying the version, the per-arch
-filenames, their sizes, and their sha512 digests. Promoting a channel copies
-that manifest, rewrites its relative ``url:`` fields to absolute ones pointing
-back at ToDesktop's CDN, and uploads the result as ``<channel>-mac.yml``.
+``<feed>/latest-<platform>-build-<buildId>.yml`` for each platform it packages,
+carrying the version, the per-arch filenames, their sizes, and their sha512
+digests. Promoting a channel copies that manifest, rewrites its relative
+``url:`` fields to absolute ones pointing back at ToDesktop's CDN, and uploads
+the result as ``<channel>-<platform>.yml`` -- one object per platform the entry
+lists, since electron-updater asks a generic feed for its own platform's file.
 
 So the artifacts are never re-hosted and the digests are never recomputed: a
 channel serves the same signed, notarized bytes ToDesktop does, from ToDesktop's
 own CDN. The manifest itself is unsigned -- it is what tells the client which
 digest to expect, so whoever can write the bucket decides that, and access to the
-bucket is the only thing protecting it. One manifest lists every arch and the
-client picks, which is why promoting a channel uploads one file rather than four.
-Every channel goes through this, ``stable`` included.
+bucket is the only thing protecting it. One manifest lists every arch of its
+platform and the client picks, which is why a promotion uploads one file per
+platform rather than one per artifact. Every channel goes through this,
+``stable`` included.
 
 The gates below guard the write because the failures they catch are otherwise
 silent: a build whose pre-baked Lima image is missing turns every create into a
@@ -55,11 +58,20 @@ TODESKTOP_FEED: Final[str] = "https://download.todesktop.com"
 
 PUBLISHABLE_CHANNELS: Final[tuple[str, ...]] = ("stable", "beta", "alpha")
 
-# electron-updater's MacUpdater picks the artifact by URL *pathname extension*
-# (findFile(files, "zip", ["pkg", "dmg"])), so a rewritten URL that loses its
-# .zip suffix stops being selected as the zip and only survives via a
-# not-pkg-and-not-dmg fallback. Verified against electron-updater 6.8.9.
-_REQUIRED_EXTENSIONS: Final[tuple[str, ...]] = (".zip", ".dmg")
+# electron-updater picks the artifact by URL *pathname extension*: MacUpdater
+# runs findFile(files, "zip", ["pkg", "dmg"]), AppImageUpdater
+# findFile(files, "AppImage", ...) and DebUpdater findFile(files, "deb", ...).
+# A rewritten URL that loses its suffix stops being selected, or survives only
+# via a fallback. Verified against electron-updater 6.8.9.
+_REQUIRED_EXTENSIONS_BY_PLATFORM: Final[Mapping[str, tuple[str, ...]]] = {
+    "mac": (".zip", ".dmg"),
+    "linux": (".appimage", ".deb"),
+}
+
+# The platforms a channel can serve, spelled the way electron-updater names
+# its channel files (`<channel>-mac.yml`, `<channel>-linux.yml`) and ToDesktop
+# names its per-build manifests.
+PUBLISHABLE_PLATFORMS: Final[tuple[str, ...]] = tuple(_REQUIRED_EXTENSIONS_BY_PLATFORM)
 
 _VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -94,15 +106,22 @@ def render(manifest: Manifest) -> str:
     return yaml.dump(dict(manifest), sort_keys=False)
 
 
-def channel_filename(channel: str) -> str:
-    """The object electron-updater asks a generic feed for, e.g. ``alpha-mac.yml``.
+def assert_publishable_platform(platform: str) -> None:
+    """Refuse a platform this tool has no channel-file name or extension rule for."""
+    if platform not in PUBLISHABLE_PLATFORMS:
+        raise PromotionError(f"Unknown platform {platform!r}. Only {list(PUBLISHABLE_PLATFORMS)} are served.")
+
+
+def channel_filename(channel: str, platform: str) -> str:
+    """The object electron-updater asks a generic feed for, e.g. ``alpha-mac.yml`` or ``alpha-linux.yml``.
 
     One definition for the read and the write, because a drift between them is
     silent both ways: the promotion writes an object no client ever fetches, and
     the read of what a channel serves asks for a name nothing publishes, finds
     nothing, and reports every move as a first publish.
     """
-    return f"{channel}-mac.yml"
+    assert_publishable_platform(platform)
+    return f"{channel}-{platform}.yml"
 
 
 def http_get(url: str) -> bytes:
@@ -115,13 +134,21 @@ def http_get(url: str) -> bytes:
 Fetch = Callable[[str], bytes]
 
 
-def fetch_build_manifest(app_id: str, build_id: str, fetch: Fetch = http_get) -> str:
-    """Fetch ToDesktop's own per-build manifest, which exists for unreleased builds too."""
-    url = f"{TODESKTOP_FEED}/{app_id}/latest-mac-build-{build_id}.yml"
+def fetch_build_manifest(app_id: str, build_id: str, platform: str, fetch: Fetch = http_get) -> str:
+    """Fetch ToDesktop's own per-build manifest for one platform, which exists for unreleased builds too.
+
+    A platform the build was not packaged for has no manifest, and that 404 is
+    the refusal: an entry listing it would otherwise promote a platform the
+    build cannot serve.
+    """
+    assert_publishable_platform(platform)
+    url = f"{TODESKTOP_FEED}/{app_id}/latest-{platform}-build-{build_id}.yml"
     try:
         return fetch(url).decode("utf-8")
     except urllib.error.HTTPError as exc:
-        raise PromotionError(f"No ToDesktop manifest for build {build_id} ({url} returned {exc.code}).") from exc
+        raise PromotionError(
+            f"No ToDesktop {platform} manifest for build {build_id} ({url} returned {exc.code})."
+        ) from exc
     except urllib.error.URLError as exc:
         raise PromotionError(f"Cannot reach {url}: {exc.reason}.") from exc
 
@@ -144,32 +171,34 @@ def parse_manifest(manifest_text: str, source: str) -> Manifest:
     return document
 
 
-def rewrite_manifest(manifest_text: str, app_id: str) -> Manifest:
+def rewrite_manifest(manifest_text: str, app_id: str, platform: str) -> Manifest:
     """Make every artifact reference absolute, leaving digests and sizes untouched.
 
     ``newUrlFromBase`` is ``new URL(pathname, baseUrl)``, so an absolute URL in
     the manifest wins over the feed's own base -- which is what lets a manifest
-    we host point at artifacts ToDesktop hosts.
+    we host point at artifacts ToDesktop hosts. The platform decides which
+    artifact extensions the rewrite insists on.
     """
-    manifest = parse_manifest(manifest_text, "ToDesktop's build manifest")
+    assert_publishable_platform(platform)
+    manifest = parse_manifest(manifest_text, f"ToDesktop's {platform} build manifest")
     base = f"{TODESKTOP_FEED}/{app_id}/"
-    document = _with_absolute_references(manifest, base)
+    document = _with_absolute_references(manifest, base, _REQUIRED_EXTENSIONS_BY_PLATFORM[platform])
     if not list(_references(document)):
         raise PromotionError("Manifest lists no artifacts.")
     return document
 
 
-def _with_absolute_references(node: Any, base: str) -> Any:
+def _with_absolute_references(node: Any, base: str, required_extensions: tuple[str, ...]) -> Any:
     """Every ``url`` and ``path`` made absolute, at whatever depth it sits."""
     if isinstance(node, dict):
         return {
-            key: _absolute_reference(value, base)
+            key: _absolute_reference(value, base, required_extensions)
             if key in _REFERENCE_KEYS and isinstance(value, str)
-            else _with_absolute_references(value, base)
+            else _with_absolute_references(value, base, required_extensions)
             for key, value in node.items()
         }
     if isinstance(node, list):
-        return [_with_absolute_references(item, base) for item in node]
+        return [_with_absolute_references(item, base, required_extensions) for item in node]
     return node
 
 
@@ -186,12 +215,12 @@ def _references(node: Any) -> Iterator[str]:
             yield from _references(item)
 
 
-def _absolute_reference(value: str, base: str) -> str:
+def _absolute_reference(value: str, base: str, required_extensions: tuple[str, ...]) -> str:
     absolute = value if value.startswith(("http://", "https://")) else base + urllib.parse.quote(value)
-    if not absolute.lower().endswith(_REQUIRED_EXTENSIONS):
+    if not absolute.lower().endswith(required_extensions):
         raise PromotionError(
-            f"Refusing to publish {absolute!r}: electron-updater selects the macOS artifact by "
-            f"URL extension, so every url must end in one of {_REQUIRED_EXTENSIONS}."
+            f"Refusing to publish {absolute!r}: electron-updater selects the artifact by "
+            f"URL extension, so every url must end in one of {required_extensions}."
         )
     return absolute
 
@@ -259,14 +288,16 @@ def assert_lima_image_published(
         )
 
 
-def read_channel_manifest_from_feed(feed_base_url: str, channel: str, fetch: Fetch = http_get) -> Manifest | None:
-    """What a channel serves now as the public feed reports it, or None when it has never been published.
+def read_channel_manifest_from_feed(
+    feed_base_url: str, channel: str, platform: str, fetch: Fetch = http_get
+) -> Manifest | None:
+    """What a channel serves one platform now as the public feed reports it, or None when never published.
 
     The whole manifest rather than its version, because a channel is declared by
     build id and two builds can carry the same version -- the version is stamped
     once at cut, and every build between cuts repeats it.
     """
-    url = f"{feed_base_url.rstrip('/')}/{channel_filename(channel)}"
+    url = f"{feed_base_url.rstrip('/')}/{channel_filename(channel, platform)}"
     try:
         text = fetch(url).decode("utf-8")
     except urllib.error.HTTPError as exc:
@@ -320,9 +351,9 @@ MakeS3Client = Callable[[], Any]
 
 
 def read_channel_manifest_from_bucket(
-    bucket: str, channel: str, make_client: MakeS3Client = r2_client
+    bucket: str, channel: str, platform: str, make_client: MakeS3Client = r2_client
 ) -> Manifest | None:
-    """What a channel serves now, read from the bucket rather than through the CDN.
+    """What a channel serves one platform now, read from the bucket rather than through the CDN.
 
     The manifest is uploaded with a short max-age, so a promotion run inside that
     window reads the *previous* one back through the feed -- which then names the
@@ -335,7 +366,7 @@ def read_channel_manifest_from_bucket(
     validate job deliberately holds none.
     """
     client = make_client()
-    key = channel_filename(channel)
+    key = channel_filename(channel, platform)
     try:
         response = client.get_object(Bucket=bucket, Key=key)
     except client.exceptions.NoSuchKey:
@@ -351,6 +382,7 @@ def read_channel_manifest_from_bucket(
 
 def read_current_channel_manifest(
     channel: str,
+    platform: str,
     *,
     bucket: str,
     feed_base_url: str,
@@ -358,26 +390,32 @@ def read_current_channel_manifest(
     fetch: Fetch = http_get,
     make_client: MakeS3Client = r2_client,
 ) -> Manifest | None:
-    """What a channel serves now, from whichever source the run can reach.
+    """What a channel serves one platform now, from whichever source the run can reach.
 
     The bucket is the better answer and needs a credential; the feed is the
     fallback for the validate job, which holds none. See ``publish.py``, which
     decides and says which one it used.
     """
     if from_bucket:
-        return read_channel_manifest_from_bucket(bucket, channel, make_client=make_client)
-    return read_channel_manifest_from_feed(feed_base_url, channel, fetch=fetch)
+        return read_channel_manifest_from_bucket(bucket, channel, platform, make_client=make_client)
+    return read_channel_manifest_from_feed(feed_base_url, channel, platform, fetch=fetch)
 
 
 def upload_manifest(
-    manifest: Manifest, *, bucket: str, channel: str, cache_seconds: int, make_client: MakeS3Client = r2_client
+    manifest: Manifest,
+    *,
+    bucket: str,
+    channel: str,
+    platform: str,
+    cache_seconds: int,
+    make_client: MakeS3Client = r2_client,
 ) -> str:
-    """Write the channel manifest to R2 with a short TTL.
+    """Write one platform's channel manifest to R2 with a short TTL.
 
     The manifest is the only mutable object in the system and every client polls
     it, so a long CDN TTL silently becomes the promotion latency.
     """
-    key = channel_filename(channel)
+    key = channel_filename(channel, platform)
     make_client().put_object(
         Bucket=bucket,
         Key=key,

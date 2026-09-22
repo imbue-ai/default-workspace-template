@@ -35,6 +35,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
 | `window_closed_path` | string | no | absent | A path shaped like a launch path; the shell posts every closed window of the app there (section 5.3), for an app whose resources live as long as their windows (`docs/system/specs/window-bound-resources.md`). |
 | `references`, `scope`, `wiring`, `handles` | | | | Unchanged. |
+| `preview` | table | no | the scaffold convention | How a throwaway instance boots for a preview (`PreviewSpec`; the workspace app model's contracts section 2 has the field-by-field rule): `command` (default: the program as its console script), `ports` (named free ports; `main` always), `env`, `args`, `copies` (repo-relative directories copied into the instance's scratch space, by key), `health_path` (default `/health`), `open_path` (default `/`), `open_path_takes_key`. `command`, `args`, and `env` values may carry `{port:<name>}`, `{copy:<key>}`, `{host}`, `{scratch}`, and `{registry}`; `open_path` may carry `{key}` exactly when `open_path_takes_key`. Absent, the table is `env = {<PACKAGE_UPPER>_PORT = "{port:main}", <PACKAGE_UPPER>_HOST = "{host}", <PACKAGE_UPPER>_DATA_DIR = "{copy:data}"}` over `copies = {data = "data/.apps/<name>"}`. |
 
 `instances`, `instances_url`, and `actions` are removed; a manifest that carries them fails to load.
 An app with no `launch_paths` has one synthesized launch path, `open`, labelled `Open <display_name>`, at `/`, which the shell adds when it reads the registry.
@@ -52,6 +53,7 @@ Built-in manifests:
 | `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
+The critical built-ins declare their `[preview]` tables (the workspace app model's contracts section 2 tabulates them): the shell boots `system-interface --preview --state-dir {copy:state}` over a copy of `data/.state/system_interface` with `MINDS_APPS_FILE = "{registry}"`; the chat `chat-app --secondary` over a copy of `data/.apps/chat` (`CHAT_DATA_DIR`), opening on `/?chat={key}`; the terminal `terminal-app --no-register` over a copy of `data/.apps/terminal` and a `{scratch}` state dir with `MINDS_APPS_FILE = "{registry}"`, booted `--with terminal-pty`; and the pty `terminal-pty --no-register` over a `{scratch}` state dir, probed at `/`.
 
 ## 3. The registry (`data/.state/apps.toml`)
 
@@ -142,6 +144,8 @@ Every error body is `{"detail": "<message>"}`.
 Unchanged: `GET /` and the SPA catch-all (with `X-Frontend-Built`), `/assets/<path>`, `/favicon.ico`, `GET /api/health`, `GET /_static/app_contract.js`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (refused for critical apps), `POST /api/client-activity`, `/api/ws`.
 `POST /api/client-activity` takes `{"client_id", "desktop_id", "kind": "message", "app", "key", "text"}`: the client that sent a message to an app's page, the desktop it was on (from the shell's handshake), the app, the page's marker (a chat id; `""` for a page without one), and the text; the shell appends it to the client-activity log as a `message` event (the text truncated), which is what `layout.py context` and an op's requester attribution read.
 Removed: `POST /api/apps/<name>/changed`, `POST /api/apps/<name>/instances` and every `/instances/<key>/...` relay route, `POST /api/tabs/<tab_id>/instance`, every `/api/projects/...` route, `GET` and `POST /api/layouts/<view_id>`.
+Added: `GET /api/updates/pending` (`200` with the update notice -- the rollback point the last `update_self.py apply --keep-rollback-point` kept, whose fields the workspace app model's contracts section 5 lists -- or `null` when none is kept); `POST /api/updates/pending/confirm` (runs `update_self.py confirm-last`; `204`; `409` when none is kept or while a rollback runs; `500` naming a failed script); `POST /api/updates/pending/rollback` (starts `update_self.py rollback-last` detached, its output going to `data/.state/update-apply/rollback-last.log`, and answers `202` once the script has written its first progress into the record, so a second window's press reads that progress rather than starting a second script; `409` when none is kept, one is already running, the point was already taken back, or the script refused, in its own words; `500` when the script could not be started or wrote no progress within 30s). An unknown path under `/api/` answers `404 {"detail": "No such API route: /<path>"}` rather than the app shell.
+A preview shell (`system-interface --preview`, booted by `preview_app.py` over a seeded copy of the state directory and a copied registry) answers `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, and the two notice verbs with `403 {"detail": "This is a preview of a proposed change; it cannot change the live workspace."}`; every other route edits its own copy or reaches only its own windows, so it stays live. Its page carries the meta tag `system-interface-preview` (content `true`), which the frontend reads to offer no Stop or Start, and never the staleness tag.
 
 ### 5.2 Desktops
 
@@ -193,7 +197,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 | `POST /api/avatars` | loopback only: registers `{"id", "label", "svg", "source_path"}` (`201`); `400` for a design off the vocabulary of `docs/system/avatar-designs.md` |
 | `GET /api/avatars/<id>/image.svg?mood=idle\|working&preview=1` | the rendered image; `GET /api/avatars/<id>/source.svg` the original as an attachment; `404` otherwise |
 | `POST /api/avatar-selection` | takes `{"design"}`; writes `avatar_selection.json` and announces `avatar_selection_changed`; `400` for an unknown design |
-| `GET /api/inventory` | `{"desktops": [desktop, ...], "apps": [app, ...], "clients": [client with "shown": [window_id, ...]]}` where `shown` is the windows of the client's active desktop that its layout does not minimize |
+| `GET /api/inventory` | `{"is_preview", "desktops": [desktop, ...], "apps": [app, ...], "clients": [client with "shown": [window_id, ...]]}` where `is_preview` is whether a preview shell (section 5.1) answered and `shown` is the windows of the client's active desktop that its layout does not minimize |
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
@@ -217,6 +221,7 @@ Outbound:
 | `client_entries_changed` | `{"client_id", "entries"}` | to that client's windows, after its entry presentations were written |
 | `avatar_status` | `{"mood": "idle" \| "working", "is_stale"}` | on connect, and when either changes |
 | `avatar_selection_changed` | `{"design"}` | after the selection is written |
+| `update_notice_changed` | `{"notice": notice \| null}` | on connect (after `avatar_status`), and whenever `data/.state/update-apply/last-good.json` is written or removed and reads differently: an apply kept it, a rollback's progress and outcome, a confirm cleared it; `notice` is the document `GET /api/updates/pending` answers (section 5.1) |
 
 `is_connected` on a client is whether any window of it holds the socket.
 
@@ -367,3 +372,4 @@ Data attributes, never classes, so restyling cannot break a test:
 ## 13. Where data lives
 
 Unchanged from the workspace app model's section 17: `data/.apps/<name>/` for what an app persists about the user's things (now including `data/.apps/system_interface/wallpapers/` and the registered avatar designs at `data/.apps/system_interface/avatars/catalog.json`), `data/.state/<name>/` for what a program keeps about this machine (the registry, the shell's desktops, placements, clients, each client's window paths, and the avatar selection).
+Also under `data/.state/`: every isolated instance's state at `data/.state/isolated-instances/<name>/` (its pids, ports, logs, `copies/<key>/` for the directories its manifest's preview table names, and `scratch/`), beside a preview's registry copy `<name>-preview.registry.toml`; and the update apply's own files at `data/.state/update-apply/` (its in-flight marker, emergency record, and `snapshots/`, plus `last-good.json` and `rollback-last.log` after an apply run with `--keep-rollback-point`; the workspace app model's section 17 has the detail).

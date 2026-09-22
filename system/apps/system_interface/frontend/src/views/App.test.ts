@@ -199,9 +199,9 @@ describe("Escape", () => {
     m.redraw.sync();
     (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
     m.redraw.sync();
-    expect(document.querySelector('[data-floating="desktops-menu"]')).not.toBeNull();
+    expect(document.querySelector(".desktops-menu")).not.toBeNull();
     pressEscape();
-    expect(document.querySelector('[data-floating="desktops-menu"]')).toBeNull();
+    expect(document.querySelector(".desktops-menu")).toBeNull();
     expect(store.isLauncherOpen()).toBe(true);
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
@@ -240,7 +240,7 @@ describe("the avatar chooser", () => {
   function openEntryMenuRow(entry: HTMLElement, key: string): void {
     entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
     m.redraw.sync();
-    (document.querySelector(`[data-menu-item="${key}"]`) as HTMLElement).click();
+    (document.querySelector(`[data-menu-row="${key}"]`) as HTMLElement).click();
     m.redraw.sync();
   }
 
@@ -279,20 +279,22 @@ describe("the avatar chooser", () => {
   });
 });
 
-describe("a press into the focused page", () => {
-  it("closes an open menu: the page is shielded while the menu is up, so the press reaches the shell", () => {
+describe("a press outside what is open", () => {
+  it("closes an open menu through its own sheet, with the focused page shielded under it", () => {
     expect(focusedShield()).toBeNull();
     (document.querySelector('[data-window-control="menu"]') as HTMLElement).click();
     m.redraw.sync();
-    expect(document.querySelector('[data-floating="window-menu"]')).not.toBeNull();
-    const shield = focusedShield();
-    expect(shield).not.toBeNull();
-    pressOn(shield as HTMLElement);
-    expect(document.querySelector('[data-floating="window-menu"]')).toBeNull();
+    expect(document.querySelector(".window-menu")).not.toBeNull();
+    expect(focusedShield()).not.toBeNull();
+    // The sheet covers the page, so the press that dismisses the menu cannot also reach it.
+    const sheet = document.querySelector('[data-menu-part="sheet"]') as HTMLElement;
+    sheet.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    m.redraw.sync();
+    expect(document.querySelector(".window-menu")).toBeNull();
     expect(focusedShield()).toBeNull();
   });
 
-  it("closes the launcher the same way", () => {
+  it("closes the launcher from a press into the focused page, which is shielded for it", () => {
     store.openLauncher();
     m.redraw.sync();
     const shield = focusedShield();

@@ -22,6 +22,8 @@ from imbue.minds_admin.slices.cutover_types import gen1_data_disk_size_error_or_
 from imbue.minds_admin.slices.cutover_types import is_version_at_or_above_floor
 from imbue.minds_admin.slices.cutover_types import parse_version_tag
 from imbue.minds_admin.slices.cutover_types import restamped_gen1_disk_gb_or_none
+from imbue.minds_admin.slices.cutover_types import shrink_fit_error_or_none
+from imbue.minds_admin.slices.cutover_types import shrunk_gen1_disk_gib_or_none
 from imbue.minds_admin.slices.cutover_types import version_tag_error_or_none
 from imbue.minds_admin.slices.testing import make_cutover_workspace_state
 from imbue.minds_admin.slices.testing import make_harvested_file
@@ -224,3 +226,28 @@ def test_unmeasured_039_disk_stamp_is_restamped_from_the_measured_disk() -> None
     # A measured stamp that disagrees stays a refusal, never a silent restamp.
     assert restamped_gen1_disk_gb_or_none(30, 45) is None
     assert gen1_data_disk_size_error_or_none(30, 45) is not None
+
+
+def test_oversized_gen1_disk_shrinks_to_the_default_size_and_a_default_sized_one_keeps_its_own() -> None:
+    # The 8 TB box carved 216 GiB per slice: a 232 GiB row shrinks to the 44 GiB an 8-unit carve grants.
+    assert shrunk_gen1_disk_gib_or_none(data_disk_virtual_gib=216, memory_units=8) == 44
+    # A 29 GiB gen-1 disk becomes a 45 GiB row, one above the default: still oversized, so it shrinks too.
+    assert shrunk_gen1_disk_gib_or_none(data_disk_virtual_gib=29, memory_units=8) == 44
+    # A 28 GiB disk is exactly the default; nothing to shrink.
+    assert shrunk_gen1_disk_gib_or_none(data_disk_virtual_gib=28, memory_units=8) is None
+
+
+def test_shrink_refuses_a_home_tree_that_would_not_fit_beside_the_base_and_the_reserve() -> None:
+    # A 44 GiB gen-2 disk leaves 44 - 16 - 4 = 24 GiB for the home tree.
+    assert shrink_fit_error_or_none(data_disk_used_gib=5, shrunk_gib=44) is None
+    assert shrink_fit_error_or_none(data_disk_used_gib=24, shrunk_gib=44) is None
+    error = shrink_fit_error_or_none(data_disk_used_gib=25, shrunk_gib=44)
+    assert error is not None
+    assert "25 GiB" in error and "24 GiB" in error
+
+
+def test_workspace_records_written_before_the_shrink_option_still_parse() -> None:
+    record = make_cutover_workspace_state(uuid4().hex, str(uuid4()))
+    dumped = json.loads(record.model_dump_json())
+    del dumped["origin_disk_gb"]
+    assert CutoverWorkspaceState.model_validate(dumped).origin_disk_gb is None

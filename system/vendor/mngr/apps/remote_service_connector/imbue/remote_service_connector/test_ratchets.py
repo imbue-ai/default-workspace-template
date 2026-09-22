@@ -58,11 +58,15 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # Two deliberate boundaries: ``handle_endpoint_errors`` (every endpoint's
-    # domain-error-to-HTTP conversion) and ``complete_oauth_code_exchange``'s
+    # Four deliberate boundaries: ``handle_endpoint_errors`` (every endpoint's
+    # domain-error-to-HTTP conversion), ``complete_oauth_code_exchange``'s
     # wrap of the SuperTokens provider layer, which raises plain ``Exception``
-    # for its most common failure (a consumed/expired authorization code).
-    rc.check_broad_exception_catch(_DIR, snapshot(2))
+    # for its most common failure (a consumed/expired authorization code),
+    # ``decide_frps_ping``'s fail-open (frp fails closed on any plugin error, so
+    # the heartbeat must not depend on the failure's type), and
+    # ``auth.call_supertokens_core``, which recognizes the SDK querier's plain
+    # ``Exception`` for a core 5xx by its message and re-raises everything else.
+    rc.check_broad_exception_catch(_DIR, snapshot(4))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -305,3 +309,10 @@ def test_prevent_bare_urwid_tty_signal_keys() -> None:
 
 def test_prevent_unpinned_modal_pip_install() -> None:
     rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))
+
+
+# --- Process management ---
+
+
+def test_prevent_raw_concurrency_group_executor() -> None:
+    rc.check_raw_concurrency_group_executor(_DIR, snapshot(0))

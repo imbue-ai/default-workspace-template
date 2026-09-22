@@ -317,8 +317,8 @@ def resolved_client_wire_json(record: ClientRecord, is_connected: bool, desktops
 
 
 def inventory_document_json(shell: ShellState) -> dict[str, Any]:
-    """The one document of desktop contracts.md section 5.5: every desktop, every app, and every known client with
-    ``shown``, the windows of its active desktop that its layout does not minimize."""
+    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, every desktop, every
+    app, and every known client with ``shown``, the windows of its active desktop that its layout does not minimize."""
     desktops = shell.list_desktops()
     desktops_by_id = {desktop.id: desktop for desktop in desktops}
     connected = shell.broadcaster.connected_client_ids()
@@ -332,6 +332,7 @@ def inventory_document_json(shell: ShellState) -> dict[str, Any]:
             shown = _shown_window_ids(desktop, layout)
         clients.append({**_client_wire_json_on(record, str(record.id) in connected, active), "shown": shown})
     return {
+        "is_preview": get_state().is_preview,
         "desktops": shell.desktops_wire_json(desktops),
         "apps": shell.inventory.serialized(),
         "clients": clients,

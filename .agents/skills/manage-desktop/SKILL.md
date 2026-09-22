@@ -92,6 +92,14 @@ A window argument is one of:
 | Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
 | Close a window | `python3 system/scripts/layout.py close <window>` (a terminal's session, or the one browser, is ended by its app once no window shows it; refused for a pinned window, which is never closed: `minimize` it instead) |
 
+**Every mutating op here changes what the user is looking at, live.** There is
+no staging area: `open` puts a window on their screen the moment it returns, and
+`close` / `place` / `focus` / `navigate` / `refresh` rearrange the desktop under
+their hands. So treat `open` as *the act of showing them something*, not as
+setup -- finish whatever you wanted to check privately before you call it, and
+never tell the user to open a window you already opened. (`context`, `desktops`,
+and `list` are the read-only ones; they change nothing.)
+
 `open` prints the window's id (the new one's, or the focused one's) to **stdout**
 so you can name it in later ops. It opens the window at `--path`, or at a launch path (`--launch <id>` with
 `--param name=value` for its parameters; with neither, the app's default launch

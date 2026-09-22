@@ -1,12 +1,16 @@
-"""Render the Slack report of a scheduled run: a message per pair and eval config, holding a grid of
-case by harness config, the trials that failed, and a collapsed table of every judge score behind
-them.
+"""Render the Slack report of a scheduled run: a thread per pair and eval config, whose message holds
+a grid of case by harness config and the trials that failed, and whose replies hold every score behind
+that grid and the detail of the pair's diagnostics.
 
-Only the blocks an incoming webhook actually accepts are used. A webhook refuses `data_table`
-outright -- a minimal one is answered with 400 invalid_blocks -- so the sorting and paging it would
-bring are not available here, and `container` is what keeps the long table out of the way instead.
-`markdown` is refused as well. Both would need an app posting with a bot token rather than a
-webhook, so do not reach for either without changing how the notify job posts.
+The top message answers "is this arm healthy, and what cost me what?" and nothing else; anything a
+reader only goes looking for once the answer is no rides in a reply, where it costs the channel
+nothing. `slack_post` is what posts them, and a reply can only be threaded under a message whose `ts`
+came back -- which is why a run posting through the webhook fallback gets the top messages alone.
+
+`table` rather than `data_table`: both cap at 20 columns and 100 rows, and only `table` takes a
+`rich_text` header cell, which the scoring replies need for their dimension super-columns. A webhook
+refuses `data_table` and `markdown` outright, so neither may be reached for without giving up the
+fallback as well.
 
 A scheduled run evaluates arms -- a frozen (mngr, dwt) pair times one suite's eval config times a
 named harness config -- and this is everything anyone reads about it. Each (pair, eval config) gets
@@ -17,7 +21,7 @@ whose rows were two configs' cases together would report every column as not eva
 config's rows, and there would be no single oracle verdict to put on the message's section line.
 
 Every message carries a plain mrkdwn `text` beside its blocks. Slack shows that wherever the blocks
-cannot be rendered, the workflow re-posts it on its own if Slack refuses a block, and it is what the
+cannot be rendered, the poster re-posts it on its own if Slack refuses a block, and it is what the
 run writes to its step summary -- so it has to read as a whole report rather than as a caption.
 
 The report has two inputs, and both are read as things that may not be there: the decided matrix,
@@ -31,6 +35,7 @@ reporting the first as the second sends the reader to the wrong place.
 """
 
 import json
+from collections.abc import Collection
 from collections.abc import Mapping
 from collections.abc import Sequence
 from enum import auto
@@ -45,23 +50,35 @@ from pydantic import Field
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.check_diagnostics import format_fact_outcome
 from imbue.minds_evals.data_types import CellDecision
 from imbue.minds_evals.data_types import CiMatrix
 from imbue.minds_evals.data_types import CiReportContext
+from imbue.minds_evals.data_types import CriterionScore
 from imbue.minds_evals.data_types import DecidedPair
 from imbue.minds_evals.data_types import DiagnosticRunCheck
 from imbue.minds_evals.data_types import DiagnosticTrialCheck
 from imbue.minds_evals.data_types import DiagnosticVerdict
+from imbue.minds_evals.data_types import DimensionScore
 from imbue.minds_evals.data_types import FactOutcome
 from imbue.minds_evals.data_types import FrozenPair
 from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.data_types import RewardDimension
 from imbue.minds_evals.data_types import RunCheck
+from imbue.minds_evals.data_types import SpenderCost
 from imbue.minds_evals.data_types import TrialCheck
 from imbue.minds_evals.data_types import is_model_observable_on_lane
+from imbue.minds_evals.reporting import AGENT_SPENDERS
+from imbue.minds_evals.reporting import FLOOR_MARK
 from imbue.minds_evals.reporting import SHORT_SHA_LENGTH
+from imbue.minds_evals.reporting import format_cost_figure
+from imbue.minds_evals.reporting import format_spend_totals_line
+from imbue.minds_evals.reporting import group_cost
+from imbue.minds_evals.reporting import is_group_floor
+from imbue.minds_evals.reporting import select_spend
 
 # The pattern the notify job downloads every summary artifact under, and the stems of the files
 # inside them. The download merges the artifacts into one flat directory, so a summary file's own
@@ -115,18 +132,18 @@ REWARD_BANDS: Final[tuple[tuple[float, str], ...]] = (
 )
 TOP_BAND_EMOJI_NAME: Final[str] = "large_green_square"
 
-# What a failing trial's reward carries after it, and what a passing one carries in its place. A
-# plain glyph rather than an emoji, so that the square is the only colour in the row: the emoji
-# would be red, which is the scale's own bottom band and would read as a second, contradicting
-# verdict.
+# What a failing trial carries at the end of its grid cell. A plain glyph rather than an emoji, so
+# that the square is the only colour in the row: the emoji would be red, which is the scale's own
+# bottom band and would read as a second, contradicting verdict. The gap before it is a no-break
+# space, since Slack trims ordinary trailing whitespace inside a cell.
 #
-# The reward column is right-aligned and every reward is the same width, so a mark on one cell and
-# nothing on another steps the numbers out of line -- hence the spacer. Neither may be built out of
-# ordinary spaces: Slack trims trailing whitespace inside a cell, which collapses the spacer to
-# nothing and leaves exactly the misalignment it is there to prevent. So the gap before the mark is
-# a no-break space, and the spacer is that plus a figure space, which is as wide as a digit.
-FAILED_MARK: Final[str] = "\u00a0\u2717"
-PASSED_SPACER: Final[str] = "\u00a0\u2007"
+# The same glyph marks a gate a scoring table's row did not hold, which is where it reads as a mark
+# rather than as a number.
+FAILURE_GLYPH: Final[str] = "\u2717"
+FAILED_MARK: Final[str] = "\u00a0" + FAILURE_GLYPH
+# What a gate that held reads as: a plain check, so it blends with the numbers beside it instead of
+# colouring a row that is fine.
+GATE_PASSED_GLYPH: Final[str] = "\u2713"
 
 PASS_EMOJI: Final[str] = ":{}:".format(PASS_EMOJI_NAME)
 FAIL_EMOJI: Final[str] = ":{}:".format(FAIL_EMOJI_NAME)
@@ -142,16 +159,21 @@ UNKNOWN_MARK: Final[str] = "?"
 PASS_MARK: Final[str] = "ok"
 FAIL_MARK: Final[str] = "FAIL"
 
-# The judge table's own columns, ahead of one column per criterion, and what a cell of it says where
-# there is no number: a trial that was never graded, or a criterion the judge did not score on it.
-JUDGE_REWARD_HEADING: Final[str] = "reward"
+# What a table cell says where there is no number: a trial that was never graded, or a criterion
+# nothing scored on the row.
 MISSING_SCORE_MARK: Final[str] = "-"
 
-# The judge table's other columns. It carries every graded trial the message reports rather than one
-# pass's, so it has to name the arm each row came from, and the state column is what makes the table
-# stand on its own when it is expanded away from the rest of the message.
-JUDGE_CONFIG_HEADING: Final[str] = "config"
-JUDGE_STATE_HEADING: Final[str] = "state"
+CONFIG_HEADING: Final[str] = "config"
+SCORING_STEP_HEADING: Final[str] = "step"
+
+# What a grid cell says of spend nothing could price: a figure would be a partial sum passed off as
+# the whole, and the markdown summary's longer spelling, naming the models, has no room here.
+UNPRICED_COST_TEXT: Final[str] = "$?"
+
+# How the pair's line names the two halves of a run's spend, spelled as the markdown summary spells
+# them so the two reports can be read against each other.
+AGENT_SPEND_LABEL: Final[str] = "agent spend"
+HARNESS_SPEND_LABEL: Final[str] = "harness spend"
 
 # The failures table: the arm, the case, and what stopped it. It is drawn only when something
 # failed -- a heading with an empty table under it reads as a missing measurement rather than as a
@@ -159,11 +181,19 @@ JUDGE_STATE_HEADING: Final[str] = "state"
 FAILED_TRIALS_HEADING: Final[str] = "*failed trials*"
 FAILED_TRIALS_NOTE_HEADING: Final[str] = "note"
 
-# The collapsible the judge table lives in. Slack caps a container's child blocks and refuses the
-# whole message past that, so nothing that grows with the matrix may become a child of its own.
-JUDGE_CONTAINER_TITLE: Final[str] = "judge scores"
-JUDGE_CONTAINER_SUBTITLE: Final[str] = "every config and case, criterion by criterion"
-MAX_CONTAINER_CHILD_BLOCKS: Final[int] = 10
+# The dimensions each scoring reply table groups, in the order its columns run. Two tables rather
+# than one because a row of every dimension's criteria is far past what a Slack table row holds, and
+# split this way because the first table is what the product is judged on and the second is about the
+# harness that drove it. The composed `reward` is in neither: it is what the grid above already says.
+SCORING_TABLE_DIMENSIONS: Final[tuple[tuple[str, ...], ...]] = (
+    (RewardDimension.OUTCOME, RewardDimension.QUALITY),
+    (RewardDimension.HARNESS_QUALITY, RewardDimension.GATES),
+)
+SCORED_DIMENSIONS: Final[frozenset[str]] = frozenset(
+    dimension for dimensions in SCORING_TABLE_DIMENSIONS for dimension in dimensions
+)
+
+DIAGNOSTICS_DETAIL_HEADING: Final[str] = "*diagnostics detail*"
 
 # Slack refuses a table whose row holds more than this many cells, and it refuses the whole message
 # with it, so a pass that scored more criteria than fit loses its overflow columns rather than its
@@ -172,17 +202,17 @@ MAX_TABLE_CELLS_PER_ROW: Final[int] = 20
 
 # Slack caps a message at this many characters across the cells of all its tables, and refuses the
 # whole message past it. The grid and the failures table are bounded by the matrix and are drawn
-# whole; the judge table is bounded by cases times configs times criteria, so it is what gets cut to
-# what is left. No cell may run away with the budget either: a case id and an incompletion reason
-# are both unbounded, so each cell is clamped before any of this is counted.
+# whole; the scoring reply's tables are bounded by cases times configs times steps, so they are what
+# gets cut to what is left. No cell may run away with the budget either: a case id and an
+# incompletion reason are both unbounded, so each cell is clamped before any of this is counted.
 MAX_TABLE_CHARACTERS: Final[int] = 10000
 MAX_TABLE_CELL_CHARACTERS: Final[int] = 120
 TABLE_ELLIPSIS: Final[str] = "..."
 # Slack refuses a table of more rows than this, header included, and the whole message with it. The
-# failures table is the one that can reach it: a diagnostic lists every failing fact as a row of its own.
+# failures table and the scoring tables both reach it: a diagnostic lists every failing fact as a row
+# of its own, and a stepped suite scores a row per step of per case of per arm.
 MAX_TABLE_ROWS: Final[int] = 100
-# What is left of a judge table row once its non-criterion columns have taken their cells.
-MAX_JUDGE_CRITERIA: Final[int] = MAX_TABLE_CELLS_PER_ROW - 4
+MAX_TABLE_DATA_ROWS: Final[int] = MAX_TABLE_ROWS - 1
 
 # What the oracle column is called. The oracle pass boots no workspace, so it is independent of the
 # harness config and is never one of them; `ci-matrix` refuses `oracle` as a config name for this.
@@ -327,7 +357,9 @@ class GridMark(FrozenModel):
     emoji_name: str = Field(description="The Slack emoji the table cell leads with: the reward's band")
     word: str = Field(description="What the fallback prints where the blocks show the emoji")
     reward_text: str = Field(description="The trial's reward, spaced ready to follow; empty when it has none")
-    verdict_mark: str = Field(description="The failure mark, or the spacer that keeps the rewards in line")
+    cost_text: str = Field(description="What the trial's workspace agent spent; empty when it recorded no spend")
+    time_text: str = Field(description="How long its conversation took; empty when its records do not say")
+    verdict_mark: str = Field(description="The failure mark; empty when the trial passed")
 
 
 class GridRow(FrozenModel):
@@ -344,35 +376,52 @@ class Grid(FrozenModel):
     rows: tuple[GridRow, ...] = Field(description="One row per case; empty when there is no grid to draw")
 
 
-class JudgeCriterion(FrozenModel):
-    """One column of a judge table: which dimension scored the criterion, and the criterion itself.
+class ScoreCell(FrozenModel):
+    """One cell of a scoring table, in the two spellings a reply needs it in.
 
-    The dimension is part of a column's identity rather than decoration. Two dimensions may score
-    criteria of the same name, and the dimension is also what says whether a score is about the
-    product or about the harness that drove it.
+    A blocks cell renders no `:emoji:` shortcode and a fixed-width fence renders no emoji at all, so a
+    cell that is a mark rather than a number carries both readings of itself.
     """
 
-    dimension: str = Field(description="The rewardkit dimension the criterion was scored under")
-    criterion: str = Field(description="The judge criterion's name, e.g. 'conciseness'")
+    text: str = Field(description="What the cell says, and what the fixed-width fallback prints")
+    emoji_name: str = Field(description="The Slack emoji a table cell shows in its place; empty for a text cell")
+    is_bold: bool = Field(description="Whether the table cell is styled bold")
 
 
-class JudgeTable(FrozenModel):
-    """Every graded trial of one suite in one table: which arm ran it, what it earned, how the judges
-    scored it, and what became of it.
+class ScoringDimension(FrozenModel):
+    """One dimension's block of columns: the dimension's own score, then a column per criterion under it."""
 
-    One table rather than one per harness config, so a criterion can be compared straight down its
-    own column, and so the message does not grow two blocks per config. Each row leads with its
-    config, which is why the block builder styles the first column rather than a named field.
+    dimension: str = Field(description="The rewardkit dimension the columns are grouped under")
+    criteria: tuple[str, ...] = Field(description="Its criteria, in the order the rows first name them")
+
+
+class ScoringRow(FrozenModel):
+    """One graded trial, or one step of one, as a row of a scoring table.
+
+    A stepped case is scored once per step against that step's own expectations, so a row per step is
+    what keeps three conversations from reading as one cell of repeated numbers.
     """
 
-    criteria: tuple[JudgeCriterion, ...] = Field(
-        description="The judge table's criterion columns, in first-seen order, capped to what a row fits"
+    config: str = Field(description="The harness config whose pass ran the trial, or 'oracle'")
+    case_key: str = Field(description="The case it ran")
+    step: str = Field(description="The step the row reports; empty for a flat trial")
+    dimension_scores: tuple[DimensionScore, ...] = Field(description="What each dimension scored on this step")
+    criterion_scores: tuple[CriterionScore, ...] = Field(description="What each criterion scored on this step")
+
+
+class ScoringTable(FrozenModel):
+    """One table of a scoring reply: the dimensions it groups, the rows it kept, and what it dropped.
+
+    Each row leads with its config, so a criterion can be compared straight down its own column across
+    every arm the message reports.
+    """
+
+    dimensions: tuple[ScoringDimension, ...] = Field(
+        description="The dimension blocks the table draws, in the order it is asked for them"
     )
-    rows: tuple[tuple[str, ...], ...] = Field(
-        description="One row per graded trial: its config, case, reward, each score, then its state"
-    )
-    total_criteria: int = Field(description="How many criteria were scored in all, before the cap")
-    dropped_rows: int = Field(description="How many graded trials the message's table budget left no room for")
+    rows: tuple[ScoringRow, ...] = Field(description="One row per graded trial or step of one, in column order")
+    dropped_criteria: int = Field(description="How many criterion columns Slack's cap on a table row left no room for")
+    dropped_rows: int = Field(description="How many rows the row cap and the character budget left no room for")
 
 
 class FailedTrial(FrozenModel):
@@ -398,12 +447,20 @@ class SlackMessage(FrozenModel):
     icon_emoji: str = Field(description="The shortcode of the avatar the message posts under")
 
 
+class SlackThread(FrozenModel):
+    """One message of the report and everything posted under it.
+
+    A reply is threaded under its own message rather than posted beside it, so a channel shows one
+    line per arm and the numbers behind that line are one click away.
+    """
+
+    message: SlackMessage = Field(description="The message posted to the channel")
+    replies: tuple[SlackMessage, ...] = Field(description="The messages posted in its thread, in order")
+
+
 # The grid of a message whose passes graded nothing. Nothing is drawn for it, and nothing is said
 # about it: the message's own section already says why there is no grid.
 EMPTY_GRID: Final[Grid] = Grid(headings=(), rows=())
-
-# The judge table of a message whose passes graded nothing.
-EMPTY_JUDGE_TABLE: Final[JudgeTable] = JudgeTable(criteria=(), rows=(), total_criteria=0, dropped_rows=0)
 
 # The failures table of a message about nothing that failed.
 EMPTY_FAILED_TRIALS: Final[FailedTrialsTable] = FailedTrialsTable(rows=(), dropped_rows=0)
@@ -1116,13 +1173,19 @@ def detail_passes(report: SuiteReport) -> tuple[PassReport, ...]:
 
 
 @pure
-def judge_passes(report: SuiteReport) -> tuple[PassReport, ...]:
-    """Every grid column that graded something, which is what a judge table can be made of.
+def graded_passes(report: SuiteReport) -> tuple[PassReport, ...]:
+    """Every grid column that graded something, which is what the scoring tables can be made of.
 
-    A skipped, not-evaluated or broken cell graded nothing and gets no section of its own; the
-    details block is where the reader is told what became of it.
+    A skipped, not-evaluated or broken cell graded nothing and gets no row of its own; the details
+    block is where the reader is told what became of it.
     """
     return tuple(column for column in grid_columns(report) if column.trials)
+
+
+@pure
+def graded_trials(report: SuiteReport) -> tuple[TrialCheck, ...]:
+    """Every trial the message's grid columns graded, in column order then case order."""
+    return tuple(trial for column in graded_passes(report) for trial in column.trials)
 
 
 @pure
@@ -1144,11 +1207,46 @@ def band_emoji_name(reward: float) -> str:
 
 
 @pure
+def format_agent_cost_text(spend: Sequence[SpenderCost]) -> str:
+    """What the workspace agent spent on one trial, in the compact spelling a grid cell has room for.
+
+    Three readings that must not be confused with one another: a trial that recorded no spend at all
+    says nothing, one whose model carries no price says so rather than showing a partial sum, and a
+    figure that holds less than the trial spent carries the floor mark instead of reading as exact.
+
+    Only the agent's half, because the grid is read to compare arms and the harness's half is what
+    running the eval costs whichever arm it ran.
+    """
+    entries = select_spend(spend, AGENT_SPENDERS)
+    if not entries:
+        return ""
+    cost_usd = group_cost(entries)
+    if cost_usd is None:
+        return UNPRICED_COST_TEXT
+    return format_cost_figure(cost_usd, is_group_floor(entries))
+
+
+@pure
+def format_conversation_time_text(conversation_seconds: float | None) -> str:
+    """How long one trial's conversation took, as a grid cell prints it.
+
+    The conversation rather than the whole trial: workspace creation is the harness's own time and is
+    much the same whichever arm is under test, so including it would flatten the difference the cell
+    is there to show. A trial whose records do not say leaves the figure out.
+    """
+    if conversation_seconds is None:
+        return ""
+    return format_duration(round(conversation_seconds))
+
+
+@pure
 def render_grid_mark(column: PassReport, case_key: str) -> GridMark:
     """One cell of the grid: what the pass made of that case, or why it says nothing about it.
 
-    The square says where the reward sits on 0..1 and the mark beside it says whether the trial
-    passed, so the colour means one thing throughout and the verdict never competes with it.
+    The square says where the reward sits on 0..1 and the mark at the end says whether the trial
+    passed, so the colour means one thing throughout and the verdict never competes with it. Between
+    them ride what the arm spent on the case and how long it talked, which is the other half of what
+    an arm is chosen on.
 
     A pass that was never attempted -- skipped because it is already green, or gated off by a failed
     oracle -- reads as a dash. Anything else without a trial is a question mark: a broken summary,
@@ -1156,24 +1254,37 @@ def render_grid_mark(column: PassReport, case_key: str) -> GridMark:
     """
     trial = find_case_trial(column, case_key)
     if trial is None:
-        if column.verdict in (ArmVerdict.SKIPPED, ArmVerdict.NOT_EVALUATED):
-            return GridMark(
-                emoji_name=NOT_EVALUATED_EMOJI_NAME, word=NOT_EVALUATED_MARK, reward_text="", verdict_mark=""
-            )
-        return GridMark(emoji_name=UNKNOWN_EMOJI_NAME, word=UNKNOWN_MARK, reward_text="", verdict_mark="")
+        word = NOT_EVALUATED_MARK if column.verdict in (ArmVerdict.SKIPPED, ArmVerdict.NOT_EVALUATED) else UNKNOWN_MARK
+        emoji_name = NOT_EVALUATED_EMOJI_NAME if word == NOT_EVALUATED_MARK else UNKNOWN_EMOJI_NAME
+        return GridMark(emoji_name=emoji_name, word=word, reward_text="", cost_text="", time_text="", verdict_mark="")
     # A trial that was never graded has no reward to place on the scale, so it keeps the neutral
     # mark rather than being coloured as though it had scored bottom.
     emoji_name = UNKNOWN_EMOJI_NAME if trial.reward is None else band_emoji_name(trial.reward)
-    reward_text = "" if trial.reward is None else " {:.2f}".format(trial.reward)
-    if trial.is_passed:
-        return GridMark(emoji_name=emoji_name, word=PASS_MARK, reward_text=reward_text, verdict_mark=PASSED_SPACER)
-    return GridMark(emoji_name=emoji_name, word=FAIL_MARK, reward_text=reward_text, verdict_mark=FAILED_MARK)
+    return GridMark(
+        emoji_name=emoji_name,
+        word=PASS_MARK if trial.is_passed else FAIL_MARK,
+        reward_text="" if trial.reward is None else " {:.2f}".format(trial.reward),
+        cost_text=format_agent_cost_text(trial.spend),
+        time_text=format_conversation_time_text(trial.conversation_seconds),
+        verdict_mark="" if trial.is_passed else FAILED_MARK,
+    )
+
+
+@pure
+def format_mark_aside(mark: GridMark) -> str:
+    """What a grid cell says beside its reward: the cost, the conversation time, or neither.
+
+    Spaced ready to follow the reward, so that a cell with nothing to add carries no stray space.
+    """
+    figures = " ".join(figure for figure in (mark.cost_text, mark.time_text) if figure)
+    return "" if not figures else " {}".format(figures)
 
 
 @pure
 def format_mark_text(mark: GridMark) -> str:
-    """One grid cell as the fallback prints it: the word the emoji stands for, and the reward."""
-    return "{}{}".format(mark.word, mark.reward_text)
+    """One grid cell as the fallback prints it: the word the emoji stands for, the reward, and what
+    the trial cost and took."""
+    return "{}{}{}".format(mark.word, mark.reward_text, format_mark_aside(mark))
 
 
 @pure
@@ -1199,7 +1310,7 @@ def render_grid(columns: Sequence[PassReport]) -> Grid:
     if not case_keys:
         return EMPTY_GRID
     return Grid(
-        headings=(GRID_CASE_HEADING, *(column.label for column in columns)),
+        headings=(GRID_CASE_HEADING, *(clamp_cell_text(column.label) for column in columns)),
         rows=tuple(
             GridRow(case_key=case_key, marks=tuple(render_grid_mark(column, case_key) for column in columns))
             for case_key in case_keys
@@ -1229,7 +1340,7 @@ def format_grid_table_cells(grid: Grid) -> tuple[tuple[str, ...], ...]:
         *(
             (
                 clamp_cell_text(row.case_key),
-                *("{}{}".format(mark.reward_text, mark.verdict_mark) for mark in row.marks),
+                *("{}{}{}".format(mark.reward_text, format_mark_aside(mark), mark.verdict_mark) for mark in row.marks),
             )
             for row in grid.rows
         ),
@@ -1333,8 +1444,8 @@ def format_unsupported_lines(report: SuiteReport) -> tuple[str, ...]:
 
 @pure
 def format_diagnostic_unmeasured_lines(diagnostics: Sequence[DiagnosticPassReport]) -> tuple[str, ...]:
-    """One line per diagnose job that left no summary, per trial that measured nothing and per trial whose
-    agent did not follow the prompt: each leaves the night without the measurement its job exists for."""
+    """One line per diagnose job that left no summary and per trial that measured nothing: each leaves
+    the night without the measurement its job exists for, which is why they stay in the top message."""
     lines: list[str] = []
     for diagnostic in diagnostics:
         if diagnostic.detail:
@@ -1346,18 +1457,26 @@ def format_diagnostic_unmeasured_lines(diagnostics: Sequence[DiagnosticPassRepor
                         diagnostic.label, format_diagnostic_trial_key(trial), trial.not_measured_reason
                     )
                 )
-            if trial.not_followed_facts:
-                lines.append(
-                    "*{}* `{}`: not followed: {}{}".format(
-                        diagnostic.label,
-                        format_diagnostic_trial_key(trial),
-                        format_fact_references(trial.not_followed_facts),
-                        " ({} dependent fact(s) not asserted)".format(len(trial.unmet_preconditions))
-                        if trial.unmet_preconditions
-                        else "",
-                    )
-                )
     return tuple(lines)
+
+
+@pure
+def format_diagnostic_not_followed_lines(diagnostics: Sequence[DiagnosticPassReport]) -> tuple[str, ...]:
+    """One line per trial whose agent did not follow the prompt, naming the compliance facts it missed
+    and how many facts went unasserted with them."""
+    return tuple(
+        "*{}* `{}`: not followed: {}{}".format(
+            diagnostic.label,
+            format_diagnostic_trial_key(trial),
+            format_fact_references(trial.not_followed_facts),
+            " ({} dependent fact(s) not asserted)".format(len(trial.unmet_preconditions))
+            if trial.unmet_preconditions
+            else "",
+        )
+        for diagnostic in diagnostics
+        for trial in diagnostic.trials
+        if trial.not_followed_facts
+    )
 
 
 @pure
@@ -1384,25 +1503,40 @@ def format_detail_lines(report: SuiteReport) -> tuple[str, ...]:
 
     A diagnostic that measured nothing, and a behaviour cell the pair cannot run, are named straight
     after them: those jobs gate nothing, so this is the only place a night without that measurement
-    stops reading as a clean one. The live invariants a cell's own trials missed follow, and the
-    diagnostics' known failures come last, since a known failure is expected every night it is
-    declared.
+    stops reading as a clean one.
 
     The unconfirmed models are every pass's, graded or not. Nothing else in the message says a
     passing arm was never confirmed to have answered on the model it names, and a green arm that
     measured the wrong model is the one thing here a reader must not miss.
+
+    What a reader only goes looking for once something is wrong -- the known failures, the facts an
+    agent did not follow, the live invariants a cell's trials missed -- is in the diagnostics reply
+    instead, so the top message stays as short as its verdict.
     """
     columns = detail_passes(report)
-    graded = judge_passes(report)
+    graded = graded_passes(report)
     uncovered = tuple(column for column in columns if column not in graded)
     return (
         *format_status_lines(columns),
         *format_diagnostic_unmeasured_lines(report.diagnostics),
         *format_unsupported_lines(report),
         *format_failure_lines(uncovered),
-        *format_invariant_miss_lines(columns),
         *format_unconfirmed_model_lines(columns),
+    )
+
+
+@pure
+def format_diagnostics_detail_lines(report: SuiteReport) -> tuple[str, ...]:
+    """What the diagnostics reply says, worst last: the known failures the pair declared, the facts an
+    agent did not follow, and the live invariants the message's own cells missed.
+
+    None of the three moves a verdict, and each is a wall of facts rather than a line, which is what
+    puts them a click away from the message a reader skims.
+    """
+    return (
         *format_diagnostic_known_lines(report.diagnostics),
+        *format_diagnostic_not_followed_lines(report.diagnostics),
+        *format_invariant_miss_lines(detail_passes(report)),
     )
 
 
@@ -1444,27 +1578,6 @@ def format_fixed_width_grid(rows: Sequence[Sequence[str]]) -> str:
 
 
 @pure
-def collect_judge_criteria(trials: Sequence[TrialCheck]) -> tuple[JudgeCriterion, ...]:
-    """Every criterion a pass's judges scored, in the order its trials first mention them.
-
-    The union across the trials rather than the first trial's own, because a case can be scored on
-    criteria another case is not: the dataset's cases carry their own expectations.
-    """
-    criteria: list[JudgeCriterion] = []
-    for trial in trials:
-        for score in trial.judge_scores:
-            criterion = JudgeCriterion(dimension=score.dimension, criterion=score.criterion)
-            if criterion not in criteria:
-                criteria.append(criterion)
-    return tuple(criteria)
-
-
-@pure
-def format_criterion_heading(criterion: JudgeCriterion) -> str:
-    return "{}: {}".format(criterion.dimension, criterion.criterion)
-
-
-@pure
 def clamp_cell_text(text: str) -> str:
     """One table cell's text, cut to what a single cell may run to."""
     if len(text) <= MAX_TABLE_CELL_CHARACTERS:
@@ -1475,137 +1588,6 @@ def clamp_cell_text(text: str) -> str:
 @pure
 def count_table_characters(rows: Sequence[Sequence[str]]) -> int:
     return sum(len(cell) for row in rows for cell in row)
-
-
-@pure
-def format_criterion_column_heading(criterion: JudgeCriterion, criteria: Sequence[JudgeCriterion]) -> str:
-    """One criterion's column heading.
-
-    Bare, because the dimensions are stated once in the legend above the table and qualifying every
-    heading makes the columns far wider than the numbers under them. A criterion name that two
-    dimensions both scored is the exception: those columns carry their dimension, or the table has
-    two columns of one name and no way to tell which score belongs to which.
-    """
-    if sum(1 for other in criteria if other.criterion == criterion.criterion) > 1:
-        return format_criterion_heading(criterion)
-    return criterion.criterion
-
-
-@pure
-def format_judge_headings(criteria: Sequence[JudgeCriterion]) -> tuple[str, ...]:
-    """The judge table's header row."""
-    return (
-        JUDGE_CONFIG_HEADING,
-        GRID_CASE_HEADING,
-        JUDGE_REWARD_HEADING,
-        *(format_criterion_column_heading(criterion, criteria) for criterion in criteria),
-        JUDGE_STATE_HEADING,
-    )
-
-
-@pure
-def format_criterion_score(trial: TrialCheck, criterion: JudgeCriterion) -> str:
-    """One criterion's own likert answer on one trial, as the judge gave it.
-
-    A dash rather than a zero where the trial has no such criterion: the columns are the union across
-    the pass's trials, and a case that was never scored on a criterion is not a case that scored
-    bottom on it.
-    """
-    for score in trial.judge_scores:
-        if score.dimension == criterion.dimension and score.criterion == criterion.criterion:
-            return "{:.0f}".format(score.raw_score)
-    return MISSING_SCORE_MARK
-
-
-@pure
-def format_judge_row(config: str, trial: TrialCheck, criteria: Sequence[JudgeCriterion]) -> tuple[str, ...]:
-    """One trial's row of the judge table.
-
-    The reward carries no band and no failure mark. The summary table above already says both, and
-    a second set of verdict glyphs is noise in a table read for its numbers.
-    """
-    reward = MISSING_SCORE_MARK if trial.reward is None else "{:.2f}".format(trial.reward)
-    return (
-        clamp_cell_text(config),
-        clamp_cell_text(format_case_key(trial)),
-        reward,
-        *(format_criterion_score(trial, criterion) for criterion in criteria),
-        clamp_cell_text(format_trial_state(trial)),
-    )
-
-
-@pure
-def format_criteria_overflow_line(table: JudgeTable) -> str:
-    """What the table says out loud when it lost columns to Slack's cap on a table row.
-
-    Silently dropping them would leave a table that reads as the whole of what the judges scored.
-    """
-    if table.total_criteria <= len(table.criteria):
-        return ""
-    return "_showing {} of {} judge criteria; the rest are in the run's summary_".format(
-        len(table.criteria), table.total_criteria
-    )
-
-
-@pure
-def render_judge_table(columns: Sequence[PassReport]) -> JudgeTable:
-    """Every graded trial of a pair, in one table.
-
-    The criteria are the union across every pass rather than one pass's own, because the arms are
-    read against each other here: a criterion only one config was scored on still gets a column,
-    and the configs that were not scored on it say so rather than showing a zero.
-    """
-    criteria = collect_judge_criteria(tuple(trial for column in columns for trial in column.trials))
-    kept_criteria = criteria[:MAX_JUDGE_CRITERIA]
-    return JudgeTable(
-        criteria=kept_criteria,
-        rows=tuple(
-            format_judge_row(column.label, trial, kept_criteria) for column in columns for trial in column.trials
-        ),
-        total_criteria=len(criteria),
-        dropped_rows=0,
-    )
-
-
-@pure
-def budget_judge_table(table: JudgeTable, spent: int) -> JudgeTable:
-    """The judge table cut to the table budget the rest of the message left it.
-
-    Whole rows, so that what survives is still a table: a row cut in half would line its scores up
-    under the wrong headings. The header row is counted first, because a table of headings alone is
-    worth nothing and must not be what the budget buys.
-    """
-    headings = format_judge_headings(table.criteria)
-    remaining = MAX_TABLE_CHARACTERS - spent - count_table_characters((headings,))
-    kept: list[tuple[str, ...]] = []
-    for row in table.rows:
-        cost = count_table_characters((row,))
-        if cost > remaining:
-            break
-        remaining -= cost
-        kept.append(row)
-    return JudgeTable(
-        criteria=table.criteria,
-        rows=tuple(kept),
-        total_criteria=table.total_criteria,
-        dropped_rows=len(table.rows) - len(kept),
-    )
-
-
-@pure
-def format_dropped_rows_line(table: JudgeTable) -> str:
-    """What the table says out loud when the message's character budget cost it rows.
-
-    A budget that leaves room for no row at all leaves no table to say it in either, so the wording
-    stands on its own: `build_message` puts this line where the container would have gone.
-    """
-    if not table.dropped_rows:
-        return ""
-    if not table.rows:
-        return "_the judge scores did not fit this message; they are in the run's summary_"
-    return "_showing {} of {} graded trials; the rest are in the run's summary_".format(
-        len(table.rows), len(table.rows) + table.dropped_rows
-    )
 
 
 @pure
@@ -1655,14 +1637,15 @@ def budget_failed_trials(failures: Sequence[FailedTrial], spent: int) -> FailedT
     """The failures table cut to Slack's row cap and to the table budget the grid left it.
 
     Whole rows in the order given, so the live passes' failures, which the matrix bounds, go before the
-    diagnostics' failing facts, which it does not. The header row is counted first, as the judge table's is.
+    diagnostics' failing facts, which it does not. The header row is counted first, because a table of
+    headings alone is worth nothing and must not be what the budget buys.
     """
-    header_cost = len(JUDGE_CONFIG_HEADING) + len(GRID_CASE_HEADING) + len(FAILED_TRIALS_NOTE_HEADING)
+    header_cost = len(CONFIG_HEADING) + len(GRID_CASE_HEADING) + len(FAILED_TRIALS_NOTE_HEADING)
     remaining = MAX_TABLE_CHARACTERS - spent - header_cost
     kept: list[FailedTrial] = []
     for failure in failures:
         cost = len(failure.config) + len(failure.case_key) + len(failure.note)
-        if cost > remaining or len(kept) + 1 >= MAX_TABLE_ROWS:
+        if cost > remaining or len(kept) >= MAX_TABLE_DATA_ROWS:
             break
         remaining -= cost
         kept.append(failure)
@@ -1680,57 +1663,12 @@ def format_dropped_failures_line(table: FailedTrialsTable) -> str:
 
 
 @pure
-def format_criteria_legend(criteria: Sequence[JudgeCriterion]) -> str:
-    """Which dimension scored which criteria, said once above the table rather than in every
-    heading."""
-    dimensions: list[str] = []
-    for criterion in criteria:
-        if criterion.dimension not in dimensions:
-            dimensions.append(criterion.dimension)
-    return "_criteria by dimension:_ {}".format(
-        "; ".join(
-            "{}: {}".format(
-                dimension,
-                ", ".join(criterion.criterion for criterion in criteria if criterion.dimension == dimension),
-            )
-            for dimension in dimensions
-        )
-    )
-
-
-@pure
-def format_judge_legend_lines(table: JudgeTable) -> tuple[str, ...]:
-    """What is said above the judge table: which dimension scored which criteria, and then whatever
-    the table had to give up to Slack's caps."""
-    return tuple(
-        line
-        for line in (
-            format_criteria_legend(table.criteria),
-            format_criteria_overflow_line(table),
-            format_dropped_rows_line(table),
-        )
-        if line
-    )
-
-
-@pure
-def format_judge_fallback(table: JudgeTable) -> tuple[str, ...]:
-    """The judge table as the fallback carries it: the legend, then a fixed-width fence."""
-    if not table.rows:
-        return (format_dropped_rows_line(table),) if table.dropped_rows else ()
-    return (
-        *format_judge_legend_lines(table),
-        "```\n{}\n```".format(format_fixed_width_grid((format_judge_headings(table.criteria), *table.rows))),
-    )
-
-
-@pure
 def format_failed_trials_rows(failures: Sequence[FailedTrial]) -> tuple[tuple[str, ...], ...]:
     """The failures table as rows of plain text, header row first; empty when nothing failed."""
     if not failures:
         return ()
     return (
-        (JUDGE_CONFIG_HEADING, GRID_CASE_HEADING, FAILED_TRIALS_NOTE_HEADING),
+        (CONFIG_HEADING, GRID_CASE_HEADING, FAILED_TRIALS_NOTE_HEADING),
         *((failure.config, failure.case_key, failure.note) for failure in failures),
     )
 
@@ -1750,15 +1688,396 @@ def format_failed_trials_fallback(failures: FailedTrialsTable) -> tuple[str, ...
 
 
 @pure
+def scored_steps(trial: TrialCheck) -> tuple[str, ...]:
+    """The steps one trial was scored on, in the order its own scores name them.
+
+    A flat trial was scored once under no step at all, which is the single unnamed row it contributes.
+    """
+    steps = tuple(dict.fromkeys(score.step for score in (*trial.dimension_scores, *trial.criterion_scores)))
+    return steps or ("",)
+
+
+@pure
+def is_scoring_row_drawn(row: ScoringRow, dimensions: Collection[str]) -> bool:
+    """Whether a row has anything to say under these dimensions.
+
+    Asked twice of every row: of all four dimensions, which is what makes a row at all -- a trial that
+    was never graded, and the unnamed step a stepped trial's composed reward is recorded under, score
+    none of them -- and then of each table's own two, which is what puts the row in that table. A row
+    of dashes reads as a trial that scored bottom rather than as one that was never scored, so it is
+    left out of the table it would read that way in even when the other one draws it.
+    """
+    return any(score.dimension in dimensions for score in (*row.dimension_scores, *row.criterion_scores))
+
+
+@pure
+def render_scoring_rows(columns: Sequence[PassReport]) -> tuple[ScoringRow, ...]:
+    """One row per graded trial, or per step of a stepped one, in column order then case order."""
+    rows = (
+        ScoringRow(
+            config=column.label,
+            case_key=format_case_key(trial),
+            step=step,
+            dimension_scores=tuple(score for score in trial.dimension_scores if score.step == step),
+            criterion_scores=tuple(score for score in trial.criterion_scores if score.step == step),
+        )
+        for column in columns
+        for trial in column.trials
+        for step in scored_steps(trial)
+    )
+    return tuple(row for row in rows if is_scoring_row_drawn(row, SCORED_DIMENSIONS))
+
+
+@pure
+def is_step_column_present(rows: Sequence[ScoringRow]) -> bool:
+    """Whether a table needs a step column. A suite of flat cases has nothing to put in one, and a
+    column of empty cells would read as a step that went unnamed."""
+    return any(row.step for row in rows)
+
+
+@pure
+def collect_scoring_dimensions(rows: Sequence[ScoringRow], dimensions: Sequence[str]) -> tuple[ScoringDimension, ...]:
+    """The dimension blocks one table draws: those of its own dimensions some row scored, each with
+    the criteria its rows name.
+
+    The criteria are the union across the rows rather than the first row's own, because a case can be
+    scored on criteria another case is not: the dataset's cases carry their own expectations. A
+    dimension nothing scored is left out altogether rather than drawn as a column of dashes.
+    """
+    blocks: list[ScoringDimension] = []
+    for dimension in dimensions:
+        criteria: list[str] = []
+        for row in rows:
+            for score in row.criterion_scores:
+                if score.dimension == dimension and score.criterion not in criteria:
+                    criteria.append(score.criterion)
+        is_scored = bool(criteria) or any(
+            score.dimension == dimension for row in rows for score in row.dimension_scores
+        )
+        if is_scored:
+            blocks.append(ScoringDimension(dimension=dimension, criteria=tuple(criteria)))
+    return tuple(blocks)
+
+
+@pure
+def cap_scoring_dimensions(
+    dimensions: Sequence[ScoringDimension], lead_column_count: int
+) -> tuple[tuple[ScoringDimension, ...], int]:
+    """The dimension blocks cut to what one table row holds, and how many criteria that cost.
+
+    Slack refuses a table whose row is over the cap and the whole message with it, so the columns
+    that do not fit go rather than the table. They go from the end, so the dimensions a reader is
+    handed first keep their criteria whole; a dimension with no room left for even its own score goes
+    entirely, since a criterion under a dimension nobody can see says nothing.
+
+    A dimension that goes whole counts its own column as well as its criteria, so that the line above
+    the table says how many columns are missing rather than how many of them were criteria -- a
+    dimension scored with no criteria at all would otherwise vanish without a word.
+    """
+    remaining = MAX_TABLE_CELLS_PER_ROW - lead_column_count
+    kept: list[ScoringDimension] = []
+    dropped_criteria = 0
+    for block in dimensions:
+        if remaining < 1:
+            dropped_criteria += 1 + len(block.criteria)
+            continue
+        kept_criteria = block.criteria[: remaining - 1]
+        dropped_criteria += len(block.criteria) - len(kept_criteria)
+        kept.append(block.model_copy_update(to_update(block.field_ref().criteria, kept_criteria)))
+        remaining -= 1 + len(kept_criteria)
+    return tuple(kept), dropped_criteria
+
+
+@pure
+def render_scoring_table(rows: Sequence[ScoringRow], dimensions: Sequence[str], dropped_rows: int) -> ScoringTable:
+    """One table of the scoring reply: the rows it was handed, under whichever of its dimensions they
+    were scored on."""
+    blocks, dropped_criteria = cap_scoring_dimensions(
+        collect_scoring_dimensions(rows, dimensions), scoring_lead_column_count(rows)
+    )
+    return ScoringTable(
+        dimensions=blocks, rows=tuple(rows), dropped_criteria=dropped_criteria, dropped_rows=dropped_rows
+    )
+
+
+@pure
+def render_scoring_table_of(rows: Sequence[ScoringRow], dimensions: Sequence[str]) -> ScoringTable:
+    """One table, out of every row the reply has: those scored on its own dimensions, cut to the row
+    cap Slack holds."""
+    drawn = tuple(row for row in rows if is_scoring_row_drawn(row, dimensions))
+    kept = drawn[:MAX_TABLE_DATA_ROWS]
+    return render_scoring_table(kept, dimensions, len(drawn) - len(kept))
+
+
+@pure
+def is_scoring_table_drawn(table: ScoringTable) -> bool:
+    """Whether a table has anything to draw. A table of headings alone reads as a measurement that went
+    missing rather than as a dimension nothing was scored on."""
+    return bool(table.dimensions) and bool(table.rows)
+
+
+@pure
+def scoring_lead_column_count(rows: Sequence[ScoringRow]) -> int:
+    """How many columns identify a row before the scores begin: its config and its case, and its step
+    where the table has one.
+
+    The same number twice over: it is what the dimension blocks are capped against and what says
+    which of a drawn row's columns are scores, so the two cannot be computed apart.
+    """
+    return 2 + (1 if is_step_column_present(rows) else 0)
+
+
+@pure
+def find_row_dimension_value(row: ScoringRow, dimension: str) -> float | None:
+    for score in row.dimension_scores:
+        if score.dimension == dimension:
+            return score.value
+    return None
+
+
+@pure
+def find_row_criterion_value(row: ScoringRow, dimension: str, criterion: str) -> float | None:
+    for score in row.criterion_scores:
+        if score.dimension == dimension and score.criterion == criterion:
+            return score.value
+    return None
+
+
+@pure
+def score_text_cell(text: str) -> ScoreCell:
+    return ScoreCell(text=text, emoji_name="", is_bold=False)
+
+
+@pure
+def score_bold_cell(text: str) -> ScoreCell:
+    return ScoreCell(text=text, emoji_name="", is_bold=True)
+
+
+@pure
+def format_score_cell(dimension: str, value: float | None) -> ScoreCell:
+    """One score as a cell: a gate as the mark that says whether it held, anything else as its
+    normalized number.
+
+    A gate is a property a trial either has or has not, so the mark is the whole of what it scored --
+    and only the failure is coloured, so a table read for its numbers stays black and white until
+    something in it is wrong. A gate that landed between the two is printed as the number it is.
+
+    A dash rather than a zero where a row has no such score: a case that was never scored on a
+    criterion is not a case that scored bottom on it.
+    """
+    if value is None:
+        return score_text_cell(MISSING_SCORE_MARK)
+    if dimension == RewardDimension.GATES:
+        if value >= 1.0:
+            return score_text_cell(GATE_PASSED_GLYPH)
+        if value <= 0.0:
+            return ScoreCell(text=FAILURE_GLYPH, emoji_name=FAIL_EMOJI_NAME, is_bold=False)
+    return score_text_cell("{:.2f}".format(value))
+
+
+@pure
+def format_scoring_headings(table: ScoringTable) -> tuple[ScoreCell, ...]:
+    """The header row: the columns a row is identified by, then each dimension in bold over the
+    criteria that make it up.
+
+    The dimension is bold because it is a super-column: nothing else in the row says where one
+    dimension's block of columns ends and the next begins.
+
+    A criterion name is authored free text carried out of a case's expectations, so a heading is
+    clamped like any other cell: one over the cap is refused with the whole message behind it.
+    """
+    lead = [score_text_cell(CONFIG_HEADING), score_text_cell(GRID_CASE_HEADING)]
+    if is_step_column_present(table.rows):
+        lead.append(score_text_cell(SCORING_STEP_HEADING))
+    return (
+        *lead,
+        *(
+            cell
+            for block in table.dimensions
+            for cell in (
+                score_bold_cell(clamp_cell_text(block.dimension)),
+                *(score_text_cell(clamp_cell_text(name)) for name in block.criteria),
+            )
+        ),
+    )
+
+
+@pure
+def format_scoring_row_cells(row: ScoringRow, table: ScoringTable) -> tuple[ScoreCell, ...]:
+    """One row's cells: which trial it is, then what each dimension and criterion scored on it."""
+    lead = [score_bold_cell(clamp_cell_text(row.config)), score_text_cell(clamp_cell_text(row.case_key))]
+    if is_step_column_present(table.rows):
+        lead.append(score_text_cell(clamp_cell_text(row.step) or MISSING_SCORE_MARK))
+    return (
+        *lead,
+        *(
+            cell
+            for block in table.dimensions
+            for cell in (
+                format_score_cell(block.dimension, find_row_dimension_value(row, block.dimension)),
+                *(
+                    format_score_cell(block.dimension, find_row_criterion_value(row, block.dimension, criterion))
+                    for criterion in block.criteria
+                ),
+            )
+        ),
+    )
+
+
+@pure
+def format_scoring_table_cells(table: ScoringTable) -> tuple[tuple[ScoreCell, ...], ...]:
+    """The whole table as cells, header row first."""
+    return (
+        format_scoring_headings(table),
+        *(format_scoring_row_cells(row, table) for row in table.rows),
+    )
+
+
+@pure
+def format_scoring_text_rows(table: ScoringTable) -> tuple[tuple[str, ...], ...]:
+    """The table as rows of plain text, for the fence that stands in for it and for the character
+    budget it is counted against."""
+    return tuple(tuple(cell.text for cell in row) for row in format_scoring_table_cells(table))
+
+
+@pure
+def count_scoring_characters(tables: Sequence[ScoringTable]) -> int:
+    return sum(
+        count_table_characters(format_scoring_text_rows(table)) for table in tables if is_scoring_table_drawn(table)
+    )
+
+
+@pure
+def narrow_scoring_dimensions(table: ScoringTable) -> ScoringTable:
+    """The same table with the columns its rows do not score taken out.
+
+    A table's blocks are collected from the rows it had before the character budget took any off the
+    end, so a criterion only a dropped row named would keep a column of dashes -- which reads as a
+    trial that scored bottom on it rather than as one nobody scored on it, and spends a header and
+    one of the row's twenty cells on saying nothing.
+
+    Columns only ever go here, never come back, so a row cannot grow past the cap
+    `cap_scoring_dimensions` cut it to. `dropped_criteria` is left alone: a column nothing scores was
+    not cut for width, and `collect_scoring_dimensions` does not count one either.
+    """
+    scored = tuple(
+        block.model_copy_update(
+            to_update(
+                block.field_ref().criteria,
+                tuple(
+                    criterion
+                    for criterion in block.criteria
+                    if any(find_row_criterion_value(row, block.dimension, criterion) is not None for row in table.rows)
+                ),
+            )
+        )
+        for block in table.dimensions
+    )
+    kept = tuple(
+        block
+        for block in scored
+        if block.criteria or any(find_row_dimension_value(row, block.dimension) is not None for row in table.rows)
+    )
+    return table.model_copy_update(to_update(table.field_ref().dimensions, kept))
+
+
+@pure
+def fit_scoring_tables(tables: Sequence[ScoringTable]) -> tuple[ScoringTable, ...]:
+    """Both tables cut to what Slack holds across the cells of one message's tables.
+
+    Whole rows, or the scores that survived would line up under the wrong headings, and always from
+    the longer table, so the two shrink together rather than one of them disappearing under the
+    other's weight. A table that loses a row gives up whatever columns only that row scored, so the
+    budget is not spent again on a column of dashes.
+    """
+    fitted = list(tables)
+    while count_scoring_characters(fitted) > MAX_TABLE_CHARACTERS:
+        candidates = [index for index, table in enumerate(fitted) if is_scoring_table_drawn(table)]
+        if not candidates:
+            break
+        longest = max(candidates, key=lambda index: len(fitted[index].rows))
+        table = fitted[longest]
+        fitted[longest] = narrow_scoring_dimensions(
+            table.model_copy_update(
+                to_update(table.field_ref().rows, table.rows[:-1]),
+                to_update(table.field_ref().dropped_rows, table.dropped_rows + 1),
+            )
+        )
+    return tuple(fitted)
+
+
+@pure
+def render_scoring_tables(columns: Sequence[PassReport]) -> tuple[ScoringTable, ...]:
+    """The reply's tables, cut to Slack's row cap and character budget.
+
+    Each table caps its own rows, because each holds only the rows scored on its own dimensions and a
+    cap spent on a row the table does not draw would cost it one it does; the character budget then
+    comes off whichever is longer, and each table says in the line above it how many rows that cost.
+    """
+    rows = render_scoring_rows(columns)
+    return fit_scoring_tables(
+        tuple(render_scoring_table_of(rows, dimensions) for dimensions in SCORING_TABLE_DIMENSIONS)
+    )
+
+
+@pure
+def format_scoring_context_lines(table: ScoringTable) -> tuple[str, ...]:
+    """What is said above one scoring table: which dimensions it holds and the scale its cells are on,
+    then whatever the table had to give up to Slack's caps.
+
+    The scale belongs here because nothing in a cell shows it: a judge answers on a 1-10 likert and
+    rewardkit normalizes that to 0-1, which is the number reported, so a reader who took `0.78` for a
+    likert answer would read a good score as a poor one.
+    """
+    gates_clause = (
+        " a gate reads {} or {};".format(GATE_PASSED_GLYPH, FAIL_EMOJI)
+        if any(block.dimension == RewardDimension.GATES for block in table.dimensions)
+        else ""
+    )
+    lines = [
+        "_{}: each dimension's own score, then the criteria under it;{} every score 0.00-1.00_".format(
+            ", ".join(block.dimension for block in table.dimensions), gates_clause
+        )
+    ]
+    if table.dropped_criteria:
+        lines.append(
+            "_{} criterion column{} did not fit this row; they are in the run's summary_".format(
+                table.dropped_criteria, "" if table.dropped_criteria == 1 else "s"
+            )
+        )
+    if table.dropped_rows:
+        lines.append(
+            "_showing {} of {} scored rows; the rest are in the run's summary_".format(
+                len(table.rows), len(table.rows) + table.dropped_rows
+            )
+        )
+    return tuple(lines)
+
+
+@pure
+def format_scoring_fallback(table: ScoringTable) -> tuple[str, ...]:
+    """One scoring table as the fallback carries it: its context lines, then a fixed-width fence."""
+    return (
+        *format_scoring_context_lines(table),
+        "```\n{}\n```".format(format_fixed_width_grid(format_scoring_text_rows(table))),
+    )
+
+
+@pure
 def format_reward_scale_note() -> str:
-    """The legend for the summary table's squares.
+    """The legend for the grid: what a square stands for, and what rides beside it.
 
     Derived from the bands themselves, so that the words under the table cannot drift from what its
     cells actually do.
     """
     bands = [":{}: `<{:.2f}`".format(emoji_name, ceiling) for ceiling, emoji_name in REWARD_BANDS]
     bands.append(":{}: `>={:.2f}`".format(TOP_BAND_EMOJI_NAME, REWARD_BANDS[-1][0]))
-    return "_reward_ {}  --  *{}* = the trial failed its gates".format(" ".join(bands), FAILED_MARK.strip())
+    return (
+        "_reward_ {}  --  *{}* = the trial failed its gates  --  _italics_ = agent spend and"
+        " conversation time, `{}` a floor and `{}` spend nothing could price".format(
+            " ".join(bands), FAILURE_GLYPH, FLOOR_MARK, UNPRICED_COST_TEXT
+        )
+    )
 
 
 @pure
@@ -1847,15 +2166,24 @@ def format_diagnostics_clause(report: SuiteReport) -> str:
 def format_pair_section(
     report: SuiteReport, context: CiReportContext, emoji: str, is_only_the_job_unhealthy: bool
 ) -> str:
-    """The pair's own two lines: which commits it froze to and what became of them, then the run."""
+    """The pair's own two lines: which commits it froze to and what became of them, then the run and
+    what it spent.
+
+    The spend is the message's own trials', not the night's: a reader acts on one arm at a time, and
+    a total across every pair would answer a question nobody asked here.
+    """
     label_line = "{} {}".format(emoji, format_pair_label(report.pair))
     summary_clauses = [clause for clause in (report.summary_text, format_diagnostics_clause(report)) if clause]
     if summary_clauses:
         label_line = "{} -- {}".format(label_line, "; ".join(summary_clauses))
-    run_line = "{} in {}, _trigger=_ `{}`{}{}".format(
+    spend_line = format_spend_totals_line(
+        [trial.spend for trial in graded_trials(report)], AGENT_SPEND_LABEL, HARNESS_SPEND_LABEL
+    )
+    run_line = "{} in {}, _trigger=_ `{}`{}{}{}".format(
         format_verdict_word(report.verdict),
         format_duration(context.duration_seconds),
         context.trigger,
+        ", {}".format(spend_line) if spend_line else "",
         " _(oracle only)_" if context.is_live_pass_skipped else "",
         format_job_note(context, is_only_the_job_unhealthy),
     )
@@ -1904,31 +2232,22 @@ def build_bold_cell(text: str) -> dict[str, Any]:
 
 @pure
 def build_mark_cell(mark: GridMark) -> dict[str, Any]:
-    """One grid cell as a rich-text cell: the reward's band as a square, the reward, then the mark.
+    """One grid cell as a rich-text cell: the reward's band as a square, the reward, what the trial
+    cost and how long it talked, then the mark.
 
     The word the fallback prints is not repeated here, because the mark is already the verdict, and
-    a cell with no reward to show carries the square alone rather than an empty text element.
+    a cell with no reward to show carries the square alone rather than an empty text element. The
+    cost and the time are italic, so the score the cell is read for stays what the eye lands on.
     """
     elements: list[dict[str, Any]] = [{"type": "emoji", "name": mark.emoji_name}]
     if mark.reward_text:
         elements.append({"type": "text", "text": mark.reward_text})
+    aside = format_mark_aside(mark)
+    if aside:
+        elements.append({"type": "text", "text": aside, "style": {"italic": True}})
     if mark.verdict_mark:
         elements.append({"type": "text", "text": mark.verdict_mark, "style": {"bold": True}})
     return {"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": elements}]}
-
-
-@pure
-def build_container_block(title: str, subtitle: str, child_blocks: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """A collapsed group of blocks."""
-    assert len(child_blocks) <= MAX_CONTAINER_CHILD_BLOCKS, len(child_blocks)
-    return {
-        "type": "container",
-        "title": {"type": "plain_text", "text": title},
-        "subtitle": {"type": "plain_text", "text": subtitle},
-        "is_collapsible": True,
-        "default_collapsed": True,
-        "child_blocks": list(child_blocks),
-    }
 
 
 @pure
@@ -1936,12 +2255,12 @@ def build_grid_block(grid: Grid) -> dict[str, Any]:
     """The grid as Slack's table block: the cases down the side, the configs across the top, and
     what each arm made of each case in between.
 
-    The rewards are right-aligned so that they read as a column of numbers rather than as text that
-    happens to be numeric.
+    Every column is left-aligned: a cell is a run of elements of different widths rather than a bare
+    number, so right-aligning it lines up the failure marks instead of the rewards.
     """
     return {
         "type": "table",
-        "column_settings": [{"align": "left"}, *({"align": "right"} for _ in grid.headings[1:])],
+        "column_settings": [{"align": "left"} for _ in grid.headings],
         "rows": [
             [build_raw_text_cell(grid.headings[0]), *(build_bold_cell(heading) for heading in grid.headings[1:])],
             *(
@@ -1953,24 +2272,33 @@ def build_grid_block(grid: Grid) -> dict[str, Any]:
 
 
 @pure
-def build_judge_table_block(table: JudgeTable) -> dict[str, Any]:
-    """The judge table as Slack's table block.
+def build_score_cell(cell: ScoreCell) -> dict[str, Any]:
+    """One scoring cell as Slack takes it. An emoji has to be an element of its own: a table cell
+    renders no `:name:` shortcode written into its text."""
+    if cell.emoji_name:
+        return {
+            "type": "rich_text",
+            "elements": [{"type": "rich_text_section", "elements": [{"type": "emoji", "name": cell.emoji_name}]}],
+        }
+    return build_bold_cell(cell.text) if cell.is_bold else build_raw_text_cell(cell.text)
 
-    The state column wraps and everything between the case and it is right-aligned, so the scores
-    line up under their headings however long the states beside them run.
+
+@pure
+def build_scoring_table_block(table: ScoringTable) -> dict[str, Any]:
+    """One scoring table as Slack's table block.
+
+    The columns that say which trial a row is are left-aligned and every score is right-aligned, so
+    the numbers line up under their headings however long the case ids beside them run.
     """
+    lead_column_count = scoring_lead_column_count(table.rows)
+    headings = format_scoring_headings(table)
     return {
         "type": "table",
         "column_settings": [
-            {"align": "left"},
-            {"align": "left"},
-            *({"align": "right"} for _ in range(1 + len(table.criteria))),
-            {"align": "left", "is_wrapped": True},
+            *({"align": "left"} for _ in range(lead_column_count)),
+            *({"align": "right"} for _ in range(len(headings) - lead_column_count)),
         ],
-        "rows": [
-            [build_raw_text_cell(heading) for heading in format_judge_headings(table.criteria)],
-            *([build_bold_cell(row[0]), *(build_raw_text_cell(cell) for cell in row[1:])] for row in table.rows),
-        ],
+        "rows": [[build_score_cell(cell) for cell in row] for row in format_scoring_table_cells(table)],
     }
 
 
@@ -1983,7 +2311,7 @@ def build_failed_trials_block(failures: Sequence[FailedTrial]) -> dict[str, Any]
         "rows": [
             [
                 build_raw_text_cell(heading)
-                for heading in (JUDGE_CONFIG_HEADING, GRID_CASE_HEADING, FAILED_TRIALS_NOTE_HEADING)
+                for heading in (CONFIG_HEADING, GRID_CASE_HEADING, FAILED_TRIALS_NOTE_HEADING)
             ],
             *(
                 [
@@ -1998,28 +2326,45 @@ def build_failed_trials_block(failures: Sequence[FailedTrial]) -> dict[str, Any]
 
 
 @pure
-def build_judge_blocks(table: JudgeTable) -> tuple[dict[str, Any], ...]:
-    """What the message shows for its suite's judge scores.
+def render_scoring_reply(report: SuiteReport, icon_emoji: str) -> SlackMessage | None:
+    """Every scoring input behind the message's grid, as a reply in its thread; None when no column
+    graded a trial and there is nothing to show.
 
-    Three outcomes, and the last is not an oversight: a table with rows is folded into a container,
-    a table the message's character budget emptied says so where that container would have gone, and
-    a suite that graded nothing has no scores to show and draws neither.
+    Two tables rather than one, because a row holding every dimension's criteria is far past what a
+    Slack table row takes -- and the split is where the reader's question changes from "how good was
+    what it built?" to "did the harness do its job?".
     """
-    if table.rows:
-        return (
-            build_container_block(
-                JUDGE_CONTAINER_TITLE,
-                JUDGE_CONTAINER_SUBTITLE,
-                (
-                    build_context_block("\n".join(format_judge_legend_lines(table))),
-                    build_judge_table_block(table),
-                ),
-            ),
+    tables = tuple(table for table in render_scoring_tables(graded_passes(report)) if is_scoring_table_drawn(table))
+    if not tables:
+        return None
+    blocks = tuple(
+        block
+        for table in tables
+        for block in (
+            build_context_block("\n".join(format_scoring_context_lines(table))),
+            build_scoring_table_block(table),
         )
-    elif table.dropped_rows:
-        return (build_context_block(format_dropped_rows_line(table)),)
-    else:
-        return ()
+    )
+    return SlackMessage(
+        text="\n".join(line for table in tables for line in format_scoring_fallback(table)),
+        blocks=blocks,
+        icon_emoji=icon_emoji,
+    )
+
+
+@pure
+def render_diagnostics_reply(report: SuiteReport, icon_emoji: str) -> SlackMessage | None:
+    """The detail behind the pair's diagnostics, as a reply in its thread; None when there is none.
+
+    Only the pair's first message carries the pair's diagnose jobs, so only it can carry their facts;
+    the live invariants are the message's own cells' and ride here because they are read for the same
+    reason and at the same moment.
+    """
+    lines = format_diagnostics_detail_lines(report)
+    if not lines:
+        return None
+    section = "{}\n{}".format(DIAGNOSTICS_DETAIL_HEADING, format_budgeted_block(lines))
+    return SlackMessage(text=section, blocks=(build_section_block(section),), icon_emoji=icon_emoji)
 
 
 @pure
@@ -2029,7 +2374,6 @@ def build_message(
     icon_emoji: str,
     pair_section: str,
     grid: Grid,
-    judge_table: JudgeTable,
     failures: FailedTrialsTable,
     details_section: str,
     links: str,
@@ -2037,8 +2381,8 @@ def build_message(
     """One message from its parts, as blocks and as the mrkdwn that stands in for them.
 
     The order is the order a reader asks the questions in: which pair and which eval config, how did
-    each case do on each arm, what went wrong, and only then every number behind it. The last of
-    those is collapsed, because a green run is read for its first two blocks alone.
+    each case do on each arm, and what went wrong. The numbers behind the grid are a reply rather
+    than a block here, because a green run is read for its first two blocks alone.
     """
     blocks: list[dict[str, Any]] = [build_header_block(header_text), build_section_block(pair_section)]
     text_parts = ["{} *{}*".format(emoji, header_text), pair_section]
@@ -2052,8 +2396,6 @@ def build_message(
         if failures.dropped_rows:
             blocks.append(build_context_block(format_dropped_failures_line(failures)))
     text_parts.extend(format_failed_trials_fallback(failures))
-    blocks.extend(build_judge_blocks(judge_table))
-    text_parts.extend(format_judge_fallback(judge_table))
     if details_section:
         blocks.append(build_section_block(details_section))
         text_parts.append(details_section)
@@ -2080,24 +2422,33 @@ def render_suite_message(
     """One suite's whole message: one pair times one eval config."""
     emoji = WARNING_EMOJI if is_only_the_job_unhealthy else format_verdict_emoji(report.verdict)
     details = format_budgeted_block(format_detail_lines(report))
-    graded = judge_passes(report)
     grid = render_grid(grid_columns(report))
     grid_spent = count_table_characters(format_grid_table_cells(grid))
     failures = budget_failed_trials(
-        (*render_failed_trials(graded), *render_diagnostic_failed_facts(report.diagnostics)), grid_spent
+        (*render_failed_trials(graded_passes(report)), *render_diagnostic_failed_facts(report.diagnostics)),
+        grid_spent,
     )
-    spent = grid_spent + count_table_characters(format_failed_trials_rows(failures.rows))
     return build_message(
         format_header_text(report),
         emoji,
         format_verdict_icon(report.verdict),
         format_pair_section(report, context, emoji, is_only_the_job_unhealthy),
         grid,
-        budget_judge_table(render_judge_table(graded), spent),
         failures,
         "{}\n{}".format(DETAILS_HEADING, details) if details else "",
         format_links_line(context.run_url),
     )
+
+
+@pure
+def render_suite_thread(report: SuiteReport, context: CiReportContext, is_only_the_job_unhealthy: bool) -> SlackThread:
+    """One suite's message and the replies that belong under it."""
+    message = render_suite_message(report, context, is_only_the_job_unhealthy)
+    replies = (
+        render_scoring_reply(report, message.icon_emoji),
+        render_diagnostics_reply(report, message.icon_emoji),
+    )
+    return SlackThread(message=message, replies=tuple(reply for reply in replies if reply is not None))
 
 
 @pure
@@ -2116,7 +2467,6 @@ def render_undecided_message(context: CiReportContext) -> SlackMessage:
         UNGREEN_ICON_EMOJI,
         section,
         EMPTY_GRID,
-        EMPTY_JUDGE_TABLE,
         EMPTY_FAILED_TRIALS,
         "",
         format_links_line(context.run_url),
@@ -2125,8 +2475,9 @@ def render_undecided_message(context: CiReportContext) -> SlackMessage:
 
 @pure
 def as_slack_payload(message: SlackMessage) -> dict[str, Any]:
-    """One message as the webhook takes it. The webhook carries no identity, so every post names
-    itself, and `text` is both the notification line and what Slack falls back to."""
+    """One message as a post takes it. Neither a webhook nor a bot token carries the identity this
+    report posts under, so every post names itself, and `text` is both the notification line and what
+    Slack falls back to."""
     return {
         "username": SLACK_USERNAME,
         "icon_emoji": message.icon_emoji,
@@ -2135,14 +2486,23 @@ def as_slack_payload(message: SlackMessage) -> dict[str, Any]:
     }
 
 
+@pure
+def as_slack_thread_payload(thread: SlackThread) -> dict[str, Any]:
+    """One thread as the posting command reads it back: the message, then what goes under it."""
+    return {
+        "message": as_slack_payload(thread.message),
+        "replies": [as_slack_payload(reply) for reply in thread.replies],
+    }
+
+
 def render_slack_report(
     matrix_path: Path | None, summaries_dir: Path, context: CiReportContext
-) -> tuple[SlackMessage, ...]:
-    """Every message a scheduled run posts: one per pair and eval config it evaluated, one for each
+) -> tuple[SlackThread, ...]:
+    """Every thread a scheduled run posts: one per pair and eval config it evaluated, one for each
     pair it evaluated nothing of, or one saying it decided nothing at all."""
     matrix = read_ci_matrix(matrix_path)
     if matrix is None or not matrix.pairs:
-        return (render_undecided_message(context),)
+        return (SlackThread(message=render_undecided_message(context), replies=()),)
     reports = tuple(
         report for pair in matrix.pairs for report in read_pair_reports(pair, matrix, summaries_dir, context)
     )
@@ -2156,4 +2516,4 @@ def render_slack_report(
         for report in reports
     )
     is_only_the_job_unhealthy = bool(describe_unhealthy_jobs(context)) and not is_any_arm_bad
-    return tuple(render_suite_message(report, context, is_only_the_job_unhealthy) for report in reports)
+    return tuple(render_suite_thread(report, context, is_only_the_job_unhealthy) for report in reports)

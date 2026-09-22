@@ -32,6 +32,9 @@ _WIREGUARD_PRIVATE_KEY_PATH: Final[str] = "/etc/wireguard/wg0.key"
 _WIREGUARD_PUBLIC_KEY_PATH: Final[str] = "/etc/wireguard/wg0.pub"
 WIREGUARD_CONFIG_PATH: Final[str] = "/etc/wireguard/wg0.conf"
 WIREGUARD_PUBLIC_KEY_MARKER: Final[str] = "MNGR_WIREGUARD_PUBLIC_KEY"
+# Echoed by the prep once the ``:22`` lockdown is live on the box, so the CLI's
+# post-prep round trips know the public address can no longer be dialed.
+MANAGEMENT_LOCKDOWN_MARKER: Final[str] = "MNGR_MANAGEMENT_LOCKDOWN installed"
 
 # The management lockdown's nftables policy: its own table (never the
 # per-VM ``mngr_slices`` table, which the slice helper owns), loaded from a
@@ -106,12 +109,17 @@ def render_wireguard_prep_section(
     """The idempotent root bash section that brings up the box's management WireGuard.
 
     Generates the box's keypair once (the private key never leaves the box),
-    renders ``wg0.conf`` with the tier's operator peers, and restarts the
-    interface only when the rendered config actually changed (so a re-prep
-    with an unchanged peer list never bounces live operator sessions). Always
-    echoes the box's public key as ``MNGR_WIREGUARD_PUBLIC_KEY <key>`` so the caller
-    can stamp it on the box's row. Also the whole body of ``minds-admin
-    wireguard sync-peers`` (which re-runs it over management SSH).
+    renders ``wg0.conf`` with the tier's operator peers, has ``wg`` itself
+    parse the rendered file on a scratch interface before it replaces the
+    installed one, and applies a changed config without disturbing live
+    sessions where it can: a peer-only change goes in through ``wg syncconf``
+    with the interface up, and only an ``[Interface]`` change (or a down
+    interface) restarts it; an unchanged config touches nothing. A reload or
+    restart the new config fails restores the previous one, so the box's
+    overlay survives a bad peer list either way.
+    Always echoes the box's public key as ``MNGR_WIREGUARD_PUBLIC_KEY <key>``
+    so the caller can stamp it on the box's row. Also the whole body of
+    ``minds-admin wireguard sync-peers`` (which re-runs it over management SSH).
     """
     peer_blocks = _render_wireguard_peer_blocks(operators)
     return f"""\
@@ -138,11 +146,64 @@ MNGR_WG_CONF
 # The private key is spliced in post-heredoc so the rendered laptop-side
 # script never contains it (WireGuard keys are base64: no sed metacharacters).
 sed -i "s|__MNGR_WG_PRIVATE_KEY__|$(cat {_WIREGUARD_PRIVATE_KEY_PATH})|" {WIREGUARD_CONFIG_PATH}.mngr-tmp
+# Let wg itself parse the rendered config on a throwaway interface before it
+# can replace the installed one: a peer wg refuses (a malformed operator key,
+# say) fails here, with the live wg0 untouched, rather than at the restart
+# below. wg-quick strip needs a <interface>.conf file name; ListenPort is
+# dropped from the check copy only because the live interface holds the port.
+check_interface="wgchk$$"
+check_dir=$(mktemp -d /dev/shm/mngr-wg-check.XXXXXX)
+cp {WIREGUARD_CONFIG_PATH}.mngr-tmp "$check_dir/$check_interface.conf"
+ip link add "$check_interface" type wireguard
+if ! wg-quick strip "$check_dir/$check_interface.conf" | sed '/^ListenPort/d' | wg setconf "$check_interface" /dev/stdin; then
+    ip link del "$check_interface"
+    rm -rf "$check_dir" {WIREGUARD_CONFIG_PATH}.mngr-tmp
+    echo "wg rejected the rendered wg0.conf; the installed config and the live interface were left untouched" >&2
+    exit 1
+fi
+ip link del "$check_interface"
+rm -rf "$check_dir"
 umask "$previous_umask"
 systemctl enable wg-quick@wg0
 if ! cmp -s {WIREGUARD_CONFIG_PATH}.mngr-tmp {WIREGUARD_CONFIG_PATH} 2>/dev/null; then
+    # A change confined to the [Peer] blocks is applied live with wg syncconf:
+    # the interface stays up, existing sessions (the operator's own, which
+    # this script arrives over) survive, and the change lands in milliseconds.
+    # Restarting instead severs that session, and the operator's tunnel then
+    # spends tens of seconds re-handshaking before the script's exit reaches
+    # them. Only an [Interface] change (address, port, key) needs the restart.
+    interface_section() {{ sed -n '/^\\[Interface\\]/,/^$/p' "$1"; }}
+    is_peer_only_change=0
+    if systemctl is-active --quiet wg-quick@wg0 && [ -f {WIREGUARD_CONFIG_PATH} ] \
+        && [ "$(interface_section {WIREGUARD_CONFIG_PATH}.mngr-tmp)" = "$(interface_section {WIREGUARD_CONFIG_PATH})" ]; then
+        is_peer_only_change=1
+    fi
+    if [ -f {WIREGUARD_CONFIG_PATH} ]; then
+        cp -a {WIREGUARD_CONFIG_PATH} {WIREGUARD_CONFIG_PATH}.mngr-previous
+    fi
     mv {WIREGUARD_CONFIG_PATH}.mngr-tmp {WIREGUARD_CONFIG_PATH}
-    systemctl restart wg-quick@wg0
+    if [ "$is_peer_only_change" = 1 ]; then
+        if ! wg syncconf wg0 <(wg-quick strip wg0); then
+            mv {WIREGUARD_CONFIG_PATH}.mngr-previous {WIREGUARD_CONFIG_PATH}
+            wg syncconf wg0 <(wg-quick strip wg0) || true
+            echo "wg syncconf refused the rendered wg0.conf; restored the previous config" >&2
+            exit 1
+        fi
+        echo "applied the peer changes live with wg syncconf (no interface restart)"
+    elif ! systemctl restart wg-quick@wg0; then
+        # The box's overlay is its only operator path once :22 is locked down,
+        # so a config the interface will not come up on is rolled back rather
+        # than left in place.
+        if [ -f {WIREGUARD_CONFIG_PATH}.mngr-previous ]; then
+            mv {WIREGUARD_CONFIG_PATH}.mngr-previous {WIREGUARD_CONFIG_PATH}
+            systemctl restart wg-quick@wg0 || true
+            echo "wg-quick@wg0 failed to restart on the rendered wg0.conf; restored the previous config" >&2
+        else
+            echo "wg-quick@wg0 failed to restart on the rendered wg0.conf (no previous config to restore)" >&2
+        fi
+        exit 1
+    fi
+    rm -f {WIREGUARD_CONFIG_PATH}.mngr-previous
 else
     rm -f {WIREGUARD_CONFIG_PATH}.mngr-tmp
     systemctl start wg-quick@wg0
@@ -243,7 +304,14 @@ cat > {_MANAGEMENT_NFT_POLICY_PATH} <<'MNGR_MGMT_NFT'
 {policy_text}\
 MNGR_MGMT_NFT
 nft -f {_MANAGEMENT_NFT_POLICY_PATH}
+echo "{MANAGEMENT_LOCKDOWN_MARKER}"
 """
+
+
+@pure
+def is_management_lockdown_in_prep_output(stdout: str) -> bool:
+    """Whether a prep run's stdout carries the ``MANAGEMENT_LOCKDOWN_MARKER`` line (the ``:22`` lockdown went live)."""
+    return any(line.strip() == MANAGEMENT_LOCKDOWN_MARKER for line in stdout.splitlines())
 
 
 @pure

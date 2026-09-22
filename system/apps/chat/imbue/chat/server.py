@@ -510,7 +510,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
         ChatId(chat_id), message_id, send_message_request.message, _held_send_origin(send_message_request)
     )
     if held_phase is not None:
-        _record_client_message_activity(ChatId(chat_id), send_message_request)
+        _record_client_message_activity(ChatId(chat_id), send_message_request, get_state().is_secondary)
         agent_manager.record_message_sent(ChatId(chat_id))
         return json_response(
             HeldSendResponse(status="held", phase=held_phase).model_dump(mode="json"), status_code=202
@@ -540,7 +540,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
         failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
         return json_response(failure.model_dump(), status_code=500)
 
-    _record_client_message_activity(ChatId(chat_id), send_message_request)
+    _record_client_message_activity(ChatId(chat_id), send_message_request, get_state().is_secondary)
     # Recorded after the delivery, once the revived process (if any) is up and its pid can be
     # found.
     agent_manager.record_message_sent(ChatId(chat_id))
@@ -572,11 +572,14 @@ def client_activity_report(chat_id: ChatId, send_message_request: SendMessageReq
     }
 
 
-def _record_client_message_activity(chat_id: ChatId, send_message_request: SendMessageRequest) -> None:
+def _record_client_message_activity(
+    chat_id: ChatId, send_message_request: SendMessageRequest, is_secondary: bool = False
+) -> None:
     """Tell the shell which client (and desktop) a message came from, so agents can attribute requests through
-    ``layout.py context``. Callers naming no client or no desktop are not recorded. Posted on its own thread:
+    ``layout.py context``. Callers naming no client or no desktop are not recorded, and neither is anything a
+    secondary chat (a preview) hears: the shell's activity log is the live chat's. Posted on its own thread:
     the shell is a separate app, and a send must not wait on it."""
-    if not is_client_activity_reportable(send_message_request):
+    if is_secondary or not is_client_activity_reportable(send_message_request):
         return
     body = client_activity_report(chat_id, send_message_request)
     threading.Thread(
@@ -1094,7 +1097,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     except HandoffError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-    _record_client_message_activity(ChatId(chat_id), switch_request)
+    _record_client_message_activity(ChatId(chat_id), switch_request, get_state().is_secondary)
     agent_manager.record_message_sent(ChatId(chat_id))
     response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)
     return json_response(response.model_dump(mode="json"), status_code=202)
@@ -1563,9 +1566,22 @@ def _serve_asset(filename: str) -> Response:
 
 
 def _health_endpoint() -> Response:
-    """The probe route (contracts.md section 5): alive, and whether the built chat page is being served."""
-    is_frontend_built = (get_state().static_directory / CHAT_DOCUMENT_FILENAME).exists()
-    return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
+    """The probe route (contracts.md section 5): alive, whether the built chat page is being served,
+    and whether agent lifecycle events are reaching this instance.
+
+    ``status`` stays ``ok`` whatever the stream says: the update apply's pre-flight boot polls
+    this route on a chat that follows nothing, and the instances API is what says the app is
+    usable. ``agent_events`` is for whoever has to tell a frozen agent view from a quiet one.
+    """
+    state = get_state()
+    is_frontend_built = (state.static_directory / CHAT_DOCUMENT_FILENAME).exists()
+    return json_response(
+        {
+            "status": "ok",
+            "is_frontend_built": is_frontend_built,
+            "agent_events": state.agent_manager.get_agent_events_status().model_dump(mode="json"),
+        }
+    )
 
 
 def _serve_static_file(basename: str) -> Response:

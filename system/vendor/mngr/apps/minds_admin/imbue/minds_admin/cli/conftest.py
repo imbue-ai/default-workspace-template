@@ -24,6 +24,26 @@ def _isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path
 
 
+# Every credential env var ``OvhProviderConfig`` falls back to.
+_ALL_OVH_CREDENTIAL_ENV_VARS = (
+    "OVH_APPLICATION_KEY",
+    "OVH_APP_KEY",
+    "OVH_APPLICATION_SECRET",
+    "OVH_APP_SECRET",
+    "OVH_CONSUMER_KEY",
+    "OVH_CLIENT_ID",
+    "OVH_CLIENT_SECRET",
+)
+
+
+@pytest.fixture
+def _cleared_ovh_and_activation_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip the OVH credential env vars and the tier activation, so ``resolve_ovh_config`` cannot reach Vault or OVH."""
+    for env_var in _ALL_OVH_CREDENTIAL_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.delenv("MINDS_ROOT_NAME", raising=False)
+
+
 @pytest.fixture
 def _held_dev_foo_forward_lock(_isolated_env: Path) -> Generator[Path, None, None]:
     """Hold the ``dev-foo`` env root's forward lock, as a live supervisor would, and yield that root."""
