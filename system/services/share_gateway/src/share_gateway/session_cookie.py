@@ -1,9 +1,13 @@
 """The workspace session: one HS256 JWT, delivered as two cookies scoped ``Domain=<workspace-domain>``.
 
 Set once by the login callback, verified (and its email re-checked against the
-grants) on every request. 24 hours, fixed. The signing secret is generated in
-the workspace and never leaves it, so a relay or connector compromise cannot
-mint sessions.
+grants) on every request. 30 days, fixed: nothing renews it on use, so this is
+how long a visitor goes between trips through the accounts broker. Access
+outliving a revoked grant is what the per-request grants re-read prevents; an
+account revoked at the broker (sign-out, suspension) is NOT re-checked here,
+which is the cost of the long life. The signing secret is generated in the
+workspace and never leaves it, so a relay or connector compromise cannot mint
+sessions.
 
 The same value is set twice, under two names, because no single cookie works
 in both places a visitor reaches a shared workspace from:
@@ -43,7 +47,7 @@ from flask import Response
 
 SESSION_COOKIE_NAME = "imbue_machine_session"
 PARTITIONED_SESSION_COOKIE_NAME = "imbue_machine_session_partitioned"
-SESSION_LIFETIME_SECONDS = 24 * 3600
+SESSION_LIFETIME_SECONDS = 30 * 24 * 3600
 
 _SESSION_COOKIE_NAMES = (SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME)
 _SESSION_ALGORITHM = "HS256"
