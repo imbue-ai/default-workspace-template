@@ -320,7 +320,7 @@ another critical app may have applied since you branched.
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" "mngr/update-$SLUG" > /tmp/update-$SLUG-files.txt
+   git diff --name-only --no-renames "$BASE" "mngr/update-$SLUG" > /tmp/update-$SLUG-files.txt
    git diff --name-only "$BASE" HEAD -- system/apps/<package>/ system/libs/workspace_ui/ \
        system/package.json system/package-lock.json $(cat /tmp/update-$SLUG-files.txt)
    ```
