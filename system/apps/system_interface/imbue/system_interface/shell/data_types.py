@@ -108,6 +108,9 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "launcher_rank": row.launcher_rank,
         "pin": pin_wire_json(row.pin),
+        "message_handlers": [
+            {"type": str(handler.type), "path": str(handler.path)} for handler in row.message_handlers
+        ],
         "is_running": entry.is_running,
     }
 

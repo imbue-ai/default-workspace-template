@@ -201,7 +201,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...]}], "default_shortcut", "launcher_rank", "pin", "message_handlers": [{"type", "path"}, ...], "is_running"}`, `pin` the manifest table or `null`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...]}], "default_shortcut", "launcher_rank", "pin", "message_handlers": [{"type", "path"}, ...], "is_running"}`, `pin` the manifest table or `null`, and `message_handlers` the row's handlers (`[]` when it registers none). The `apps_updated` push (section 6) carries the same objects.
 
 ### 5.6 Embedder messages
 

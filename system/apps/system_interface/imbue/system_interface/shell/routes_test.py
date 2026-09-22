@@ -1121,6 +1121,32 @@ def test_a_malformed_op_argument_is_a_400_naming_the_argument(
     assert fragment in refused.get_json()["detail"]
 
 
+def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row_registers(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The inventory document and the socket's ``apps_updated`` both carry each app's ``message_handlers``, so the
+    shell page knows which messages from the minds chrome to relay."""
+    registry_path = write_two_app_registry(
+        tmp_path,
+        registry_row_toml(
+            "buddy", "http://localhost:7002", message_handlers=[("minds:focus-chat", "/api/focus-chat")]
+        ),
+    )
+    client_queue = broadcaster.register()
+    inventory = build_inventory(registry_path, broadcaster)
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
+
+    expected = {
+        "terminal": [],
+        "files": [],
+        "buddy": [{"type": "minds:focus-chat", "path": "/api/focus-chat"}],
+    }
+    listed = client.get("/api/inventory").get_json()["apps"]
+    assert {app["name"]: app["message_handlers"] for app in listed} == expected
+    (pushed,) = [message for message in drain_messages(client_queue) if message["type"] == "apps_updated"]
+    assert {app["name"]: app["message_handlers"] for app in pushed["apps"]} == expected
+
+
 # Section 8: the show op
 
 # What the show tests ask ``buddy`` to show, and the one other path that already counts as showing it.
