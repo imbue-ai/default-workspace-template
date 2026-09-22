@@ -374,8 +374,8 @@ export function windowShowingChat(
   return null;
 }
 
-/** The chat app's root window on the active desktop to show a chat in: the frontmost one on screen,
- *  else the pinned one, else null. A window showing a single chat is never one. */
+/** The chat app's window on the active desktop to show a chat in: the frontmost one on screen showing the
+ *  root (never one showing a single chat), else the pinned one whatever it shows, else null. */
 export function chatRootWindowOf(state: DesktopState, app: string): WindowRecord | null {
   const desktop = activeDesktop(state);
   if (desktop === null) return null;
