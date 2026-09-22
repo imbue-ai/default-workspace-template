@@ -27,16 +27,30 @@ _SCRIPT = Path(__file__).parent / "run_in_background.py"
 _DELIVERY_DEADLINE_SECONDS = 8.0
 
 
-def _runner_argv(description: str, *command: str) -> list[str]:
-    return [sys.executable, str(_SCRIPT), "--description", description, "--", *command]
+def _runner_argv(
+    description: str, *command: str, options: tuple[str, ...] = ()
+) -> list[str]:
+    return [
+        sys.executable,
+        str(_SCRIPT),
+        "--description",
+        description,
+        *options,
+        "--",
+        *command,
+    ]
 
 
 def _start_runner(
-    cwd: Path, env: dict[str, str], description: str, *command: str
+    cwd: Path,
+    env: dict[str, str],
+    description: str,
+    *command: str,
+    options: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run the script as an agent's tool call does; it returns once the command is detached."""
     return subprocess.run(
-        _runner_argv(description, *command),
+        _runner_argv(description, *command, options=options),
         cwd=cwd,
         env=env,
         capture_output=True,
@@ -152,6 +166,28 @@ def test_the_report_still_arrives_after_the_callers_whole_process_group_is_kille
 
     [(_, body)] = _wait_for_posts(fake_chat_app, 1)
     assert "survived" in body["message"]
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_reused_task_dir_shows_no_exit_code_until_the_new_command_exits(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    task_dir = tmp_path / "reused-task"
+    task_dir.mkdir()
+    (task_dir / "exit_code").write_text("0\n")
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        "Run again",
+        *_python_command("import sys, time; time.sleep(1); sys.exit(5)"),
+        options=("--task-dir", str(task_dir)),
+    )
+
+    assert started.returncode == 0, started.stderr
+    assert not (task_dir / "exit_code").exists()
+    _wait_for_posts(fake_chat_app, 1)
+    assert (task_dir / "exit_code").read_text().strip() == "5"
 
 
 def test_a_caller_that_is_not_an_agent_is_refused_before_anything_starts(

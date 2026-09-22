@@ -332,6 +332,8 @@ def main(
 
     task_dir = Path(args.task_dir) if args.task_dir else _new_task_dir()
     task_dir.mkdir(parents=True, exist_ok=True)
+    # A reused directory's exit code belongs to the previous command, not this one.
+    (task_dir / EXIT_CODE_FILE_NAME).unlink(missing_ok=True)
     if args.foreground:
         return run_and_deliver(task_dir, args.description, chat_id, command)
     _start_detached(task_dir, args.description, chat_id, command)
