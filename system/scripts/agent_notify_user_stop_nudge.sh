@@ -1,53 +1,51 @@
 #!/usr/bin/env bash
-# Stop hook: a chat agent that did work this turn tells the user it is done.
+# Stop hook: ask a chat agent, at the end of every turn, to tell the user it
+# finished -- the notification (bell, badge, toast, and a system banner when
+# they are looking elsewhere) is the only thing that reaches a user who walked
+# away, and clicking it lands them back in this chat.
 #
-# Exits 2 with the reminder on stderr, which both claude and codex hand back to
-# the agent as a continuation -- so the agent can send the notification and then
-# stop for real. It is a nudge, not a gate: the agent may decide a notification
-# does not fit this turn, and stopping again goes through, because a nudge is
-# spent on the step snapshot it fired for.
+# A suggestion, not a gate. Whether a given turn is worth a notification is a
+# judgement only the agent can make, so the message offers an explicit way out:
+# say nothing and stop. That costs one short continuation on a turn that does
+# not want one, which is the price of not guessing from the outside.
 #
-# Fires only when ALL of these hold:
-#   - the agent is a chat (MNGR_AGENT_ROLE=chat, set by the `chat` create
-#     template); a worker's results reach the user through its lead's chat, and
-#     only chats appear in the app's notification feed;
-#   - a turn is open (agent_notify_user_turn_start.sh ran on this prompt);
-#   - the turn did work, i.e. it created, started or closed a step record --
-#     chitchat, a clarifying question and a single quick read stay silent, the
-#     same carve-out AGENTS.md makes for step records themselves;
-#   - no notification has gone out this turn, and this snapshot has not already
-#     been nudged for.
+# The reminder has to exit 2 to reach the model at all -- a Stop hook's stdout
+# and its stderr on exit 0 go to the debug log, which is why the open-steps stop
+# nudge beside this one is decorative. Exit 2 makes claude continue the
+# conversation with this stderr as the message; `stop_hook_active` on the next
+# Stop payload is how claude says "you are already continuing because of a stop
+# hook", and is the documented way to let that continuation through rather than
+# block forever (https://code.claude.com/docs/en/hooks). It is also the only
+# state this needs: no turn markers, no bookkeeping files.
+#
+# Chat agents only (MNGR_AGENT_ROLE=chat, set by the `chat` create template):
+# a worker's results reach the user through the chat that launched it, and only
+# chats appear in the app's notification feed.
+#
+# claude only. codex acts on an exit 2 at Stop (it turns it into a new prompt),
+# but nothing measured says whether it sends a `stop_hook_active` equivalent,
+# and an exit 2 with no way to recognise the continuation is an endless loop in
+# a live chat. See tool-call-policies-state-of-things.md, P8.
 set -euo pipefail
 
-# Drain stdin.
-cat > /dev/null
+input=$(cat)
 
 [[ -z "${MNGR_CLAUDE_SUBAGENT_PROXY_CHILD:-}" ]] || exit 0
 [[ "${MNGR_AGENT_ROLE:-}" == "chat" ]] || exit 0
 
-source "${BASH_SOURCE[0]%/*}/_notify_user_turn_state.sh"
-
-state_dir="$(notify_user_state_dir)"
-[[ -f "$state_dir/turn-steps" ]] || exit 0
-[[ ! -e "$state_dir/sent" ]] || exit 0
-
-current_steps="$(notify_user_step_snapshot)"
-[[ "$current_steps" != "$(cat "$state_dir/turn-steps")" ]] || exit 0
-if [[ -f "$state_dir/nudged" && "$current_steps" == "$(cat "$state_dir/nudged")" ]]; then
+if [[ "$(echo "$input" | jq -r '.stop_hook_active // false')" == "true" ]]; then
     exit 0
 fi
-
-printf '%s' "$current_steps" > "$state_dir/nudged"
 
 cat >&2 <<'EOF'
 [Finish notification]
 
-You did work this turn and have not told the user it is finished. Send the notification now, so it reaches them even if they walked away from this chat:
+Tell the user this turn is done, so it reaches them even if they walked away from this chat:
 
   python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is now done>"
 
-One sentence in the user's terms -- what they can now see, use, or decide -- never the tool names or the steps. Read the exit code: when it is non-zero the notification did not go out, and your reply should say so.
+One sentence in the user's terms -- what they can now see, use, or decide -- never the tool names or the steps. Read the exit code: when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance.
 
-See the `notify-user` skill for the full guidance. If a notification genuinely does not belong on this turn, skip it and finish -- this fires once for the work you have done.
+If this turn does not warrant one -- chitchat, an acknowledgement, a trivial answer, a question you put to the user, a single quick read -- then output NOTHING at all in response to this message. Do not explain and do not acknowledge it: just stop.
 EOF
 exit 2

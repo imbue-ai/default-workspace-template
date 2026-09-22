@@ -21,11 +21,11 @@ or ten minutes, so anything they might have walked away from is worth one
 line. One notification per turn, sent once, when the work is done (or when it
 failed and needs them).
 
-"Did work" is the same line `AGENTS.md` draws for step records. Skip the
-notification for the turns that need no records: chitchat, a single-line
-acknowledgement, a trivial answer, a turn that only asks a clarifying question,
-or a reply that is one quick file read. If you opened a step, you finished
-something, and the user should hear about it.
+Skip it for the turns that carry nothing: chitchat, a single-line
+acknowledgement, a trivial answer, a turn that only asks the user a question,
+or a reply that is one quick file read. Roughly the same line `AGENTS.md`
+draws for step records -- if the turn warranted a step, the user should hear
+it is finished.
 
 Do NOT use it:
 
@@ -35,9 +35,10 @@ Do NOT use it:
 - as a progress ticker. It goes out when the turn's work is done, never
   partway through, and never more than once per turn.
 
-A Stop hook reminds you if a turn did work and no notification went out. It is
-a reminder, not a gate -- if one genuinely does not belong on this turn, say so
-and finish.
+A Stop hook asks for one at the end of every turn. It is a suggestion, not a
+gate: when the turn does not warrant a notification, output nothing at all in
+reply to it and just stop -- do not explain the decision to the user, who
+cannot see the question.
 
 ## How
 

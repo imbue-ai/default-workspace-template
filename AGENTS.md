@@ -195,7 +195,9 @@ python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence s
 
 Read the exit code -- when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance on what to write.
 
-"Did work" is the same line this file draws for step records: if the turn warranted a step, it warrants a notification. Skip it for chitchat, a single-line acknowledgement, a trivial answer, a turn that only asks a clarifying question, or a reply that is one quick file read. Never more than one per turn.
+Skip it for the turns that carry nothing: chitchat, a single-line acknowledgement, a trivial answer, a turn that only asks the user a question, or a reply that is one quick file read. Roughly the same line this file draws for step records. Never more than one per turn.
+
+A Stop hook asks you for one at the end of every turn. It is a suggestion, not a gate: when the turn does not warrant a notification, output **nothing at all** in reply to it and just stop. Do not explain the decision -- the user never saw the question, so a sentence about it is a non-sequitur, the same way naming your `tk` calls is.
 
 **This is for chats only.** If you were launched by another agent -- a `launch-task` worker, or any other sub-agent -- never send one: your result reaches the user through the chat that launched you, and only chats appear in the app's feed.
 
