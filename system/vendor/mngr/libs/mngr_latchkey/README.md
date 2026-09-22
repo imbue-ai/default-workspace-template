@@ -22,6 +22,13 @@ mngr latchkey admin-jwt          # mint a wildcard permissions-override JWT for 
 mngr latchkey gateway-info       # print the running gateway's URL + listen password as JSON
 ```
 
+The plugin also hooks `mngr create`: once a new host's env is written and
+before any agent starts, a host whose `LATCHKEY_GATEWAY` names
+`host.docker.internal` but whose container cannot resolve that name (one
+created before containers carried the mapping) is pointed at
+`http://127.0.0.1:1989` instead, where the reverse SSH tunnel serves the
+gateway.
+
 `mngr latchkey forward` spawns the shared gateway eagerly on startup
 and stops it on `SIGINT`/`SIGTERM` (coupled lifetime). Any in-flight
 agents lose their gateway endpoint until the next `mngr latchkey
@@ -340,6 +347,15 @@ one go. Nothing is queued: an exchange either succeeds before its caller
 returns or raises `RemoteGatewayError`, so an embedder (the minds desktop app)
 can block a user's click on it and report what the machine said.
 
+Those scripts never reach the logs. Each one embeds what it is moving -- a
+credential store, the key the machine is to re-encrypt one under, or the policy
+being applied -- so its text is as sensitive as what it carries, and at a whole
+base64-encoded store on one line it is far too big to read anyway. Each is run
+inside `commands_kept_out_of_logs` (`imbue.mngr.utils.command_logging`), so the
+host layer traces a stand-in naming the kind of script and its size in place of
+the command, and pyinfra's own echo of the command it is about to run is
+dropped along with it.
+
 `refresh` also settles which side wins, and for both halves the answer is the
 machine. The credentials are obviously its own -- only it can rotate the tokens
 it holds. The policy is its own for a less obvious reason: the user may have
@@ -584,20 +600,32 @@ for the agent's `latchkey_permissions.json`.
 
 ### Remote desktop-gateway proxy extension
 
-Remote workspaces expose the VPS-resident gateway at the same
-`http://127.0.0.1:1989` URL local workspaces use. Third-party requests terminate
-there so the VPS can inject the credentials its own store holds. The VPS gateway
-loads one dedicated `desktop_gateway_proxy.mjs` extension for the endpoint
-families whose state remains on the user's computer: `/permissions`,
-`/permission-requests`, and `/minds-api-proxy` (including all subpaths). It
-forwards those requests to the desktop gateway over a desktop-to-VPS reverse
-tunnel, authenticating that hop with the desktop's own gateway password and a
-dedicated desktop-target permissions JWT -- both of which *replace* whatever the
-caller sent, since the caller's password authenticates it to the VPS gateway and
-its override would let it choose the policy the desktop evaluates it against.
-Native VPS requests carry no override and are authorized by the machine's own
-`~/.latchkey/permissions.json` (seeded at provisioning, then rewritten by the
-full permission snapshot the desktop pushes on every edit).
+Remote workspaces reach the VPS-resident gateway at
+`http://host.docker.internal:1989`: the gateway binds the VPS's docker bridge
+address (never a public interface), and the workspace container resolves that
+name to it because the VPS provider creates every container with the matching
+`--add-host` mapping. It is the same fixed port local workspaces use on their
+own loopback. Provisioning also loads an nftables policy on the VPS (table
+`inet mngr_bridge_services`, boot-persistent through a systemd oneshot) that
+drops traffic to the gateway's port -- and the owner-exec daemon's, which binds
+the same address -- unless it arrives on the docker bridge interface or on
+loopback; without it Linux would deliver a packet for the bridge address that
+reached the public interface to the bound socket all the same. The same policy
+drops any other new connection arriving from the docker bridge, so those two
+ports are all the workspace can reach on its VPS (not its sshd, for one).
+Third-party requests terminate there so the VPS can inject the credentials its
+own store holds. The VPS gateway loads one dedicated `desktop_gateway_proxy.mjs`
+extension for the endpoint families whose state remains on the user's computer:
+`/permissions`, `/permission-requests`, and `/minds-api-proxy` (including all
+subpaths). It forwards those requests to the desktop gateway over a
+desktop-to-VPS reverse tunnel, authenticating that hop with the desktop's own
+gateway password and a dedicated desktop-target permissions JWT -- both of which
+*replace* whatever the caller sent, since the caller's password authenticates it
+to the VPS gateway and its override would let it choose the policy the desktop
+evaluates it against. Native VPS requests carry no override and are authorized
+by the machine's own `~/.latchkey/permissions.json` (seeded at provisioning,
+then rewritten by the full permission snapshot the desktop pushes on every
+edit).
 
 Those two desktop-owned secrets are handed to the extension as *paths* into the
 machine's tmpfs secrets directory (`LATCHKEY_EXTENSION_DESKTOP_GATEWAY_PASSWORD_FILE`,
@@ -856,7 +884,9 @@ setup = prepare_agent_latchkey(
 )
 # setup.env: LATCHKEY_GATEWAY[_PASSWORD,_DISABLE_COUNTING]
 # Desktop-gateway setups also include LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE.
-# LATCHKEY_GATEWAY is always http://127.0.0.1:1989 for tunneled workspaces.
+# LATCHKEY_GATEWAY is a constant per location: http://127.0.0.1:1989 for a
+# desktop gateway (reverse-tunneled in), http://host.docker.internal:1989 for
+# a VPS gateway (reached over the container's docker bridge).
 # Discovery realizes the desktop or VPS location selected before creation.
 # setup.opaque_permissions_path: pass to finalize_host_permissions later
 

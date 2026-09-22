@@ -133,6 +133,7 @@ from imbue.minds_admin.slices.cutover_scripts import parse_docker_inspect
 from imbue.minds_admin.slices.cutover_scripts import parse_latchkey_harvest_output
 from imbue.minds_admin.slices.cutover_scripts import parse_marked_files
 from imbue.minds_admin.slices.cutover_scripts import parse_qemu_img_info
+from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_never_started
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_not_running
 from imbue.minds_admin.slices.cutover_scripts import parse_supervisorctl_unhealthy
 from imbue.minds_admin.slices.cutover_scripts import parse_used_bytes
@@ -570,8 +571,9 @@ def probe_workspace_health(
 ) -> HealthProbeFindings:
     """One health pass: running container, every template supervisord program RUNNING or EXITED, the UI answering.
 
-    A supervisord program the owner added is reported, not required (see
-    ``split_unhealthy_by_template``). When the migrate replayed the machine's
+    A supervisord program the owner added, or a template program the
+    workspace's own config leaves ``STOPPED   Not started``, is reported, not
+    required (see ``split_unhealthy_by_template``). When the migrate replayed the machine's
     latchkey gateway, the VM's own ``latchkey-gateway`` and ``latchkey-tunnel``
     programs must be RUNNING and the gateway must be bound on its loopback port.
     """
@@ -586,10 +588,12 @@ def probe_workspace_health(
     )
     if not supervisor.success and not supervisor.stdout.strip():
         blocking.append(f"supervisorctl status failed: {supervisor.stderr.strip()}")
-    unhealthy_blocking, user_program_notes = split_unhealthy_by_template(
-        parse_supervisorctl_unhealthy(supervisor.stdout), template_program_names
+    health_split = split_unhealthy_by_template(
+        parse_supervisorctl_unhealthy(supervisor.stdout),
+        template_program_names,
+        parse_supervisorctl_never_started(supervisor.stdout),
     )
-    blocking.extend(f"supervisord not healthy: {entry}" for entry in unhealthy_blocking)
+    blocking.extend(f"supervisord not healthy: {entry}" for entry in health_split.blocking)
     ui = outer.execute_idempotent_command(
         build_system_interface_probe_command(container_name), timeout_seconds=_SHORT_TIMEOUT_SECONDS
     )
@@ -599,7 +603,13 @@ def probe_workspace_health(
         blocking.extend(_probe_vm_latchkey_gateway(outer))
     return HealthProbeFindings(
         blocking=tuple(blocking),
-        user_program_notes=tuple(f"owner-added program not running: {entry}" for entry in user_program_notes),
+        user_program_notes=(
+            *(f"owner-added program not running: {entry}" for entry in health_split.user_program_entries),
+            *(
+                f"template program not autostarted by the workspace's config: {entry}"
+                for entry in health_split.not_autostarted_template_entries
+            ),
+        ),
     )
 
 
@@ -2631,7 +2641,9 @@ def _migrate_workspace(
             state, findings = _restore_workspace_on_target(ctx, target_server, state, replay_inputs)
             user_program_notes = findings.user_program_notes
             for note in user_program_notes:
-                logger.warning("Workspace {} came back with an {} (the owner's program, left to them)", row.id, note)
+                logger.warning(
+                    "Workspace {} came back with a non-blocking finding: {} (the workspace's own to fix)", row.id, note
+                )
         if not state.is_origin_vm_kept:
             try:
                 _destroy_gen1_instance_on_box(ctx, state.origin_server_id, state.slice_instance_name)

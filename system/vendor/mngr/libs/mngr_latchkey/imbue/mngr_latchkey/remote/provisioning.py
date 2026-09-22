@@ -4,13 +4,31 @@ Remote workspaces receive the gateway managed here, while local workspaces
 receive the desktop gateway directly. The VPS gateway handles third-party
 calls itself and forwards Minds-owned endpoint families back to the desktop.
 
-The VPS-resident gateway and the VPS->container reverse SSH tunnel are both
-long-running processes that must survive crashes and VM pause/resume. Rather
-than spawn them detached (``nohup`` + a PID-file guard), they are registered as
-``supervisord`` programs: ``supervisord`` is installed from the distro package
-and auto-restarts either process if it dies. The SSH tunnel additionally
-carries keepalive flags so a connection wedged by a paused-then-resumed VM is
-detected and torn down, letting ``supervisord`` restart it.
+The VPS-resident gateway binds the VPS's docker bridge address, which the
+agent's container reaches by the constant name ``host.docker.internal``: the
+VPS provider creates every container with the matching ``--add-host`` mapping,
+and the agent's ``LATCHKEY_GATEWAY`` names that host. Nothing bridges the
+two; the docker bridge is the route, and an nftables policy applied before
+either bridge-bound service starts keeps it the only route (see
+:mod:`imbue.mngr_latchkey.docker_bridge`). The gateway is a long-running process that
+must survive crashes and VM pause/resume, so rather than spawn it detached
+(``nohup`` + a PID-file guard) it is registered as a ``supervisord`` program:
+``supervisord`` is installed from the distro package and auto-restarts it if it
+dies.
+
+An agent whose ``LATCHKEY_GATEWAY`` names its own ``127.0.0.1`` instead still
+reaches the gateway over a VPS->container reverse SSH tunnel registered as a
+second ``supervisord`` program (with keepalive flags so a connection wedged by
+a paused-then-resumed VM is detected and torn down, letting ``supervisord``
+restart it). That is every agent in a container created without the mapping
+(``mngr create`` points such an agent at its loopback whatever client runs it;
+see :func:`imbue.mngr_latchkey.agent_setup.fall_back_to_reverse_tunneled_gateway_url`),
+and every agent whose host was created by an older client while its container
+already carried the mapping. Provisioning recognizes the first kind by the
+missing ``--add-host`` mapping and the second by the tunnel that client
+registered, so a registered tunnel is never dropped (only re-pointed at the
+address the gateway binds) and none is ever registered for a container that
+resolves the outer host (see :func:`_does_container_need_reverse_tunnel`).
 
 Crash recovery deliberately stops short of surviving a full *reboot*: the
 gateway's secrets (the machine's own encryption key and listen password, plus
@@ -26,9 +44,11 @@ never written to a disk filesystem by mistake. After a reboot the gateway
 stays down until the next provisioning pass re-writes the secrets.
 """
 
+import json
 import shlex
 import time
 from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
@@ -39,9 +59,12 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
+from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import OUTER_HOST_HOSTNAME_IN_CONTAINER
+from imbue.mngr.utils.command_logging import commands_kept_out_of_logs
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import CREDENTIALS_STORE_FILENAME
@@ -54,8 +77,13 @@ from imbue.mngr_latchkey.core import bundled_gateway_extension_content
 from imbue.mngr_latchkey.core import custom_service_registration_entries
 from imbue.mngr_latchkey.core import merge_minds_latchkey_config
 from imbue.mngr_latchkey.core import summarize_latchkey_failure
+from imbue.mngr_latchkey.docker_bridge import DockerBridgeAddressError
+from imbue.mngr_latchkey.docker_bridge import DockerBridgeFirewallError
+from imbue.mngr_latchkey.docker_bridge import ensure_bridge_services_firewalled
+from imbue.mngr_latchkey.docker_bridge import resolve_docker_bridge_address
 from imbue.mngr_latchkey.encryption_key import LatchkeyEncryptionKeyPermissionError
 from imbue.mngr_latchkey.encryption_key import load_or_create_encryption_key
+from imbue.mngr_latchkey.owner_exec_vm import VM_EXEC_PORT
 from imbue.mngr_latchkey.owner_exec_vm import provision_owner_exec_vm
 from imbue.mngr_latchkey.remote._machine import DESKTOP_GATEWAY_PASSWORD_FILENAME
 from imbue.mngr_latchkey.remote._machine import DESKTOP_PERMISSIONS_OVERRIDE_FILENAME
@@ -73,6 +101,7 @@ from imbue.mngr_latchkey.remote._machine import REMOTE_FILE_MODE as REMOTE_FILE_
 # plugin read the gateway's logs under this directory.
 from imbue.mngr_latchkey.remote._machine import REMOTE_LATCHKEY_DIR_NAME as REMOTE_LATCHKEY_DIR_NAME
 from imbue.mngr_latchkey.remote._machine import REMOTE_LATCHKEY_TIMEOUT_SECONDS
+from imbue.mngr_latchkey.remote._machine import SECRET_BEARING_SCRIPT_LOG_REASON
 from imbue.mngr_latchkey.remote._machine import TMPFS_SECRETS_DIR as TMPFS_SECRETS_DIR
 from imbue.mngr_latchkey.remote._machine import read_machine_gateway_password_from_secrets_dir
 from imbue.mngr_latchkey.remote._machine import read_machine_key_from_secrets_dir
@@ -94,34 +123,41 @@ from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
 
 # Version of the upstream ``latchkey`` CLI to install on the VPS.
-LATCHKEY_VERSION: Final[str] = "3.14.0"
+LATCHKEY_VERSION: Final[str] = "3.15.0"
 
-# datalib release the VPS fetches the "dispatch curl" + Chrome-impersonating
-# curl from (``curl-<triple>.tar.gz``). The gateway runs the dispatch curl as
-# its ``LATCHKEY_CURL`` so a caller that sends the ``X-Imbue-Impersonate``
-# marker header gets Chrome TLS impersonation, while every other request
-# passes through to the system curl. The statically linked musl build is
-# fetched rather than the glibc one, so it runs on any VPS image regardless of
-# how old its glibc is. The fetch is fail-loud, like every other component of
-# the install: a network failure, a checksum mismatch, or a host arch datalib
-# doesn't build fails provisioning. The gateway run script exports
+# latchkey-curl-shims release the VPS fetches the curl router + the
+# Chrome-impersonating curl from (``latchkey-curl-shims-<triple>.tar.gz``). The
+# gateway runs the router as its ``LATCHKEY_CURL``: a request carrying the
+# ``X-Imbue-Impersonate`` marker header gets Chrome TLS impersonation, and every
+# other request passes through to the system curl. The statically linked musl
+# build is fetched rather than the glibc one, so it runs on any VPS image
+# regardless of how old its glibc is. The fetch is fail-loud, like every other
+# component of the install: a network failure, a checksum mismatch, or a host
+# arch with no build fails provisioning. The gateway run script exports
 # ``LATCHKEY_CURL`` unconditionally and so depends on that -- pointing latchkey
 # at a curl that isn't there would break every request, not just impersonating
 # ones.
-_DATALIB_REPO: Final[str] = "imbue-ai/datalib"
-DATALIB_CURL_VERSION: Final[str] = "v0.26.0"
+_CURL_SHIMS_REPO: Final[str] = "imbue-ai/latchkey-curl-shims"
+CURL_SHIMS_VERSION: Final[str] = "v0.4.0"
+# sha256 of each tarball a VPS can fetch, from the release's ``SHA256SUMS``.
+# Pinned here rather than downloaded beside the tarball, so a tarball replaced
+# on the release fails the install instead of verifying against its own sum.
+CURL_SHIMS_SHA256_BY_TRIPLE: Final[Mapping[str, str]] = {
+    "x86_64-unknown-linux-musl": "7173b301133c4a465174481041ade5c1f8fffac4ae4b86d54cdf4279ac7a0f93",
+    "aarch64-unknown-linux-musl": "afa65e2c795dce9acfd32ad22d732c27509a07382e6db00626a98e1ec93f8f76",
+}
 # Where the two binaries land on the VPS. ``/usr/local/bin`` is already on the
-# gateway run script's PATH, and the dispatch curl finds the impersonator as a sibling.
-_CURL_IMPERSONATE_INSTALL_DIR: Final[str] = "/usr/local/bin"
-_CURL_DISPATCH_BIN: Final[str] = "latchkey-curl-dispatch"
-_CURL_IMPERSONATE_BIN: Final[str] = "latchkey-curl-impersonate"
-_CURL_DISPATCH_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/{_CURL_DISPATCH_BIN}"
-_CURL_IMPERSONATE_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/{_CURL_IMPERSONATE_BIN}"
+# gateway run script's PATH, and the router finds the impersonator as a sibling.
+_CURL_SHIMS_INSTALL_DIR: Final[str] = "/usr/local/bin"
+_CURL_ROUTER_BIN: Final[str] = "latchkey-curl-router"
+_CURL_IMPERSONATE_BIN: Final[str] = "curl-impersonate"
+_CURL_ROUTER_PATH: Final[str] = f"{_CURL_SHIMS_INSTALL_DIR}/{_CURL_ROUTER_BIN}"
+_CURL_IMPERSONATE_PATH: Final[str] = f"{_CURL_SHIMS_INSTALL_DIR}/{_CURL_IMPERSONATE_BIN}"
 # The curl the gateway run script this build writes names as ``LATCHKEY_CURL``
 # (the one ``ensure_latchkey_installed`` puts on the machine), for a caller
 # that replays a run script written by another build and must give it a curl
 # at the path it expects.
-LATCHKEY_CURL_PATH: Final[str] = _CURL_DISPATCH_PATH
+LATCHKEY_CURL_PATH: Final[str] = _CURL_ROUTER_PATH
 # Suffix the new binaries are staged under before being renamed over the old
 # ones. Overwriting them in place would truncate a file the gateway may be
 # executing right then, which fails with ETXTBSY ("Text file busy"); a rename
@@ -129,21 +165,32 @@ LATCHKEY_CURL_PATH: Final[str] = _CURL_DISPATCH_PATH
 # old inode. Staging both before swapping either also means a failure while
 # downloading, verifying, or staging leaves the previous pair untouched.
 _CURL_STAGED_SUFFIX: Final[str] = ".new"
-# Records which datalib release and target triple the installed pair came from.
-# The binaries are installed under fixed, version-less names, so without this
+# Records which release and target triple the installed pair came from. The
+# binaries are installed under fixed, version-less names, so without this
 # stamp a presence check would leave an already-provisioned VPS on whatever
 # build it first received -- exactly the hosts a bump is meant to reach. A
 # dotfile in ``/usr/local/bin`` is never picked up by a PATH lookup.
-_CURL_VERSION_STAMP_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/.latchkey-curl-version"
+_CURL_VERSION_STAMP_PATH: Final[str] = f"{_CURL_SHIMS_INSTALL_DIR}/.latchkey-curl-version"
+# ``uname -m`` patterns, as ``case`` alternatives, and the build each selects.
+_CURL_SHIMS_TRIPLE_BY_UNAME_PATTERN: Final[tuple[tuple[str, str], ...]] = (
+    ("x86_64", "x86_64-unknown-linux-musl"),
+    ("aarch64|arm64", "aarch64-unknown-linux-musl"),
+)
 
 # Port on the VPS loopback where the desktop gateway is reverse-tunneled. The
 # VPS-only extension forwards Minds-owned endpoint families here.
 DESKTOP_GATEWAY_VPS_PORT: Final[int] = 1988
 
-# Port the latchkey gateway binds to on the VPS's loopback. The VPS->container
-# reverse tunnel exposes it at the same fixed agent-side port local workspaces
-# use, so every workspace has one gateway URL: http://127.0.0.1:1989.
+# Port the latchkey gateway binds to on the VPS's docker bridge address. It is
+# the same fixed agent-side port a desktop-gateway agent uses, so every agent's
+# gateway URL differs only in its host: http://host.docker.internal:1989 on a
+# VPS host, http://127.0.0.1:1989 on a local one.
 OUTER_PORT: Final[int] = AGENT_SIDE_LATCHKEY_PORT
+
+# The variable the gateway's wrapper script exports its bind address under
+# (the name upstream reads). Public so a consumer that replays a harvested
+# wrapper on another machine can read back where its gateway listens.
+GATEWAY_LISTEN_HOST_ENV_VAR: Final[str] = "LATCHKEY_GATEWAY_LISTEN_HOST"
 
 # A pre-supervisord build exposed the VPS gateway at container port 1990. Keep
 # that value only for identifying and killing its legacy nohup tunnel.
@@ -182,6 +229,11 @@ _REMOTE_EXTENSION_CANDIDATE_SUFFIX: Final[str] = ".candidate"
 # supervisord-managed gateway and reverse-tunnel programs' stdout/stderr logs.
 # Public for the same reason as :data:`REMOTE_LATCHKEY_DIR_NAME`.
 REMOTE_GATEWAY_LOG_FILENAME: Final[str] = "gateway.log"
+# CLEANUP: drop the reverse tunnel (this log, the ``latchkey-tunnel`` supervisord
+# program, the ad-hoc VPS->container keypair, and the functions that set them up)
+# once no remote host whose agent reaches the gateway at its own loopback
+# remains; the info log in :func:`_does_container_need_reverse_tunnel` shows
+# when that is.
 REMOTE_TUNNEL_LOG_FILENAME: Final[str] = "tunnel.log"
 
 # PID files a *pre-supervisord* build wrote under ``$HOME/.latchkey`` when it
@@ -323,8 +375,8 @@ def _build_ensure_installed_script(
 ) -> str:
     """Build an idempotent POSIX-sh script that installs curl, Node.js, supervisor, and latchkey.
 
-    It also installs the datalib "dispatch" curl + the Chrome-impersonating
-    curl it fronts (see :data:`DATALIB_CURL_VERSION`).
+    It also installs the curl router + the Chrome-impersonating curl it fronts
+    (see :data:`CURL_SHIMS_VERSION`).
 
     Each component is gated behind a presence check -- except Node.js, the
     latchkey CLI, and the curl pair, which are gated behind a *version* check.
@@ -357,38 +409,39 @@ def _build_ensure_installed_script(
             "  apt-get update",
             "  apt-get install -y curl",
             "fi",
-            # Install the Chrome-impersonating "dispatch" curl + the
-            # impersonator it fronts from the datalib release, so marked
-            # latchkey requests (X-Imbue-Impersonate header) clear Cloudflare.
-            # Fail-loud under ``set -e`` like every other component here.
+            # Install the curl router + the Chrome-impersonating curl it fronts
+            # from the latchkey-curl-shims release, so marked latchkey requests
+            # (X-Imbue-Impersonate header) clear Cloudflare. Fail-loud under
+            # ``set -e`` like every other component here.
             '_ci_arch="$(uname -m)"',
             'case "$_ci_arch" in',
-            "  x86_64) _ci_triple=x86_64-unknown-linux-musl ;;",
-            "  aarch64|arm64) _ci_triple=aarch64-unknown-linux-musl ;;",
+            *(
+                f"  {arch_pattern}) _ci_triple={triple}; _ci_sha256={CURL_SHIMS_SHA256_BY_TRIPLE[triple]} ;;"
+                for arch_pattern, triple in _CURL_SHIMS_TRIPLE_BY_UNAME_PATTERN
+            ),
             '  *) echo "no impersonating curl build for arch $_ci_arch" >&2; exit 1 ;;',
             "esac",
             # Reinstall whenever the installed pair came from a different
             # release or triple (a host that predates the stamp, or has no
             # curl at all, reads as an empty string and so never matches).
             # ``$(cat ...)`` drops the stamp's trailing newline.
-            f'_ci_want="{DATALIB_CURL_VERSION} ${{_ci_triple}}"',
-            f"if [ ! -x {_CURL_DISPATCH_PATH} ] || "
+            f'_ci_want="{CURL_SHIMS_VERSION} ${{_ci_triple}}"',
+            f"if [ ! -x {_CURL_ROUTER_PATH} ] || "
             f'[ "$(cat {_CURL_VERSION_STAMP_PATH} 2>/dev/null)" != "$_ci_want" ]; then',
-            '  _ci_tb="curl-${_ci_triple}.tar.gz"',
-            f'  _ci_url="https://github.com/{_DATALIB_REPO}/releases/download/{DATALIB_CURL_VERSION}/${{_ci_tb}}"',
+            '  _ci_tb="latchkey-curl-shims-${_ci_triple}.tar.gz"',
+            f'  _ci_url="https://github.com/{_CURL_SHIMS_REPO}/releases/download/{CURL_SHIMS_VERSION}/${{_ci_tb}}"',
             '  _ci_tmp="$(mktemp -d)"',
             '  curl -fsSL --retry 3 --retry-delay 2 -o "${_ci_tmp}/${_ci_tb}" "$_ci_url"',
-            '  curl -fsSL --retry 2 -o "${_ci_tmp}/${_ci_tb}.sha256" "${_ci_url}.sha256"',
-            '  (cd "${_ci_tmp}" && sha256sum -c "${_ci_tb}.sha256" >/dev/null)',
+            '  (cd "${_ci_tmp}" && echo "${_ci_sha256}  ${_ci_tb}" | sha256sum -c - >/dev/null)',
             '  tar -xzf "${_ci_tmp}/${_ci_tb}" -C "${_ci_tmp}" --strip-components=1',
             # Staged beside their destinations, then renamed into place: see
-            # :data:`_CURL_STAGED_SUFFIX`. The dispatch curl is swapped last
-            # because it is the one ``LATCHKEY_CURL`` names, so no request ever
-            # reaches a new dispatch curl fronting an old impersonator.
-            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_BIN}" "{_CURL_DISPATCH_PATH}{_CURL_STAGED_SUFFIX}"',
+            # :data:`_CURL_STAGED_SUFFIX`. The router is swapped last because
+            # it is the one ``LATCHKEY_CURL`` names, so no request ever reaches
+            # a new router fronting an old impersonator.
+            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_ROUTER_BIN}" "{_CURL_ROUTER_PATH}{_CURL_STAGED_SUFFIX}"',
             f'  install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_BIN}" "{_CURL_IMPERSONATE_PATH}{_CURL_STAGED_SUFFIX}"',
             f'  mv -f "{_CURL_IMPERSONATE_PATH}{_CURL_STAGED_SUFFIX}" "{_CURL_IMPERSONATE_PATH}"',
-            f'  mv -f "{_CURL_DISPATCH_PATH}{_CURL_STAGED_SUFFIX}" "{_CURL_DISPATCH_PATH}"',
+            f'  mv -f "{_CURL_ROUTER_PATH}{_CURL_STAGED_SUFFIX}" "{_CURL_ROUTER_PATH}"',
             # Stamped only once both binaries are in place: a failed download,
             # checksum, or swap aborts under ``set -e`` before reaching this,
             # so the stamp never claims a release the host isn't running.
@@ -461,7 +514,7 @@ def ensure_latchkey_installed(host: OuterHostInterface) -> None:
 
     Idempotent: each component is installed only when missing, or -- for
     latchkey and the impersonating curl pair -- when the installed version
-    differs from :data:`LATCHKEY_VERSION` / :data:`DATALIB_CURL_VERSION`.
+    differs from :data:`LATCHKEY_VERSION` / :data:`CURL_SHIMS_VERSION`.
     Raises :class:`RemoteGatewayError` if the install fails.
     """
     script = _build_ensure_installed_script(LATCHKEY_VERSION, _NODE_MAJOR_VERSION, _MINIMUM_NODE_MAJOR_VERSION)
@@ -780,6 +833,7 @@ def _ensure_remote_gateway_extension(host: OuterHostInterface, remote_dir: Path)
 
 def _build_gateway_run_script(
     outer_port: int,
+    listen_host: str,
     key_file_path: Path,
     password_file_path: Path,
     desktop_password_file_path: Path,
@@ -794,9 +848,8 @@ def _build_gateway_run_script(
     gateway PID directly, not a wrapping shell). Reading the secrets from files
     -- rather than baking them into the supervisord ``command=`` line -- keeps
     them out of the config file and out of any process listing
-    (``/proc/<pid>/cmdline``). The gateway binds ``outer_port`` on the VPS
-    loopback only; it is reached from the container via the reverse tunnel, never
-    exposed off-host.
+    (``/proc/<pid>/cmdline``). The gateway binds ``outer_port`` on ``listen_host``
+    only, which the container reaches as ``host.docker.internal``.
 
     The secret files live in tmpfs (see :data:`TMPFS_SECRETS_DIR`), so a reboot
     wipes them. The script therefore refuses to launch a gateway with missing
@@ -852,14 +905,14 @@ def _build_gateway_run_script(
             # ``LATCHKEY_GATEWAY_LISTEN_PORT`` is the name upstream reads; a
             # gateway handed any other one silently binds latchkey's default.
             f"export LATCHKEY_GATEWAY_LISTEN_PORT={outer_port}",
-            "export LATCHKEY_GATEWAY_LISTEN_HOST=127.0.0.1",
+            f"export {GATEWAY_LISTEN_HOST_ENV_VAR}={shlex.quote(listen_host)}",
             "export LATCHKEY_DISABLE_COUNTING=1",
             f"export LATCHKEY_EXTENSION_DESKTOP_GATEWAY_URL={shlex.quote(desktop_gateway_url)}",
-            # Route latchkey through the bundled dispatch curl (installed by
+            # Route latchkey through the curl router (installed by
             # _build_ensure_installed_script): requests carrying the
             # X-Imbue-Impersonate marker header get Chrome TLS impersonation
             # via the sibling impersonator, everything else uses system curl.
-            f"export LATCHKEY_CURL={_CURL_DISPATCH_PATH}",
+            f"export LATCHKEY_CURL={_CURL_ROUTER_PATH}",
             f"exec latchkey gateway --max-body-size {GATEWAY_MAX_BODY_SIZE_BYTES}",
             "",
         )
@@ -868,6 +921,7 @@ def _build_gateway_run_script(
 
 def _ensure_latchkey_gateway_running(
     host: OuterHostInterface,
+    listen_host: str,
     latchkey_directory: Path,
     machine_encryption_key: SecretStr,
     machine_gateway_password: str,
@@ -875,9 +929,10 @@ def _ensure_latchkey_gateway_running(
 ) -> None:
     """Register (and start) the ``latchkey gateway`` as a supervisord program on the VPS.
 
-    Writes a supervisord drop-in that launches ``latchkey gateway`` bound to the
-    VPS loopback on ``OUTER_PORT`` and applies it via ``reread``/``update``, so
-    supervisord keeps the gateway running and restarts it if it crashes. This
+    Writes a supervisord drop-in that launches ``latchkey gateway`` bound to
+    ``listen_host`` (the VPS's docker bridge address) on ``OUTER_PORT`` and
+    applies it via ``reread``/``update``, so supervisord keeps the gateway
+    running and restarts it if it crashes. This
     machine's own encryption key and listen password (see
     :func:`_resolve_machine_encryption_key` and
     :func:`_resolve_machine_gateway_password`) plus ``desktop_secrets`` are
@@ -941,6 +996,7 @@ def _ensure_latchkey_gateway_running(
     desktop_gateway_url = f"http://127.0.0.1:{DESKTOP_GATEWAY_VPS_PORT}"
     run_script = _build_gateway_run_script(
         OUTER_PORT,
+        listen_host,
         key_file_path,
         password_file_path,
         desktop_password_file_path,
@@ -954,9 +1010,123 @@ def _ensure_latchkey_gateway_running(
     conf = _build_supervisor_program_config(
         GATEWAY_PROGRAM_NAME, command, str(log_path), _SUPERVISOR_GATEWAY_START_RETRIES
     )
-    with log_span("Ensuring latchkey gateway is running on VPS {} (port {})", host_name, OUTER_PORT):
+    with log_span(
+        "Ensuring latchkey gateway is running on VPS {} (listening on {}:{})", host_name, listen_host, OUTER_PORT
+    ):
         host.write_file(conf_path, conf.encode("utf-8"), mode=REMOTE_FILE_MODE, is_atomic=True)
         reload_supervisor_programs(host, host_name, GATEWAY_PROGRAM_NAME, restart=True)
+
+
+def _resolve_bridge_listen_host(host: OuterHostInterface) -> str:
+    """The VPS's docker bridge address, which the gateway and the owner-exec daemon bind.
+
+    Resolved once per provisioning pass for both. Raises
+    :class:`RemoteGatewayError` rather than falling back to a wildcard bind,
+    which on a VPS would put either service on the public interface.
+    """
+    try:
+        return resolve_docker_bridge_address(host)
+    except DockerBridgeAddressError as e:
+        raise RemoteGatewayError(
+            "Refusing to bind the latchkey gateway and the owner-exec daemon on VPS {} to a public/wildcard "
+            "interface: {}".format(host.get_name(), e)
+        ) from e
+
+
+def _ensure_bridge_services_firewalled(host: OuterHostInterface) -> None:
+    """Keep the gateway's and the owner-exec daemon's ports reachable from the docker bridge only, and vice versa.
+
+    Why binding the bridge address is not enough on its own is spelled out in
+    :mod:`imbue.mngr_latchkey.docker_bridge`. Applied before either service
+    starts; raises :class:`RemoteGatewayError` when it cannot be.
+    """
+    try:
+        ensure_bridge_services_firewalled(host, (OUTER_PORT, VM_EXEC_PORT))
+    except DockerBridgeFirewallError as e:
+        raise RemoteGatewayError(
+            "Refusing to start the latchkey gateway and the owner-exec daemon on VPS {} without the firewall "
+            "that keeps them on the docker bridge: {}".format(host.get_name(), e)
+        ) from e
+
+
+@pure
+def _do_extra_hosts_resolve_outer_host(extra_hosts: Sequence[str] | None) -> bool:
+    """Whether a container's creation-time ``--add-host`` mappings (its inspect's ``HostConfig.ExtraHosts``) name the outer host.
+
+    ``None`` is what ``docker inspect`` reports for a container created without
+    any mapping.
+    """
+    return any(str(entry).split(":", 1)[0] == OUTER_HOST_HOSTNAME_IN_CONTAINER for entry in (extra_hosts or []))
+
+
+def _does_container_resolve_outer_host(host: OuterHostInterface, container_name: str) -> bool:
+    """Whether the container was created with the ``host.docker.internal`` mapping.
+
+    The mapping is part of a container's creation (``--add-host``) and cannot be
+    added later, so a container without it can only reach the gateway over the
+    reverse tunnel. Raises :class:`RemoteGatewayError` if the container cannot
+    be inspected.
+    """
+    command = f"docker inspect -f '{{{{json .HostConfig.ExtraHosts}}}}' {shlex.quote(container_name)}"
+    result = host.execute_idempotent_command(command, timeout_seconds=REMOTE_COMMAND_TIMEOUT_SECONDS)
+    if not result.success:
+        raise RemoteGatewayError(
+            "Failed to inspect container {} on VPS {}: {}".format(
+                container_name, host.get_name(), result.stderr.strip() or result.stdout.strip()
+            )
+        )
+    try:
+        extra_hosts = json.loads(result.stdout.strip() or "null")
+    except json.JSONDecodeError as e:
+        raise RemoteGatewayError(
+            f"Could not parse the extra hosts of container {container_name} on VPS {host.get_name()}: {e}"
+        ) from e
+    return _do_extra_hosts_resolve_outer_host(extra_hosts)
+
+
+def _is_reverse_tunnel_registered(host: OuterHostInterface) -> bool:
+    """Whether a VPS->container reverse tunnel is registered with supervisord on this VPS."""
+    return host.path_exists(SUPERVISOR_CONFD_DIR / TUNNEL_CONF_FILENAME)
+
+
+# CLEANUP: drop this decision together with the reverse tunnel; see the comment
+# above ``REMOTE_TUNNEL_LOG_FILENAME``.
+def _does_container_need_reverse_tunnel(host: OuterHostInterface, container_name: str) -> bool:
+    """Whether the agent in ``container_name`` reaches the gateway only over the reverse tunnel.
+
+    The agent's ``LATCHKEY_GATEWAY`` was decided by the client that created its
+    host and cannot change for the life of the container, while the container's
+    ``host.docker.internal`` mapping is decided by the outer host it was created
+    on. A current client makes the two agree at create time (an agent in a
+    container without the mapping names its own loopback; see
+    :func:`imbue.mngr_latchkey.agent_setup.fall_back_to_reverse_tunneled_gateway_url`),
+    leaving one exception: a host an older client created in a container that
+    already carried the mapping. Its agent names its own loopback, and that
+    client registered the tunnel for it. So the tunnel is needed when the container cannot
+    resolve the outer host at all, or when a tunnel is already registered on
+    this VPS; a registered tunnel is never dropped (a container recreated on the
+    same VPS keeps a redundant one, which is harmless), and none is registered
+    for a container that resolves the outer host. Raises
+    :class:`RemoteGatewayError` if the container cannot be inspected.
+    """
+    if not _does_container_resolve_outer_host(host, container_name):
+        logger.info(
+            "Container {} on VPS {} predates the {} mapping; keeping its latchkey reverse tunnel",
+            container_name,
+            host.get_name(),
+            OUTER_HOST_HOSTNAME_IN_CONTAINER,
+        )
+        return True
+    if _is_reverse_tunnel_registered(host):
+        logger.info(
+            "Container {} on VPS {} resolves {} but an earlier provisioning registered a latchkey reverse "
+            "tunnel there (its agent may name its own loopback); keeping the tunnel",
+            container_name,
+            host.get_name(),
+            OUTER_HOST_HOSTNAME_IN_CONTAINER,
+        )
+        return True
+    return False
 
 
 def _build_reverse_tunnel_ssh_command(
@@ -964,16 +1134,17 @@ def _build_reverse_tunnel_ssh_command(
     container_ssh_port: int,
     container_ssh_key_path: Path,
     inner_port: int,
+    gateway_address: str,
     outer_port: int,
 ) -> str:
     """Build the ``ssh`` command supervisord runs to reverse-tunnel the VPS into the container.
 
     Run on the VPS, it SSHes into the container (reachable at
     ``127.0.0.1:<container_ssh_port>`` via the published sshd) and binds the
-    container's ``127.0.0.1:<inner_port>``, forwarding it back to the VPS's
-    ``127.0.0.1:<outer_port>`` where the gateway listens. The agent's
-    ``LATCHKEY_GATEWAY=http://127.0.0.1:<inner_port>`` therefore reaches the
-    VPS-resident gateway unchanged.
+    container's ``127.0.0.1:<inner_port>``, forwarding it back to
+    ``<gateway_address>:<outer_port>`` on the VPS, where the gateway listens.
+    The agent's ``LATCHKEY_GATEWAY=http://127.0.0.1:<inner_port>`` therefore
+    reaches the VPS-resident gateway unchanged.
 
     This runs in the foreground under supervisord (no ``nohup``/``ssh -f``): the
     keepalive flags make ssh exit when the far end is unreachable -- e.g. after
@@ -987,7 +1158,7 @@ def _build_reverse_tunnel_ssh_command(
     by supervisord (which shell-splits it), so the key path and user are
     ``shlex``-quoted.
     """
-    forward_spec = f"127.0.0.1:{inner_port}:127.0.0.1:{outer_port}"
+    forward_spec = f"127.0.0.1:{inner_port}:{gateway_address}:{outer_port}"
     return " ".join(
         (
             _SSH_BINARY_PATH,
@@ -1025,17 +1196,23 @@ def _ensure_latchkey_gateway_reachable_from_container(
     container_ssh_user: str,
     container_ssh_port: int,
     container_ssh_key_path: Path,
+    gateway_address: str,
 ) -> None:
     """Register (and start) the VPS->container reverse SSH tunnel as a supervisord program.
 
-    Binds the container's ``127.0.0.1:AGENT_SIDE_LATCHKEY_PORT`` and forwards it to the VPS's
-    ``127.0.0.1:OUTER_PORT`` (where :func:`_ensure_latchkey_gateway_running`
-    started the gateway), so the agent's fixed ``LATCHKEY_GATEWAY`` URL
-    reaches the VPS-resident gateway with no change to how the agent env is
-    injected. supervisord keeps the tunnel up and restarts it if ssh exits (e.g.
-    after a keepalive timeout on a resumed VM). The tunnel carries no secret, so
-    unlike the gateway it also survives a reboot on its own (though it forwards
-    to a down gateway until the gateway is re-provisioned).
+    Only for an agent whose ``LATCHKEY_GATEWAY`` names its own loopback (a
+    container created before containers carried the ``host.docker.internal``
+    mapping, or one an older client wired; see
+    :func:`_does_container_need_reverse_tunnel`), since nothing can change
+    that URL for the life of the container. Binds the container's
+    ``127.0.0.1:AGENT_SIDE_LATCHKEY_PORT`` and forwards it to
+    ``<gateway_address>:OUTER_PORT`` on the VPS (where
+    :func:`_ensure_latchkey_gateway_running` started the gateway), so that fixed
+    URL reaches the VPS-resident gateway. supervisord keeps the tunnel up and
+    restarts it if ssh exits (e.g. after a keepalive timeout on a resumed VM).
+    The tunnel carries no secret, so unlike the gateway it also survives a
+    reboot on its own (though it forwards to a down gateway until the gateway
+    is re-provisioned).
 
     ``container_ssh_key_path`` must be a private key present *on the VPS* that
     authenticates to the container's sshd. Idempotent. Raises
@@ -1046,6 +1223,7 @@ def _ensure_latchkey_gateway_reachable_from_container(
         container_ssh_port=container_ssh_port,
         container_ssh_key_path=container_ssh_key_path,
         inner_port=AGENT_SIDE_LATCHKEY_PORT,
+        gateway_address=gateway_address,
         outer_port=OUTER_PORT,
     )
     log_path = resolve_remote_latchkey_directory(host) / REMOTE_TUNNEL_LOG_FILENAME
@@ -1055,9 +1233,11 @@ def _ensure_latchkey_gateway_reachable_from_container(
     )
     host_name = host.get_name()
     with log_span(
-        "Ensuring latchkey gateway is reachable from the container on VPS {} (container:{} -> gateway:{})",
+        "Ensuring latchkey gateway is reachable from the container on VPS {} "
+        "(container:127.0.0.1:{} -> gateway:{}:{})",
         host_name,
         AGENT_SIDE_LATCHKEY_PORT,
+        gateway_address,
         OUTER_PORT,
     ):
         host.write_file(conf_path, conf.encode("utf-8"), mode=REMOTE_FILE_MODE, is_atomic=True)
@@ -1419,7 +1599,8 @@ def _does_key_open_the_machine_store(host: OuterHostInterface, candidate_key: Se
             "latchkey auth list --offline >/dev/null",
         )
     )
-    result = host.execute_idempotent_command(script, timeout_seconds=REMOTE_LATCHKEY_TIMEOUT_SECONDS)
+    with commands_kept_out_of_logs(SECRET_BEARING_SCRIPT_LOG_REASON):
+        result = host.execute_idempotent_command(script, timeout_seconds=REMOTE_LATCHKEY_TIMEOUT_SECONDS)
     if not result.success:
         logger.debug(
             "Ruled out a candidate key for the store on VPS {}: {}",
@@ -1452,27 +1633,33 @@ def provision_remote_gateway(
     latchkey_directory: Path,
     desktop_secrets: DesktopGatewaySecrets,
 ) -> None:
-    """Stand up a VPS-resident latchkey gateway and tunnel it into the agent's container.
+    """Stand up a VPS-resident latchkey gateway where the agent's container can reach it.
 
     Runs the full remote-gateway sequence on the agent's outer host (the VPS):
-    install the latchkey CLI and supervisord, register the gateway as a
-    supervisord program bound to the VPS loopback (with this machine's own
-    encryption key so it can decrypt the credentials it is given, and its own
-    listen password so it accepts the traffic of the workspaces on it, plus
-    ``desktop_secrets`` for the forwarding extension's hop to this computer),
-    mint an ad-hoc
-    VPS->container keypair, and register the VPS->container reverse tunnel as a
-    second supervisord program so the agent's
-    ``LATCHKEY_GATEWAY=http://127.0.0.1:AGENT_SIDE_LATCHKEY_PORT`` reaches it. supervisord
-    keeps both processes running and restarts them on failure. A VPS provisioned
-    by an older (nohup + PID-file) build is migrated first: its detached gateway
-    and tunnel are killed so they free ``OUTER_PORT`` and the container forward
-    bind before the supervisord programs start. (The gateway's
-    secrets live in tmpfs, so a reboot leaves the gateway down until the next
-    provisioning pass; this is a deliberate choice to keep the encryption key
-    off the persistent disk -- see :func:`_ensure_latchkey_gateway_running`.)
-    The container's ssh user/port come from the inner host's SSH info; the
-    container itself is located on the VPS by its host-id label.
+    fence the bridge-bound ports off every interface but the docker bridge and
+    loopback (see :func:`_ensure_bridge_services_firewalled`), install the
+    latchkey CLI and supervisord, then register the gateway as a
+    supervisord program bound to the VPS's docker bridge address (with this
+    machine's own encryption key so it can decrypt the credentials it is given,
+    and its own listen password so it accepts the traffic of the agents on
+    it, plus ``desktop_secrets`` for the forwarding extension's hop to this
+    computer). The container reaches that address as ``host.docker.internal``,
+    which is what its ``LATCHKEY_GATEWAY`` names, so nothing else is wired for
+    it. supervisord keeps the gateway running and restarts it on failure. A VPS
+    provisioned by an older (nohup + PID-file) build is migrated first: its
+    detached gateway and tunnel are killed so they free ``OUTER_PORT`` and the
+    container forward bind before the supervisord programs start. (The
+    gateway's secrets live in tmpfs, so a reboot leaves the gateway down until
+    the next provisioning pass; this is a deliberate choice to keep the
+    encryption key off the persistent disk -- see
+    :func:`_ensure_latchkey_gateway_running`.)
+
+    An agent whose ``LATCHKEY_GATEWAY`` names its own loopback instead (see
+    :func:`_does_container_need_reverse_tunnel` for how that is recognized)
+    still gets an ad-hoc VPS->container keypair minted and the VPS->container
+    reverse tunnel registered as a second supervisord program, pointed at the
+    address the gateway binds. Its ssh user/port come from the inner host's SSH
+    info. The container itself is located on the VPS by its host-id label.
 
     Only genuinely-remote outer hosts are provisioned: when ``host`` is the
     local machine (e.g. the outer of a local docker daemon) this is a no-op, so
@@ -1485,12 +1672,14 @@ def provision_remote_gateway(
             host.get_name(),
         )
         return
+    listen_host = _resolve_bridge_listen_host(host)
+    _ensure_bridge_services_firewalled(host)
     # Stand up the VM-resident owner-exec daemon first: it is independent of the
     # latchkey gateway (a web workspace uses it to configure the VM, including to
     # provision latchkey), and piggybacking on this pass is how every remote
     # provider converges on the one exec channel. A failure here fails the whole
     # provisioning pass, which is retried on the next discovery cycle.
-    provision_owner_exec_vm(host, host_id)
+    provision_owner_exec_vm(host, host_id, listen_host)
     ensure_latchkey_installed(host)
     # Tear down any pre-supervisord (nohup + PID-file) gateway/tunnel first: an
     # old build's processes still hold OUTER_PORT and the container's forward
@@ -1498,12 +1687,17 @@ def provision_remote_gateway(
     _migrate_legacy_remote_gateway_state(host)
     _ensure_latchkey_gateway_running(
         host,
+        listen_host,
         latchkey_directory,
         _resolve_machine_encryption_key(host, latchkey_directory, host_id),
         _resolve_machine_gateway_password(host, latchkey_directory, host_id, desktop_secrets.gateway_password),
         desktop_secrets,
     )
     container_name = _resolve_container_name_for_host(host, host_id)
+    # CLEANUP: drop everything below together with the reverse tunnel; see the
+    # comment above ``REMOTE_TUNNEL_LOG_FILENAME``.
+    if not _does_container_need_reverse_tunnel(host, container_name):
+        return
     container_ssh_key_path = _ensure_container_tunnel_keypair(
         host, container_name=container_name, container_ssh_user=container_ssh_user
     )
@@ -1512,4 +1706,5 @@ def provision_remote_gateway(
         container_ssh_user=container_ssh_user,
         container_ssh_port=container_ssh_port,
         container_ssh_key_path=container_ssh_key_path,
+        gateway_address=listen_host,
     )
