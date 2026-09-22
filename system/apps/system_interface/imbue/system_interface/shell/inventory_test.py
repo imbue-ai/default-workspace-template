@@ -27,10 +27,14 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
     assert all(entry.is_running for entry in entries)
     assert inventory.entry("files") is not None and inventory.entry("nope") is None
     serialized = inventory.serialized()
-    assert serialized[0]["launch_paths"] == [{"id": "new", "label": "New terminal", "path": "/new", "params": []}]
+    assert serialized[0]["launch_paths"] == [
+        {"id": "new", "label": "New terminal", "path": "/new", "params": [], "text_param": None}
+    ]
     assert serialized[0]["default_shortcut"] == {"launch": "new", "mode": "new"}
     # An app declaring no launch path offers the synthesized ``open`` at its root.
-    assert serialized[1]["launch_paths"] == [{"id": "open", "label": "Open Files", "path": "/", "params": []}]
+    assert serialized[1]["launch_paths"] == [
+        {"id": "open", "label": "Open Files", "path": "/", "params": [], "text_param": None}
+    ]
     assert set(serialized[1]) == {
         "name",
         "display_name",

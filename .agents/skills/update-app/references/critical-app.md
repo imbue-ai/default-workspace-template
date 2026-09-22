@@ -67,8 +67,8 @@ the worker's runtime dir is `data/.tasks/harden/update-$SLUG/`.
 
 **Kick off provisioning in the background, then start exploring.** The one real
 up-front cost is a built worktree; hide it behind the reading you were going to
-do anyway. Both frontends build at the npm workspace root, so a change to one
-bundle or to the shared library gets both:
+do anyway. Every frontend builds at the npm workspace root, so a change to one
+bundle or to the shared library rebuilds them all:
 
 ```bash
 git worktree add -b "mngr/update-$SLUG" "data/.tasks/critical-live/update-$SLUG" HEAD
@@ -267,8 +267,8 @@ frontmatter, launch, background-poll) with these specifics:
 
   There is **no `## Change origin` marker and no worker gate**: the user already
   approved the shape in your live loop. Name the app (`type-app.md`'s
-  "Critical apps" section tells the worker to build both bundles at the npm root
-  and report both paths). Include a `## Real scenario` section when a real
+  "Critical apps" section tells the worker to build every bundle at the npm root
+  and report each path). Include a `## Real scenario` section when a real
   conversation motivated the change, naming the motivating chat (usually your
   own, `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`) and what looked wrong, so the worker opens *that*
   conversation rather than reconstructing it from prose.
@@ -302,7 +302,7 @@ With the worker `done` (and any final preview approved), land the change. You
 hold the editing lease from step 1, so no other chat's merge or apply can
 interleave.
 
-1. **Freshness check.** The branch is mergeable only if nothing the two bundles
+1. **Freshness check.** The branch is mergeable only if nothing the bundles
    are built from has changed on the served branch since the worker branched:
 
    ```bash
@@ -357,7 +357,9 @@ interleave.
    the top of the workspace names every critical app included in the rollback:
    recently updated, with "Roll back" and "Everything seems good". It rolls all
    of them back together. Frontend applies include both chat and shell because
-   both bundles are replaced; an extra app restart is acceptable. Tell the user
+   every bundle (the shell's, the chat's, and the Getting Started app's, whose
+   owner is not critical and so is not named) is replaced; an extra app restart
+   is acceptable. Tell the user
    the banner is at the top of the workspace and what it does. **Never confirm or roll back on the user's behalf.** Only a person
    closes it: confirming
    discards the kept snapshots, rolling back restores them and restarts only the
