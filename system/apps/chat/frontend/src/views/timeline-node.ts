@@ -47,11 +47,8 @@ export const TIMELINE_NODE_CLASS = "relative flex max-w-[calc(100%-var(--width-a
  * The bullet gutter. Its opaque chat background masks the thread behind it.
  *
  * The box is exactly one title line tall and centres the bullet in it, so the
- * bullet and the title agree by construction. Before this it was a block with
- * an inline icon, which left the bullet positioned by the NODE's line box (the
- * block's 21px strut) while the title sat in its own 19.6px one -- two boxes
- * that only ever lined up by coincidence, and drifted a pixel apart the moment
- * either type size changed.
+ * bullet and the title agree by construction rather than by two line boxes
+ * happening to work out the same.
  *
  * `top-[0.1em]` is the optical correction on top of that. A line box is
  * symmetric about the em box, but the ink in it is not: the ascenders reach
@@ -60,11 +57,6 @@ export const TIMELINE_NODE_CLASS = "relative flex max-w-[calc(100%-var(--width-a
  * half a descender, which is what 0.1em is. In em rather than px so it keeps
  * pace with the type size, and relative rather than a margin so the row's
  * layout does not move with it.
- *
- * Measured, not guessed: for the title's 14px/500 at 19.6px leading, the
- * line-box centre is 131.39 and the ink centre (ascender top to descender
- * bottom) is 132.73. Aiming at the EM box instead -- and then nudging the wrong
- * way on top of it -- is what left the bullet visibly high.
  *
  * The height must track {@link TITLE_BASE}'s `leading-[1.4]` at
  * `--font-size-body`; both are written out because Tailwind scans class strings
@@ -83,11 +75,10 @@ export const TIMELINE_BODY_CLASS = "pv-tl-body min-w-0 flex-1";
  * of its own -- the captions under it drop to helper instead.
  *
  * `flex w-fit`, not `inline-flex`: an inline-level button is baseline-aligned
- * inside the BODY's line box, which added the block's leading above the title
- * and pushed it a couple of pixels below the bullet. Block-level takes the
- * title out of that line box entirely and starts it at the body's top edge,
- * where the bullet is; `w-fit` keeps it shrink-wrapped to its text so the
- * clickable area is still the title and not the whole row.
+ * inside the BODY's line box, which puts the block's leading above it.
+ * Block-level starts the title at the body's top edge, where the bullet is;
+ * `w-fit` keeps it shrink-wrapped to its text so the clickable area is the
+ * title and not the whole row.
  */
 const TITLE_BASE =
   "pv-tl-title flex w-fit cursor-pointer items-center appearance-none border-0 bg-transparent p-0 text-left " +
@@ -105,8 +96,7 @@ export function timelineTitleClass(tone: TimelineTone): string {
  *  independently of the text scale (and deliberately not text-lg, whose
  *  line-height would reflow the row). `leading-none` for the same reason one
  *  step further: at 18px the glyph's own line box is taller than the title's,
- *  so without it an expandable title sat lower than a plain one -- two rows of
- *  the same timeline disagreeing on where their text sits. */
+ *  which would make an expandable title sit lower than a plain one. */
 export const TIMELINE_CHEVRON_CLASS =
   "pv-chev ml-1.5 inline-block text-[18px] leading-none font-normal transition-transform duration-(--dur-base) " +
   "ease-[ease]";

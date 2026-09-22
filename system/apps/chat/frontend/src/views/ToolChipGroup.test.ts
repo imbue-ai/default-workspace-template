@@ -252,8 +252,8 @@ describe("the open chip's detail panel", () => {
 describe("the input a panel shows", () => {
   it("shows a lone remaining field bare -- for a shell call, just the command", () => {
     const raw = JSON.stringify({ command: "rg -n 'font-size' src/style.css", description: "Sweep the stylesheet" });
-    // The note is already the chip; printing it again here is what made the panel
-    // a four-line JSON blob whose only real content was the command.
+    // The note is already the chip; printing it here too would leave the panel a
+    // JSON blob whose only real content is the command.
     expect(formatToolInput(raw, "Sweep the stylesheet")).toBe("rg -n 'font-size' src/style.css");
   });
 
@@ -308,8 +308,8 @@ describe("the input a panel shows", () => {
 
     setBlockExpanded("chip:pv-2", true);
     mount([chip(edit)]);
-    // The chip already reads "edited src/a.ts"; repeating it here is the doubling
-    // this pane exists to avoid.
+    // The chip already reads "edited src/a.ts", so the verb here would say it
+    // twice.
     expect(root.querySelector(".tool-call-input .tool-call-verb")).toBeNull();
     setBlockExpanded("chip:pv-2", false);
   });

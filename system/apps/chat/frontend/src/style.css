@@ -149,10 +149,10 @@
   background-color: transparent;
   padding: 0;
   /* The inline-code chip's border has to go too, not just its fill: a <code>
-     inside a <pre> is still an inline box, so the border was drawn once per
-     wrapped LINE -- a fenced block came out as a stack of outlined strips.
-     (Only fences the tool-call wrapper claims get `display: block`; a plain
-     one in agent prose stays inline.) */
+     inside a <pre> is still an inline box, so the border draws once per wrapped
+     LINE, turning a fenced block into a stack of outlined strips. (Only fences
+     the tool-call wrapper claims get `display: block`; a plain one in agent
+     prose stays inline.) */
   border: none;
   border-radius: 0;
   font-size: var(--font-size-helper);
@@ -532,7 +532,7 @@
 .pv-tl-narration {
   /* #bcbcbc: the highlight, deliberately lighter than --c-text-faint. A
      design-system-exception -- it is one end of a moving gradient, not a text
-     role, and at faint the sweep barely showed against the text it crosses. */
+     role, and at faint the sweep barely reads against the text it crosses. */
   background: linear-gradient(90deg, var(--c-text-primary) 0%, #bcbcbc 40%, var(--c-text-primary) 80%);
   background-size: 200% 100%;
   -webkit-background-clip: text;

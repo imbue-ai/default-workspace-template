@@ -210,9 +210,8 @@ export function StableAssistantMessage(): m.Component<{
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion ||
-        // Opening a tool chip swaps WHICH detail panel exists, so unlike the
-        // older blocks (a CSS-revealed body already in the DOM) it needs a real
-        // re-render to build one.
+        // Opening a tool chip swaps WHICH detail panel exists, so it needs a
+        // real re-render to build one.
         getExpansionVersion() !== renderedExpansionVersion
       );
     },
