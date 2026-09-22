@@ -50,12 +50,7 @@ class NoPluginsListed(Exception):
 
 
 class Run(Protocol):
-    """How the install reaches uv, injected so a test can watch what it was handed.
-
-    The alternative -- a stub ``uv`` on PATH -- cannot run where this code does: pytest's
-    ``tmp_path`` lives under a ``/tmp`` that a workspace container mounts ``noexec``, so
-    the stub is unexecutable, PATH resolution walks past it, and the real ``uv`` runs.
-    """
+    """How the install reaches uv, injected so a test can watch what it was handed."""
 
     def __call__(
         self,
