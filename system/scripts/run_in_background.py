@@ -14,8 +14,8 @@ turn when their command finishes.
 
 The message is a ``<background-task-report>`` whose ``<summary>`` line is all the chat
 shows the user (the chat app renders it as a one-line notice; a test there pins its copy of
-the tag to this one). The rest is for the agent: the command, its exit code, the tail of its
-output, and the file holding all of it.
+the tag to this one). The rest is for the agent: the command, its exit code, its output (cut in
+the middle when long), and the file holding all of it.
 
 A run leaves everything in ``data/.tasks/run-in-background/<task-id>/`` under the caller's
 cwd: ``output.log`` (the command's stdout and stderr, interleaved), ``exit_code`` once the
@@ -72,6 +72,9 @@ DELIVERY_ATTEMPTS = 6
 DELIVERY_RETRY_SECONDS = 20.0
 
 MAX_INLINE_OUTPUT_CHARS = 20_000
+# How much of a long output's start is kept: enough for a report's frontmatter, which a
+# reader parses before anything else.
+MAX_INLINE_HEAD_CHARS = 2_000
 
 
 class RepoRootNotFoundError(Exception):
@@ -131,12 +134,15 @@ def compose_report(
     output: str,
     output_path: Path,
 ) -> str:
-    """The message for one finished command; long output keeps its end, where a result usually is."""
+    """The message for one finished command; long output keeps its start and, mostly, its end,
+    where a result usually is."""
     if len(output) > MAX_INLINE_OUTPUT_CHARS:
+        tail_chars = MAX_INLINE_OUTPUT_CHARS - MAX_INLINE_HEAD_CHARS
         omitted_count = len(output) - MAX_INLINE_OUTPUT_CHARS
         shown_output = (
-            f"[{omitted_count} characters omitted; the whole output is in {output_path}]\n"
-            + output[-MAX_INLINE_OUTPUT_CHARS:]
+            output[:MAX_INLINE_HEAD_CHARS]
+            + f"\n[{omitted_count} characters omitted; the whole output is in {output_path}]\n"
+            + output[-tail_chars:]
         )
     else:
         shown_output = output

@@ -258,9 +258,12 @@ def test_the_summary_says_how_the_command_ended(returncode: int, status: str) ->
     assert f"Exit code: {returncode}" in report
 
 
-def test_long_output_keeps_its_end_and_points_at_the_full_file() -> None:
+def test_long_output_keeps_its_start_and_end_and_points_at_the_full_file() -> None:
+    """A worker report's frontmatter is at the start of ``await``'s output, and its result at the end."""
     output = (
-        "early line\n"
+        "---\ntype: status\nname: done\n---\n"
+        + "x" * run_in_background.MAX_INLINE_HEAD_CHARS
+        + "middle line\n"
         + "x" * run_in_background.MAX_INLINE_OUTPUT_CHARS
         + "\nlast line\n"
     )
@@ -274,7 +277,8 @@ def test_long_output_keeps_its_end_and_points_at_the_full_file() -> None:
         output_path=output_path,
     )
 
+    assert "<output>\n---\ntype: status\nname: done\n---\n" in report
     assert "last line" in report
-    assert "early line" not in report
+    assert "middle line" not in report
     assert f"omitted; the whole output is in {output_path}" in report
     assert len(report) < run_in_background.MAX_INLINE_OUTPUT_CHARS + 2000
