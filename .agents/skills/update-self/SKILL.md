@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Mind app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the release the running Mind app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -26,9 +26,10 @@ still wait for the user: an `--override` past the version ceiling (asked at
 launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
-The default target is the **latest stable `minds-v*` tag**, never newer than
-the Mind app driving this workspace (the template ships the code that app
-talks to); see `references/version-ceiling.md`. Once the target is resolved,
+The default target is **the release the Mind app driving this workspace was
+built against** -- the `minds-v*` tag it names, and only that one, because the
+template ships the code that app talks to and no other pairing was verified;
+see `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, so fixes
@@ -123,15 +124,21 @@ Tell the user which version you are updating to, and never mention a release
 above `ceiling` that they did not ask for by name: the Mind app announces its
 own updates.
 
-**If the command exits non-zero, stop -- nothing is wrong with the workspace.**
-Its single `error:` line says why no target could be chosen (the Mind app
-could not be reached or is too old to report its version; no release is at or
-below the app's version; the workspace is already on the release it may take).
-Relay that line in plain terms and offer the next step; never resolve a ref by
-hand. Record the verdict first: `run-status verdict ALREADY_CURRENT` when the
-error says the workspace is current, else `run-status verdict REFUSED --detail
-"<the error line, in plain terms>"` (with `--in-place-compatible-ref` when the
-error names a release the workspace could still take).
+**If the command exits non-zero, stop.** Its single `error:` line says why no
+target could be chosen. Relay it in plain terms, offer the next step, and
+record the verdict it calls for -- never resolve a ref by hand:
+
+- **Already on the release it may take.** Nothing is wrong with the workspace:
+  `run-status verdict ALREADY_CURRENT`.
+- **A fault**: the Mind app could not be reached, is too old to report its
+  version, named a release the upstream does not carry, or named no release at
+  all. The pair this workspace is supposed to run was never published as
+  claimed, so say so plainly and record `run-status verdict STUCK --detail
+  "<the error line, in plain terms>"`. Do **not** pick another release to
+  update to; only a version the user names becomes an `--override`, and an
+  operator testing a dev build is exactly who names one.
+- **Anything else**: `run-status verdict REFUSED --detail "<the error line, in
+  plain terms>"`.
 
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it

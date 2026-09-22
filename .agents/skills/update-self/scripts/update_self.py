@@ -10,20 +10,22 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
-    tag (semver-sorted, ``-rc``/prerelease excluded) that is **not newer than the
-    minds app driving this workspace**; an explicit override may name a specific
-    tag, ``main``, or any other ref, and is reported back as exceeding the
-    ceiling when it cannot be proven to sit at or below it.
+    Resolve the ref to update to. Default is the release the minds app driving
+    this workspace was built against -- the ``minds-v*`` tag it names, and only
+    that one; an explicit override may name a specific tag, ``main``, or any
+    other ref, and is reported back as exceeding the ceiling when it cannot be
+    proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, ``mngr``), so updating past
     the app's own release would leave the workspace speaking a protocol its app
     does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
-    cannot be read the command **fails** rather than silently updating uncapped.
-    Releases above the ceiling are treated as absent: only an ``--override``
-    naming one puts it in the output.
+    cannot be read, or names a release the upstream does not carry, the command
+    **fails** rather than choosing some other release: that pairing was never
+    verified, and which way out is right is the skill's call. Releases above the
+    app's are treated as absent: only an ``--override`` naming one puts it in
+    the output.
 
     A default target the workspace is **already on** is a refusal too: the command
     asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
@@ -149,6 +151,7 @@ from update_environment import default_sweep_homes
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
+    AppReleaseUnavailableError,
     CeilingUnavailableError,
     NoUpdateTargetError,
     already_current_message,
@@ -901,7 +904,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (CeilingUnavailableError, NoUpdateTargetError, ApplyPreconditionError) as e:
+    except (
+        AppReleaseUnavailableError,
+        CeilingUnavailableError,
+        NoUpdateTargetError,
+        ApplyPreconditionError,
+    ) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it
         # and read as a crash rather than a refusal.

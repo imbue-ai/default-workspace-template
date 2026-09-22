@@ -1,14 +1,25 @@
 # The version ceiling
 
-The default update target is capped at the version of the **Mind app driving
-this workspace**, which `resolve-target` reads from the app itself (`GET
-/api/v1/app/version` through the latchkey gateway; `ceiling` in the output).
-The template carries the code the app talks to -- the system interface and
-`mngr` -- so a workspace running a template newer than its app would
-be speaking a protocol the app does not know. When the app reports a branch
-rather than a release tag (a dev build) there is nothing to compare against and
-`ceiling` caps nothing. When the app cannot be reached, or is too old to report
-a version, `resolve-target` **fails** rather than updating uncapped.
+The default update target **is** the release the **Mind app driving this
+workspace** was built against, which `resolve-target` reads from the app itself
+(`GET /api/v1/app/version` through the latchkey gateway; `ceiling` in the
+output). The template carries the code the app talks to -- the system interface
+and `mngr` -- so only that pairing was ever verified: a newer template speaks a
+protocol the app does not know, and an older one is a release nobody shipped
+with this app.
+
+Three things make that release unavailable, and all three are **faults** rather
+than refusals -- `resolve-target` fails, and what to do next is your call with
+the user, not a version the script picks:
+
+- the app cannot be reached, or is too old to report a version at all;
+- it names a release the upstream does not carry, which means that release was
+  never published as the app claims;
+- it names no release at all (a dev build reports its branch), so there is
+  nothing to match.
+
+In the last case an operator testing a dev build knows which ref they want:
+take it from them and pass it as `--override`. Never choose one for them.
 
 Releases above the ceiling are treated as if they do not exist: never name one
 the user did not ask for by name, or suggest updating the app to reach it. The
@@ -17,12 +28,11 @@ the user does name is an override, covered below.
 
 ## At the ceiling vs behind it
 
-A workspace already sitting *at* the ceiling gets a refusal rather than a pass:
-the capped target is the release it was created from, so there is nothing to
-merge, and `resolve-target` says so instead of spending a backup, a worker and
-a validation run on a no-op. A workspace *behind* the ceiling still updates to
-it. The two are distinguished by whether the resolved ref is already an
-ancestor of `HEAD`, not by the ceiling alone.
+A workspace already sitting *at* the app's release gets a refusal rather than a
+pass: the target is the release it is already on, so there is nothing to merge,
+and `resolve-target` says so instead of spending a backup, a worker and a
+validation run on a no-op. A workspace *behind* it still updates to it. The two
+are distinguished by whether the resolved ref is already an ancestor of `HEAD`.
 
 ## Overrides past the ceiling
 
