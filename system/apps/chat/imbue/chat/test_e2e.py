@@ -635,8 +635,8 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         home_window = _the_chat_window(server)["id"]
 
         page.locator("[data-desktops-menu]").click()
-        expect(page.locator('[data-floating="desktops-menu"]')).to_be_visible(timeout=5000)
-        page.locator('[data-menu-item="new-desktop"]').click()
+        expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
+        page.locator('[data-menu-row="new-desktop"]').click()
         wait_for(lambda: len(_desktops(server)) == 2, timeout=10.0, poll_interval=0.1)
         (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != _HOME_DESKTOP_ID]
         expect(page.locator(f'[data-desktop-id="{created}"]')).to_be_visible(timeout=15000)
@@ -767,8 +767,8 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
 def _open_provider_menu(chat: FrameLocator) -> None:
     """Open the composer's model card and its provider menu."""
     chat.locator(".model-selector-trigger").click()
-    chat.locator('[data-card-row="providers"]').click()
-    expect(chat.locator('[data-model-popover="flyout"]')).to_be_visible()
+    chat.locator('[data-menu-row="providers"]').click()
+    expect(chat.locator('[data-menu-part="submenu"]')).to_be_visible()
 
 
 def _choose_pending_account(chat: FrameLocator, provider: str, label: str) -> None:
@@ -778,7 +778,7 @@ def _choose_pending_account(chat: FrameLocator, provider: str, label: str) -> No
     the strip above the composer then names the account by its composed label.
     """
     _open_provider_menu(chat)
-    chat.locator('[data-model-popover="flyout"] button', has_text=provider).first.click()
+    chat.locator('[data-menu-part="submenu"] button', has_text=provider).first.click()
     dialog = chat.locator(".modal-card")
     expect(dialog).to_contain_text("Switch to")
     dialog.get_by_role("button", name="Switch this chat").click()
@@ -887,7 +887,7 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list")).to_contain_text("Welcome! What shall we build?")
         _open_provider_menu(chat)
-        chat.locator('[data-model-popover="flyout"] button', has_text="OpenAI").first.click()
+        chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
         # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and the
         # live node reports it while it does.
@@ -912,7 +912,7 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
         assert snapshot is not None and len(snapshot.agent_ids) == 2
         chat.locator(".model-selector-trigger").click()
-        expect(chat.locator('[data-card-row="providers"]')).to_contain_text("OpenAI")
+        expect(chat.locator('[data-menu-row="providers"]')).to_contain_text("OpenAI")
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -956,9 +956,9 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         assert len(snapshot.agent_ids) == 2
         # The provider row follows the new account, and the armed switch is spent.
         chat.locator(".model-selector-trigger").click()
-        provider_row = chat.locator('[data-card-row="providers"]')
+        provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("OpenAI")
-        expect(provider_row).not_to_contain_text("after your next message")
+        expect(provider_row).not_to_contain_text("next message")
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -972,7 +972,7 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
         _open_provider_menu(chat)
-        chat.locator('[data-model-popover="flyout"] button', has_text="Anthropic 2").first.click()
+        chat.locator('[data-menu-part="submenu"] button', has_text="Anthropic 2").first.click()
         # A rebind keeps the agent and its conversation, so nothing asks: the press arms the switch at
         # once. The strip's Change opens the dialog, whose picker starts from the model the agent keeps.
         expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
@@ -1019,9 +1019,9 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         expect(chat.locator("[data-handoff-status]")).to_have_count(0)
         expect(chat.locator(".message-input-cancel-switch-button")).to_have_count(0)
         chat.locator(".model-selector-trigger").click()
-        provider_row = chat.locator('[data-card-row="providers"]')
+        provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Anthropic 2")
-        expect(provider_row).not_to_contain_text("after your next message")
+        expect(provider_row).not_to_contain_text("next message")
 
 
 # A turn that failed on the chat's own credential: Claude Code's stamped login notice.
@@ -1184,6 +1184,6 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         assert settled.active_agent.account_id == server.account_ids[2]
         # The lane picked before the failure is spent too: the next send is an ordinary one.
         chat.locator(".model-selector-trigger").click()
-        provider_row = chat.locator('[data-card-row="providers"]')
+        provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Google")
         expect(provider_row).not_to_contain_text("next:")

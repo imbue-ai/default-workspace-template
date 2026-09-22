@@ -66,14 +66,15 @@ const { fastModeState, fastModeLoads, fastModeChoices } = vi.hoisted(() => ({
   fastModeLoads: [] as string[],
   fastModeChoices: [] as [string, string][],
 }));
-vi.mock("../models/FastMode", () => ({
+// Only the backend-backed half is faked; the words the rows read are the real ones, so what
+// this asserts on is what the menu really says.
+vi.mock("../models/FastMode", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/FastMode")>()),
   getFastModeState: () => fastModeState.state,
   ensureFastModeState: (chatId: string) => {
     fastModeLoads.push(chatId);
     return Promise.resolve(fastModeState.state);
   },
-  fastModeLabel: (state: { mode: string; is_switched: boolean }) =>
-    state.mode === "off" ? "Off" : state.mode === "on" ? "On" : state.is_switched ? "Auto (off now)" : "Auto",
 }));
 vi.mock("./fast-mode-limit", () => ({
   chooseFastMode: (chatId: string, mode: string) => {
@@ -122,12 +123,13 @@ import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, setPendingAccount, setPendingSwitch } from "../models/PendingLane";
-import { ModelBar } from "./ModelBar";
+import { ModelProviderMenu } from "./ModelProviderMenu";
+import * as css from "./modelProviderMenuStyles";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
 
 function render(): void {
-  m.render(ROOT(), m(ModelBar as never, { chatId: "a1" }));
+  m.render(ROOT(), m(ModelProviderMenu as never, { chatId: "a1" }));
 }
 
 /** Everything on screen, card and flyout included -- both portal out of the component. */
@@ -139,6 +141,16 @@ function click(selector: string): void {
   const node = document.querySelector<HTMLElement>(selector);
   if (node === null) throw new Error(`no ${selector} on screen`);
   node.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  render();
+}
+
+/** Take the pointer off the open submenu and wait out the menu's leave grace. Needs fake timers,
+ *  and overshoots the shared menu's own grace constant rather than restating it. */
+function leaveSubmenu(): void {
+  const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
+  if (submenu === null) throw new Error("no submenu to leave");
+  submenu.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+  vi.advanceTimersByTime(1000);
   render();
 }
 
@@ -170,6 +182,13 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
     popups: [],
     ...overrides,
   };
+}
+
+/** Put the chat on a model that supports fast mode, so the menu offers its Fast Mode row. */
+function withFastModel(): void {
+  const model = { ...OPUS, supports_fast: true };
+  catalogState.catalog = catalogOf({ options: [model] });
+  settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
 }
 
 afterEach(() => {
@@ -251,15 +270,15 @@ describe("the combo card", () => {
     catalogState.catalog = catalogOf({ switch_mode: "read_only" });
     render();
     click(".model-selector-trigger");
-    const modelRow = document.querySelector<HTMLElement>('[data-card-row="model"]')!;
+    const modelRow = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
     expect(hoverTooltipText(modelRow)).toContain("run /model or /effort");
 
     catalogState.catalog = catalogOf();
     render();
-    // The card stays open and mithril patches the row rather than replacing it, so the row
-    // keeps whatever its first render attached.
-    expect(document.querySelector('[data-card-row="model"]')).toBe(modelRow);
-    expect(hoverTooltipText(modelRow)).toBeNull();
+    // The read-only value row gives way to the interactive submenu row; whatever element
+    // stands in the slot now must explain nothing.
+    const switched = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
+    expect(hoverTooltipText(switched)).toBeNull();
   });
 
   it("renders an effort slider only when there is more than one stop", () => {
@@ -350,7 +369,7 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
     if (slider === null) throw new Error("no slider");
-    const row = (): string => document.querySelector('[data-card-row="effort"]')?.textContent ?? "";
+    const row = (): string => document.querySelector('[data-menu-row="effort"]')?.textContent ?? "";
     expect(row()).toContain("Low");
 
     slider.value = "1";
@@ -389,7 +408,7 @@ describe("the combo card", () => {
     slider.dispatchEvent(new Event("change", { bubbles: true }));
     render();
     expect(picks).toHaveLength(1);
-    expect(document.querySelector('[data-card-row="effort"]')?.textContent).toContain("Low");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Low");
   });
 
   it("keeps naming a hidden level while the thumb sits at the far left", () => {
@@ -410,20 +429,47 @@ describe("the combo card", () => {
     };
     render();
     click(".model-selector-trigger");
-    expect(document.querySelector('[data-card-row="effort"]')?.textContent).toContain("Ultra");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
+  it("colours each tick for the part of the track it is drawn on", () => {
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "medium", in_picker: true },
+      { level: "high", in_picker: true },
+      { level: "xhigh", in_picker: true },
+    ];
+    const model = { ...OPUS, efforts };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "high", fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider");
+    // The wrap holds the tick layer and the input; the thumb's own stop (index 2) is not drawn.
+    const ticks = [...(slider.parentElement?.firstElementChild?.children ?? [])];
+    expect(ticks.map((tick) => tick.className)).toEqual([
+      css.SLIDER_TICK_ON_FILL,
+      css.SLIDER_TICK_ON_FILL,
+      css.SLIDER_TICK_ON_TRACK,
+    ]);
   });
 
   it("hands a press on another harness's account to the switch dialog, and takes an armed choice back on a second press", () => {
     // The dialog (or, for a chat with no user turn, an immediate switch) decides what happens;
-    // the card itself arms nothing and closes so the dialog has the screen.
+    // the menu itself arms nothing and closes so the dialog has the screen.
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", label: "Google (Antigravity CLI)" },
     ];
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
     expect(rows).toHaveLength(1);
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -431,16 +477,16 @@ describe("the combo card", () => {
     expect(begun).toEqual(["acct-2"]);
     expect(getPendingAccountId("a1")).toBeNull();
     expect(started).toEqual([]);
-    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
-    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
 
     // Armed (what the dialog's "Switch this chat" does), the row wears its badge and pressing it
     // again takes the choice back without a second dialog.
     setPendingAccount("a1", "acct-2");
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
-    const flyout = document.querySelector('[data-model-popover="flyout"]');
+    click('[data-menu-row="providers"]');
+    const flyout = document.querySelector('[data-menu-part="submenu"]');
     const badged = [...(flyout?.querySelectorAll("button") ?? [])].find((b) =>
       (b.textContent ?? "").includes("Google"),
     );
@@ -452,15 +498,15 @@ describe("the combo card", () => {
 
     // So does pressing the account the chat already runs on: staying put is the choice then.
     setPendingAccount("a1", "acct-2");
-    click('[data-card-row="providers"]');
-    const own = [...document.querySelectorAll('[data-model-popover="flyout"] button')].find((b) =>
+    click('[data-menu-row="providers"]');
+    const own = [...document.querySelectorAll('[data-menu-part="submenu"] button')].find((b) =>
       (b.textContent ?? "").includes("Anthropic"),
     );
     if (own === undefined) throw new Error("no row for the chat's own account");
     own.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
     expect(getPendingAccountId("a1")).toBeNull();
-    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
     expect(started).toEqual([]);
   });
 
@@ -471,14 +517,14 @@ describe("the combo card", () => {
     ];
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Anthropic 2"));
     expect(rows).toHaveLength(1);
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
     expect(begun).toEqual(["acct-2"]);
     expect(started).toEqual([]);
-    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("reads as the target while a switch is armed, and its Model row reopens the dialog", () => {
@@ -518,15 +564,15 @@ describe("the combo card", () => {
     expect(ROOT().textContent).toContain("next");
     expect(ROOT().textContent).not.toContain("Opus");
     click(".model-selector-trigger");
-    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("Google");
-    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
-    expect(document.querySelector('[data-card-row="model"]')?.textContent).toContain("Gemini · High");
+    expect(document.querySelector('[data-menu-row="providers"]')?.textContent).toContain("Google");
+    expect(document.querySelector('[data-menu-row="providers"]')?.textContent).toContain("next message");
+    expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("Gemini · High");
     // The current agent's effort and fast rows are not the target's: they are not offered.
-    expect(document.querySelector('[data-card-row="effort"]')).toBeNull();
-    expect(document.querySelector('[data-model-popover="card"]')?.textContent).not.toContain("Fast Mode");
-    click('[data-card-row="model"]');
+    expect(document.querySelector('[data-menu-row="effort"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')?.textContent).not.toContain("Fast Mode");
+    click('[data-menu-row="model"] button');
     expect(reopened).toEqual(["acct-2"]);
-    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
   it("reads an armed rebind as the agent's own model, with a Model row that opens the dialog to pick another", () => {
@@ -538,9 +584,9 @@ describe("the combo card", () => {
     expect(ROOT().textContent).toContain("Opus");
     expect(ROOT().textContent).toContain("next");
     click(".model-selector-trigger");
-    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain("after your next message");
-    expect(document.querySelector('[data-card-row="model"]')?.textContent).toContain("Opus");
-    click('[data-card-row="model"]');
+    expect(document.querySelector('[data-menu-row="providers"]')?.textContent).toContain("next message");
+    expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("Opus");
+    click('[data-menu-row="model"] button');
     expect(reopened).toEqual(["acct-2"]);
 
     setPendingSwitch("a1", "acct-2", {
@@ -607,7 +653,7 @@ describe("the combo card", () => {
     providerState.defaultId = "acct-1";
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     const pinned = document.querySelector('[aria-label="Stop opening new chats on Anthropic by default"]');
     expect(pinned?.getAttribute("aria-pressed")).toBe("true");
     const other = document.querySelector<HTMLElement>('[aria-label="Open new chats on Google by default"]');
@@ -625,7 +671,7 @@ describe("the combo card", () => {
     // too often be someone finding out what it was.
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     expect(screenText()).not.toContain("Remove account");
     click('[aria-label="Sign out of Anthropic"]');
     expect(screenText()).toContain("Remove account");
@@ -633,7 +679,7 @@ describe("the combo card", () => {
     // Closing and reopening must not leave the confirmation up.
     click(".model-selector-trigger");
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     expect(screenText()).not.toContain("Remove account");
   });
 
@@ -658,13 +704,11 @@ describe("the combo card", () => {
     expect(trigger.querySelector("svg")).not.toBeNull();
   });
 
-  it("states the chat's fast mode on the fast row and opens the chooser from it", () => {
+  it("states the chat's fast mode on the fast row and picks another from its submenu", () => {
     // The row says which of the three modes the chat is in rather than showing a switch, since
-    // auto is neither on nor off; pressing it closes the card and opens the chooser modal, where
-    // the modes are picked and auto's turn limit lives.
-    const model = { ...OPUS, supports_fast: true };
-    catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    // auto is neither on nor off; the submenu is where the modes are picked and auto's turn
+    // limit lives.
+    withFastModel();
     chatSettingsState.settings = {
       fast_mode_default: "auto",
       fast_mode_turn_limit: 3,
@@ -673,36 +717,137 @@ describe("the combo card", () => {
     fastModeState.state = { mode: "auto", is_switched: true };
     render();
     click(".model-selector-trigger");
-    const row = document.querySelector<HTMLElement>('[data-card-row="fast"]');
+    const row = document.querySelector<HTMLElement>('[data-menu-row="fast"]');
     if (row === null) throw new Error("no fast row");
     expect(row.textContent).toContain("Fast Mode");
     expect(row.textContent).toContain("Auto (off now)");
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
-    click('[data-card-row="fast"]');
-    const modal = document.querySelector<HTMLElement>('[data-e2e="fast-mode-modal"]');
-    if (modal === null) throw new Error("no fast-mode modal");
-    expect(document.querySelector('[data-card-row="fast"]')).toBeNull();
-    expect(modal.querySelector('[data-fast-mode="auto"]')?.getAttribute("aria-checked")).toBe("true");
-    expect(modal.textContent).toContain("Fast for the first 3 turns, then standard speed.");
-    const limit = modal.querySelector<HTMLInputElement>(".fast-limit-input");
-    if (limit === null) throw new Error("no turn-limit field under Auto");
-    expect(limit.value).toBe("3");
+    click('[data-menu-row="fast"]');
+    const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
+    if (submenu === null) throw new Error("no fast-mode submenu");
+    expect(submenu.querySelector('[data-fast-mode="auto"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(submenu.querySelector('[data-fast-mode="on"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain(
+      "Fast for the first 3 turns, then standard",
+    );
+    expect(submenu.querySelector('[data-fast-mode="auto"]')?.textContent).toContain("(off now)");
 
+    click('[data-fast-mode="auto"]');
+    expect(fastModeChoices).toEqual([]);
     click('[data-fast-mode="on"]');
     expect(fastModeChoices).toEqual([["a1", "on"]]);
-    click(".fast-mode-done");
-    expect(document.querySelector('[data-e2e="fast-mode-modal"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
+  });
+
+  it("offers auto's turn limit only under auto, and writes a changed one to the settings", () => {
+    withFastModel();
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const limit = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (limit === null) throw new Error("no turn-limit field under Auto");
+    expect(limit.value).toBe("5");
+
+    limit.value = "2";
+    limit.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+    // The field keeps what is being typed across the redraws every keystroke causes.
+    expect(limit.value).toBe("2");
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(settingsWrites).toEqual([
+      { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
+    ]);
+
+    // An emptied field or a zero is not a limit.
+    limit.value = "";
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    limit.value = "0";
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(settingsWrites).toHaveLength(1);
+
+    // The limit belongs to auto: no other mode runs to one.
+    fastModeState.state = { mode: "on", is_switched: false };
+    render();
+    expect(document.querySelector(".fast-limit-input")).toBeNull();
+  });
+
+  it("holds the fast submenu open while a limit is half typed, and lets it go once there is none", () => {
+    vi.useFakeTimers();
+    withFastModel();
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const limit = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (limit === null) throw new Error("no turn-limit field under Auto");
+    limit.value = "12";
+    limit.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+
+    leaveSubmenu();
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+
+    // Filed, so there is nothing left to lose and the drift closes it again.
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    render();
+    leaveSubmenu();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+
+    // A pick that takes the field away abandons the half-typed number with it, without relying
+    // on the field's own blur.
+    click('[data-menu-row="fast"]');
+    const retyped = document.querySelector<HTMLInputElement>(".fast-limit-input");
+    if (retyped === null) throw new Error("no turn-limit field under Auto");
+    retyped.value = "12";
+    retyped.dispatchEvent(new Event("input", { bubbles: true }));
+    render();
+    click('[data-fast-mode="on"]');
+    fastModeState.state = { mode: "on", is_switched: false };
+    render();
+    expect(document.querySelector(".fast-limit-input")).toBeNull();
+    leaveSubmenu();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+  });
+
+  it("makes the chat's mode the one new chats start in, and says when it already is", () => {
+    withFastModel();
+    fastModeState.state = { mode: "on", is_switched: false };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="fast"]');
+    const row = document.querySelector<HTMLElement>(".fast-mode-default");
+    expect(row?.textContent).toContain("Use On for new chats");
+    const toggle = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
+    if (toggle === null) throw new Error("no default toggle");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.disabled).toBe(false);
+    click("[data-fast-mode-default]");
+    expect(settingsWrites).toEqual([
+      { fast_mode_default: "on", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false },
+    ]);
+
+    // Auto is the settings' default, so its toggle is on and has nothing left to do -- but it is
+    // NOT natively disabled, which would fade the setting out at the moment it reads as set.
+    fastModeState.state = { mode: "auto", is_switched: false };
+    render();
+    expect(document.querySelector(".fast-mode-default")?.textContent).toContain("Use Auto for new chats");
+    const already = document.querySelector<HTMLButtonElement>("[data-fast-mode-default]");
+    if (already === null) throw new Error("no default toggle");
+    expect(already.getAttribute("aria-checked")).toBe("true");
+    expect(already.getAttribute("aria-disabled")).toBe("true");
+    expect(already.disabled).toBe(false);
+    expect(already.className).not.toContain("cursor-pointer");
+    click("[data-fast-mode-default]");
+    expect(settingsWrites).toHaveLength(1);
   });
 
   it("asks for the chat's fast mode and shows the row unresolved until it is known", () => {
-    const model = { ...OPUS, supports_fast: true };
-    catalogState.catalog = catalogOf({ options: [model] });
-    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: true }, matched: model, pending: null };
+    withFastModel();
     fastModeState.state = null;
     render();
     click(".model-selector-trigger");
-    const row = document.querySelector<HTMLElement>('[data-card-row="fast"]');
+    const row = document.querySelector<HTMLElement>('[data-menu-row="fast"]');
     if (row === null) throw new Error("no fast row");
     expect(row.textContent).toContain("...");
     expect(fastModeLoads).toContain("a1");
@@ -714,9 +859,9 @@ describe("the combo card", () => {
     catalogState.catalog = catalogOf({ switch_mode: "read_only" });
     render();
     click(".model-selector-trigger");
-    expect(document.querySelector('[data-card-row="model"]')?.querySelector("svg")).toBeNull();
-    click('[data-card-row="model"]');
-    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-menu-row="model"]')?.querySelector("svg")).toBeNull();
+    click('[data-menu-row="model"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("survives a dynamic harness with no static options", () => {
