@@ -160,6 +160,20 @@ def test_a_caller_that_is_not_an_agent_is_refused_before_anything_starts(
     assert not (tmp_path / "data").exists()
 
 
+def test_help_is_shown_without_a_command_while_a_missing_command_is_named(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as help_exit:
+        run_in_background.main(["--help"])
+    assert help_exit.value.code == 0
+    assert "--description" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as usage_exit:
+        run_in_background.main(["--description", "Say hello", "echo", "hello"])
+    assert usage_exit.value.code == 2
+    assert "put the command after a `--`" in capsys.readouterr().err
+
+
 def test_a_tree_without_the_chat_messenger_delivers_through_mngr_message(
     tmp_path: Path,
 ) -> None:

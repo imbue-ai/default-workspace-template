@@ -305,6 +305,8 @@ def main(
     parser = _build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw_argv:
+        # Let --help, and a missing --description, answer for themselves first.
+        parser.parse_known_args(raw_argv)
         parser.error("put the command after a `--`")
     separator_index = raw_argv.index("--")
     args = parser.parse_args(raw_argv[:separator_index])
