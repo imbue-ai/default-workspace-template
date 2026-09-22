@@ -1,0 +1,1 @@
+- Bump the Latchkey CLI installed inside workspaces (`LATCHKEY_VERSION` in `system/scripts/setup_system.sh`) from 3.9.0 to 3.15.0, the version the minds app bundles and installs on remote hosts.

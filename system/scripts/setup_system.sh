@@ -55,7 +55,7 @@ provision_drop_inherited_pins
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.9.0}"
+: "${LATCHKEY_VERSION:=3.15.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Shared curl flags for the pinned-binary downloads below. --retry-all-errors
