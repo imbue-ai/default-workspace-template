@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
@@ -33,19 +34,19 @@ def test_offered_options_carry_suffix_free_reported_ids() -> None:
     reported = {option.id: option.harness_reported_model_id for option in CLAUDE_CATALOG.options if option.in_picker}
     assert reported == {
         "fable[1m]": "claude-fable-5-1",
-        "opus[1m]": "claude-opus-5",
+        "opus[1m]": "claude-opus-5-5",
         "sonnet[1m]": "claude-sonnet-5",
         "haiku": "claude-haiku-4-5",
     }
 
 
 def test_picker_offers_exactly_four_models() -> None:
-    # Fable 5.1, Opus 5, Sonnet 5, Haiku 4.5 -- in the order claude 2.1.269's own /model
+    # Fable 5.1, Opus 5.5, Sonnet 5, Haiku 4.5 -- in the order claude 2.1.280's own /model
     # picker ranks them. Everything else in the catalog is display-only.
     offered = [(option.id, option.label) for option in CLAUDE_CATALOG.options if option.in_picker]
     assert offered == [
         ("fable[1m]", "Fable 5.1"),
-        ("opus[1m]", "Opus 5"),
+        ("opus[1m]", "Opus 5.5"),
         ("sonnet[1m]", "Sonnet 5"),
         ("haiku", "Haiku 4.5"),
     ]
@@ -53,15 +54,16 @@ def test_picker_offers_exactly_four_models() -> None:
 
 def test_hidden_options_are_the_models_the_picker_cannot_reach() -> None:
     # The hidden set is defined by what the four offered models do NOT match: an agent
-    # sitting on one of these (a chat still on the previous Fable, an approved org on
-    # Mythos, or a user who typed /model opus-4-8 into the underlying session) still shows
-    # a name instead of shrugging.
+    # sitting on one of these (a chat still on the previous Opus or Fable, an approved org
+    # on Mythos, or a user who typed /model opus-4-8 into the underlying session) still
+    # shows a name instead of shrugging.
     hidden = [option.id for option in CLAUDE_CATALOG.options if not option.in_picker]
     assert hidden == [
         "claude-fable-5",
         "claude-mythos-5-1",
         "claude-mythos-5",
         "claude-mythos-preview",
+        "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
@@ -95,12 +97,13 @@ def test_no_catalog_key_shadows_another_in_the_prefix_pass() -> None:
 
 
 def test_fast_mode_follows_the_binary_not_model_rank() -> None:
-    # Claude 2.1.269 scopes fast mode to "Opus 5/4.8": 4.7 and 4.6 had it removed, and
-    # Fable does not have it at all despite outranking Opus in capability. supports_fast
-    # also gates matching -- an agent on Opus 4.8 with fast on shrugs without the flag --
-    # so this is not a cosmetic field on the hidden entries.
+    # Claude 2.1.280's baked-in catalog gives fast_mode to Opus 5.5, Opus 5 and Opus 4.8:
+    # 4.7 and 4.6 had it removed, and Fable does not have it at all despite outranking Opus
+    # in capability. resolve_model_choice drops a live read's fast flag on a model that does
+    # not declare it, so a missing flag here shows fast off on a session that is running --
+    # and billing -- fast. Not a cosmetic field on the hidden entries.
     fast = [option.id for option in CLAUDE_CATALOG.options if option.supports_fast]
-    assert fast == ["opus[1m]", "claude-opus-4-8"]
+    assert fast == ["opus[1m]", "claude-opus-5", "claude-opus-4-8"]
 
 
 def test_every_option_declares_the_full_effort_set() -> None:
@@ -114,7 +117,89 @@ def test_every_option_declares_the_full_effort_set() -> None:
         assert {choice.level for choice in option.efforts} == declared
 
 
-# Every claude model id the pinned 2.1.269 binary carries, extracted from its strings
+# Claude Code carries its own model table -- a JS object literal its source calls the
+# "hand-maintained baked-in model catalog ... the source of truth for per-model provider IDs
+# and metadata" -- so the display name, the fast-mode capability and the alias targets do not
+# have to be inferred from release notes. The fixture beside this file is the id / family /
+# display_name / capabilities of every entry in it plus the alias table, lifted from the pinned
+# 2.1.280 executable. The table sits on a single JS line, found by:
+#
+#     strings -n 4 claude | grep "Hand-maintained baked-in model catalog"
+#
+# Slice the `var <name>={...}` object out of that line, then in node reduce it to
+# models -> {id, family, display_name, capabilities} and aliases -> alias.default.
+#
+# Regenerate it whenever CLAUDE_CODE_VERSION moves. Everything below reads it rather than
+# restating it: the module docstring's warning about never hand-copying the catalog applies to
+# this file too.
+_BAKED_CATALOG_FIXTURE = Path(__file__).parent / "baked_model_catalog_v2_1_280.json"
+
+
+def _baked_catalog() -> dict[str, Any]:
+    return json.loads(_BAKED_CATALOG_FIXTURE.read_text())
+
+
+def _baked_entry_by_id() -> dict[str, dict[str, Any]]:
+    return {entry["id"]: entry for entry in _baked_catalog()["models"]}
+
+
+def test_offered_options_track_the_binarys_alias_table() -> None:
+    # The upgrade bug this guards: a pin bump repoints an alias (2.1.280 moved `opus` from
+    # claude-opus-5 to claude-opus-5-5) while the catalog keeps the old reported id, so the
+    # picker offers a switch that lands on a model the entry does not describe. Every offered
+    # option switches with an alias, so its reported id must be exactly what the binary says
+    # that alias resolves to.
+    aliases = _baked_catalog()["aliases"]
+    resolved = {
+        option.id: aliases[option.id.removesuffix("[1m]")] for option in CLAUDE_CATALOG.options if option.in_picker
+    }
+    assert resolved == {
+        option.id: option.harness_reported_model_id for option in CLAUDE_CATALOG.options if option.in_picker
+    }
+
+
+def test_every_option_label_is_the_binarys_display_name() -> None:
+    # A label is what the user reads in the model bar, and the binary names each model in its
+    # own `/model` picker from display_name -- so the two disagreeing means the chat calls a
+    # model something claude does not. Only options whose key IS a catalog entry are checked:
+    # the family catch-alls (claude-opus-4) are prefixes invented here to absorb dated ids and
+    # deliberately have no entry of their own.
+    entries = _baked_entry_by_id()
+    for option in CLAUDE_CATALOG.options:
+        key = option.harness_reported_model_id or option.id
+        if key in entries:
+            assert option.label == entries[key]["display_name"], (
+                f"{key} is {entries[key]['display_name']!r} in the binary"
+            )
+
+
+def test_supports_fast_is_the_binarys_fast_mode_capability() -> None:
+    # supports_fast gates MATCHING, not just rendering: an agent on a model with fast on shrugs
+    # unless that model declares it, and offering fast on a model that does not have it sends a
+    # /fast the session rejects. Either way the answer is in the binary's capability list, so
+    # take it from there rather than from the release notes' prose.
+    entries = _baked_entry_by_id()
+    for option in CLAUDE_CATALOG.options:
+        key = option.harness_reported_model_id or option.id
+        if key in entries:
+            assert option.supports_fast == ("fast_mode" in entries[key]["capabilities"]), key
+
+
+def test_no_baked_catalog_model_is_missing_from_the_catalog() -> None:
+    # Completeness the other way round from test_every_binary_model_id_resolves: every model the
+    # binary knows must reach an option, so a release that adds one (as 2.1.280 added Opus 5.5)
+    # fails here until the catalog carries it.
+    unresolved = [
+        entry["id"]
+        for entry in _baked_catalog()["models"]
+        if match_option(ModelIdentity(model_id=entry["id"], effort="high", fast=False), CLAUDE_CATALOG.options) is None
+    ]
+    # The pre-4 ids claude spells the other way round (claude-3-5-haiku) are the binary's own
+    # legacy naming and are matched by the explicitly-spelled claude-haiku-3-5 form instead.
+    assert unresolved == ["claude-3-5-haiku", "claude-3-5-sonnet", "claude-3-7-sonnet"]
+
+
+# Every claude model id the pinned 2.1.280 binary carries, extracted from its strings
 # rather than transcribed from docs:
 #
 #     strings -n 8 claude | grep -oE "claude-(opus|sonnet|haiku|fable|mythos)[a-z0-9._-]*(\\[[12]m\\])?"
@@ -153,6 +238,8 @@ _BINARY_MODEL_IDS: tuple[str, ...] = (
     "claude-opus-4-8",
     "claude-opus-4-8[1m]",
     "claude-opus-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5[1m]",
     "claude-opus-5[1m]",
     "claude-sonnet-3-7",
     "claude-sonnet-4",
@@ -195,21 +282,27 @@ def test_binary_model_ids_resolve_to_their_own_family() -> None:
 
 
 def test_live_statusline_model_ids_match_their_catalog_option() -> None:
-    # The model ids claude 2.1.227's statusline actually reports, captured from a live
-    # binary launched exactly as the workspace launches it (settings.json model="opus[1m]",
-    # then /model sonnet, /model haiku). None of them is a bare catalog key any more: opus
-    # and sonnet keep their [1m] launch suffix and haiku reports a dated id, so all three
-    # reach their option through match_option's prefix pass rather than an exact key hit.
-    # claude-sonnet-5[1m] and the two Fable 5.1 ids are NOT captured live -- they are what
-    # the sonnet[1m] and fable[1m] switches must report given the [1m] suffix survives into
-    # opus's reported id (2.1.269 resolves the fable alias to claude-fable-5-1), and are
-    # pinned so the prefix pass is exercised for them too. The Fable 5 ids stay because a
-    # chat created on the previous pin still reports them.
+    # The model ids a live claude statusline actually reports, captured from a binary
+    # launched exactly as the workspace launches it (settings.json model="opus[1m]", then
+    # /model sonnet, /model haiku). None of them is a bare catalog key any more: opus and
+    # sonnet keep their [1m] launch suffix and haiku reports a dated id, so all three reach
+    # their option through match_option's prefix pass rather than an exact key hit.
+    # claude-opus-5-5[1m] is the 2.1.280 capture -- its `opus` alias resolves to Opus 5.5 --
+    # and it sits next to claude-opus-5[1m] because that pair is the shadowing trap this
+    # catalog is ordered against: claude-opus-5 prefixes claude-opus-5-5, so a catalog that
+    # put the older key first would label every Opus 5.5 read "Opus 5". claude-sonnet-5[1m]
+    # and the two Fable 5.1 ids are NOT captured live -- they are what the sonnet[1m] and
+    # fable[1m] switches must report given the [1m] suffix survives into opus's reported id,
+    # and are pinned so the prefix pass is exercised for them too. The Opus 5 and Fable 5 ids
+    # stay because a chat created on a previous pin still reports them.
     for reported_id, expected_label in (
         ("claude-fable-5-1", "Fable 5.1"),
         ("claude-fable-5-1[1m]", "Fable 5.1"),
         ("claude-fable-5", "Fable 5"),
         ("claude-fable-5[1m]", "Fable 5"),
+        ("claude-opus-5-5", "Opus 5.5"),
+        ("claude-opus-5-5[1m]", "Opus 5.5"),
+        ("claude-opus-5", "Opus 5"),
         ("claude-opus-5[1m]", "Opus 5"),
         ("claude-sonnet-5", "Sonnet 5"),
         ("claude-sonnet-5[1m]", "Sonnet 5"),
