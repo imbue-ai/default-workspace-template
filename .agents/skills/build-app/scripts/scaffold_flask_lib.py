@@ -497,13 +497,22 @@ env = {{{package_upper}_PORT = "{{port:main}}", {package_upper}_HOST = "{{host}}
 copies = {{data = "data/.apps/{name}"}}
 """
 
+# ``startsecs``/``startretries`` bound a crash loop, and are why a user app's
+# block differs from a built-in service's (which retries forever, by design: the
+# workspace is unusable without them). An app that dies before it has been up
+# ``startsecs`` counts as a failed start, so supervisord backs off and gives up
+# in FATAL after ``startretries`` instead of restarting it at full speed for as
+# long as the workspace lives. Without this a broken app restarts a few times a
+# second forever, and every restart re-registers it (measured on a real
+# workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
 command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
-startretries=1000000
+startsecs=30
+startretries=5
 stopasgroup=true
 killasgroup=true
 stdout_logfile=/var/log/supervisor/{name}-stdout.log

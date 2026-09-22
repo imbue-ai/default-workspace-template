@@ -316,3 +316,10 @@ The chat app re-tags chat agents' `oom_score_adj` from live activity
 path, and keeps each chat's last-messaged stamp under `data/.apps/chat/` so a
 restart seeds the ranking from real history. The app itself runs in the `chat`
 band, just above the shell.
+
+It also keeps its own footprint down. Folding the agent stream is a continuous
+churn of short-lived allocations, and glibc keeps the freed pages in the
+per-thread arena they came from, so a long-lived chat app's RSS tracks the
+high-water mark of every arena at once rather than what it holds. The program's
+supervisord entry caps the arena count with `MALLOC_ARENA_MAX` so that
+high-water mark is summed over fewer arenas.
