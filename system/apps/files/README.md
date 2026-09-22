@@ -5,20 +5,19 @@ supervised as the `files` program declared in
 `system/supervisord.conf.d/files.conf`. There is no Python package here: the
 program line registers `app.toml` and the dufs port 8300 through
 `system/scripts/forward_port.py`, then runs
-`dufs --allow-all --bind 127.0.0.1 --port 8300 --assets system/apps/files/assets data`.
+`dufs --allow-all --bind 127.0.0.1 --port 8300 --assets system/apps/files/assets .`.
 
 The server is [dufs](https://github.com/sigoden/dufs), a single static binary
 installed at image build by `system/scripts/install_dufs.sh` (version and
-per-arch sha256 pinned there). It serves `data/` -- the workspace's user-facing
-file tree -- bound to loopback with all operations enabled (browse, preview,
+per-arch sha256 pinned there). It serves the workspace root -- including `data/`, documents, and app and skill files -- bound to loopback with all operations enabled (browse, preview,
 upload, rename, delete): the workspace origin is what gates access, exactly as
 for every other registered app.
 
 ## Opening a folder
 
 The manifest's one launch path is `/` with an optional `path` param, so the shell
-opens a file viewer window at `/?path=<folder>` (`layout.py open files --path
-/notes/` is the same thing). dufs ignores the query; the vendored frontend
+opens a file viewer window at `/?path=<workspace-relative-folder>` (`layout.py open files --path
+/data/notes/` is the same thing). dufs ignores the query; the vendored frontend
 takes the frame to the folder itself (see below) and then reports that folder as
 its location, so the window's stored path follows and a reload reopens the
 folder.
@@ -58,3 +57,5 @@ changes, patch or re-vendor alike.
 
 `system/test_app_manifests.py` checks the manifest against the program line, and
 `system/test_supervisord_layout.py` the program block.
+
+Chat file links open a separate File Viewer window at the file's workspace-relative path with `?view`, leaving the conversation in place. Absolute workspace paths and relative links are supported. Files outside the workspace keep the chat's existing download behavior in a separate tab.

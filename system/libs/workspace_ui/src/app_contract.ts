@@ -81,6 +81,8 @@ export interface ShellConnection {
   location(path: string, title: string): void;
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
+  /** Open a page of another registered app beside this one. */
+  openAppPath(app: string, path: string, ifPresent: OpenIfPresent): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -167,6 +169,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
+    openAppPath: (app: string, path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { app, path, ifPresent }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
 }

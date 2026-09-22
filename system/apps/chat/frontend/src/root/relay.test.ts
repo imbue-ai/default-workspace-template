@@ -40,6 +40,10 @@ describe("isForwardedToShell", () => {
 });
 
 describe("rootOpenDecision", () => {
+  it("forwards another app even when its path is the root", () => {
+    expect(rootOpenDecision({ type: "shell:open", app: "files", path: "/" })).toEqual({ kind: "forward" });
+  });
+
   it("selects the chat a root path names, in place", () => {
     expect(rootOpenDecision({ type: "shell:open", path: "/?chat=agent-2", ifPresent: "focus" })).toEqual({
       kind: "select",

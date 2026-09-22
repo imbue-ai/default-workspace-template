@@ -817,11 +817,14 @@ export class DesktopStore {
   }
 
   /** ``shell:open {path, ifPresent}`` from a page: a window of the posting window's own app, on its desktop. */
-  async openPathFromWindow(windowId: string, path: string, ifPresent: IfPresent): Promise<void> {
+  async openPathFromWindow(windowId: string, path: string, ifPresent: IfPresent, app?: string): Promise<void> {
     const found = findWindow(this.state, windowId);
     if (found === null) return;
     if (found.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(found.desktop.id);
-    await this.openWindowAt(found.window.app, path, null, ifPresent);
+    const targetApp = app ?? found.window.app;
+    const target = appByName(this.state, targetApp);
+    if (target === undefined || target.internal) return;
+    await this.openWindowAt(targetApp, path, null, ifPresent);
   }
 
   async closeWindow(windowId: string): Promise<void> {

@@ -377,6 +377,12 @@ describe("opening", () => {
     ]);
   });
 
+  it("opens another app without changing the originating window", async () => {
+    const store = await startedStore();
+    await store.openPathFromWindow("win-2", "/README.md?view", "focus", "docs");
+    expect(api.calls).toContain("openWindow:home:docs:/README.md?view:focus:-");
+  });
+
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
     const store = await startedStore();
     await store.switchDesktop("work");

@@ -93,6 +93,17 @@ def read_host_name() -> str:
     return socket.gethostname()
 
 
+def inject_workspace_roots_meta_tag(html_content: str) -> str:
+    """Name the physical workspace root and its container alias for file links."""
+    workspace = Path(os.environ.get("MNGR_AGENT_WORK_DIR", str(Path.cwd())))
+    roots = list(dict.fromkeys((str(workspace), str(workspace.resolve()), str(Path.cwd()))))
+    # The container exposes this stable alias even when its physical mount differs.
+    container_workspace = Path("/home/user/workspace")
+    if container_workspace.exists() and container_workspace.resolve() == workspace.resolve():
+        roots.append(str(container_workspace))
+    return inject_meta_tag(html_content, "chat-workspace-roots", json.dumps(roots))
+
+
 def inject_hostname_meta_tag(html_content: str) -> str:
     return inject_meta_tag(html_content, HOSTNAME_META_NAME, read_host_name())
 
