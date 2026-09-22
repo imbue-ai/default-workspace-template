@@ -48,6 +48,15 @@ def _item_line(item_type: str) -> dict:
     }
 
 
+def _code_mode_result_line(output: str) -> dict[str, Any]:
+    """A code-mode script's result line for call ``c1``."""
+    return {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": output},
+    }
+
+
 def test_user_bubble_id_is_stable_across_rereads() -> None:
     """The same user message re-read (e.g. a rollout compressed then re-materialised,
     repointing the marker and forcing a re-read from byte 0) must yield the SAME event id so
@@ -318,11 +327,7 @@ def test_command_result_envelopes_preserve_task_titles_and_raw_detail(wrapped: b
         json.dumps({"chunk_id": str(i), "output": output}) if wrapped else output for i, output in enumerate(outputs)
     )
     raw = "Script completed\nWall time 0.2 seconds\nOutput:\n" + text
-    line = {
-        "timestamp": "t",
-        "type": "response_item",
-        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
-    }
+    line = _code_mode_result_line(raw)
     event = parse_lines(line, {"c1": "exec"})[0]
     assert event["tk_stamp"] == "".join(outputs).rstrip()
     assert event["output_chars"] == len(raw)
@@ -340,11 +345,7 @@ def test_command_result_envelopes_preserve_the_filed_permission_request(wrapped:
     stdout = "  % Total    % Received % Xferd  Average Speed\n" + json.dumps(echoed_request, indent=2) + "\n"
     text = json.dumps({"chunk_id": "0", "output": stdout}) if wrapped else stdout
     raw = "Script completed\nWall time 0.4 seconds\nOutput:\n" + text
-    line = {
-        "timestamp": "t",
-        "type": "response_item",
-        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
-    }
+    line = _code_mode_result_line(raw)
     event = parse_lines(line, {"c1": "exec"})[0]
     assert event["permission_request"] == echoed_request
     assert event["output_chars"] == len(raw)
@@ -361,11 +362,7 @@ def test_command_result_envelopes_preserve_the_filed_permission_request(wrapped:
     ],
 )
 def test_unrecognized_output_is_not_unwrapped_into_task_lines(raw: str) -> None:
-    line = {
-        "timestamp": "t",
-        "type": "response_item",
-        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
-    }
+    line = _code_mode_result_line(raw)
     event = parse_lines(line, {"c1": "exec"})[0]
     assert not event.get("tk_stamp", "").startswith("Created ")
 
