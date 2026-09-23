@@ -6,19 +6,21 @@ const state = vi.hoisted(() => ({
   chat: null as unknown,
   accounts: [] as { id: string; harness: string; lane: string }[],
   listeners: [] as ((chats: unknown[]) => void)[],
-  agentListeners: [] as ((chatId: string, previous: string, current: string) => void)[],
 }));
 vi.mock("./Chats", () => ({
   getChatById: () => state.chat ?? undefined,
   addChatsUpdatedListener: (listener: (chats: unknown[]) => void) => state.listeners.push(listener),
-  addActiveAgentChangedListener: (listener: (chatId: string, previous: string, current: string) => void) =>
-    state.agentListeners.push(listener),
 }));
 vi.mock("./Providers", () => ({
   accountForAgent: (id?: string) => state.accounts.find((account) => account.id === id) ?? null,
 }));
+// Every pick handed to the model bar's overlay as the lane gave it up, as (chat id, model id) pairs.
+const shown = vi.hoisted(() => [] as [string, string][]);
+vi.mock("./ModelSettings", () => ({
+  showSwitchChoice: (chatId: string, identity: { model_id: string }) => shown.push([chatId, identity.model_id]),
+}));
 
-import { chatSnapshotFixture } from "./chatSnapshotFixture";
+import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "./chatSnapshotFixture";
 import type { ProviderAccount } from "./Providers";
 import {
   getPendingAccountId,
@@ -30,6 +32,20 @@ import {
   switchKind,
   trackPendingLaneSettlement,
 } from "./PendingLane";
+
+const HAIKU = {
+  id: "haiku",
+  label: "Haiku 4.5",
+  efforts: [{ level: "low", in_picker: true }],
+  supports_fast: false,
+  in_picker: true,
+  harness_reported_model_id: "claude-haiku-4-5",
+};
+const HAIKU_PICK = {
+  identity: { model_id: "haiku", effort: "low", fast: false },
+  label: "Haiku 4.5 · Low",
+  option: HAIKU,
+};
 
 const OWN_ACCOUNT = { id: "acct-anthropic", harness: "claude", lane: "anthropic" };
 const CODEX_ACCOUNT = { id: "acct-openai", harness: "codex", lane: "openai" };
@@ -43,7 +59,7 @@ describe("the pending lane", () => {
     state.chat = chatSnapshotFixture("agent-1", { active_agent: { harness: "claude", account_id: "acct-anthropic" } });
     state.accounts = [OWN_ACCOUNT, CODEX_ACCOUNT, OTHER_CLAUDE_ACCOUNT, OPENROUTER_ACCOUNT, OPENCODE_GO_ACCOUNT];
     state.listeners.length = 0;
-    state.agentListeners.length = 0;
+    shown.length = 0;
     setPendingAccount("agent-1", null);
   });
 
@@ -56,7 +72,11 @@ describe("the pending lane", () => {
   });
 
   it("carries the model picked for the switch, which goes with the account it was picked for", () => {
-    const pick = { identity: { model_id: "gpt-6-astra", effort: "high", fast: false }, label: "GPT-6 Astra · High" };
+    const pick = {
+      identity: { model_id: "gpt-6-astra", effort: "high", fast: false },
+      label: "GPT-6 Astra · High",
+      option: { ...HAIKU, id: "gpt-6-astra", label: "GPT-6 Astra" },
+    };
     setPendingSwitch("agent-1", "acct-openai", pick);
     expect(getPendingAccountId("agent-1")).toBe("acct-openai");
     expect(getPendingPick("agent-1")).toEqual(pick);
@@ -128,15 +148,84 @@ describe("the pending lane", () => {
     expect(getPendingAccountId("agent-1")).toBeNull();
   });
 
+  it("holds the choice through a rebind, which carries the target account long before the picked model", () => {
+    // The rebind relabels the agent with the target account partway through its restart -- before
+    // the agent is started, let alone put on the pick. Reading that as settled drops the pick into
+    // the middle of the switch, where the live choice is still the account the chat is leaving.
+    trackPendingLaneSettlement();
+    setPendingSwitch("agent-1", OTHER_CLAUDE_ACCOUNT.id, HAIKU_PICK);
+    const [listener] = state.listeners;
+    const relabelled = {
+      active_agent: { harness: "claude", account_id: OTHER_CLAUDE_ACCOUNT.id },
+      handoff: rebindStateFixture({ phase: "restarting" }),
+    };
+    listener([chatSnapshotFixture("agent-1", relabelled)]);
+    expect(getPendingAccountId("agent-1")).toBe(OTHER_CLAUDE_ACCOUNT.id);
+    expect(getPendingPick("agent-1")).toEqual(HAIKU_PICK);
+    expect(shown).toEqual([]);
+
+    // Only once the rebind is over, and then the bar goes on showing the pick until the harness
+    // reports it.
+    listener([
+      chatSnapshotFixture("agent-1", { active_agent: { harness: "claude", account_id: OTHER_CLAUDE_ACCOUNT.id } }),
+    ]);
+    expect(getPendingAccountId("agent-1")).toBeNull();
+    expect(shown).toEqual([["agent-1", "haiku"]]);
+  });
+
+  it("holds the choice through a handoff, whose successor is the chat's agent before it takes the pick", () => {
+    trackPendingLaneSettlement();
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "claude", account_id: "acct-anthropic" },
+    });
+    setPendingSwitch("agent-1", "acct-openai", HAIKU_PICK);
+    const [listener] = state.listeners;
+    const adopted = {
+      active_agent: { agent_id: "successor", harness: "codex", account_id: "acct-openai" },
+      handoff: handoffStateFixture({ phase: "switching" }),
+    };
+    listener([chatSnapshotFixture("agent-1", adopted)]);
+    expect(getPendingAccountId("agent-1")).toBe("acct-openai");
+    expect(shown).toEqual([]);
+
+    listener([
+      chatSnapshotFixture("agent-1", {
+        active_agent: { agent_id: "successor", harness: "codex", account_id: "acct-openai" },
+      }),
+    ]);
+    expect(getPendingAccountId("agent-1")).toBeNull();
+    expect(shown).toEqual([["agent-1", "haiku"]]);
+  });
+
+  it("gives the choice up on a failed switch, and carries its pick nowhere", () => {
+    // The failure notice governs from there. The pick was never applied -- a switch fails either
+    // before its agent is up or on the pick itself -- so the bar stays on the agent's real model.
+    trackPendingLaneSettlement();
+    setPendingSwitch("agent-1", OTHER_CLAUDE_ACCOUNT.id, HAIKU_PICK);
+    const [listener] = state.listeners;
+    listener([
+      chatSnapshotFixture("agent-1", {
+        active_agent: { harness: "claude", account_id: OTHER_CLAUDE_ACCOUNT.id },
+        handoff: rebindStateFixture({ phase: "failed", failed_step: "model", error: "Unknown model" }),
+      }),
+    ]);
+    expect(getPendingAccountId("agent-1")).toBeNull();
+    expect(shown).toEqual([]);
+  });
+
   it("clears itself once the chat moved to a new agent, whatever account that agent runs on", () => {
     // A failed switch retried on a third account lands the chat there, not on the picked one.
     trackPendingLaneSettlement();
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "claude", account_id: "acct-anthropic" },
+    });
     setPendingAccount("agent-1", "acct-openai");
-    setPendingAccount("agent-2", "acct-openai");
-    const [agentListener] = state.agentListeners;
-    agentListener("agent-1", "agent-1", "agent-1-successor");
+    const [listener] = state.listeners;
+    listener([
+      chatSnapshotFixture("agent-1", {
+        active_agent: { agent_id: "agent-1-successor", harness: "claude", account_id: OTHER_CLAUDE_ACCOUNT.id },
+      }),
+    ]);
     expect(getPendingAccountId("agent-1")).toBeNull();
-    expect(getPendingAccountId("agent-2")).toBe("acct-openai");
-    setPendingAccount("agent-2", null);
   });
 });

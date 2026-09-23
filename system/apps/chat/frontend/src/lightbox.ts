@@ -94,8 +94,8 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
   closeButton.addEventListener("click", closeImageLightbox);
 
   // Native `title` is not used anywhere in the workspace -- see workspace_ui's hoverTooltip.ts.
-  setHoverTooltip(downloadLink, "Download");
-  setHoverTooltip(closeButton, "Close");
+  setHoverTooltip(downloadLink, "Download", "above");
+  setHoverTooltip(closeButton, "Close", "above");
 
   actions.appendChild(downloadLink);
   actions.appendChild(closeButton);

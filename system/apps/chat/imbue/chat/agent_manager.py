@@ -71,9 +71,8 @@ from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
-from imbue.chat.harnesses.binding import BindingError
-from imbue.chat.harnesses.binding import create_args as binding_create_args
 from imbue.chat.harnesses.binding import is_rebind_supported
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.codex.live_user_turns import drop_live_user_turns
@@ -89,10 +88,12 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
+from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
-from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.chat.harnesses.model_state_poll import ModelStatePoller
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_resolver
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -108,6 +109,7 @@ from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
+from imbue.chat.models import AgentEventsStatus
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
@@ -124,6 +126,7 @@ from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
+from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -139,12 +142,8 @@ from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.concurrency_group.concurrency_group import InvalidConcurrencyGroupStateError
 from imbue.concurrency_group.errors import ConcurrencyGroupError
-from imbue.concurrency_group.errors import EnvironmentStoppedError
-from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.event_utils import ShutdownEvent
-from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -154,6 +153,7 @@ from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import AgentRemovedEvent
 from imbue.mngr.api.observe import AgentStateEvent
 from imbue.mngr.api.observe import FullAgentStateEvent
+from imbue.mngr.api.observe import ObserveEventFollower
 from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
@@ -326,7 +326,7 @@ def _build_chat_create_command(
     project_label = _chat_project_label(primary_labels, project_id)
     if project_label:
         cmd.extend(["--label", f"project={project_label}"])
-    # The account this chat runs on, if any. These come from ``binding.create_args`` and have
+    # The account this chat runs on, if any. These come from the harness binding's ``create_args`` and have
     # to ride the create rather than follow it: ``mngr create`` provisions, starts, waits for
     # readiness and delivers the first message before returning, so a repoint afterwards
     # lands after the first turn has already run on the wrong credential.
@@ -351,7 +351,11 @@ def _account_binding_args(harness: HarnessType, account_id: str, state_dir: Path
     recorded as a label: it is how the UI shows which account a chat runs on, and how a
     re-auth knows which chats it just revived.
     """
-    return [*binding_create_args(harness, account_dir(account_id), state_dir), "--label", f"account={account_id}"]
+    return [
+        *build_account_binding(harness).create_args(account_dir(account_id), state_dir),
+        "--label",
+        f"account={account_id}",
+    ]
 
 
 def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
@@ -445,21 +449,19 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
     ]
 
 
-def _build_observe_command_argv(mngr_binary: str) -> list[str]:
-    """Build the ``mngr observe --stream-events`` argv. Pure (see above).
+def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
+    """The ``set_adj`` a secondary chat gets: never writes, always fails.
 
-    ``--stream-events`` runs the full observer and additionally echoes each
-    agents-stream event (AGENT_STATE / AGENTS_FULL_STATE / AGENT_REMOVED) as
-    JSONL to stdout, which we consume directly. Unlike the old ``--discovery-only``
-    stream, these events carry real probed lifecycle state (including event-driven
-    detection of an agent process dying on its own), which is what drives each
-    agent's real ``state`` below.
+    Chat ``oom_score_adj`` is not shared state a second chat instance (a preview
+    booted from a worktree) may contribute to: the two would fight over the same
+    ``/proc`` entries, and this one's inputs are wrong anyway -- the presence it
+    sees is its own windows', not the workspace's, which reads as every other chat
+    closed. Withholding the capability rather than gating the call sites is
+    deliberate: ``reapply`` is reached from the sweep, from the presence and send
+    routes, and from every lifecycle event, so a new call site added later is
+    inert here by construction.
     """
-    return [
-        mngr_binary,
-        "observe",
-        "--stream-events",
-    ]
+    return False
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -590,6 +592,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
         held_sends=(*trigger, *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others)),
+        model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
     )
@@ -748,10 +751,11 @@ class AgentManager:
     Its chat-level duties (the ``chat-level`` sections below) are what the pages, the shell,
     and the loopback callers see: naming, provisional chats, the chat snapshots and their
     broadcast, presence and message stamps, and the create/destroy/stop/rename verbs. Its
-    agent-level duties are how those are kept true: the ``mngr observe`` stream, the mngr
-    commands, and the per-agent trackers, sessions, and model watchers. The two are joined by
-    the chat records (``chat_records.py``): a chat that has had a handoff has a record naming
-    its agents in order, and every other agent is a chat of its own (the own-chat rule), so
+    agent-level duties are how those are kept true: the event file the workspace's
+    ``agent-observer`` program (``mngr observe``) writes, the mngr commands, and the
+    per-agent trackers, sessions, and model watchers. The two are joined by the chat records
+    (``chat_records.py``): a chat that has had a handoff has a record naming its agents in
+    order, and every other agent is a chat of its own (the own-chat rule), so
     ``_resolve_chat_locked`` and ``_chat_id_of_agent_locked`` are how one side crosses into the
     other.
     """
@@ -797,8 +801,15 @@ class AgentManager:
     _own_agent_id: str
     _own_work_dir: str
     _shutdown_event: ShutdownEvent
-    _observe_cg: ConcurrencyGroup | None
-    _observe_process: RunningProcess | None
+    # The reader of the observer's event file, once ``start`` has attached it.
+    _follower: ObserveEventFollower | None
+    # Whether a lifecycle event has ever been folded. A follower that started cleanly
+    # is not yet proof of anything: it drops every line until a full-state snapshot
+    # arrives, so the stream reads healthy only once one has.
+    _has_received_lifecycle_event: bool
+    # A second chat instance beside the live one (a preview), which leaves the work that acts
+    # on the workspace's agents on its own initiative to the live chat.
+    _is_secondary: bool
     _creation_cg: ConcurrencyGroup
     _mngr_binary: str
     _host_dir: Path
@@ -823,13 +834,16 @@ class AgentManager:
     # around it -- per-harness behavior is the session implementation's.
     _session_by_agent: dict[str, AgentHarnessSession]
     # The alt-harness sign-in preflight (injectable so tests skip the real CLI).
-    # The last computed model choice per agent, and the filesystem watcher that
-    # re-derives it when the agent's model_state.json changes. The live read is
-    # harness-neutral (the shared reader + the harness's registered state-file path), so
-    # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
-    # None = the harness has recorded no model yet -> the bar renders no slots.
+    # The last computed model choice per agent. The live read is harness-neutral (the
+    # shared reader + the harness's registered state-file path), so there is no per-agent
+    # resolver to cache -- the switch endpoint builds one inline. None = the harness has
+    # recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
-    _model_watcher_by_agent: dict[str, PathWatcher]
+    # The ONE model-state poller for every tracked agent: re-derives an agent's choice
+    # whenever its ``model_state.json`` stamp changes. One thread total -- per-agent
+    # watchers cost four OS threads per agent and grew without bound with the host's
+    # agent count (see :mod:`imbue.chat.harnesses.model_state_poll`).
+    _model_state_poller: ModelStatePoller
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
     # prioritizer's recency ranking from real history.
     _message_stamps: MessageStampStore
@@ -883,16 +897,17 @@ class AgentManager:
         prompt_template_path: Path = DEFAULT_PROMPT_TEMPLATE_PATH,
         chat_settings: ChatSettingsStore | None = None,
         autocompactor: ChatAutoCompactor | None = None,
+        is_secondary: bool = False,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
         ``messenger`` is the agent-messaging collaborator; it defaults to the
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
         fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
-        mngr executable used for the stream-events observe subprocess and for
-        agent-creation commands. ``message_stamps`` remembers when each chat was
+        mngr executable used for the agent-creation, rename, stop, and destroy
+        commands. ``message_stamps`` remembers when each chat was
         last messaged; the default keeps that in memory only, so a real server
-        passes one backed by the chat app's state directory. ``auto_open``
+        passes one backed by the chat app's data directory. ``auto_open``
         surfaces labeled chats' windows; the default remembers nothing and reaches
         no shell, so a real server passes one backed by the ledger and the shell.
         ``chat_record_store`` holds the records of the chats that have run on several
@@ -901,6 +916,10 @@ class AgentManager:
         and prompts go (beside the records), and ``prompt_template_path`` the reference
         document the successor's first message is filled in from. ``chat_settings`` holds the
         workspace's fast-mode turn limit; the default keeps it in memory only.
+        ``is_secondary`` marks a second chat instance beside the live one (a preview): it
+        withholds the chat memory scores, the automatic context compaction, and the
+        resumption of unfinished switches, all of which belong to the live chat alone, and
+        refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -922,8 +941,9 @@ class AgentManager:
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
         manager._own_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
         manager._shutdown_event = ShutdownEvent.build_root()
-        manager._observe_cg = None
-        manager._observe_process = None
+        manager._follower = None
+        manager._has_received_lifecycle_event = False
+        manager._is_secondary = is_secondary
         manager._creation_cg = ConcurrencyGroup(name="agent-creation")
         manager._creation_cg.__enter__()
         manager._mngr_binary = mngr_binary
@@ -935,7 +955,10 @@ class AgentManager:
         manager._queue_idle_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
-        manager._model_watcher_by_agent = {}
+        manager._model_state_poller = ModelStatePoller.build(
+            list_model_state_paths=manager._list_model_state_paths,
+            on_model_state_changed=manager._on_model_state_changed,
+        )
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
@@ -955,7 +978,7 @@ class AgentManager:
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
             resolve_pid=lambda chat_id: manager._resolve_active_pid(chat_id),
-            set_adj=set_oom_score_adj,
+            set_adj=_refuse_to_set_oom_score_adj if is_secondary else set_oom_score_adj,
             resolve_process_started_at=lambda chat_id: manager._read_agent_process_started_at(
                 manager._active_agent_id_of_chat(chat_id)
             ),
@@ -989,7 +1012,7 @@ class AgentManager:
         return _stand_in_active_agent_id(record)
 
     def start(self) -> None:
-        """Start the observe subprocess and perform initial agent discovery.
+        """Perform initial agent discovery, then follow the observer's event stream.
 
         Also seeds and starts the OOM prioritizer and autocompactor. Seeding happens
         before the sweep so the first pass ranks chats against their real message history
@@ -999,39 +1022,38 @@ class AgentManager:
         self._auto_open.start()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
-        self._autocompactor.start()
+        self._model_state_poller.start()
+        if not self._is_secondary:
+            self._autocompactor.start()
         self._start_session_sweep()
-        self._start_observe()
-        self._resume_handoffs()
+        self._start_follow()
+        if not self._is_secondary:
+            self._resume_handoffs()
 
     def start_without_observe(self) -> None:
-        """Start with initial discovery only, no observe subprocess. For testing."""
+        """Start with initial discovery only, following no event stream. For testing."""
         self._initial_discover()
 
     def stop(self) -> None:
-        """Stop the observe subprocess, the session sweep, and creation threads."""
+        """Stop the follower, the session sweep, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
         self._autocompactor.stop()
         self._auto_open.stop()
+        self._model_state_poller.stop()
 
         self._session_sweep_stop.set()
         if self._session_sweep_thread is not None:
             self._session_sweep_thread.join(timeout=5)
             self._session_sweep_thread = None
 
-        if self._observe_cg is not None:
-            self._observe_cg.shutdown()
-            self._observe_cg.__exit__(None, None, None)
-            self._observe_cg = None
+        with self._lock:
+            follower = self._follower
+            self._follower = None
+        if follower is not None:
+            follower.stop()
 
         self._creation_cg.__exit__(None, None, None)
-
-        with self._lock:
-            model_watchers = list(self._model_watcher_by_agent.values())
-            self._model_watcher_by_agent.clear()
-        for watcher in model_watchers:
-            watcher.stop()
 
         with self._lock:
             sessions = list(self._session_by_agent.values())
@@ -1420,21 +1442,18 @@ class AgentManager:
         lane and that harness can be rebound, else a handoff (spec 5.2).
 
         Returns which it was, the phase the chat is in once draining is done, and the queued
-        text draining returned for the composer. ``model_pick`` is the model the successor of a
-        handoff runs on; a rebind keeps its agent's settings and refuses one. Raises
-        ``ChatConvergingError`` for a chat already converging and ``HandoffError`` for a chat
-        with no active agent, an unknown account, or the chat's own account.
+        text draining returned for the composer. ``model_pick`` is the model the chat runs on
+        once the switch lands, applied before ``message``: a handoff's successor, which starts on
+        its harness's default without one, or a rebind's restarted agent, which keeps its own
+        model without one. Raises ``ChatConvergingError`` for a chat already converging and
+        ``HandoffError`` for a chat with no active agent, an unknown account, or the chat's own
+        account.
         """
         target = _resolve_switch_target(account_id)
         with self._lock:
             agent_state = self._movable_agent_locked(chat_id, target)
         if is_rebind_target(agent_state, target):
-            if model_pick is not None:
-                raise HandoffError(
-                    f"Chat '{chat_id}' keeps its model settings when it changes account in place; "
-                    "pick the model from the model bar afterwards"
-                )
-            phase, returned_block = self.begin_rebind(chat_id, account_id, message, message_id, origin)
+            phase, returned_block = self.begin_rebind(chat_id, account_id, message, message_id, origin, model_pick)
             return TransitionKind.REBIND, phase, returned_block
         phase, returned_block = self.begin_handoff(chat_id, account_id, message, message_id, origin, model_pick)
         return TransitionKind.HANDOFF, phase, returned_block
@@ -1460,6 +1479,7 @@ class AgentManager:
         converging and ``HandoffError`` when the chat has no active agent or the account is
         unknown or the chat's own. ``begin_switch`` decides between this and a rebind.
         """
+        self._refuse_switch_in_secondary(chat_id)
         runner = self._handoff_runner()
         target = _resolve_switch_target(account_id)
         now = datetime.now(timezone.utc)
@@ -1493,16 +1513,24 @@ class AgentManager:
         return HandoffPhase.SUMMARIZING, returned_block
 
     def begin_rebind(
-        self, chat_id: ChatId, account_id: str, message: str, message_id: str, origin: HeldSendOrigin
+        self,
+        chat_id: ChatId,
+        account_id: str,
+        message: str,
+        message_id: str,
+        origin: HeldSendOrigin,
+        model_pick: ModelPick | None = None,
     ) -> tuple[HandoffPhase, str]:
         """Start moving a chat's agent to ``account_id`` in place (spec 6): write the rebind, drain the agent,
         and restart it on its own thread.
 
         Returns the phase the chat is in once draining is done and the queued text draining
-        returned for the composer. Raises ``ChatConvergingError`` and ``HandoffError`` as
-        ``begin_handoff`` does, plus ``HandoffError`` when the account is not one the agent can be
-        rebound to (another harness or lane, or a harness that cannot be).
+        returned for the composer. ``model_pick`` is the model the agent runs on once it is back,
+        applied before ``message``; without one it keeps its own. Raises ``ChatConvergingError``
+        and ``HandoffError`` as ``begin_handoff`` does, plus ``HandoffError`` when the account is
+        not one the agent can be rebound to (another harness or lane, or a harness that cannot be).
         """
+        self._refuse_switch_in_secondary(chat_id)
         runner = self._rebind_runner()
         target = _resolve_switch_target(account_id)
         now = datetime.now(timezone.utc)
@@ -1513,7 +1541,9 @@ class AgentManager:
                     f"Chat '{chat_id}' cannot change to account {target.account.id} in place; "
                     "it is on another harness or lane"
                 )
-            rebind = self._open_rebind_locked(chat_id, agent_state, target, message, message_id, origin, now)
+            rebind = self._open_rebind_locked(
+                chat_id, agent_state, target, message, message_id, origin, now, model_pick
+            )
         self._broadcast_chats_updated()
         # Launching on an account makes it the most recently used one, as a create does; a
         # convenience, so a store that refuses is logged rather than failing the switch.
@@ -1613,6 +1643,7 @@ class AgentManager:
         message_id: str,
         origin: HeldSendOrigin,
         now: datetime,
+        model_pick: ModelPick | None,
     ) -> ChatRebindRecord:
         """Write the chat's rebind entry in the draining phase, with the trigger message as its first held
         send; a chat that is still its one agent gets its record here. Lock held."""
@@ -1633,6 +1664,7 @@ class AgentManager:
             trigger_message_id=message_id,
             trigger_text=message,
             held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
+            model_pick=model_pick,
         )
         self._write_record_locked(record.with_converging(rebind))
         return rebind
@@ -1665,6 +1697,7 @@ class AgentManager:
         once switching has begun, the point of no return, or when the switch is a rebind, which
         has no window to call it off in.
         """
+        self._refuse_switch_in_secondary(chat_id)
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
             transition = record.converging if record is not None else None
@@ -1706,13 +1739,15 @@ class AgentManager:
 
         A failed handoff reruns its successor's create on any signed-in account, the stored
         prompt resent verbatim; a failed rebind reruns its restart on an account of the same
-        harness and lane (its agent stays the chat's). A handoff that failed after its successor
+        harness and lane (its agent stays the chat's), or only its model pick when the restart
+        already landed on that account. A handoff that failed after its successor
         was already adopted has only its deliveries left, and reruns them on the account it
         moved to. Raises ``HandoffError`` when the chat is not in the failed phase, the account
         is unknown, it is not one a rebind can move to, or it names another account for a
         handoff whose successor the chat already runs on.
         """
         # Refused before anything is written, so an unwired manager leaves the failed phase as it is.
+        self._refuse_switch_in_secondary(chat_id)
         self._require_switch_capabilities()
         target = _resolve_switch_target(account_id)
         discarded_successor_id: str | None = None
@@ -1729,9 +1764,11 @@ class AgentManager:
                         f"Chat '{chat_id}' can only retry its switch on an account of the same harness and lane; "
                         "start a new chat to move it elsewhere"
                     )
+                # The pick survives: a rebind retry stays on the same harness and lane, whose models it named.
                 retried_rebind = transition.model_copy_update(
                     to_update(transition.field_ref().phase, HandoffPhase.RESTARTING),
                     to_update(transition.field_ref().error, None),
+                    to_update(transition.field_ref().failed_step, None),
                     to_update(transition.field_ref().target_lane, target.account.lane),
                     to_update(transition.field_ref().target_account_id, target.account.id),
                     to_update(transition.field_ref().target_label, target.label),
@@ -1799,23 +1836,34 @@ class AgentManager:
         self.remove_agent(successor_id)
 
     def apply_model_pick(self, agent_info: AgentInfo, pick: ModelPick) -> None:
-        """Put a running agent on ``pick``: the model bar's own path, for an agent that was just created.
+        """Put a running agent on ``pick``: the model bar's own path, for an agent that has just come up.
 
         The pick is validated against the agent's option set, fetched fresh for a harness whose
         set is per agent (codex reads it off its daemon) and read from the catalog otherwise,
-        then every axis is applied at once. Raises ``ModelApplyError`` with the reason the user
-        sees.
+        then every axis is applied at once. Raises ``ModelPickRejectedError`` for a pick outside
+        that set and ``ModelApplyError`` when the harness refused the switch, each with the reason
+        the user sees. A per-agent set that could not be fetched is checked against the last set
+        the agent was offered instead, and a pick outside that one is a ``ModelApplyError``: an
+        agent just restarted on another account has not answered for its new set yet. A harness
+        whose model the chat app cannot switch rejects every pick.
         """
+        if get_catalog(agent_info.harness).switch_mode is SwitchMode.READ_ONLY:
+            raise ModelPickRejectedError(
+                f"{HARNESS_LABEL[agent_info.harness]}'s model is changed from the agent's terminal, not from the chat"
+            )
         resolver = build_resolver(agent_info)
         session = self.get_or_create_session(agent_info)
         dynamic_options = resolver.list_offered_options()
         if dynamic_options:
             session.note_offered_options(dynamic_options)
+        is_checked_against_last_offered = dynamic_options is not None and len(dynamic_options) == 0
         options = dynamic_options if dynamic_options else session.switch_options()
         try:
             validate_model_pick(options, pick.model_id, pick.effort, pick.fast)
         except InvalidModelPickError as e:
-            raise ModelApplyError(str(e)) from e
+            if is_checked_against_last_offered:
+                raise ModelApplyError(str(e)) from e
+            raise ModelPickRejectedError(str(e)) from e
         identity = ModelIdentity(model_id=pick.model_id, effort=pick.effort, fast=pick.fast)
         result = resolver.switch(
             identity,
@@ -1899,13 +1947,22 @@ class AgentManager:
             resolve_account=resolve_account,
             account_dir=account_dir,
             deliver=capabilities.deliver,
+            apply_model=self.apply_model_pick,
             drain_to_composer=capabilities.drain_to_composer,
             stop_agent=self.stop_agent_process,
             evict_watcher=self._evict_watcher,
             note_agent_relabeled=self._note_agent_relabeled,
             note_agent_alive=self.note_agent_alive,
+            monotonic=time.monotonic,
+            sleep=self._pause,
         )
         return RebindRunner.build(deps)
+
+    def _refuse_switch_in_secondary(self, chat_id: ChatId) -> None:
+        """Refuse every switch verb in a secondary chat: a switch writes the chat's record, and a
+        secondary's records are a scratch copy the live chat never reads."""
+        if self._is_secondary:
+            raise HandoffError(f"Chat '{chat_id}' cannot change account from a preview; switch it from the live chat")
 
     def _require_switch_capabilities(self) -> HandoffCapabilities:
         capabilities = self._handoff_capabilities
@@ -2329,7 +2386,7 @@ class AgentManager:
         """Remove an agent from the tracked state and broadcast the update.
 
         Called after a successful mngr destroy to immediately reflect the destruction
-        without waiting for the observe subprocess. An agent that is its own chat takes the
+        without waiting for the observe stream. An agent that is its own chat takes the
         chat's per-chat records with it; a member of a recorded chat leaves the chat standing
         (``destroy_chat`` forgets the chat once every member is gone).
         """
@@ -2483,12 +2540,9 @@ class AgentManager:
                 session = self._session_by_agent.get(agent_id)
             if session is not None:
                 session.ensure_live()
-            # Installs the state-file watcher once the agent's state dir exists, which it may
-            # not have when the agent was first tracked.
-            self._ensure_model_tracking(agent_id)
-            # ...and broadcast, which that does not: it recomputes silently, on the reasoning
-            # that its callers are already about to broadcast the whole agent list. Nothing
-            # follows this one, so a bar that just became resolvable would stay unrendered.
+            # Recompute AND broadcast: options arriving from a late connect change the
+            # derived choice with no state-file write to wake the poller, so this sweep
+            # is what turns a late connect into a rendered bar.
             self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
@@ -3117,111 +3171,56 @@ class AgentManager:
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Agent refresh failed")
 
-    def _resolve_observe_cwd(self) -> Path:
-        """Return the cwd for the mngr observe subprocess.
+    def _start_follow(self) -> None:
+        """Attach to the event file the ``agent-observer`` program writes.
 
-        Prefers ``MNGR_AGENT_WORK_DIR`` so observe picks up the same
-        project-local ``.mngr/settings.toml`` that agent-creation commands
-        run against -- the things observe lists should match what the
-        primary agent could create. Falls back to ``$HOME`` when the work
-        dir is unset or does not exist (e.g. tests that stub the env var
-        with a non-existent path); ``$HOME`` avoids inheriting whatever
-        project config happens to live under the spawning process's cwd.
+        The observer is a supervised program of its own, started beside this one in no
+        guaranteed order, so the follower does not require a writer to be up: it starts
+        in the outage state, says so through :meth:`get_agent_events_status`, and seeds
+        from the observer's opening snapshot once one holds the lock. An observer that
+        dies later is restarted by supervisord and picked back up the same way, so the
+        folded view freezes only for as long as the outage lasts.
         """
-        work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
-        if work_dir:
-            candidate = Path(work_dir)
-            if candidate.is_dir():
-                return candidate
-        return Path.home()
+        follower = ObserveEventFollower(
+            events_base_dir=self._host_dir,
+            on_line=self._handle_observe_line,
+            require_writer=False,
+        )
+        follower.start()
+        with self._lock:
+            self._follower = follower
 
-    def _build_observe_command(self) -> list[str]:
-        """Build the argv for the mngr observe --stream-events subprocess. Pure."""
-        return _build_observe_command_argv(self._mngr_binary)
+    def get_agent_events_status(self) -> AgentEventsStatus:
+        """Report whether agent lifecycle events are actually reaching this instance.
 
-    def _start_observe(self) -> None:
-        """Start the mngr observe subprocess and a watchdog for early exit."""
-        cmd = self._build_observe_command()
-
-        self._observe_cg = ConcurrencyGroup(name="agent-manager-observe")
-        self._observe_cg.__enter__()
-
-        try:
-            # Run from the primary agent's work dir so observe inherits the
-            # same project-local .mngr/settings.toml that mngr create uses --
-            # otherwise observe picks up ~/.mngr config, which inside a Docker
-            # agent typically has providers enabled (e.g. modal) that are not
-            # authenticated. `mngr observe` itself now tolerates unauthenticated
-            # providers (its discovery runs under ErrorBehavior.CONTINUE, so a
-            # failing provider is surfaced per-provider and still emits a
-            # DISCOVERY_FULL snapshot); scoping to the project providers via cwd
-            # is kept only to avoid that noise and the wasted credential probes.
-            # `is_checked_by_group=False` because we terminate this long-running
-            # subprocess explicitly via `.terminate()` in `stop()`; that SIGTERM
-            # produces a non-zero exit code that should not surface as a
-            # ProcessError when the concurrency group exits. The watchdog thread
-            # below is responsible for distinguishing graceful shutdown from
-            # unexpected early exit.
-            process = self._observe_cg.run_process_in_background(
-                command=cmd,
-                cwd=self._resolve_observe_cwd(),
-                on_output=self._handle_observe_output_line,
-                shutdown_event=self._shutdown_event,
-                is_checked_by_group=False,
+        This is the question a health probe must ask. Listing agents is not: the
+        initial discovery succeeds just as well while the observer is down, and a
+        follower that started cleanly has seen nothing until it folds a snapshot.
+        """
+        with self._lock:
+            follower = self._follower
+            has_received_event = self._has_received_lifecycle_event
+        if follower is None:
+            return AgentEventsStatus(
+                is_stream_healthy=False, detail="The agent-lifecycle follower has not been started."
             )
-        except (OSError, InvalidConcurrencyGroupStateError):
-            _loguru_logger.warning(
-                "Could not start mngr observe subprocess. Agent lifecycle events will not be detected."
+        follower_failure = follower.failure_detail()
+        if follower_failure is not None:
+            return AgentEventsStatus(is_stream_healthy=False, detail=follower_failure)
+        if not has_received_event:
+            return AgentEventsStatus(
+                is_stream_healthy=False,
+                detail="Waiting for the first full-state snapshot from the workspace's agent observer.",
             )
-            self._observe_cg.__exit__(None, None, None)
-            self._observe_cg = None
-            return
-
-        self._observe_process = process
-
-        # ``run_process_in_background`` returns immediately even if the spawned
-        # binary exits with a non-zero code (e.g. import failure). Attach a
-        # watchdog so a silently-dying subprocess surfaces as a loud error
-        # instead of a stale agent list.
-        self._observe_cg.start_new_thread(
-            target=self._watch_observe_process,
-            args=(process,),
-            name="observe-watchdog",
-            is_checked=False,
+        return AgentEventsStatus(
+            is_stream_healthy=True,
+            detail="Following the agent-lifecycle event stream written by the workspace's agent observer.",
         )
 
-    def _watch_observe_process(self, process: RunningProcess) -> None:
-        """Log an error if the observe subprocess exits before shutdown."""
-        try:
-            process.wait()
-        except (ProcessError, EnvironmentStoppedError) as e:
-            if self._shutdown_event.is_set():
-                return
-            _loguru_logger.opt(exception=e).error("mngr observe subprocess failed")
-            return
-
-        if self._shutdown_event.is_set():
-            return
-
-        stderr = process.read_stderr().strip()
-        _loguru_logger.error(
-            "mngr observe subprocess exited unexpectedly (returncode={}). "
-            "Agent lifecycle events will no longer be detected. stderr: {}",
-            process.returncode,
-            stderr if stderr else "(empty)",
-        )
-
-    def _handle_observe_output_line(self, line: str, is_stdout: bool) -> None:
-        """Parse and dispatch a single line of output from mngr observe.
-
-        stderr lines are surfaced as warnings so startup failures from the
-        subprocess (import errors, bad flags, etc.) are not lost.
-        """
+    def _handle_observe_line(self, line: str) -> None:
+        """Parse and fold one complete line of the observer's event file."""
         stripped = line.strip()
         if not stripped:
-            return
-        if not is_stdout:
-            _loguru_logger.warning("mngr observe stderr: {}", stripped)
             return
         event = parse_observe_event_line(stripped)
         if event is None:
@@ -3245,6 +3244,7 @@ class AgentManager:
         """
         is_full_snapshot = isinstance(event, FullAgentStateEvent)
         with self._lock:
+            self._has_received_lifecycle_event = True
             before_details = dict(self._agent_details_by_id)
             was_agent_list_known = self._is_agent_list_known
             match event:
@@ -3663,40 +3663,43 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
-        """Watch the agent's live model-state file once its state dir exists.
+        """Derive the agent's current model choice, without broadcasting.
 
         The live read is harness-neutral -- the shared reader over the harness's
-        registered ``model_state.json`` -- so there is nothing to build per agent;
-        this just derives the current choice and, when the local state dir is present,
-        starts the one watch that drives every later recompute. Idempotent (the watch is
-        retried on later calls until the dir appears).
+        registered ``model_state.json`` -- so there is nothing to build per agent.
+        Later recomputes are driven by the ONE shared :class:`ModelStatePoller`
+        (started in ``start``), which re-lists every agent's state-file path from
+        ground truth each pass; nothing per-agent is installed here. Idempotent.
         """
-        agent_state = self.get_agent_by_id(agent_id)
-        if agent_state is None:
-            return
-        with self._lock:
-            needs_watcher = agent_id not in self._model_watcher_by_agent
         self._recompute_model_choice(agent_id, broadcast_on_change=False)
-        if needs_watcher and self._get_agent_state_dir(agent_id).exists():
-            state_path = get_model_state_path(agent_state.harness, self._get_agent_state_dir(agent_id))
-            new_watcher = PathWatcher.build(
-                (state_path,),
-                lambda: self._recompute_model_choice(agent_id, broadcast_on_change=True),
-            )
-            with self._lock:
-                already_watched = agent_id in self._model_watcher_by_agent
-                if not already_watched:
-                    self._model_watcher_by_agent[agent_id] = new_watcher
-            if not already_watched:
-                new_watcher.start()
 
     def _stop_model_tracking(self, agent_id: str) -> None:
-        """Stop the model watcher and clear the cached choice for an agent."""
+        """Clear the cached model choice for an agent (the poller drops its own stamp
+        when the agent leaves ``_agents``)."""
         with self._lock:
-            watcher = self._model_watcher_by_agent.pop(agent_id, None)
             self._model_choice_by_agent.pop(agent_id, None)
-        if watcher is not None:
-            watcher.stop()
+
+    def _list_model_state_paths(self) -> dict[str, Path]:
+        """Every tracked agent's model-state file path, resolved from current ground truth.
+
+        The shared poller calls this each pass, so an agent whose harness heals after
+        first sight (the create path tracks before observe reports it) is polled at its
+        real path from the next pass on -- nothing bakes a guessed path in.
+        """
+        with self._lock:
+            return {
+                agent_id: get_model_state_path(agent.harness, self._get_agent_state_dir(agent_id))
+                for agent_id, agent in self._agents.items()
+            }
+
+    def _on_model_state_changed(self, agent_id: str) -> None:
+        """One agent's model-state file changed: re-derive and broadcast on change.
+
+        Runs on the poller thread. Safe for spurious calls (an agent that just left
+        ``_agents`` or a content-identical rewrite): the recompute no-ops for unknown
+        agents and suppresses unchanged broadcasts.
+        """
+        self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
         """Recompute an agent's model choice from its live state file, then cache/broadcast it.

@@ -1,1 +1,0 @@
-Added `read_custom_domains`: reads a comma-separated list of Modal custom-domain hosts from a deploy-time env var (None when unset), alongside the existing `read_min_containers` / `read_scaledown_window` deploy-convention helpers.

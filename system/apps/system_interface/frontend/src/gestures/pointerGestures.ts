@@ -42,6 +42,12 @@ export interface GestureListener {
   thresholdPx(): number;
   /** Whether a binding may start a drag right now (compact mode turns window drags off). */
   isDraggable(binding: GestureBinding): boolean;
+  /** A press landed on a handle, before it is known to be a drag. The live pages go inert from here:
+   *  only a move the root sees crosses the threshold, and a handle sits close enough to a page that
+   *  the pixels before it can be spent inside one. */
+  onPressStart(binding: GestureBinding): void;
+  /** The press ended, however it ended. Always answers a press start. */
+  onPressEnd(binding: GestureBinding): void;
   /** ``point`` is in the root's own coordinates (the backdrop's pixels). */
   onBegin(binding: GestureBinding, point: PixelPoint, pressPoint: PixelPoint): void;
   onMove(binding: GestureBinding, point: PixelPoint, delta: PixelPoint): void;
@@ -100,6 +106,8 @@ interface PendingPress {
   readonly pointerType: string;
   readonly pressClient: PixelPoint;
   readonly press: PixelPoint;
+  /** Where the pointer last was with the button still down: where a release the root never saw left it. */
+  lastPoint: PixelPoint;
   isDragging: boolean;
   longPressTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -129,22 +137,34 @@ export class PointerGestureSource implements GestureSource {
       return { x: event.clientX - origin.left, y: event.clientY - origin.top };
     };
 
+    const deltaFrom = (press: PixelPoint, point: PixelPoint): PixelPoint => ({
+      x: point.x - press.x,
+      y: point.y - press.y,
+    });
+
+    /** End a press that had become a drag, at ``point``; a press that never did ends silently. */
+    const endDrag = (held: PendingPress, point: PixelPoint): void => {
+      if (held.isDragging) listener.onEnd(held.binding, point, deltaFrom(held.press, point));
+    };
+
     const clearLongPress = (): void => {
       if (pending?.longPressTimer != null) clearTimeout(pending.longPressTimer);
       if (pending !== null) pending.longPressTimer = null;
     };
 
     const finish = (): void => {
+      const held = pending;
       clearLongPress();
       pending = null;
+      if (held !== null) listener.onPressEnd(held.binding);
     };
 
     const onPointerDown = (event: PointerEvent): void => {
       // A new press: the last drag's click has fired by now or never will.
       suppressNextClick = false;
       if (event.button !== PRIMARY_BUTTON) return;
-      // A second pointer during a drag is ignored; a press still pending without a drag is stale (it was
-      // released over a live page, whose document took the pointerup) and this press replaces it.
+      // A second pointer during a drag is ignored; a press still pending without a drag is stale (its
+      // release is one the root never saw) and this press replaces it.
       if (pending !== null) {
         if (pending.isDragging) return;
         finish();
@@ -164,9 +184,11 @@ export class PointerGestureSource implements GestureSource {
         pointerType: event.pointerType,
         press,
         pressClient,
+        lastPoint: press,
         isDragging: false,
         longPressTimer: null,
       };
+      listener.onPressStart(binding);
       if (event.pointerType !== "mouse") {
         pending.longPressTimer = setTimeout(() => {
           if (pending === null || pending.isDragging) return;
@@ -181,17 +203,18 @@ export class PointerGestureSource implements GestureSource {
 
     const onPointerMove = (event: PointerEvent): void => {
       if (pending === null || !isSamePointer(pending, event)) return;
-      // No button held: the press ended where the root could not see it (over a live page, or while the
-      // window had lost focus); the pointer is only hovering now. A drag that had begun is cancelled, so
-      // the listener's begin is always answered by an end or a cancel.
+      // No button held: the press ended where the root could not see it (released outside the window,
+      // or while the window had lost focus); the pointer is only hovering now. A drag that had begun
+      // ends at the last point it was held at, not where the hovering has since reached, and a begin
+      // is still always answered by an end or a cancel.
       if (event.buttons === 0) {
         const held = pending;
         finish();
-        if (held.isDragging) listener.onCancel(held.binding);
+        endDrag(held, held.lastPoint);
         return;
       }
       const point = pointOf(event);
-      const delta = { x: point.x - pending.press.x, y: point.y - pending.press.y };
+      const delta = deltaFrom(pending.press, point);
       if (!pending.isDragging) {
         if (Math.hypot(delta.x, delta.y) < listener.thresholdPx()) return;
         if (!listener.isDraggable(pending.binding)) {
@@ -211,6 +234,7 @@ export class PointerGestureSource implements GestureSource {
         listener.onBegin(pending.binding, point, pending.press);
       }
       event.preventDefault();
+      pending.lastPoint = point;
       listener.onMove(pending.binding, point, delta);
     };
 
@@ -219,8 +243,7 @@ export class PointerGestureSource implements GestureSource {
       const held = pending;
       const point = pointOf(event);
       finish();
-      if (held.isDragging)
-        listener.onEnd(held.binding, point, { x: point.x - held.press.x, y: point.y - held.press.y });
+      endDrag(held, point);
     };
 
     const onPointerCancel = (event: PointerEvent): void => {

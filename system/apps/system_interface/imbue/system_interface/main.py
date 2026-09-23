@@ -15,7 +15,6 @@ from imbue.system_interface.config import load_config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
-from imbue.system_interface.template_catalog import build_template_catalog_store
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -38,10 +37,19 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default=DEFAULT_STATE_DIRECTORY,
         help="Where the shell keeps its desktops, placements, and client records (desktop contracts.md section 4)",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help=(
+            "Boot as a preview of a proposed change: the real desktop over the state directory it is "
+            "given (a seeded copy) and the registry MINDS_APPS_FILE names, refusing only the verbs that "
+            "would reach the live workspace (an app's stop and start, the update notice's)"
+        ),
+    )
     return parser.parse_args(argv)
 
 
-def build_production_state(config: Config, state_directory: Path) -> SystemInterfaceState:
+def build_production_state(config: Config, state_directory: Path, is_preview: bool = False) -> SystemInterfaceState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together. It builds but
@@ -53,15 +61,13 @@ def build_production_state(config: Config, state_directory: Path) -> SystemInter
         shell=build_shell_state(
             state_directory=state_directory, registry_path=registry_path(), broadcaster=WebSocketBroadcaster()
         ),
-        template_catalog=build_template_catalog_store(
-            catalog_url=config.system_interface_template_catalog_url, state_directory=state_directory
-        ),
+        is_preview=is_preview,
     )
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:
     """Build the Flask app from parsed CLI args: the state over the state directory, and the routes over it."""
-    return create_application(build_production_state(config, state_directory=args.state_dir))
+    return create_application(build_production_state(config, state_directory=args.state_dir, is_preview=args.preview))
 
 
 def main() -> None:

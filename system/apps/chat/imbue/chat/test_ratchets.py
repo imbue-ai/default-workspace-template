@@ -34,7 +34,10 @@ def test_prevent_while_true() -> None:
 def test_prevent_time_sleep() -> None:
     # +1 for testing.py's _wait_until_serving TCP-ready poll loop, used by the
     # WebSocket/SSE tests that need a real Werkzeug listener.
-    rc.check_time_sleep(_DIR, snapshot(4))
+    # +1 for the codex account probe's wait for the daemon to bind its socket: codex emits nothing
+    # when it binds (verified against 0.154.0 -- its only startup line is an unrelated sandbox
+    # warning), so there is no readiness signal to block on. mngr's own launcher waits the same way.
+    rc.check_time_sleep(_DIR, snapshot(5))
 
 
 def test_prevent_global_keyword() -> None:
