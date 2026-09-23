@@ -1,5 +1,5 @@
-"""Which ref to update to: the latest stable ``minds-v*`` tag not newer than the
-Mind app driving the workspace (the ceiling), or an explicit override.
+"""Which ref to update to: the ``minds-v*`` release the Mind app driving the
+workspace was built against, or an explicit override.
 """
 
 from __future__ import annotations
@@ -14,6 +14,17 @@ from typing import NamedTuple, Sequence
 # A released minds version tag, e.g. ``minds-v0.3.7`` (stable) or
 # ``minds-v0.3.7-rc1`` (a release candidate -- a prerelease we never default to).
 _TAG_RE = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
+
+
+class AppVersionNotReleasedError(Exception):
+    """Raised when the release this workspace's app was built against cannot be had.
+
+    A fault, unlike :class:`NoUpdateTargetError`: either the app named no release
+    at all, or it named one the template upstream does not carry. Both mean the
+    pair this workspace is supposed to run was never published as claimed, so the
+    skill reports it and lets the user decide, rather than quietly taking a
+    release nobody verified against this app.
+    """
 
 
 class NoUpdateTargetError(ValueError):
@@ -31,17 +42,19 @@ class ResolvedTarget(NamedTuple):
     ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (``main``),
     or ``ref`` (any other override passed straight through for git to validate).
 
-    ``ceiling`` is the template ref the app reported, passed through as given --
-    it caps only insofar as it parses as a release, so a dev build's branch name
-    is carried here and caps nothing. ``None`` means no ceiling was supplied at
-    all, which only a direct caller does. ``exceeds_ceiling`` marks an override the
-    ceiling could not vouch for: newer than the app, or a branch/commit carrying no
-    version to compare; the default (no-override) path never sets it.
+    ``app_version`` is the template ref the app reported, passed through as
+    given. ``None`` means none was supplied, which only a direct caller does.
+    ``exceeds_ceiling`` marks an override the app cannot vouch for: newer than
+    it, or a branch/commit carrying no version to compare -- the one place the
+    app's version is still a ceiling, since only an override can pass it. The
+    default path never sets it.
     """
 
     ref: str
     kind: str
-    ceiling: str | None = None
+    app_version: str | None = None
+    # Serialized as ``exceeds_ceiling``: every released SKILL.md reads that key,
+    # and a rename would read as "false" to all of them.
     exceeds_ceiling: bool = False
 
 
@@ -62,11 +75,6 @@ class Version(NamedTuple):
     patch: int
     release_rank: int
     prerelease: tuple[tuple[int, int, str], ...]
-
-    @property
-    def is_stable(self) -> bool:
-        """Whether this is a released version rather than a prerelease of one."""
-        return not self.prerelease
 
 
 def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
@@ -92,14 +100,12 @@ def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
 def parse_version(tag: str) -> Version | None:
     """Return the :class:`Version` of any ``minds-v*`` tag, prerelease included.
 
-    Prereleases parse because a *ceiling* is a different question from a
-    *candidate*: an app on ``minds-v0.4.0-rc1`` has a real version and should cap
-    its workspaces. Candidate selection asks the separate question via
-    :attr:`Version.is_stable`, so a prerelease still never wins the default
-    "latest stable" pick.
+    Prereleases parse because an app on ``minds-v0.4.0-rc1`` has a real version:
+    it names that template as its target like any other release, and it vouches
+    for an override the same way.
 
-    Ordering follows semver: a prerelease sorts below its own release, so a ceiling
-    of ``minds-v0.4.0-rc1`` admits ``minds-v0.3.9`` but not ``minds-v0.4.0``.
+    Ordering follows semver: a prerelease sorts below its own release, so an
+    override of ``minds-v0.4.0`` under a ``minds-v0.4.0-rc1`` app exceeds it.
 
     Returns ``None`` only for something that is not a release tag at all (a
     branch name, a bare commit) -- there is genuinely no version to compare.
@@ -117,81 +123,34 @@ def parse_version(tag: str) -> Version | None:
     )
 
 
-def pick_latest_stable_tag(
-    tags: Sequence[str], ceiling: str | None = None
-) -> str | None:
-    """Return the highest-versioned stable ``minds-v*`` tag, or ``None`` if none.
-
-    Prereleases (``minds-v*-rc*``) and non-matching tags are ignored. Selection is
-    by semantic version, not lexical order, so ``minds-v0.3.10`` beats
-    ``minds-v0.3.9``.
-
-    ``ceiling`` bounds the selection to tags at or below it, so a workspace never
-    picks a template newer than the app driving it. It is parsed with
-    :func:`parse_version`, so an app on a *prerelease* caps just as well as one on
-    a stable release; only a ceiling that is not a release tag at all (a dev app
-    reporting a branch) means no ceiling.
-
-    Candidates are still filtered to *stable* tags: capping by a prerelease does
-    not make one selectable.
-    """
-    ceiling_version = parse_version(ceiling) if ceiling is not None else None
-    stable = [
-        (version, tag)
-        for tag in tags
-        if (version := parse_version(tag)) is not None
-        and version.is_stable
-        and (ceiling_version is None or version <= ceiling_version)
-    ]
-    if not stable:
-        return None
-    return max(stable, key=lambda item: item[0])[1]
-
-
-def is_held_back_by_ceiling(
-    *,
-    resolved_ref: str,
-    latest_available: str | None,
-    ceiling: str | None,
-    has_override: bool,
-) -> bool:
-    """Whether the ceiling -- and not the user -- is why a newer release was not taken.
-
-    Only true when the flow chose the target itself. With an explicit override the
-    user picked the ref, so a gap between it and ``latest_available`` is their own
-    doing; reporting "your app held this back" there blames the app for the user's
-    choice (an ``--override`` to an *older* tag would otherwise trip it every time).
-    """
-    if has_override or ceiling is None or latest_available is None:
-        return False
-    return latest_available != resolved_ref
-
-
-def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
-    """Whether ``ref`` is provably a release at or below ``ceiling``.
+def _is_at_or_below_app_version(ref: str, app_version: str | None) -> bool:
+    """Whether ``ref`` is provably a release at or below the app's version.
 
     Both sides go through :func:`parse_version`, so a prerelease on either side
     compares properly rather than being written off. False for something with no
-    version at all -- a branch or a bare commit -- where the ceiling genuinely
-    cannot vouch for the ref. True when there is no ceiling to enforce.
+    version at all -- a branch or a bare commit -- which the app cannot vouch
+    for. True when there is no app version to compare against.
     """
-    ceiling_version = parse_version(ceiling) if ceiling is not None else None
-    if ceiling_version is None:
+    target_version = parse_version(app_version) if app_version is not None else None
+    if target_version is None:
         return True
     ref_version = parse_version(ref)
-    return ref_version is not None and ref_version <= ceiling_version
+    return ref_version is not None and ref_version <= target_version
 
 
 def resolve_target(
     override: str | None,
     tags: Sequence[str],
     remote: str = "upstream",
-    ceiling: str | None = None,
+    app_version: str | None = None,
 ) -> ResolvedTarget:
     """Resolve the update target ref.
 
-    With no override, pick the latest stable ``minds-v*`` tag at or below
-    ``ceiling`` (raising if the upstream exposes none). An override of ``main``
+    With no override the target is the app's own release: the ``minds-v*`` tag
+    named by ``app_version``, which must exist upstream. Anything else is a fault
+    for the skill to judge, not a thing to work around here -- picking some
+    other release would hand the workspace a template that no one verified
+    against this app. An override of ``main``
     selects the template's default branch, **remote-qualified** to
     ``<remote>/main`` -- a bare ``main`` would resolve to the *local* branch, which
     ``git fetch upstream`` never advances, so the pull would merge stale local
@@ -202,56 +161,36 @@ def resolve_target(
     qualified themselves).
 
     An override is never silently blocked -- the user asked for it by name -- but
-    one that is not provably at or below ``ceiling`` comes back with
+    one that is not provably at or below the app's version comes back with
     ``exceeds_ceiling`` set, which the skill turns into an explicit user
     confirmation before anything is merged.
     """
     if override is None:
-        latest = pick_latest_stable_tag(tags, ceiling=ceiling)
-        if latest is None:
-            raise NoUpdateTargetError(_no_target_message(tags, ceiling))
-        return ResolvedTarget(latest, "tag", ceiling, False)
-    exceeds = not _is_within_ceiling(override, ceiling)
+        if app_version is None or parse_version(app_version) is None:
+            raise AppVersionNotReleasedError(
+                f"this workspace's minds app reports {app_version!r}, which is not a release "
+                f"tag, so there is no release to match. A dev build reports its branch "
+                f"this way. Decide what this workspace should take and pass it as "
+                f"--override, or update the app to a release."
+            )
+        if app_version not in set(tags):
+            raise AppVersionNotReleasedError(
+                f"this workspace's minds app is {app_version}, but the template upstream has no "
+                f"such tag, so the release this app was built against cannot be fetched. "
+                f"Something is wrong with that release, not with this workspace: report it "
+                f"rather than updating to a different version, unless the user names one."
+            )
+        return ResolvedTarget(app_version, "tag", app_version, False)
+    exceeds = not _is_at_or_below_app_version(override, app_version)
     if override == "main":
-        return ResolvedTarget(f"{remote}/{override}", "branch", ceiling, exceeds)
+        return ResolvedTarget(f"{remote}/{override}", "branch", app_version, exceeds)
     if override in set(tags):
-        return ResolvedTarget(override, "tag", ceiling, exceeds)
-    return ResolvedTarget(override, "ref", ceiling, exceeds)
+        return ResolvedTarget(override, "tag", app_version, exceeds)
+    return ResolvedTarget(override, "ref", app_version, exceeds)
 
 
-def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
-    """Explain why no default target could be picked, distinguishing the two causes."""
-    if ceiling is not None and pick_latest_stable_tag(tags) is not None:
-        return (
-            f"every stable minds-v* tag upstream is newer than this workspace's minds "
-            f"app ({ceiling}); update the app first, or pass an explicit --override "
-            f"to update past it anyway"
-        )
-    return (
-        "no stable minds-v* tag found upstream; pass an explicit "
-        "--override (a tag, 'main', or a ref) to update anyway"
-    )
-
-
-def already_current_message(
-    ref: str, latest_available: str | None, ceiling: str | None, is_held_back: bool
-) -> str:
-    """Explain that the default target is already merged, naming the ceiling when it is why.
-
-    The two cases read very differently to a user and need different next steps.
-    Held back: a newer release exists and the app is the only thing standing
-    between them and it, so the message has to say so -- updating the app is the
-    action that unblocks them. Not held back: the workspace is simply current,
-    and there is nothing to do.
-    """
-    if is_held_back:
-        return (
-            f"this workspace is already on {ref}, the newest release your minds app "
-            f"({ceiling}) supports; {latest_available} is available upstream but needs a "
-            f"newer app -- update the app first, or pass an explicit --override to update "
-            f"past it anyway"
-        )
-    return f"this workspace is already on {ref}, the newest release upstream; nothing to update"
+def already_current_message(ref: str) -> str:
+    return f"this workspace is already on {ref}; nothing to update"
 
 
 # The minds app's version route, addressed through the latchkey gateway's
@@ -276,12 +215,12 @@ _APP_VERSION_TIMEOUT_SECONDS = 60
 _APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
 
 
-class CeilingUnavailableError(Exception):
-    """Raised when the minds app's update ceiling could not be read.
+class AppVersionUnavailableError(Exception):
+    """Raised when the minds app's own version could not be read.
 
-    Never downgraded to "no ceiling": an app that cannot answer is very often an
-    app too old to *have* this route, which is exactly the case the ceiling
-    protects against.
+    Never downgraded to "no version to match": an app that cannot answer is very
+    often an app too old to *have* this route, which is exactly the case that
+    matching the app protects against.
     """
 
 
@@ -314,12 +253,12 @@ def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
                 timeout=_APP_VERSION_TIMEOUT_SECONDS,
             )
         except (OSError, subprocess.TimeoutExpired) as e:
-            raise CeilingUnavailableError(
+            raise AppVersionUnavailableError(
                 f"could not reach the minds app to read its version ({e}). The app may be "
                 f"closed or the gateway down; retry once it is running."
             ) from e
         if result.returncode != 0:
-            raise CeilingUnavailableError(
+            raise AppVersionUnavailableError(
                 f"could not reach the minds app to read its version (latchkey curl exited "
                 f"{result.returncode}: {result.stderr.strip()}). The app may be closed or the "
                 f"gateway down; retry once it is running."
@@ -328,23 +267,23 @@ def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
         body = Path(body_file.name).read_text()
 
     if status in _APP_TOO_OLD_STATUSES:
-        raise CeilingUnavailableError(
+        raise AppVersionUnavailableError(
             "this workspace's minds app is too old to report its version (it answered "
             f"HTTP {status} for {url}), so there is no way to tell how far this workspace "
             "may safely update. Update the minds app itself first."
         )
     if status != "200":
-        raise CeilingUnavailableError(
+        raise AppVersionUnavailableError(
             f"the minds app returned HTTP {status} for its version ({body.strip()[:200]})."
         )
     try:
         template_ref = json.loads(body)["workspace_template_ref"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        raise CeilingUnavailableError(
+        raise AppVersionUnavailableError(
             f"the minds app's version response could not be parsed ({e}): {body.strip()[:200]}"
         ) from e
     if not isinstance(template_ref, str) or not template_ref:
-        raise CeilingUnavailableError(
+        raise AppVersionUnavailableError(
             f"the minds app reported an empty workspace_template_ref: {body.strip()[:200]}"
         )
     return template_ref

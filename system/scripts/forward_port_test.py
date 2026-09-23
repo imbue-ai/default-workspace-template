@@ -18,7 +18,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from app_manifest.primitives import describe_app_name_problem
+from app_manifest.errors import InvalidManifestValueError
+from app_manifest.primitives import DisplayName, describe_app_name_problem
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
 
@@ -136,6 +137,37 @@ def test_upsert_then_remove_round_trips(tmp_path: Path) -> None:
     result = _run(["--remove", "--name", "web"], apps_file)
     assert result.returncode == 0, result.stderr
     assert _read_apps(apps_file) == []
+
+
+def test_a_registration_that_changes_nothing_leaves_the_file_untouched(
+    tmp_path: Path,
+) -> None:
+    """Re-registering identical values must not touch the registry at all.
+
+    Every app re-registers on each start, and the watchers key off the file's
+    mtime, so a program restarting in a loop used to make them re-announce every
+    app in the registry several times a second (measured on a real workspace:
+    46,371 rewrites in a day, fanned out to 602,823 service events).
+    """
+    apps_file = tmp_path / "apps.toml"
+    args = ["--name", "web", "--url", "http://localhost:5000", "--no-icon"]
+    assert _run(args, apps_file).returncode == 0
+
+    before = apps_file.stat()
+    contents_before = apps_file.read_text()
+
+    for _ in range(3):
+        result = _run(args, apps_file)
+        assert result.returncode == 0, result.stderr
+
+    after = apps_file.stat()
+    assert (after.st_mtime_ns, after.st_ino) == (before.st_mtime_ns, before.st_ino)
+    assert apps_file.read_text() == contents_before
+
+    # A real change still lands.
+    assert _run(["--name", "web", "--url", "http://localhost:5001"], apps_file).returncode == 0
+    assert _read_apps(apps_file)[0]["url"] == "http://localhost:5001"
+    assert apps_file.stat().st_ino != before.st_ino
 
 
 def test_name_over_the_length_cap_is_rejected(tmp_path: Path) -> None:
@@ -364,6 +396,61 @@ def test_program_cannot_be_combined_with_remove(tmp_path: Path) -> None:
     assert "cannot be combined with --remove" in result.stderr
 
 
+def test_display_name_is_stored_and_authoritative_on_every_call(tmp_path: Path) -> None:
+    """A manifest-less row reads as its raw service name unless a registration
+    gives it a display name. Like ``internal`` and ``program``, every call is
+    authoritative, so a re-registration that stops passing one cannot leave a
+    label from an earlier boot behind."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        [
+            "--name",
+            "chat-preview",
+            "--url",
+            "http://localhost:8000",
+            "--no-icon",
+            "--display-name",
+            "Chat (update-quieter)",
+        ],
+        apps_file,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["display_name"] == "Chat (update-quieter)"
+
+    result = _run(
+        ["--name", "chat-preview", "--url", "http://localhost:8001"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert "display_name" not in rows[0]
+
+
+@pytest.mark.parametrize("display_name", ["  ", "x" * 65])
+def test_a_display_name_the_registry_cannot_hold_is_refused(
+    tmp_path: Path, display_name: str
+) -> None:
+    """A row whose display name breaks the library's rule fails validation on
+    read and is skipped, which hides the app altogether. Catch it here, where
+    the caller can see it, instead."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        [
+            "--name",
+            "web",
+            "--url",
+            "http://localhost:8000",
+            "--no-icon",
+            "--display-name",
+            display_name,
+        ],
+        apps_file,
+    )
+    assert result.returncode != 0
+    assert "display_name must" in result.stderr
+    assert not apps_file.exists()
+
+
 def test_an_oversized_icon_is_rejected(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     forward_port = _load_module("_forward_port_icon_cap", _SCRIPT)
@@ -538,6 +625,23 @@ def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
         assert is_script_accepted == is_library_accepted, name
 
 
+def test_app_manifest_display_name_rule_is_identical_to_the_registration_rule() -> None:
+    """Drift guard, as for names: the library validates display names on read
+    with its own copy of this script's rule, and a row it rejects is skipped
+    rather than shown. The two must accept and reject exactly the same values."""
+    forward_port = _load_module("_forward_port_display_name_drift_check", _SCRIPT)
+    values = ("Chat", "Chat (update-quieter)", " ", "", "  x  ", "x" * 64, "x" * 65)
+    for value in values:
+        is_script_accepted = forward_port.validate_display_name(value) is None
+        try:
+            DisplayName(value)
+        except InvalidManifestValueError:
+            is_library_accepted = False
+        else:
+            is_library_accepted = True
+        assert is_script_accepted == is_library_accepted, value
+
+
 def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
     """Drift guard: the build-app scaffold's name validation must stay a
     subset of this script's, or the scaffold could mint an app whose
@@ -617,6 +721,7 @@ id = "new"
 label = "New File Viewer"
 path = "/"
 params = [{name = "path", label = "Path", required = false}]
+text_param = "path"
 
 [[launch_paths]]
 id = "recent"
@@ -659,10 +764,10 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
     assert "actions" not in row
-    # The row carries each launch path's param NAMES (the launcher reads them), and no ``params``
+    # The row carries each launch path's param NAMES (the launcher reads them) and its text_param, and neither
     # key at all for a launch path that declares none.
     assert row["launch_paths"] == [
-        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"]},
+        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"], "text_param": "path"},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
     ]
     assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
@@ -697,6 +802,11 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
             '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\nparams = [{label = "Path"}]\n',
             "every launch path param needs a string 'name'",
             id="launch-path-param-without-a-name",
+        ),
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\ntext_param = 3\n',
+            "a launch path's text_param must be a string",
+            id="launch-path-text-param-not-a-string",
         ),
         pytest.param(
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',
