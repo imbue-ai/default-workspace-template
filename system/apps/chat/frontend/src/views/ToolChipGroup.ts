@@ -95,13 +95,22 @@ function chipKey(call: ToolCall): string {
   return `chip:${call.tool_call_id}`;
 }
 
-/** The group's own margins separate it from its SIBLINGS inside a message: the
- *  prose that introduces it above, anything that follows below. At the edges of
- *  a message they would instead add to the message's own margin, making that
- *  seam wider than every other seam in the transcript -- so there they collapse
- *  and the message rhythm alone does the spacing. Same reason, and the same
- *  shape, as the `p:last-child` rules the markdown blocks carry. */
-const GROUP_CLASS = "tool-chip-group my-1.5 first:mt-0 last:mb-0";
+/** The group's own margins separate it from its SIBLINGS inside a message, and
+ *  they are deliberately NOT equal. Above it is the line that introduces the
+ *  run ("Checking how much disk..."), which the run belongs to: tight, so it
+ *  reads as that sentence's work. Below it the agent has moved on to what it
+ *  found, which is a new message however the harness packaged it: the full
+ *  message gap, so it reads as one.
+ *
+ *  At the edges of a message they would instead add to the message's own
+ *  margin, making that seam wider than every other seam in the transcript -- so
+ *  there they collapse and the message rhythm alone does the spacing. Same
+ *  reason, and the same shape, as the `p:last-child` rules the markdown blocks
+ *  carry. That collapse is also why the uneven pair is easy to miss: a
+ *  top-level run ends its message, so `mb` is dropped and the row's own gap
+ *  shows through. It is the runs INSIDE a timeline, where prose follows in the
+ *  same container, that render the bottom margin at all. */
+const GROUP_CLASS = "tool-chip-group mt-1.5 mb-5 first:mt-0 last:mb-0";
 
 /** `-ml-1` cancels the first chip's own left padding, so the row's ink starts
  *  where the prose above it does: a ghost button needs that padding for its

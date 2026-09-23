@@ -202,6 +202,16 @@ describe("the tool chip row", () => {
     expect(group.className).toContain("last:mb-0");
   });
 
+  // The two are uneven on purpose: the line above introduces the run, the one
+  // below is the agent moving on to what it found. Evening them up (to a `my-`)
+  // is the tempting tidy-up, and it reads as the result being part of the work.
+  it("sits closer to the line that introduces it than to what follows", () => {
+    mount([chip(read)]);
+    const group = root.querySelector(".tool-chip-group")!;
+    expect(group.className).toContain("mt-1.5");
+    expect(group.className).toContain("mb-5");
+  });
+
   it("marks a failed call on the chip itself, before anything is opened", () => {
     mount([chip(read), chip(exec)], [result({ tool_call_id: "c2", is_error: true })]);
     expect(chipButtons()[0].className).toContain("text-faint");
