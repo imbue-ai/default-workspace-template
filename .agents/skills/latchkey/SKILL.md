@@ -241,6 +241,9 @@ Every command above is routed through the Latchkey gateway at
 a transient outage. It usually helps if the user restarts the
 Mind app. Requests to /permissions and /permission-requests are
 routed to the user's computer so they will fail if it's offline.
+If the user appears to be actively using the app or chatting
+with you, but the Latchkey gateway is unreachable, ask them to
+try restarting the Minds app.
 
 
 ## Notes
