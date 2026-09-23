@@ -33,7 +33,9 @@ from playwright.sync_api import expect
 from imbue.chat.accounts import account_dir
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
+from imbue.chat.auto_open import navigate_pinned_op_body
 from imbue.chat.auto_open import open_chat_op_body
+from imbue.chat.auto_open import restore_pinned_op_body
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
@@ -78,6 +80,8 @@ _TRIGGER_TIMEOUT_MS = 20000
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
 # The chat root's path with the fixture chat selected: what a link, and the agent's auto-open, open.
 _FIXTURE_ROOT_PATH = chat_root_path(ChatId(FIXTURE_AGENT_ID))
+# A second agent beside the fixture's, for the flows that need a choice of chats.
+_SECOND_AGENT_ID = "agent-5e2e5e2e5e2e5e2e5e2e5e2e5e2e5e2e"
 
 
 def _chat_root(page: Page) -> FrameLocator:
@@ -117,6 +121,7 @@ def _running_e2e_server(
     tmp_path: Path,
     session_events: list[dict[str, Any]] | None = None,
     is_account_signed_in: bool = True,
+    additional_agents: Sequence[tuple[str, str]] = (),
 ) -> AbstractContextManager[RunningWorkspace]:
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
@@ -124,6 +129,7 @@ def _running_e2e_server(
         find_free_port(),
         find_free_port(),
         session_events=session_events,
+        additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
     )
 
@@ -219,13 +225,13 @@ def _open_fixture_chat(page: Page, server: RunningWorkspace) -> None:
 
 
 def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
-    """Run the chat app's ``new`` launch path from the launcher's tile, and return the frame of the chat the root
-    created and shows."""
+    """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
+    typed), and return the frame of the chat the root created and shows."""
     _land(page, server)
-    page.locator("[data-launcher-field] input").click()
-    overlay = page.locator("[data-launcher-overlay]")
-    expect(overlay).to_be_visible(timeout=10000)
-    overlay.locator(f'.launcher-tile[data-launch="{CHAT_APP_NAME}:new"]').click()
+    page.locator("[data-launcher-field] textarea").click()
+    menu = page.locator("[data-launcher-overlay]")
+    expect(menu).to_be_visible(timeout=10000)
+    menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
     expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
     return _chat(page, None)
 
@@ -235,27 +241,41 @@ def _shown_chat(page: Page) -> FrameLocator:
     return _chat(page, None)
 
 
+def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
+    """Post one op to the shell's op route, as an agent does. The route's status: 200 for an applied op, the
+    refusal's code for a 404 or 412 (a window or client the shell does not know yet), 0 when unreachable."""
+    request = urllib.request.Request(
+        f"{server.shell_url}/api/layout/broadcast",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 412):
+            return int(e.code)
+        raise AssertionError(f"op refused with HTTP {e.code}: {e.read().decode(errors='replace')}") from e
+    except (TimeoutError, urllib.error.URLError):
+        return 0
+
+
 def _open_fixture_chat_by_op(server: RunningWorkspace, client_id: str) -> None:
-    """Open the fixture chat the way the agent-side auto-open does: the desktop ``open`` op naming the app, the
-    root path, and the client, retried until the shell has registered the client."""
-    payload = json.dumps(open_chat_op_body(ChatId(FIXTURE_AGENT_ID), client_id)).encode()
+    """Show the fixture chat the way the agent-side auto-open does: the desktop ``navigate`` op pointing the app's
+    pinned window at the chat for the client, then ``restore`` of it; with no pinned window on the desktop (this
+    server registers the chat without its pin) the ``open`` op instead, as the reactor falls back. Retried until the
+    shell has registered the client."""
+    chat_id = ChatId(FIXTURE_AGENT_ID)
 
     def _attempt() -> bool:
-        request = urllib.request.Request(
-            f"{server.shell_url}/api/layout/broadcast",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=5):
-                return True
-        except urllib.error.HTTPError as e:
-            if e.code in (404, 412):
-                return False
-            raise AssertionError(f"open op refused with HTTP {e.code}: {e.read().decode(errors='replace')}") from e
-        except (TimeoutError, urllib.error.URLError):
+        navigated = _post_op(server, navigate_pinned_op_body(chat_id, client_id))
+        if navigated == 404:
+            return _post_op(server, open_chat_op_body(chat_id, client_id)) == 200
+        if navigated != 200:
             return False
+        _post_op(server, restore_pinned_op_body(client_id))
+        return True
 
     wait_for(_attempt, timeout=15.0, poll_interval=0.2, error_message="the open op never succeeded")
 
@@ -346,7 +366,12 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
             "model": "claude-opus-4-6",
             "content": [
                 {"type": "text", "text": "Let me read that file."},
-                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file": "test.txt"}},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_tc1",
+                    "name": "Read",
+                    "input": {"file_path": "/tmp/project/test.txt"},
+                },
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -365,21 +390,30 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
-    """Tool calls render as collapsible blocks that expand to show input/output."""
+def test_tool_calls_render_as_inline_chips(tmp_path: Path, page: Page) -> None:
+    """A turn's tool calls render as a row of chips; picking one opens its detail below."""
     with _running_e2e_server(tmp_path, session_events=_TOOL_CALL_SESSION_EVENTS) as server:
         _open_fixture_chat(page, server)
 
         expect(_chat(page).locator(".message-assistant").first).to_be_visible(timeout=15000)
-        tool_block = _chat(page).locator(".tool-call-block").first
-        expect(tool_block).to_be_visible(timeout=10000)
-        expect(tool_block).to_contain_text("Read")
+        chip = _chat(page).locator(".tool-chip").first
+        expect(chip).to_be_visible(timeout=10000)
+        # The chip says what the call DID, not which tool ran it: a past-tense verb
+        # and the file it acted on, so a row of them can be told apart.
+        expect(chip.locator(".tool-chip-verb")).to_have_text("read")
+        expect(chip.locator(".tool-chip-target")).to_contain_text("test.txt")
 
-        tool_details = _chat(page).locator(".tool-call-details").first
-        expect(tool_details).to_be_hidden()
-        _chat(page).locator(".tool-call-header").first.click()
-        expect(tool_details).to_be_visible()
-        expect(tool_details).to_contain_text("file contents here")
+        # Nothing is open until the reader picks a chip -- the row is a list to
+        # scan, and the payload behind it is fetched on demand.
+        expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
+        chip.click()
+        detail = _chat(page).locator(".tool-chip-detail").first
+        expect(detail).to_be_visible()
+        expect(detail).to_contain_text("file contents here")
+
+        # Picking it again puts it away.
+        chip.click()
+        expect(_chat(page).locator(".tool-chip-detail")).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -619,8 +653,8 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         home_window = _the_chat_window(server)["id"]
 
         page.locator("[data-desktops-menu]").click()
-        expect(page.locator('[data-floating="desktops-menu"]')).to_be_visible(timeout=5000)
-        page.locator('[data-menu-item="new-desktop"]').click()
+        expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
+        page.locator('[data-menu-row="new-desktop"]').click()
         wait_for(lambda: len(_desktops(server)) == 2, timeout=10.0, poll_interval=0.1)
         (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != _HOME_DESKTOP_ID]
         expect(page.locator(f'[data-desktop-id="{created}"]')).to_be_visible(timeout=15000)
@@ -639,6 +673,104 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
         expect(_chat(page).locator(".message-list-not-found")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_root_reports_the_selection_alone(
+    tmp_path: Path, page: Page
+) -> None:
+    """The root's ``draft`` param off a ``navigate`` (the desktop's "Design your own..."), with the chat it lands in
+    already selected: the text goes into that chat's composer, unsent, and the window's stored path goes back to the
+    selection alone, so a reload of the window drafts nothing again (pinned-taskbar-entries plan section 4.7)."""
+    with _running_e2e_server(tmp_path) as server:
+        _open_fixture_chat(page, server)
+        expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        assert _the_chat_window(server)["path"] == _FIXTURE_ROOT_PATH
+        client_id = _client_id(page)
+        _wait_for_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
+
+        draft = "Draw me a seal"
+        navigated = _post_op(
+            server,
+            {
+                "op": "navigate",
+                "args": {
+                    "window": _the_chat_window(server)["id"],
+                    "path": "/?" + urllib.parse.urlencode({"draft": draft}),
+                    "client": client_id,
+                },
+                "requester": None,
+            },
+        )
+        assert navigated == 200
+        expect(_chat(page).locator(".message-input-textbox")).to_have_value(draft, timeout=15000)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        assert _chat(page).locator(".message-user", has_text=draft).count() == 0
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_send_launch_path_offers_the_picker_and_sends_the_text_to_the_chat_picked(
+    tmp_path: Path, page: Page
+) -> None:
+    """The ``send`` launch path off a ``navigate`` (the desktop's Ctrl+Enter row), with two chats to choose from: the
+    picker opens over them; Escape drops it and the text with it, and picking a chat sends the text there through
+    the ordinary send and selects it. Either way the window's stored path goes back to the selection alone, so a
+    reload of the window offers nothing again (launcher-and-getting-started plan section 4.5)."""
+    with _running_e2e_server(tmp_path, additional_agents=[(_SECOND_AGENT_ID, "Second chat")]) as server:
+        _open_fixture_chat(page, server)
+        expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        client_id = _client_id(page)
+        _wait_for_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        root = _chat_root(page)
+        text = "Carry on with the seal"
+
+        def _navigate_to_send() -> None:
+            navigated = _post_op(
+                server,
+                {
+                    "op": "navigate",
+                    "args": {
+                        "window": _the_chat_window(server)["id"],
+                        "path": "/send?" + urllib.parse.urlencode({"message": text}),
+                        "client": client_id,
+                    },
+                    "requester": None,
+                },
+            )
+            assert navigated == 200
+            expect(root.locator("[data-send-picker]")).to_be_visible(timeout=15000)
+            expect(root.locator(".send-picker-text")).to_contain_text(text)
+
+        _navigate_to_send()
+        root.locator("[data-send-picker-search]").press("Escape")
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        assert messenger.sent == []
+
+        _navigate_to_send()
+        root.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]').click()
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=10.0)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        # The recording messenger writes nothing into the fixture transcript, so the bubble is not looked for.
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_send_launch_path_with_one_chat_sends_to_it_without_the_picker(tmp_path: Path, page: Page) -> None:
+    """The ``send`` launch path as a document load (a window opened at it when the chat has no independent pinned
+    window here, or a link), on a workspace with one chat: the root waits for the chats to arrive, then sends the
+    text to the one there is with no picker, selects it, and moves its own URL to the selection alone, so a reload
+    of the document sends nothing again. The root behaves the same visited directly, so no shell frames it here."""
+    with _running_e2e_server(tmp_path) as server:
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        text = "Carry on with the seal"
+        page.goto(f"{server.chat_url}/send?" + urllib.parse.urlencode({"message": text}))
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=15.0)
+        expect(page).to_have_url(f"{server.chat_url}{_FIXTURE_ROOT_PATH}", timeout=10000)
+        assert page.locator("[data-send-picker]").count() == 0
 
 
 # starting a chat
@@ -673,15 +805,23 @@ def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_i
     tmp_path: Path, page: Page
 ) -> None:
     """With an account signed in the create runs immediately on it; the page says so while the
-    create runs, and the composer arrives when the agent registers."""
+    create runs, and the composer arrives when the agent registers. The launcher points the chat's pinned
+    window at ``/new`` in place, so the create can land before the notice is looked for: either is
+    accepted, and the composer is what must arrive."""
     with _running_e2e_server(tmp_path) as server:
         chat = _start_new_chat(page, server)
-        expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
+        creating_or_landed = chat.locator(".message-list-creating, .message-input-textbox")
+        expect(creating_or_landed.first).to_be_visible(timeout=15000)
+        if chat.locator(".message-list-creating").count() > 0:
+            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat")
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
         assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
 
 
+# Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
+# once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
@@ -693,7 +833,7 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     with _running_e2e_server(tmp_path) as server:
         chat = _start_new_chat(page, server)
         failed = chat.locator(".message-list-create-failed")
-        expect(failed).to_contain_text("This chat could not be started", timeout=20000)
+        expect(failed).to_contain_text("This chat could not be started", timeout=45000)
         expect(failed).to_contain_text("exited with code 3")
         expect(failed).to_contain_text("create failed on purpose")
         expect(failed.locator(".message-list-create-retry")).to_be_visible()
@@ -718,8 +858,8 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
 def _open_provider_menu(chat: FrameLocator) -> None:
     """Open the composer's model card and its provider menu."""
     chat.locator(".model-selector-trigger").click()
-    chat.locator('[data-card-row="providers"]').click()
-    expect(chat.locator('[data-model-popover="flyout"]')).to_be_visible()
+    chat.locator('[data-menu-row="providers"]').click()
+    expect(chat.locator('[data-menu-part="submenu"]')).to_be_visible()
 
 
 def _choose_pending_account(chat: FrameLocator, provider: str, label: str) -> None:
@@ -729,7 +869,7 @@ def _choose_pending_account(chat: FrameLocator, provider: str, label: str) -> No
     the strip above the composer then names the account by its composed label.
     """
     _open_provider_menu(chat)
-    chat.locator('[data-model-popover="flyout"] button', has_text=provider).first.click()
+    chat.locator('[data-menu-part="submenu"] button', has_text=provider).first.click()
     dialog = chat.locator(".modal-card")
     expect(dialog).to_contain_text("Switch to")
     dialog.get_by_role("button", name="Switch this chat").click()
@@ -761,6 +901,24 @@ def _settled_chat_snapshot(server: RunningWorkspace) -> ChatSnapshot:
         return snapshot is not None and snapshot.handoff is None
 
     wait_for(_settled, timeout=30.0, poll_interval=0.1, error_message="the switch never left the chat's record")
+    snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+    assert snapshot is not None
+    return snapshot
+
+
+def _rebound_chat_snapshot(server: RunningWorkspace, account_id: str) -> ChatSnapshot:
+    """The chat's snapshot once its rebind has landed: the same agent, now running on ``account_id``.
+
+    A rebind leaves the record like any other switch, so the account has to be waited on too: the
+    record clears the moment the agent is back, whichever account it came back on.
+    """
+    manager = server.chat_state.agent_manager
+
+    def _rebound() -> bool:
+        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        return snapshot is not None and snapshot.handoff is None and snapshot.active_agent.account_id == account_id
+
+    wait_for(_rebound, timeout=30.0, poll_interval=0.1, error_message="the rebind never reached the chosen account")
     snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
     assert snapshot is not None
     return snapshot
@@ -820,7 +978,7 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list")).to_contain_text("Welcome! What shall we build?")
         _open_provider_menu(chat)
-        chat.locator('[data-model-popover="flyout"] button', has_text="OpenAI").first.click()
+        chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
         # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and the
         # live node reports it while it does.
@@ -845,7 +1003,7 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
         assert snapshot is not None and len(snapshot.agent_ids) == 2
         chat.locator(".model-selector-trigger").click()
-        expect(chat.locator('[data-card-row="providers"]')).to_contain_text("OpenAI")
+        expect(chat.locator('[data-menu-row="providers"]')).to_contain_text("OpenAI")
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -889,28 +1047,39 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         assert len(snapshot.agent_ids) == 2
         # The provider row follows the new account, and the armed switch is spent.
         chat.locator(".model-selector-trigger").click()
-        provider_row = chat.locator('[data-card-row="providers"]')
+        provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("OpenAI")
-        expect(provider_row).not_to_contain_text("after your next message")
+        expect(provider_row).not_to_contain_text("next message")
 
 
 @pytest.mark.timeout(90, func_only=False)
 def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Page) -> None:
     """The rebind through the browser: a second account on the chat's own lane is a switch too, armed at once
-    with no dialog, and the chat comes back on the same agent with its transcript, now read from the new
-    account's folder."""
+    with no dialog; the strip's Change opens the dialog, where a model is picked for the agent; and the chat
+    comes back on the same agent, on that model, with its transcript now read from the new account's folder."""
     with _switched_workspace(tmp_path, additional_accounts=(("anthropic", "Anthropic"),)) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
         _open_provider_menu(chat)
-        chat.locator('[data-model-popover="flyout"] button', has_text="Anthropic 2").first.click()
+        chat.locator('[data-menu-part="submenu"] button', has_text="Anthropic 2").first.click()
         # A rebind keeps the agent and its conversation, so nothing asks: the press arms the switch at
-        # once, and the strip offers no dialog to change it from.
+        # once. The strip's Change opens the dialog, whose picker starts from the model the agent keeps.
         expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
         expect(chat.locator(".modal-card")).to_have_count(0)
-        expect(chat.locator(".message-input-switch-change")).to_have_count(0)
+        chat.locator(".message-input-switch-change").click()
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Switch to Anthropic 2 (Claude Code)?")
+        model = dialog.locator("select.switch-dialog-model")
+        expect(model).to_have_value("")
+        expect(model.locator("option").first).to_have_text("Keep the current model")
+        model.select_option("haiku")
+        dialog.locator("select.switch-dialog-effort").select_option("high")
+        dialog.get_by_role("button", name="Switch this chat").click()
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"
+        )
 
         chat.locator(".message-input-textbox").fill("Carry on on the other account")
         switch_button = chat.locator(".message-input-send-button--switch")
@@ -918,26 +1087,22 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         switch_button.click()
 
         # The rebind runs against the fake mngr and lands the same agent on the second account.
-        manager = server.chat_state.agent_manager
         second_account = server.account_ids[1]
-
-        def is_rebound() -> bool:
-            snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-            return (
-                snapshot is not None
-                and snapshot.handoff is None
-                and snapshot.active_agent.account_id == second_account
-            )
-
-        wait_for(is_rebound, timeout=30.0)
-        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-        assert snapshot is not None and snapshot.agent_ids == (FIXTURE_AGENT_ID,)
+        snapshot = _rebound_chat_snapshot(server, second_account)
+        assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
         # The session file followed the agent into the new account's folder, and the confirming
         # message went through the ordinary send path once the agent was back.
         assert list((account_dir(second_account) / "projects").rglob(f"{FIXTURE_SESSION_ID}.jsonl"))
-        messenger = manager._messenger
+        messenger = server.chat_state.agent_manager._messenger
         assert isinstance(messenger, RecordingMngrMessenger)
         wait_for(lambda: (FIXTURE_AGENT_ID, "Carry on on the other account") in messenger.sent, timeout=10.0)
+        # The pick reached the agent through the model bar's own commands before the message did.
+        assert messenger.sent[-4:] == [
+            (FIXTURE_AGENT_ID, "/model haiku"),
+            (FIXTURE_AGENT_ID, "/effort high"),
+            (FIXTURE_AGENT_ID, "/fast off"),
+            (FIXTURE_AGENT_ID, "Carry on on the other account"),
+        ]
         # The page keeps the transcript, no handoff node remains (the agent did not change), the held
         # bubble is gone, and the provider row names the new account with the choice spent.
         expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
@@ -945,9 +1110,95 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         expect(chat.locator("[data-handoff-status]")).to_have_count(0)
         expect(chat.locator(".message-input-cancel-switch-button")).to_have_count(0)
         chat.locator(".model-selector-trigger").click()
-        provider_row = chat.locator('[data-card-row="providers"]')
+        provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Anthropic 2")
-        expect(provider_row).not_to_contain_text("after your next message")
+        expect(provider_row).not_to_contain_text("next message")
+
+
+# A turn that failed on the chat's own credential: Claude Code's stamped login notice.
+_AUTH_FAILED_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Hello agent!"},
+    },
+    {
+        "type": "assistant",
+        "uuid": "uuid-2",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "isApiErrorMessage": True,
+        "error": "authentication_failed",
+        "message": {
+            "role": "assistant",
+            "model": "<synthetic>",
+            "content": [{"type": "text", "text": "Login expired · Please run /login"}],
+            "stop_reason": "stop_sequence",
+            "usage": {},
+        },
+    },
+]
+
+
+def _pick_from_auth_error_note(chat: FrameLocator, server: RunningWorkspace, account_id: str) -> None:
+    """Follow "switch to another provider" under the failed turn and pick ``account_id`` in the chooser.
+
+    The chat's own account is listed as not working and cannot be picked.
+    """
+    expect(chat.locator(".message-list")).to_contain_text("Login expired", timeout=15000)
+    chat.get_by_role("button", name="switch to another provider").click()
+    own = chat.locator(f'[data-e2e="pick-account-{server.account_ids[0]}"]')
+    expect(own).to_be_disabled()
+    expect(own.locator("xpath=..")).to_contain_text("Not working")
+    chat.locator(f'[data-e2e="pick-account-{account_id}"]').click()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_whose_turn_failed_on_its_login_hands_off_from_the_error_note(tmp_path: Path, page: Page) -> None:
+    """Picking another harness's account from the auth-error note moves this chat there through the handoff,
+    rather than opening a new chat."""
+    with _switched_workspace(
+        tmp_path, messenger=SummaryWritingMngrMessenger(), session_events=_AUTH_FAILED_SESSION_EVENTS
+    ) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        _pick_from_auth_error_note(chat, server, server.account_ids[1])
+
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Switch to Codex?")
+        dialog.get_by_role("button", name="Switch this chat").click()
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to OpenAI (Codex)"
+        )
+        _switch_and_send(chat, "Carry on in Codex")
+
+        expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
+            "Handed off from Claude Code to Codex", timeout=30000
+        )
+        snapshot = _settled_chat_snapshot(server)
+        assert snapshot.active_agent.account_id == server.account_ids[1]
+        assert len(snapshot.agent_ids) == 2
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_path: Path, page: Page) -> None:
+    """Picking another account on the chat's own harness and lane from the auth-error note arms a rebind of
+    this chat, with no dialog."""
+    with _switched_workspace(
+        tmp_path, additional_accounts=(("anthropic", "Anthropic"),), session_events=_AUTH_FAILED_SESSION_EVENTS
+    ) as server:
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        _pick_from_auth_error_note(chat, server, server.account_ids[1])
+
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+            "Your next message switches this chat to Anthropic 2 (Claude Code)"
+        )
+        expect(chat.locator(".modal-card")).to_have_count(0)
+        _switch_and_send(chat, "Carry on on the other account")
+
+        snapshot = _rebound_chat_snapshot(server, server.account_ids[1])
+        assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1024,6 +1275,6 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         assert settled.active_agent.account_id == server.account_ids[2]
         # The lane picked before the failure is spent too: the next send is an ordinary one.
         chat.locator(".model-selector-trigger").click()
-        provider_row = chat.locator('[data-card-row="providers"]')
+        provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Google")
         expect(provider_row).not_to_contain_text("next:")

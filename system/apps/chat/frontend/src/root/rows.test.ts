@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import type { ProvisionalChat } from "../models/Chats";
-import { groupedRows, parentOf, rowsFromSnapshots } from "./rows";
+import { groupedRows, mostRecentChatId, parentOf, rowsFromSnapshots } from "./rows";
 
 const NONE: ReadonlySet<string> = new Set();
 
@@ -20,6 +20,23 @@ describe("rowsFromSnapshots", () => {
       ["agent-a", "Plan", "idle", 1_700_000_000_000, false],
       ["agent-b", "New chat", "error", null, true],
     ]);
+  });
+});
+
+describe("mostRecentChatId", () => {
+  it("names the chat most recently messaged, a chat started here over it, and nothing with no chats", () => {
+    const rows = rowsFromSnapshots(
+      [
+        chatSnapshotFixture("agent-old", { last_messaged_at: 100 }),
+        chatSnapshotFixture("agent-never"),
+        chatSnapshotFixture("agent-new", { last_messaged_at: 200 }),
+        chatSnapshotFixture("agent-mine"),
+      ],
+      [],
+    );
+    expect(mostRecentChatId(rows, NONE)).toBe("agent-new");
+    expect(mostRecentChatId(rows, new Set(["agent-mine"]))).toBe("agent-mine");
+    expect(mostRecentChatId([], NONE)).toBeNull();
   });
 });
 

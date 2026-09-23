@@ -2,6 +2,7 @@
 signed-in user, per browser context."""
 
 from collections.abc import Callable
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
@@ -20,6 +22,7 @@ from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
@@ -47,6 +50,9 @@ class _StoredClient(FrozenModel):
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
     last_seen: datetime = Field(description="When the client last arrived or reported")
     user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
+    entries: dict[str, EntryPresentation] = Field(
+        default_factory=dict, description="The client's presentation of each pinned entry, by app name"
+    )
 
 
 class ClientsDocument(FrozenModel):
@@ -54,6 +60,12 @@ class ClientsDocument(FrozenModel):
 
     version: int = Field(description="The file format version")
     clients: dict[str, _StoredClient] = Field(description="Every client, by id")
+
+
+@pure
+def entries_wire_json(entries: Mapping[str, EntryPresentation]) -> dict[str, Any]:
+    """The ``entries`` map of the client object (pinned-taskbar-entries plan section 7.4)."""
+    return {app: presentation.model_dump(mode="json") for app, presentation in entries.items()}
 
 
 @pure
@@ -65,13 +77,18 @@ def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]
         "last_seen": record.last_seen.isoformat(),
         "is_connected": is_connected,
         "user_id": str(record.user_id) if record.user_id is not None else None,
+        "entries": entries_wire_json(record.entries),
     }
 
 
 @pure
 def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
     return ClientRecord(
-        id=client_id, active_desktop=stored.active_desktop, last_seen=stored.last_seen, user_id=stored.user_id
+        id=client_id,
+        active_desktop=stored.active_desktop,
+        last_seen=stored.last_seen,
+        user_id=stored.user_id,
+        entries=stored.entries,
     )
 
 
@@ -154,6 +171,7 @@ class ClientStore(MutableModel):
                 active_desktop=report.active_desktop,
                 last_seen=stamped,
                 user_id=previous.user_id if previous is not None else None,
+                entries=previous.entries if previous is not None else {},
             ),
         )
 
@@ -169,7 +187,13 @@ class ClientStore(MutableModel):
         """Record a client's arrival (the shell page loading): the user it arrived as and the desktop it lands on."""
         stamped = now.astimezone(timezone.utc)
         return self._store_client(
-            client_id, lambda _: _StoredClient(active_desktop=desktop_id, last_seen=stamped, user_id=user_id)
+            client_id,
+            lambda previous: _StoredClient(
+                active_desktop=desktop_id,
+                last_seen=stamped,
+                user_id=user_id,
+                entries=previous.entries if previous is not None else {},
+            ),
         )
 
     def _store_client(
@@ -187,6 +211,24 @@ class ClientStore(MutableModel):
         return ClientReportOutcome(
             record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != stored.active_desktop
         )
+
+    def set_entry_presentation(
+        self, client_id: ClientId, app: AppName, presentation: EntryPresentation, now: datetime
+    ) -> ClientRecord:
+        """Store how a recorded client shows one pinned entry; raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            previous = document.clients.get(str(client_id))
+            if previous is None:
+                raise ClientNotFoundError(f"No client record for {client_id!r}")
+            updated = previous.model_copy_update(
+                to_update(previous.field_ref().entries, {**previous.entries, str(app): presentation}),
+                to_update(previous.field_ref().last_seen, stamped),
+            )
+            clients = {**document.clients, str(client_id): updated}
+            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
+        return _record_of(client_id, updated)
 
     def prune_unseen(self, now: datetime) -> list[ClientId]:
         """Drop every client unseen for the retention period; returns their ids so the caller can drop their layouts."""

@@ -13,7 +13,8 @@
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { isUnread } from "./chatUnread";
 import { destroyChat, renameChat, startChat, stopChat } from "./verbs";
 import { isAgentStarted } from "./rows";
@@ -85,13 +86,20 @@ interface RenameState {
 let rename: RenameState | null = null;
 const deletingChatIds = new Set<string>();
 
-interface MenuState {
-  chatId: string;
-  x: number;
-  y: number;
-}
+// The row whose menu is up, or null. Which row it belongs to is this file's; opening, placing,
+// dismissing and closing are the component's, and its `onClose` keeps the two in step.
+let menuChatId: string | null = null;
 
-let menu: MenuState | null = null;
+const railMenu = createMenu({
+  placement: "below",
+  role: "menu",
+  // What the old hand-built card set as `min-w-36`.
+  minWidth: 144,
+  extraClass: "chat-rail-menu",
+  onClose: () => {
+    menuChatId = null;
+  },
+});
 
 function beginRename(row: ChatRow): void {
   rename = { chatId: row.chatId, draft: row.title, error: null };
@@ -122,8 +130,6 @@ function pruneDeleting(rows: readonly ChatRow[]): void {
 }
 
 function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
-  menu = null;
-  m.redraw();
   const verb = isRunning ? startChat : stopChat;
   verb(row.chatId).catch((error: unknown) => {
     alert(
@@ -135,8 +141,6 @@ function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
 /** Delete from the menu, after asking. When it is the chat the root shows, the root moves to
  *  the next one in the list first, so it is not left on a page whose chat is gone. */
 function deleteFromMenu(attrs: ChatRailAttrs, row: ChatRow): void {
-  menu = null;
-  m.redraw();
   const isConfirmed = window.confirm(
     `Delete "${row.title}"?\n\nThis ends its agent and removes its conversation. It cannot be undone.`,
   );
@@ -154,80 +158,26 @@ function deleteFromMenu(attrs: ChatRailAttrs, row: ChatRow): void {
   });
 }
 
-function keepMenuOnScreen(dom: Element): void {
-  const element = dom as HTMLElement;
-  const rect = element.getBoundingClientRect();
-  const overflowX = rect.right - window.innerWidth;
-  const overflowY = rect.bottom - window.innerHeight;
-  if (overflowX > 0) element.style.left = `${Math.max(0, rect.left - overflowX)}px`;
-  if (overflowY > 0) element.style.top = `${Math.max(0, rect.top - overflowY)}px`;
-}
-
-function rowMenu(attrs: ChatRailAttrs, row: ChatRow, state: MenuState): m.Vnode {
+/** The rows a chat's context menu offers. */
+function rowMenuRows(attrs: ChatRailAttrs, row: ChatRow): MenuRow[] {
   const isStopped = row.status === "stopped";
-  const rowClass = menuRowClass({ extra: "text-(length:--font-size-row) text-primary" });
-  return m(
-    "div",
+  return [
+    { kind: "action", key: "rename", label: "Rename", onSelect: () => beginRename(row) },
     {
-      class: `chat-rail-menu ${menuCardClass("fixed min-w-36")}`,
-      style: `left: ${state.x}px; top: ${state.y}px`,
-      role: "menu",
-      oncreate: ({ dom }: m.VnodeDOM) => keepMenuOnScreen(dom),
-      onclick: (event: MouseEvent) => event.stopPropagation(),
-      oncontextmenu: (event: MouseEvent) => event.preventDefault(),
+      kind: "action",
+      key: isStopped ? "start" : "stop",
+      label: isStopped ? "Restart chat" : "Stop chat",
+      onSelect: () => setRunningFromMenu(row, isStopped),
     },
-    [
-      m(
-        "button",
-        {
-          type: "button",
-          class: rowClass,
-          role: "menuitem",
-          "data-menu-item": "rename",
-          onclick: () => {
-            menu = null;
-            beginRename(row);
-          },
-        },
-        "Rename",
-      ),
-      m(
-        "button",
-        {
-          type: "button",
-          class: rowClass,
-          role: "menuitem",
-          "data-menu-item": isStopped ? "start" : "stop",
-          onclick: () => setRunningFromMenu(row, isStopped),
-        },
-        isStopped ? "Restart chat" : "Stop chat",
-      ),
-      m("div", { class: menuDividerClass() }),
-      m(
-        "button",
-        {
-          type: "button",
-          class: menuRowClass({ extra: "text-(length:--font-size-row) text-danger" }),
-          role: "menuitem",
-          "data-menu-item": "delete",
-          onclick: () => deleteFromMenu(attrs, row),
-        },
-        "Delete chat",
-      ),
-    ],
-  );
-}
-
-function closeMenuOnClickAway(): void {
-  if (menu === null) return;
-  menu = null;
-  m.redraw();
-}
-
-function closeMenuOnEscape(event: KeyboardEvent): void {
-  if (event.key !== "Escape" || menu === null) return;
-  menu = null;
-  m.redraw();
+    { kind: "divider" },
+    {
+      kind: "action",
+      key: "delete",
+      label: "Delete chat",
+      tone: "danger",
+      onSelect: () => deleteFromMenu(attrs, row),
+    },
+  ];
 }
 
 // ---------- marks ----------
@@ -287,19 +237,14 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
 // ---------- the component ----------
 
 export const ChatRail: m.Component<ChatRailAttrs> = {
-  oncreate() {
-    document.addEventListener("click", closeMenuOnClickAway);
-    document.addEventListener("keydown", closeMenuOnEscape);
-  },
   onremove() {
-    document.removeEventListener("click", closeMenuOnClickAway);
-    document.removeEventListener("keydown", closeMenuOnEscape);
-    menu = null;
+    // A menu still open when the rail unmounts would keep its Escape listener on the window.
+    railMenu.dispose();
   },
   view({ attrs }) {
     const collapsed = isCollapsed(attrs.isCompact);
     pruneDeleting(attrs.rows);
-    const menuRow = menu === null ? undefined : attrs.rows.find((row) => row.chatId === menu?.chatId);
+    const menuRow = menuChatId === null ? undefined : attrs.rows.find((row) => row.chatId === menuChatId);
     return m(
       "nav",
       {
@@ -357,7 +302,7 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
           { class: "chat-rail-list min-h-0 flex-1 overflow-y-auto px-2 pb-2" },
           attrs.rows.map((row) => railRow(attrs, row, collapsed)),
         ),
-        menu !== null && menuRow !== undefined ? rowMenu(attrs, menuRow, menu) : null,
+        menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow)),
       ],
     );
   },
@@ -397,7 +342,8 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow, collapsed: boolean): m.Vnod
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
         if (isDeleting || row.isProvisional) return;
-        menu = { chatId: row.chatId, x: event.clientX, y: event.clientY };
+        menuChatId = row.chatId;
+        railMenu.open(anchorForPoint(event.clientX, event.clientY));
       },
     },
     collapsed

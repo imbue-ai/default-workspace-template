@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 
 afterEach(() => {

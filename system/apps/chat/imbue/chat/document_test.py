@@ -120,7 +120,11 @@ def test_a_chat_page_without_a_bundle_is_the_not_built_placeholder(tmp_path: Pat
 
 def test_the_health_route_reports_the_bundle(tmp_path: Path) -> None:
     client, _ = _client(tmp_path, _agent_id())
-    assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
+    health = client.get("/api/health").get_json()
+    assert health["status"] == "ok"
+    assert health["is_frontend_built"] is True
+    # A never-started manager follows nothing, which the probe says rather than hides.
+    assert health["agent_events"]["is_stream_healthy"] is False
 
 
 def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_desktop() -> None:
@@ -146,6 +150,8 @@ def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch
     with serve_app(shell.application) as served:
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
         _record_client_message_activity(chat_id, SendMessageRequest(message="unframed"))
+        # A secondary chat's send is as framed as any, and still reaches no shell.
+        _record_client_message_activity(chat_id, framed, is_secondary=True)
         _record_client_message_activity(chat_id, framed)
         wait_until_true(
             lambda: shell.received == [client_activity_report(chat_id, framed)], 5.0, "the client-activity report"
@@ -168,15 +174,16 @@ def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pyt
     assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="terminal-pty-a1b2c3d4">' in response.text
 
 
-def test_the_root_and_new_serve_the_chat_root_document(tmp_path: Path) -> None:
+def test_the_root_new_and_send_serve_the_chat_root_document(tmp_path: Path) -> None:
     chat_id = _agent_id()
     client, _ = _client(tmp_path, chat_id)
     (tmp_path / "root.html").write_text("<html><head></head><body>root</body></html>")
 
     root = client.get("/?chat=" + chat_id)
     new = client.get("/new?message=hello")
+    send = client.get("/send?message=hello")
 
-    for response in (root, new):
+    for response in (root, new, send):
         assert response.status_code == 200
         assert response.headers[FRONTEND_BUILT_HEADER] == "true"
         assert response.headers["Cache-Control"] == "no-store"

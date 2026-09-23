@@ -71,6 +71,9 @@ A window argument is one of:
   `open` that made it;
 - **`self`**, your own chat's window (the chat app's window whose path carries
   `$MINDS_CHAT_ID`, or `$MNGR_AGENT_ID` for an agent that is its own chat);
+- **`pinned`**, your app's pinned window on the target client's active desktop
+  (the chat's root window, which the avatar opens): `navigate pinned /?chat=<id>`
+  shows a chat there for that client;
 - an **app name** (`files`, `browser`), that app's most recently focused window
   on the target client's active desktop.
 
@@ -87,7 +90,15 @@ A window argument is one of:
 | Open a page with launch parameters | `python3 system/scripts/layout.py open terminal --launch new --param workdir=/data` |
 | Open a web page in a new browser | `python3 system/scripts/layout.py open https://example.com` |
 | Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
-| Close a window | `python3 system/scripts/layout.py close <window>` (a terminal's session, or the one browser, is ended by its app once no window shows it) |
+| Close a window | `python3 system/scripts/layout.py close <window>` (a terminal's session, or the one browser, is ended by its app once no window shows it; refused for a pinned window, which is never closed: `minimize` it instead) |
+
+**Every mutating op here changes what the user is looking at, live.** There is
+no staging area: `open` puts a window on their screen the moment it returns, and
+`close` / `place` / `focus` / `navigate` / `refresh` rearrange the desktop under
+their hands. So treat `open` as *the act of showing them something*, not as
+setup -- finish whatever you wanted to check privately before you call it, and
+never tell the user to open a window you already opened. (`context`, `desktops`,
+and `list` are the read-only ones; they change nothing.)
 
 `open` prints the window's id (the new one's, or the focused one's) to **stdout**
 so you can name it in later ops. It opens the window at `--path`, or at a launch path (`--launch <id>` with
@@ -120,7 +131,10 @@ target client's placements only:
 
 `navigate` and `refresh` reach the page itself: `navigate` sets the window's
 path as if its page had reported it (the client's page follows), and `refresh`
-reloads the page (on the target client, or on every client for `--app`).
+reloads the page (on the target client, or on every client for `--app`). On a
+window whose `scope` is `independent` (the chat's pinned root window: each
+viewer keeps their own path there), `navigate` moves the target client's page
+alone and leaves every other client where it was.
 
 The most common natural request, "put a terminal next to my chat", is:
 
@@ -166,7 +180,11 @@ subcommand: it is the taskbar's desktop menu, or the shell's REST routes
 
 `desktops` prints every desktop with its windows (`id`, `app`, `path`, `title`,
 `is_settling`: true from an open at a launch path until the page's first
-location report) and shortcuts, and every client with its `active_desktop`,
+location report; `is_pinned`: the app's pinned window, present on every desktop
+and never closed; `scope`: `linked`, or `independent` for a window whose path
+is each client's own, in which case the listed `path` is the shared home path
+and `client_paths` says where each client's page is, by client id) and shortcuts,
+and every client with its `active_desktop`,
 `is_connected`, and `shown` (the windows of its active desktop it has not
 minimized). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both

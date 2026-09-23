@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -16,20 +17,24 @@ from pydantic import Field
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopShortcut
+from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
+from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
 from imbue.system_interface.shell.desktop_document import with_shortcut
 from imbue.system_interface.shell.desktop_document import with_shortcut_moved
 from imbue.system_interface.shell.desktop_document import with_window_location
 from imbue.system_interface.shell.desktop_document import with_window_opened
+from imbue.system_interface.shell.desktop_document import without_pin_marks
 from imbue.system_interface.shell.desktop_document import without_shortcut
 from imbue.system_interface.shell.desktop_document import without_window
 from imbue.system_interface.shell.errors import DesktopConflictError
@@ -266,8 +271,28 @@ class DesktopStore(MutableModel):
             )
             return list(seeded.desktops)
 
-    def create_desktop(self, name: str, color: str, glyph: int, shortcuts: Sequence[DesktopShortcut]) -> Desktop:
-        """Register a new desktop with no windows and no wallpaper; two names that shorten to one id conflict."""
+    def ensure_pinned_windows(self, pins: Sequence[AppPin], now: datetime) -> DesktopsChangeOutcome:
+        """The desktops, after every desktop holds exactly one pinned window per pinned app and no pin mark of an app
+        that is no longer pinned (pinned-taskbar-entries plan section 3.2); written only when something changed."""
+        pinned_app_names = {app_pin.app for app_pin in pins}
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktops = document.desktops if document is not None else ()
+            ensured = tuple(
+                with_pinned_windows_ensured(without_pin_marks(desktop, pinned_app_names), pins, now).desktop
+                for desktop in desktops
+            )
+            if all(after is before for after, before in zip(ensured, desktops, strict=True)):
+                return DesktopsChangeOutcome(desktops=desktops, is_written=False)
+            self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=ensured))
+        logger.info("Reconciled the pinned windows of {} desktop(s) for {} pinned app(s)", len(ensured), len(pins))
+        return DesktopsChangeOutcome(desktops=ensured, is_written=True)
+
+    def create_desktop(
+        self, name: str, color: str, glyph: int, shortcuts: Sequence[DesktopShortcut], windows: Sequence[Window]
+    ) -> Desktop:
+        """Register a new desktop with its seeded shortcuts and pinned windows and no wallpaper; two names that
+        shorten to one id conflict."""
         return self.add_desktop(
             Desktop(
                 id=slugify_desktop_name(name),
@@ -276,7 +301,7 @@ class DesktopStore(MutableModel):
                 glyph=validated_desktop_glyph(glyph),
                 wallpaper=None,
                 shortcuts=tuple(shortcuts),
-                windows=(),
+                windows=tuple(windows),
             )
         )
 

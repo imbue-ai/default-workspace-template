@@ -1,1 +1,0 @@
-Updated the minds dev workflow skill's example `docker ps` output and marked finding 13 of `specs/provider-uniformity-review.md` (and the matching anti-pattern in `specs/provider-shape.md`) resolved, following the Docker provider's loopback SSH bind for local daemons.

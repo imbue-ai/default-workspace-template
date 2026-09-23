@@ -6,12 +6,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_manifest.manifest import EntryMode
+from app_manifest.manifest import LocationScope
+from app_manifest.manifest import Pin
+from app_manifest.manifest import PinStyle
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import read_registry
 
 from imbue.imbue_common.model_update import to_update
+from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
@@ -24,6 +30,7 @@ from imbue.system_interface.shell.desktop_document import BackdropSize
 from imbue.system_interface.shell.desktop_document import FitMetrics
 from imbue.system_interface.shell.desktop_document import GridDimensions
 from imbue.system_interface.shell.desktop_document import GridMetrics
+from imbue.system_interface.shell.desktop_document import PINNED_WINDOW_FRAME
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
@@ -38,12 +45,15 @@ from imbue.system_interface.shell.desktop_document import most_recently_focused_
 from imbue.system_interface.shell.desktop_document import nearest_free_cell
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
 from imbue.system_interface.shell.desktop_document import path_carries_marker
+from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import place_shortcuts
 from imbue.system_interface.shell.desktop_document import reading_order_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import settled_windows
 from imbue.system_interface.shell.desktop_document import snap_zone_for_release
 from imbue.system_interface.shell.desktop_document import unsnap_frame
+from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
+from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_shortcut
 from imbue.system_interface.shell.desktop_document import with_shortcut_moved
 from imbue.system_interface.shell.desktop_document import with_window_frame
@@ -53,6 +63,7 @@ from imbue.system_interface.shell.desktop_document import with_window_placed_on_
 from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
+from imbue.system_interface.shell.desktop_document import without_pin_marks
 from imbue.system_interface.shell.desktop_document import without_shortcut
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
@@ -244,6 +255,117 @@ def test_a_location_report_replaces_the_path_and_title_and_ends_settling_only_wh
     assert with_window_location(landed, _WIN_1, WindowPath("/?chat=agent-9"), WindowTitle("Plan")) is landed
     with pytest.raises(WindowNotFoundError):
         with_window_location(desktop, _WIN_2, WindowPath("/"), WindowTitle(""))
+
+
+# Desktops: pinned windows
+
+
+def _pin(app: str, path: str = "/", scope: LocationScope = LocationScope.LINKED) -> AppPin:
+    return AppPin(app=AppName(app), pin=Pin(path=LaunchPathValue(path), scope=scope))
+
+
+def test_a_fresh_desktop_gets_one_pinned_window_per_pinned_app_and_a_second_ensure_changes_nothing() -> None:
+    desktop = desktop_with_windows()
+    ensured = with_pinned_windows_ensured(desktop, [_pin("chat"), _pin("notes", "/inbox")], TEST_NOW)
+    assert ensured.is_written is True
+    assert [
+        (str(window.app), str(window.path), window.is_pinned, window.title) for window in ensured.desktop.windows
+    ] == [
+        ("chat", "/", True, ""),
+        ("notes", "/inbox", True, ""),
+    ]
+    assert all(
+        window.is_settling is False and window.scope is LocationScope.LINKED for window in ensured.desktop.windows
+    )
+    again = with_pinned_windows_ensured(ensured.desktop, [_pin("chat"), _pin("notes", "/inbox")], TEST_NOW)
+    assert again.is_written is False and again.desktop is ensured.desktop
+    # No pins: nothing to ensure, and the same object answers.
+    assert with_pinned_windows_ensured(desktop, [], TEST_NOW).desktop is desktop
+
+
+def test_the_earliest_window_at_the_home_path_is_adopted_and_an_independent_pin_clears_its_shared_title() -> None:
+    desktop = desktop_with_windows(
+        window_record(_WIN_1, "chat", "/?chat=agent-1", title="Drifted"),
+        window_record(_WIN_2, "chat", "/", title="Root"),
+        window_record(_WIN_3, "chat", "/", title="Later root"),
+    )
+    linked = with_pinned_windows_ensured(desktop, [_pin("chat")], TEST_NOW).desktop
+    assert [window.is_pinned for window in linked.windows] == [False, True, False]
+    assert linked.windows[1].title == "Root" and linked.windows[1].scope is LocationScope.LINKED
+    independent = with_pinned_windows_ensured(desktop, [_pin("chat", scope=LocationScope.INDEPENDENT)], TEST_NOW)
+    adopted = independent.desktop.windows[1]
+    assert adopted.id == _WIN_2 and adopted.is_pinned is True
+    assert adopted.scope is LocationScope.INDEPENDENT and adopted.title == ""
+    # A window still settling at the home path is adopted settled: a pinned window has no launch path to finish.
+    settling = desktop_with_windows(window_record(_WIN_1, "chat", "/", is_settling=True))
+    (adopted_settling,) = with_pinned_windows_ensured(settling, [_pin("chat")], TEST_NOW).desktop.windows
+    assert adopted_settling.id == _WIN_1 and adopted_settling.is_pinned and adopted_settling.is_settling is False
+    # A window at another path is not adopted: a pinned window is created beside it.
+    drifted_only = desktop_with_windows(window_record(_WIN_1, "chat", "/?chat=agent-1"))
+    created = with_pinned_windows_ensured(drifted_only, [_pin("chat")], TEST_NOW).desktop
+    assert [(window.id == _WIN_1, window.is_pinned) for window in created.windows] == [(True, False), (False, True)]
+    # A pin whose home path moved: the marked independent window's shared path follows it (that record carries
+    # the home path at all times), while a marked linked window keeps the path it drifted to.
+    moved = desktop_with_windows(
+        window_record(_WIN_1, "chat", "/old", is_pinned=True, scope=LocationScope.INDEPENDENT),
+        window_record(_WIN_2, "notes", "/?note=3", is_pinned=True),
+    )
+    pins = [_pin("chat", "/home", LocationScope.INDEPENDENT), _pin("notes", "/inbox")]
+    followed = with_pinned_windows_ensured(moved, pins, TEST_NOW)
+    assert followed.is_written is True
+    assert [(str(window.path), window.is_pinned) for window in followed.desktop.windows] == [
+        ("/home", True),
+        ("/?note=3", True),
+    ]
+
+
+def test_a_withdrawn_pin_leaves_its_window_as_an_ordinary_one() -> None:
+    desktop = with_pinned_windows_ensured(desktop_with_windows(), [_pin("chat"), _pin("notes")], TEST_NOW).desktop
+    unmarked = without_pin_marks(desktop, {AppName("notes")})
+    assert [(str(window.app), window.is_pinned) for window in unmarked.windows] == [("chat", False), ("notes", True)]
+    assert without_pin_marks(unmarked, {AppName("notes")}) is unmarked
+    # An ordinary window at the home path is adopted again when the pin returns.
+    readopted = with_pinned_windows_ensured(unmarked, [_pin("chat"), _pin("notes")], TEST_NOW).desktop
+    assert [window.is_pinned for window in readopted.windows] == [True, True] and len(readopted.windows) == 2
+
+
+def test_a_pinned_window_the_client_never_placed_reads_at_the_pinned_frame_below_the_stack() -> None:
+    pinned = window_record(WindowId("win-00000000000000ab"), "buddy", "/", is_pinned=True)
+    ordinary = window_record(WindowId("win-00000000000000cd"), "docs", "/a")
+    desktop = desktop_with_windows(ordinary, pinned)
+    layout = DesktopLayout(version=1, updated_at=None, placements=(placement_record(ordinary.id),))
+    placed = with_pinned_windows_placed(layout, desktop)
+    assert [placement.window_id for placement in placed.placements] == [pinned.id, ordinary.id]
+    assert placed.placements[0].frame == PINNED_WINDOW_FRAME
+    assert placed.placements[0].is_minimized is True
+    assert placed.placements[0].state is WindowState.NORMAL
+    # Placed once (by hand, or by this rule then saved), the stored placement stands.
+    assert with_pinned_windows_placed(placed, desktop) is placed
+    # An ordinary window the client never placed keeps reading as the cascade.
+    assert (
+        with_pinned_windows_placed(
+            DesktopLayout(version=1, updated_at=None, placements=()), desktop_with_windows(ordinary)
+        ).placements
+        == ()
+    )
+
+
+def test_the_pinned_apps_are_the_non_internal_rows_that_carry_a_pin(tmp_path: Path) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            registry_row_toml("chat", "http://localhost:1", pin=("/", "avatar", "independent", "floating")),
+            registry_row_toml("hidden", "http://localhost:2", is_internal=True, pin=("/", "plain", "linked", "bar")),
+            registry_row_toml("plain", "http://localhost:3"),
+        )
+    )
+    (chat,) = pinned_apps(rows)
+    assert str(chat.app) == "chat"
+    assert (chat.pin.style, chat.pin.scope, chat.pin.default_mode) == (
+        PinStyle.AVATAR,
+        LocationScope.INDEPENDENT,
+        EntryMode.FLOATING,
+    )
 
 
 # Desktops: shortcuts

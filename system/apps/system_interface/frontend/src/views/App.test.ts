@@ -4,13 +4,21 @@
  * document-level keyboard and pointer handling around the launcher and the menus.
  */
 import "../testing/dom";
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
-import { FakeDesktopApi, FakeDesktopSocket } from "../testing/fakeShell";
-import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
+import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
+import {
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  placementRecord,
+  themeMetricsRecord,
+  windowRecord,
+} from "../testing/records";
+import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
 import { App } from "./App";
 
 const CLIENT = "client-1";
@@ -23,6 +31,8 @@ const gestures: GestureSource = {
   },
 };
 
+let api: FakeDesktopApi;
+let socket: FakeDesktopSocket;
 let store: DesktopStore;
 
 function pressEscape(): void {
@@ -31,13 +41,8 @@ function pressEscape(): void {
 }
 
 beforeEach(async () => {
-  // The template catalog request the App fires on mount: a shell with no catalog configured.
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => ({ ok: true, json: async () => ({ catalog: null }) })),
-  );
-  const api = new FakeDesktopApi();
-  const socket = new FakeDesktopSocket();
+  api = new FakeDesktopApi();
+  socket = new FakeDesktopSocket();
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
   api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
   store = new DesktopStore({
@@ -57,8 +62,53 @@ beforeEach(async () => {
 
 afterEach(() => {
   unmountViews();
-  vi.unstubAllGlobals();
   gestureListener = null;
+});
+
+describe("a floating entry drag", () => {
+  const buddy = appRecord("buddy", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "floating" } });
+
+  /** A floating buddy entry on a 1000x800 backdrop, lifted at (10, 10): under jsdom every box measures as empty,
+   *  so the grab offset is the press point itself and a move to (x, y) puts the box's corner at (x - 10, y - 10). */
+  function beginDrag(): { listener: GestureListener; element: HTMLElement } {
+    socket.deliver().onAppsUpdated([appRecord("docs"), buddy]);
+    socket.deliver().onDesktopsUpdated([
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+    ]);
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const element = document.querySelector('[data-pinned-entry="buddy"][data-entry-mode="floating"]') as HTMLElement;
+    const listener = gestureListener as GestureListener;
+    listener.onBegin({ kind: "floating-entry", app: "buddy", element }, { x: 10, y: 10 }, { x: 10, y: 10 });
+    return { listener, element };
+  }
+
+  it("paints the entry per move with no redraw, and a redraw then draws the same box", () => {
+    const { listener, element } = beginDrag();
+    expect(element.style.left).toBe("928px");
+    listener.onMove({ kind: "floating-entry", app: "buddy", element }, { x: 110, y: 210 }, { x: 100, y: 200 });
+    expect(element.style.left).toBe("100px");
+    expect(element.style.top).toBe("200px");
+    m.redraw.sync();
+    expect(document.querySelector('[data-pinned-entry="buddy"]')).toBe(element);
+    expect(element.style.left).toBe("100px");
+    listener.onEnd({ kind: "floating-entry", app: "buddy", element }, { x: 110, y: 210 }, { x: 100, y: 200 });
+    expect(element.style.left).toBe("100px");
+    m.redraw.sync();
+    expect(element.style.left).toBe("100px");
+  });
+
+  it("puts the entry back where it was when cancelled, before any redraw", () => {
+    const { listener, element } = beginDrag();
+    listener.onMove({ kind: "floating-entry", app: "buddy", element }, { x: 110, y: 210 }, { x: 100, y: 200 });
+    expect(element.style.left).toBe("100px");
+    listener.onCancel({ kind: "floating-entry", app: "buddy", element });
+    expect(element.style.left).toBe("928px");
+    m.redraw.sync();
+    expect(element.style.left).toBe("928px");
+  });
 });
 
 describe("a window drag", () => {
@@ -149,9 +199,9 @@ describe("Escape", () => {
     m.redraw.sync();
     (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
     m.redraw.sync();
-    expect(document.querySelector('[data-floating="desktops-menu"]')).not.toBeNull();
+    expect(document.querySelector(".desktops-menu")).not.toBeNull();
     pressEscape();
-    expect(document.querySelector('[data-floating="desktops-menu"]')).toBeNull();
+    expect(document.querySelector(".desktops-menu")).toBeNull();
     expect(store.isLauncherOpen()).toBe(true);
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
@@ -168,20 +218,83 @@ function pressOn(element: HTMLElement): void {
   m.redraw.sync();
 }
 
-describe("a press into the focused page", () => {
-  it("closes an open menu: the page is shielded while the menu is up, so the press reaches the shell", () => {
+describe("the avatar chooser", () => {
+  // The pinned app takes a draft at its home path, so the chooser's prompt goes to this client's view of its window.
+  const buddy = appRecord("buddy", {
+    pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
+    launch_paths: [launchPathRecord({ id: "root", path: "/", params: ["draft"] })],
+  });
+
+  /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
+  function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
+    socket.deliver().onAppsUpdated([appRecord("docs"), buddy, ...apps]);
+    socket.deliver().onDesktopsUpdated([
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+    ]);
+    m.redraw.sync();
+    return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
+  }
+
+  function openEntryMenuRow(entry: HTMLElement, key: string): void {
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    (document.querySelector(`[data-menu-row="${key}"]`) as HTMLElement).click();
+    m.redraw.sync();
+  }
+
+  it("routes the entry menu's style row and the chooser's Design your own... to the store", async () => {
+    const entry = pinnedEntry();
+    openEntryMenuRow(entry, "change-avatar");
+    await settle();
+    m.redraw.sync();
+    (document.querySelector(".avatar-design-own") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+    await settle();
+    const prompt = new URLSearchParams({ draft: AVATAR_DESIGN_PROMPT }).toString();
+    expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?${prompt}:Buddy`);
+    expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
+
+    openEntryMenuRow(entry, "style-plain");
+    await settle();
+    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:bar:plain:-");
+  });
+
+  it("opens from the pinned entry's menu, and stays closed when dismissed before the catalog answered", async () => {
+    const entry = pinnedEntry();
+    const answerCatalog = api.holdReads();
+    openEntryMenuRow(entry, "change-avatar");
+    expect(document.querySelector("[data-avatar-chooser]")).not.toBeNull();
+    expect(document.querySelector("[data-avatar-chooser] [role='status']")).not.toBeNull();
+
+    (document.querySelector(".avatar-chooser-done") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+    answerCatalog();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+  });
+});
+
+describe("a press outside what is open", () => {
+  it("closes an open menu through its own sheet, with the focused page shielded under it", () => {
     expect(focusedShield()).toBeNull();
     (document.querySelector('[data-window-control="menu"]') as HTMLElement).click();
     m.redraw.sync();
-    expect(document.querySelector('[data-floating="window-menu"]')).not.toBeNull();
-    const shield = focusedShield();
-    expect(shield).not.toBeNull();
-    pressOn(shield as HTMLElement);
-    expect(document.querySelector('[data-floating="window-menu"]')).toBeNull();
+    expect(document.querySelector(".window-menu")).not.toBeNull();
+    expect(focusedShield()).not.toBeNull();
+    // The sheet covers the page, so the press that dismisses the menu cannot also reach it.
+    const sheet = document.querySelector('[data-menu-part="sheet"]') as HTMLElement;
+    sheet.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    m.redraw.sync();
+    expect(document.querySelector(".window-menu")).toBeNull();
     expect(focusedShield()).toBeNull();
   });
 
-  it("closes the launcher the same way", () => {
+  it("closes the launcher from a press into the focused page, which is shielded for it", () => {
     store.openLauncher();
     m.redraw.sync();
     const shield = focusedShield();

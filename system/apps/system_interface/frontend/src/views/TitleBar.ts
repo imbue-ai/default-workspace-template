@@ -3,7 +3,8 @@
  * window menu (three dots, right after the title), then at the right edge minimize,
  * maximize (restore when maximized), and close. It is the drag handle (``data-drag-handle``);
  * a double click toggles maximize. The maximize and restore controls are hidden in compact mode,
- * where every window renders maximized.
+ * where every window renders maximized. A pinned window keeps its close control too, so the
+ * habit of reaching for it holds; the desktop answers it by minimizing the window.
  */
 
 import m from "mithril";

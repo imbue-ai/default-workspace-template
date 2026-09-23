@@ -10,9 +10,11 @@
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
  * desktop change, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
- * of plan section 4.6 after every desktops update (``shell:navigate`` for a page that declared
- * navigation, a ``src`` reassignment otherwise), and the pages' own ``shell:capabilities``, ``shell:location``,
- * ``shell:focused``, and ``shell:open``. Messages cross through ``relay.ts``.
+ * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
+ * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
+ * this client's own stored path, which arrives with the layout), and the pages' own
+ * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, and
+ * ``shell:start-with-text``. Messages cross through ``relay.ts``.
  */
 
 import {
@@ -25,6 +27,7 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_SHOWN,
+  SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageUrl } from "../model/pageUrl";
@@ -36,9 +39,11 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  effectiveWindow,
+  effectiveWindowTitle,
   findWindow,
-  windowTitle,
 } from "../reducers/desktopState";
+import type { DesktopState } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
 
@@ -97,8 +102,10 @@ export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
   private lastFocusedWindowId: string | null = null;
-  /** The shell's desktops revision the pages last followed: a stored path changes only with it. */
+  /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
+  /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
+  private followedLayoutLoadsRevision = 0;
 
   constructor(
     private readonly host: HTMLElement,
@@ -112,6 +119,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_LOCATION, (frame, payload) => this.takeLocation(frame, payload));
     setChildFrameMessageHandler(SHELL_FOCUSED, (frame) => this.takeFocused(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
+    setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     this.store.setPageDriver(this);
   }
 
@@ -144,7 +152,20 @@ export class LivePagesLayer implements PageDriver {
     const found = findWindow(state, page.windowId);
     const app = found === null ? undefined : appByName(state, found.window.app);
     if (found === null || app === undefined) return;
-    this.pointPageAt(page, app, found.window.path);
+    this.pointPageAt(page, app, this.pathSeen(page, found, state));
+  }
+
+  /** Whether the layout holds this client's own path for the window: an independent window's arrives with its
+   *  desktop's layout, so it is known only while that desktop is the active one and the layout has loaded. */
+  private isOwnPathKnown(found: { window: WindowRecord; desktop: Desktop }, state: DesktopState): boolean {
+    return found.desktop.id === state.activeDesktopId && state.isLayoutLoaded;
+  }
+
+  /** The path this client's page of the window is at: a linked window's shared record, an independent window's
+   *  own stored path when it is known, else where the layer last put or saw the page. */
+  private pathSeen(page: LivePage, found: { window: WindowRecord; desktop: Desktop }, state: DesktopState): string {
+    if (found.window.scope === "independent" && !this.isOwnPathKnown(found, state)) return page.lastReportedPath;
+    return effectiveWindow(state, found.window).path;
   }
 
   /** Point the frame at the app's page for ``path`` (cross-origin, so a reload is a ``src`` reassignment). */
@@ -218,12 +239,17 @@ export class LivePagesLayer implements PageDriver {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
 
-    // Only after the shell's own desktops update, never on a redraw or a local edit (an open, a close, a
-    // settings answer): between a page's own location report and the broadcast that stores it, the
+    // Only after the shell's own desktops update or layout load, never on a redraw or a local edit (an open, a
+    // close, a settings answer): between a page's own location report and the broadcast that stores it, the
     // stored path is still the old one, and nothing must send the page back there.
-    const revision = this.store.getDesktopsRevision();
-    if (revision !== this.followedDesktopsRevision) {
-      this.followedDesktopsRevision = revision;
+    const desktopsRevision = this.store.getDesktopsRevision();
+    const layoutLoadsRevision = this.store.getLayoutLoadsRevision();
+    if (
+      desktopsRevision !== this.followedDesktopsRevision ||
+      layoutLoadsRevision !== this.followedLayoutLoadsRevision
+    ) {
+      this.followedDesktopsRevision = desktopsRevision;
+      this.followedLayoutLoadsRevision = layoutLoadsRevision;
       this.follow(windowsById);
     }
 
@@ -235,18 +261,31 @@ export class LivePagesLayer implements PageDriver {
   }
 
   private follow(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
+    const state = this.store.getState();
+    // A navigation this client asked for itself is meant even when it points the page back at a path the page
+    // just reported leaving (the same draft handed over twice): the guard below is for stale snapshots, not this.
+    const own = this.store.takeOwnNavigation();
+    if (own !== null) {
+      const page = this.pages.get(own.windowId);
+      if (page !== undefined) page.pendingReport = null;
+    }
     const reports = new Map<string, PageReport>();
     const windows: WindowRecord[] = [];
     for (const page of this.pages.values()) {
       const found = windowsById.get(page.windowId);
       if (found === undefined) continue;
+      // A hidden page of an independent window on another desktop stays where it is until that desktop is
+      // shown again, and nothing moves one while the active desktop's layout is still being read.
+      if (found.window.scope === "independent" && !this.isOwnPathKnown(found, state)) continue;
+      // The window as this client sees it: an independent window at this client's own stored path.
+      const seen = effectiveWindow(state, found.window);
       // A stored record still naming the path a page reported leaving is a snapshot from before the shell
       // took the report (a broadcast from another cause meanwhile): it must not send the page back.
       if (page.pendingReport !== null) {
-        if (found.window.path === page.pendingReport.fromPath) continue;
+        if (seen.path === page.pendingReport.fromPath) continue;
         page.pendingReport = null;
       }
-      windows.push(found.window);
+      windows.push(seen);
       reports.set(page.windowId, {
         lastReportedPath: page.lastReportedPath,
         isNavigationCapable: page.isNavigationCapable,
@@ -288,15 +327,17 @@ export class LivePagesLayer implements PageDriver {
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);
     frame.setAttribute("sandbox", PAGE_FRAME_SANDBOX);
     frame.setAttribute("allow", PAGE_FRAME_ALLOW);
-    frame.title = windowTitle(window, app);
+    const state = this.store.getState();
+    frame.title = effectiveWindowTitle(state, window, app);
     frame.className = "block h-full w-full border-0";
     wrapper.appendChild(frame);
+    const openingPath = effectiveWindow(state, window).path;
     const page: LivePage = {
       windowId: window.id,
       app: window.app,
       wrapper,
       frame,
-      lastReportedPath: window.path,
+      lastReportedPath: openingPath,
       pendingReport: null,
       isNavigationCapable: false,
       greetedDesktopId: null,
@@ -313,7 +354,7 @@ export class LivePagesLayer implements PageDriver {
     });
     this.pages.set(window.id, page);
     this.host.appendChild(wrapper);
-    this.pointPageAt(page, app, window.path);
+    this.pointPageAt(page, app, openingPath);
     return page;
   }
 
@@ -352,7 +393,7 @@ export class LivePagesLayer implements PageDriver {
     const state = this.store.getState();
     const found = findWindow(state, page.windowId);
     const desktopId = found?.desktop.id ?? state.activeDesktopId ?? "";
-    const path = found?.window.path ?? "";
+    const path = found === null ? "" : this.pathSeen(page, found, state);
     sendToChildFrame(page.frame, SHELL_HANDSHAKE, {
       clientId: state.clientId,
       windowId: page.windowId,
@@ -386,9 +427,11 @@ export class LivePagesLayer implements PageDriver {
     const title = typeof payload.title === "string" ? payload.title.trim().slice(0, MAX_WINDOW_TITLE_LENGTH) : "";
     // Remembered before the post, so this client's own report never navigates the page.
     page.lastReportedPath = path;
-    const stored = findWindow(this.store.getState(), page.windowId);
-    if (stored !== null && stored.window.path !== path) {
-      page.pendingReport = { fromPath: stored.window.path, path };
+    const state = this.store.getState();
+    const stored = findWindow(state, page.windowId);
+    if (stored !== null) {
+      const seenPath = effectiveWindow(state, stored.window).path;
+      if (seenPath !== path) page.pendingReport = { fromPath: seenPath, path };
     }
     if (title !== "") page.frame.title = title;
     void this.store.reportLocation(page.windowId, path, title).then((isTaken) => {
@@ -400,6 +443,18 @@ export class LivePagesLayer implements PageDriver {
   private takeFocused(frame: HTMLIFrameElement): void {
     const page = this.pageOfFrame(frame);
     if (page !== undefined) this.store.raiseWindow(page.windowId);
+  }
+
+  /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
+   *  desktop (a page can only be pressed there); the frame has to be one the shell created. */
+  private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined) return;
+    const text = payload.text;
+    if (typeof text !== "string") {
+      console.warn(`[si] shell:start-with-text ignored: it carried no text (${JSON.stringify(payload)})`);
+      return;
+    }
+    void this.store.startWithText(text);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

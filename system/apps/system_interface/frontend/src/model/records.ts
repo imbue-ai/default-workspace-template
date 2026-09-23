@@ -1,7 +1,10 @@
 /**
  * The TypeScript mirrors of the shell's records (desktop-interface contracts.md sections 3 to
- * 5): what ``GET /api/desktops``, the placements routes, the client list, and the ``apps_updated``
- * and ``presence_updated`` pushes carry, spelled as the wire spells them (``snake_case``), and the
+ * 5, and the pinned-taskbar-entries plan): what ``GET /api/desktops``, the placements routes
+ * (a client's stored window paths included), the client list with each client's entries, the
+ * ``apps_updated`` push with each app's pin, the avatar catalog of ``GET /api/avatars``, and the
+ * ``avatar_status``, ``avatar_selection_changed``, ``client_entries_changed``, and
+ * ``presence_updated`` pushes carry, spelled as the wire spells them (``snake_case``), and the
  * parsers that read a wire document into them. A document of the wrong shape is refused with
  * ``WireShapeError`` rather than read as an empty one: an empty desktop list would be believed.
  */
@@ -15,6 +18,15 @@ export type ShortcutMode = "focus" | "new";
 export type IfPresent = "focus" | "new";
 
 export type WallpaperKind = "bundled" | "file";
+
+/** Whether a window's path and title are followed by every client, or kept by each client for itself. */
+export type LocationScope = "linked" | "independent";
+
+/** How a pinned entry is drawn: the plain icon-and-title entry, or the avatar the shell ships. */
+export type PinStyle = "plain" | "avatar";
+
+/** Where one client shows a pinned entry: in the taskbar, or floating above the windows. */
+export type EntryMode = "bar" | "floating";
 
 /** A window's rectangle in fractions of the backdrop, wholly inside the unit square. */
 export interface Frame {
@@ -54,6 +66,9 @@ export interface WindowRecord {
   readonly title: string;
   readonly opened_at: string;
   readonly is_settling: boolean;
+  /** The app's pinned window on this desktop: permanent, never closed. */
+  readonly is_pinned: boolean;
+  readonly scope: LocationScope;
 }
 
 export interface Desktop {
@@ -73,13 +88,25 @@ export interface Placement {
   readonly is_minimized: boolean;
 }
 
-/** One client's layout of one desktop: the placements, back to front, and the stamp of the last save. */
+/** One client's path and title for an independent window (pinned-taskbar-entries plan section 5.1). */
+export interface StoredWindowPath {
+  readonly path: string;
+  readonly title: string;
+}
+
+/** One client's layout of one desktop: the placements, back to front, the stamp of the last save, and the
+ *  client's stored paths for the desktop's independent windows, by window id. */
 export interface Layout {
   readonly updated_at: string | null;
   readonly placements: readonly Placement[];
+  readonly window_paths: Readonly<Record<string, StoredWindowPath>>;
 }
 
-export const EMPTY_LAYOUT: Layout = Object.freeze({ updated_at: null, placements: Object.freeze([]) });
+export const EMPTY_LAYOUT: Layout = Object.freeze({
+  updated_at: null,
+  placements: Object.freeze([]),
+  window_paths: Object.freeze({}),
+});
 
 export interface LaunchPath {
   readonly id: string;
@@ -87,12 +114,23 @@ export interface LaunchPath {
   readonly path: string;
   /** The names of the query parameters the shell may append. */
   readonly params: readonly string[];
+  /** The param the launcher fills with typed text, which makes this a free-text row; null for none. */
+  readonly text_param: string | null;
 }
 
 export interface DefaultShortcut {
   /** The launch path id the shortcut runs. */
   readonly launch: string;
   readonly mode: ShortcutMode;
+}
+
+/** An app's pinned taskbar entry, as its manifest declares it (pinned-taskbar-entries plan section 3.1). */
+export interface AppPin {
+  /** The home path: where the pinned window opens. */
+  readonly path: string;
+  readonly style: PinStyle;
+  readonly scope: LocationScope;
+  readonly default_mode: EntryMode;
 }
 
 /** One registered app as the shell lists it (contracts.md section 5.5). */
@@ -111,7 +149,21 @@ export interface AppRecord {
   readonly launch_paths: readonly LaunchPath[];
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
+  readonly pin: AppPin | null;
   readonly is_running: boolean;
+}
+
+/** Where a client keeps a floating entry: the top-left corner of its box, in fractions of the backdrop. */
+export interface FloatingPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** How one client shows one pinned entry (pinned-taskbar-entries plan section 3.4). */
+export interface EntryPresentation {
+  readonly mode: EntryMode;
+  readonly style: PinStyle;
+  readonly position: FloatingPosition | null;
 }
 
 export interface ClientRecord {
@@ -119,6 +171,8 @@ export interface ClientRecord {
   readonly active_desktop: string | null;
   readonly last_seen: string;
   readonly is_connected: boolean;
+  /** The client's presentation of each pinned entry, by app name. */
+  readonly entries: Readonly<Record<string, EntryPresentation>>;
 }
 
 /** What the shell answers when this client's page arrives (contracts.md section 5.5): where it lands, the desktop
@@ -145,6 +199,42 @@ export interface PresentUser {
   readonly session_count: number;
   readonly first_seen: string;
   readonly last_seen: string;
+}
+
+/** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
+export type AvatarMood = "idle" | "working";
+
+export interface AvatarStatus {
+  readonly mood: AvatarMood;
+  /** Whether the status may be out of date: the events it is read from are old, or absent. */
+  readonly is_stale: boolean;
+}
+
+/** The update notice as the shell sends it (``GET /api/updates/pending`` and ``update_notice_changed``): the
+ *  rollback point the last update-app careful-flow apply kept, or null once it is cleared. */
+export interface UpdateNoticeWire {
+  readonly merge_sha: string;
+  readonly applied_at: number;
+  readonly driven_by: string;
+  readonly apps: readonly string[];
+  readonly programs: readonly string[];
+  readonly needs_system_services_restart: boolean;
+  readonly progress: string | null;
+  readonly outcome: string | null;
+}
+
+/** One design as ``GET /api/avatars`` lists it; ``source_path`` is null for a bundled one. */
+export interface AvatarDesign {
+  readonly id: string;
+  readonly label: string;
+  readonly source_path: string | null;
+}
+
+/** The whole of ``GET /api/avatars``: the designs on offer, the workspace's choice, and the fallback. */
+export interface AvatarCatalog {
+  readonly designs: readonly AvatarDesign[];
+  readonly selected: string;
+  readonly default: string;
 }
 
 /** Raised when a wire document does not have the shape the contract gives it. */
@@ -238,6 +328,8 @@ export function parseWindow(raw: unknown): WindowRecord {
     title: asString(record.title, "window.title"),
     opened_at: asString(record.opened_at, "window.opened_at"),
     is_settling: asBoolean(record.is_settling, "window.is_settling"),
+    is_pinned: record.is_pinned === undefined ? false : asBoolean(record.is_pinned, "window.is_pinned"),
+    scope: record.scope === undefined ? "linked" : asOneOf(record.scope, ["linked", "independent"], "window.scope"),
   };
 }
 
@@ -268,11 +360,25 @@ export function parsePlacement(raw: unknown): Placement {
   };
 }
 
+function parseStoredWindowPath(raw: unknown): StoredWindowPath {
+  const record = asObject(raw, "window path");
+  return { path: asString(record.path, "window_path.path"), title: asString(record.title, "window_path.title") };
+}
+
+function parseWindowPaths(raw: unknown): Record<string, StoredWindowPath> {
+  if (raw === undefined) return {};
+  const record = asObject(raw, "layout.window_paths");
+  return Object.fromEntries(
+    Object.entries(record).map(([windowId, stored]) => [windowId, parseStoredWindowPath(stored)]),
+  );
+}
+
 export function parseLayout(raw: unknown): Layout {
   const record = asObject(raw, "layout");
   return {
     updated_at: asOptionalString(record.updated_at, "layout.updated_at"),
     placements: asArray(record.placements, "layout.placements").map(parsePlacement),
+    window_paths: parseWindowPaths(record.window_paths),
   };
 }
 
@@ -283,6 +389,7 @@ function parseLaunchPath(raw: unknown): LaunchPath {
     label: asString(record.label, "launch_path.label"),
     path: asString(record.path, "launch_path.path"),
     params: asArray(record.params ?? [], "launch_path.params").map((param) => asString(param, "launch_path.param")),
+    text_param: asOptionalString(record.text_param, "launch_path.text_param"),
   };
 }
 
@@ -292,6 +399,17 @@ function parseDefaultShortcut(raw: unknown): DefaultShortcut | null {
   return {
     launch: asString(record.launch, "default_shortcut.launch"),
     mode: asOneOf(record.mode, ["focus", "new"], "default_shortcut.mode"),
+  };
+}
+
+function parsePin(raw: unknown): AppPin | null {
+  if (raw === null || raw === undefined) return null;
+  const record = asObject(raw, "pin");
+  return {
+    path: asString(record.path, "pin.path"),
+    style: asOneOf(record.style, ["plain", "avatar"], "pin.style"),
+    scope: asOneOf(record.scope, ["linked", "independent"], "pin.scope"),
+    default_mode: asOneOf(record.default_mode, ["bar", "floating"], "pin.default_mode"),
   };
 }
 
@@ -311,6 +429,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
     default_shortcut: parseDefaultShortcut(record.default_shortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
+    pin: parsePin(record.pin),
     is_running: record.is_running === true,
   };
 }
@@ -323,6 +442,28 @@ export function parseClientRecords(raw: unknown): ClientRecord[] {
   return asArray(raw, "clients").map(parseClientRecord);
 }
 
+function parseFloatingPosition(raw: unknown): FloatingPosition | null {
+  if (raw === null || raw === undefined) return null;
+  const record = asObject(raw, "position");
+  return { x: asNumber(record.x, "position.x"), y: asNumber(record.y, "position.y") };
+}
+
+export function parseEntryPresentation(raw: unknown): EntryPresentation {
+  const record = asObject(raw, "entry");
+  return {
+    mode: asOneOf(record.mode, ["bar", "floating"], "entry.mode"),
+    style: asOneOf(record.style, ["plain", "avatar"], "entry.style"),
+    position: parseFloatingPosition(record.position),
+  };
+}
+
+/** The ``entries`` map of a client record or a ``client_entries_changed`` message; absent reads as none. */
+export function parseEntries(raw: unknown): Record<string, EntryPresentation> {
+  if (raw === undefined) return {};
+  const record = asObject(raw, "entries");
+  return Object.fromEntries(Object.entries(record).map(([app, entry]) => [app, parseEntryPresentation(entry)]));
+}
+
 export function parseClientRecord(raw: unknown): ClientRecord {
   const record = asObject(raw, "client");
   return {
@@ -330,6 +471,62 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     active_desktop: asOptionalString(record.active_desktop, "client.active_desktop"),
     last_seen: asString(record.last_seen, "client.last_seen"),
     is_connected: record.is_connected === true,
+    entries: parseEntries(record.entries),
+  };
+}
+
+export function parseAvatarStatus(raw: unknown): AvatarStatus {
+  const record = asObject(raw, "avatar status");
+  return {
+    mood: asOneOf(record.mood, ["idle", "working"], "avatar status.mood"),
+    is_stale: asBoolean(record.is_stale, "avatar status.is_stale"),
+  };
+}
+
+/** The design an ``avatar_selection_changed`` message names. */
+export function parseAvatarSelectionChanged(raw: unknown): string {
+  const record = asObject(raw, "avatar selection");
+  return asString(record.design, "avatar selection.design");
+}
+
+export function parseUpdateNoticeChanged(raw: unknown): UpdateNoticeWire | null {
+  const record = asObject(raw, "update notice change");
+  if (record.notice === null || record.notice === undefined) return null;
+  const notice = asObject(record.notice, "update notice");
+  return {
+    merge_sha: asString(notice.merge_sha, "update notice.merge_sha"),
+    applied_at: asNumber(notice.applied_at, "update notice.applied_at"),
+    driven_by: asString(notice.driven_by, "update notice.driven_by"),
+    apps: asArray(notice.apps, "update notice.apps").map((app, index) =>
+      asString(app, `update notice.apps[${index}]`),
+    ),
+    programs: asArray(notice.programs, "update notice.programs").map((program, index) =>
+      asString(program, `update notice.programs[${index}]`),
+    ),
+    needs_system_services_restart: asBoolean(
+      notice.needs_system_services_restart,
+      "update notice.needs_system_services_restart",
+    ),
+    progress: asOptionalString(notice.progress, "update notice.progress"),
+    outcome: asOptionalString(notice.outcome, "update notice.outcome"),
+  };
+}
+
+export function parseAvatarDesign(raw: unknown): AvatarDesign {
+  const record = asObject(raw, "avatar design");
+  return {
+    id: asString(record.id, "avatar design.id"),
+    label: asString(record.label, "avatar design.label"),
+    source_path: asOptionalString(record.source_path, "avatar design.source_path"),
+  };
+}
+
+export function parseAvatarCatalog(raw: unknown): AvatarCatalog {
+  const record = asObject(raw, "avatar catalog");
+  return {
+    designs: asArray(record.designs, "avatar catalog.designs").map(parseAvatarDesign),
+    selected: asString(record.selected, "avatar catalog.selected"),
+    default: asString(record.default, "avatar catalog.default"),
   };
 }
 
@@ -392,6 +589,18 @@ export function isSamePlacement(first: Placement, second: Placement): boolean {
     first.frame.height === second.frame.height &&
     first.state === second.state &&
     first.is_minimized === second.is_minimized
+  );
+}
+
+/** Whether two layouts hold the same stored paths and titles for the same windows. */
+export function isSameWindowPaths(
+  first: Readonly<Record<string, StoredWindowPath>>,
+  second: Readonly<Record<string, StoredWindowPath>>,
+): boolean {
+  const firstIds = Object.keys(first);
+  if (firstIds.length !== Object.keys(second).length) return false;
+  return firstIds.every(
+    (windowId) => second[windowId]?.path === first[windowId].path && second[windowId]?.title === first[windowId].title,
   );
 }
 

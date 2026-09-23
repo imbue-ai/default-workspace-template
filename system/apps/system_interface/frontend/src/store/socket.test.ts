@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { presentUserRecord } from "../testing/records";
+import { WireShapeError } from "../model/records";
 import { ShellSocket } from "./socket";
 import type { SocketHandlers } from "./socket";
 
@@ -62,6 +63,10 @@ beforeEach(() => {
     onDesktopsUpdated: vi.fn(),
     onPlacementsUpdated: vi.fn(),
     onActiveDesktopChanged: vi.fn(),
+    onClientEntriesChanged: vi.fn(),
+    onAvatarStatus: vi.fn(),
+    onAvatarSelectionChanged: vi.fn(),
+    onUpdateNoticeChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onPresenceUpdated: vi.fn(),
     onConnected: vi.fn(),
@@ -95,6 +100,15 @@ describe("ShellSocket", () => {
     current().receive({ type: "desktops_updated", desktops: [] });
     current().receive({ type: "placements_updated", desktop_id: "home", client_id: "client-1", save_id: "s-1" });
     current().receive({ type: "active_desktop_changed", client_id: "client-1" });
+    current().receive({
+      type: "client_entries_changed",
+      client_id: "client-1",
+      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
+    });
+    expect(handlers.onClientEntriesChanged).toHaveBeenCalledWith({
+      clientId: "client-1",
+      entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
+    });
     const bob = presentUserRecord("user-bob-4471", { display_name: "Bob" });
     current().receive({ type: "presence_updated", users: [bob] });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);
@@ -106,6 +120,36 @@ describe("ShellSocket", () => {
       saveId: "s-1",
     });
     expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({ clientId: "client-1", desktopId: "" });
+    current().receive({ type: "avatar_status", mood: "working", is_stale: false });
+    expect(handlers.onAvatarStatus).toHaveBeenCalledWith({ mood: "working", is_stale: false });
+    current().receive({ type: "avatar_selection_changed", design: "jelly-cat" });
+    expect(handlers.onAvatarSelectionChanged).toHaveBeenCalledWith("jelly-cat");
+    // A selection naming no design is refused like any other malformed message, not dropped in silence.
+    expect(() => current().receive({ type: "avatar_selection_changed", design: 7 })).toThrow(WireShapeError);
+    expect(handlers.onAvatarSelectionChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers the update notice as the shell holds it, and null once the record is cleared", () => {
+    current().open();
+    const notice = {
+      merge_sha: "abc1234",
+      applied_at: 1_780_000_000,
+      driven_by: "mngr/update-widgets",
+      apps: ["chat"],
+      programs: ["chat"],
+      needs_system_services_restart: false,
+      progress: null,
+      outcome: "Rolled back to the previous version.",
+    };
+    current().receive({ type: "update_notice_changed", notice });
+    expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledWith(notice);
+    current().receive({ type: "update_notice_changed", notice: null });
+    expect(handlers.onUpdateNoticeChanged).toHaveBeenLastCalledWith(null);
+    // A record missing what the banner reads is refused rather than shown half-empty.
+    expect(() => current().receive({ type: "update_notice_changed", notice: { apps: ["chat"] } })).toThrow(
+      WireShapeError,
+    );
+    expect(handlers.onUpdateNoticeChanged).toHaveBeenCalledTimes(2);
   });
 
   it("delivers a layout op for this client or for everyone, and drops another client's or an unknown op", () => {

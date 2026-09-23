@@ -5,7 +5,7 @@
  */
 
 import m from "mithril";
-import type { TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
+import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { LauncherField } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
 import { SystemTray } from "./SystemTray";
@@ -14,6 +14,7 @@ import { TaskbarEntry } from "./TaskbarEntry";
 
 export interface TaskbarAttrs {
   readonly entries: readonly TaskbarEntryRecord[];
+  readonly avatar: AvatarState;
   readonly isCompact: boolean;
   readonly openEntryMenuWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
@@ -45,6 +46,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
             m(TaskbarEntry, {
               key: entry.window.id,
               entry,
+              avatar: attrs.avatar,
               isCompact: attrs.isCompact,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),

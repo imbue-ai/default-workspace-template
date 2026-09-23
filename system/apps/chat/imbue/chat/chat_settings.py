@@ -23,7 +23,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
 
-DEFAULT_SETTINGS_PATH: Final[Path] = Path("data/.apps/chat/settings.json")
+SETTINGS_FILENAME: Final[str] = "settings.json"
 # How many of the user's turns a chat in auto mode runs with fast mode on before the chat app
 # switches it to standard speed.
 DEFAULT_FAST_MODE_TURN_LIMIT: Final[int] = 5

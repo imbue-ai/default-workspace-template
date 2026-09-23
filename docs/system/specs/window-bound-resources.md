@@ -19,7 +19,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
   A close removes the window for everyone and does nothing else: "the shell has no notion of stopping or deleting what the window showed" (plan 4.5; concepts decision 9 took "close means stop" from neither prototype).
 - A **shortcut** runs a launch path in `focus` or `new` mode; the desktop is seeded from each manifest's `default_shortcut`.
   Chat seeds `{new, mode = new}`; terminal, files, and browser seed `{new, mode = focus}`.
-  `ShortcutIcon.ts` labels a `new` shortcut with the launch path's label ("New Terminal") and a `focus` shortcut with the app's display name ("Terminal"), so today's desktop reads "New Chat, Terminal, File Viewer, Browser", and flipping a mode from the context menu renames the icon.
+  `ShortcutIcon.ts` labels a `new` shortcut with the launch path's label (then "New Terminal") and a `focus` shortcut with the app's display name ("Terminal"), so today's desktop reads "New Chat, Terminal, File Viewer, Browser", and flipping a mode from the context menu renames the icon.
 - The **terminal** (`system/apps/terminal`) allocates `terminal-<N>` at `/new`, remembers it in `data/.apps/terminal/instances.json`, and recreates remembered sessions at startup.
   `TmuxSessionSource.delete_terminal` kills the session and forgets the record, but no route calls it.
   Every window of the terminal shows `/?session=<name>`.
@@ -39,9 +39,9 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 Recorded here so the implementation need not re-argue them.
 
 1. Every seeded shortcut is in `new` mode: a shortcut is "a new window of this app".
-   A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's tiles.
+   A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's rows.
 2. A new chat window is the chat list at `/`.
-   The chat app creates chats only from its own page (the New chat button, the launcher's seeded prompts through `/new`) and the workspace's seeding; the desktop shortcut and `layout.py open chat` never create one.
+   The chat app creates chats only from its own page (the New chat button, the launcher's free-text row and the Getting Started app's seeded prompts through `/new`) and the workspace's seeding; the desktop shortcut and `layout.py open chat` never create one.
 3. A terminal and a browser are **window-bound**: the app destroys the resource once no window on any desktop shows it.
    The files app and the chat have no window-bound resource.
 4. Collection is the **app's**, by a sweep over the shell's windows: run when the shell says a window of the app closed, and every 90 seconds as the safety net.
@@ -62,21 +62,20 @@ Recorded here so the implementation need not re-argue them.
 | App | `default_shortcut` | `launch_paths` | Desktop label |
 |---|---|---|---|
 | `chat` | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`), then `new` ("New Chat", `/new`, params `account_id`, `message`) | Chat |
-| `terminal` | `{launch = "new", mode = "new"}` | `new` ("New Terminal", `/new`, param `workdir`) | Terminal |
-| `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer", `/`, param `path`) | File Viewer |
-| `browser` | `{launch = "new", mode = "focus"}` | `new` ("Open Browser", `/new`, param `url`) | Browser |
+| `terminal` | `{launch = "new", mode = "new"}` | `new` ("Terminal", `/new`, param `workdir`) | Terminal |
+| `files` | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, param `path`) | File Viewer |
+| `browser` | `{launch = "new", mode = "focus"}` | `new` ("Browser", `/new`, param `url`) | Browser |
 
-The chat gains a second launch path, `root`, listed first so the launcher's "Open new" tiles show "Chat" before "New Chat".
-The `new` launch path stays: the launcher's "Start something" intents and templates seed a chat through the launch path that declares a `message` param, the welcome chat's auto-open targets `/?chat=<id>` explicitly, and `layout.py open chat --launch new` remains the way an agent starts a chat.
-The browser's launch path is relabelled "Open Browser" because it no longer always creates (section 5.4).
+The chat gains a second launch path, `root`, listed first so the launcher's rows show "Chat" before "New Chat".
+The `new` launch path stays: the launcher's primary free-text row and the Getting Started app's intents and templates seed a chat through the launch path that declares `message` as its `text_param`, the welcome chat's auto-open targets `/?chat=<id>` explicitly, and `layout.py open chat --launch new` remains the way an agent starts a chat.
+The browser's launch path was relabelled "Open Browser" because it no longer always creates (section 5.4); the launcher-and-getting-started plan later shortened the three single-launch-path apps' labels to their display names ("Terminal", "File Viewer", "Browser"), since the launcher's row is the one place they show.
 
-`shortcutLabel` in `ShortcutIcon.ts` returns the app's display name in both modes, so a shortcut's icon never renames when its mode changes; the launch path's label is what the launcher's tile shows.
-`launchRowLabel` ("Open new chat") in the launcher's search reads the same for both chat tiles; that is accepted.
+`shortcutLabel` in `ShortcutIcon.ts` returns the app's display name in both modes, so a shortcut's icon never renames when its mode changes; the launch path's label is what the launcher's row shows, beside the app's display name.
 
 ### 3.2 What a run does
 
 `resolveLaunchRun` is unchanged.
-A `new` shortcut opens a window at the launch path with `if_present: new`, so every double click on Chat opens another list window and every double click on New Terminal allocates another session.
+A `new` shortcut opens a window at the launch path with `if_present: new`, so every double click on Chat opens another list window and every double click on Terminal allocates another session.
 The `focus` browser shortcut raises this client's most recent browser window on this desktop and opens `/new` only when there is none.
 
 `layout.py open <app>` with no `--path` or `--launch` follows `default_shortcut.launch`, so an agent asked to "show the chat" opens the list.
@@ -131,7 +130,7 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
     """Every window path of ``app`` across every desktop, or None when the shell could not be read."""
 ```
 
-It GETs `{shell_url}/api/desktops` with a 2 second timeout over `urllib.request`, validates the `{"desktops": [{"windows": [{"app", "path"}, ...]}, ...]}` shape it needs, and returns the paths of the windows whose `app` matches.
+It GETs `{shell_url}/api/desktops` with a 2 second timeout over `urllib.request`, validates the `{"desktops": [{"windows": [{"app", "path", "client_paths"?}, ...]}, ...]}` shape it needs, and returns the paths of the windows whose `app` matches: each window's `path`, and every value of its `client_paths` (a pinned window with the `independent` scope keeps its shared path at its home path, and what each client's page shows rides beside it; any one of those views keeps the resource alive).
 The shell URL is `MINDS_WORKSPACE_SERVER_URL` with the default `http://127.0.0.1:8000`, resolved as `layout.py` and the chat's `shell_client.py` resolve it; a helper `shell_base_url()` moves into the same module so the three agree.
 
 A window-seen flag is one additive boolean on each app's record, defaulting to false, so a store written by the previous release reads unchanged.
@@ -262,6 +261,6 @@ Each step leaves the tree green and is one or two commits.
   Needs a new page-to-shell message; the viewer's overlays cover it for now.
 - One Chromium with one profile and a window per fleet browser (shared logins across concurrent browsers).
   Moot while the fleet holds one browser.
-- Hiding the chat's `new` tile from the launcher.
+- Hiding the chat's `new` tile from the launcher: resolved by the launcher-and-getting-started plan, where `new` is the launcher's primary free-text row rather than a tile.
 - Migrating existing desktops' shortcuts.
 - Letting only the last-interacted window of a shared browser drive its size; every viewer's resize wins in turn, and the others letterbox, as today.

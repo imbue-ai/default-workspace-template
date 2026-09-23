@@ -58,24 +58,31 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `/wallpapers/<kind>/<name>`), the per-app Stop and Start
   (`/api/apps/<name>/stop|start`), clients (`/api/clients`, and the arrival
   `/api/clients/<client>/arrive` a page posts first), client activity
-  (`/api/client-activity`), the inventory (`/api/inventory`), the templates
-  catalog (`/api/templates-catalog`), and the loopback-only op route
-  (`/api/layout/broadcast`).
+  (`/api/client-activity`), the inventory (`/api/inventory`), each client's
+  pinned-entry presentation
+  (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
+  `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
+  registration `POST /api/avatars` is loopback-only), and the loopback-only
+  op route (`/api/layout/broadcast`).
 - Presence (`/api/presence`, `/api/presence/heartbeat`,
   `/api/presence/leave`): who is connected right now, with their identity
   details (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
-  `presence_updated`, `placements_updated`, `active_desktop_changed`, and
+  `presence_updated`, `placements_updated`, `active_desktop_changed`,
+  `client_entries_changed`, `avatar_status`, `avatar_selection_changed`, and
   `layout_op` (contracts section 6); it accepts each client's `client_state`
   report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
-`placements/<desktop>/<client>.json`, `clients.json`, `users.json` (the
-desktop made for each visiting user), and the client-activity
+`placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
+own paths for independent windows), `clients.json`, `users.json` (the desktop
+made for each visiting user), `avatar_selection.json`, and the client-activity
 event log (`events/client_activity/events.jsonl`, what `layout.py context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
-`data/.apps/system_interface/wallpapers/` (files the user adds). Presence
-lives beside it under `data/.state/presence/` (`--presence-dir`).
+`data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
+an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
+beside the seven bundled ones (`docs/system/avatar-designs.md`). Presence lives
+beside it under `data/.state/presence/` (`--presence-dir`).
 
 ### The desktop model
 
@@ -84,6 +91,17 @@ lives beside it under `data/.state/presence/` (`--presence-dir`).
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
   backdrop, state, minimized; the order is the stack).
+- **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
+  app whose manifest declares a `[pin]` has exactly one pinned window on
+  every desktop, reconciled on every read after the registry is read and
+  never closed. With the `independent` scope the window's shared path stays
+  its home path and each client's own path and title live in
+  `shell/window_paths.py`'s per-client file. How a client shows the entry
+  (in the bar or floating, plain or as the avatar) is on its client record.
+- **The avatar** (`avatar/`): the bundled and registered designs, the
+  workspace's selection, the rendered image routes, and the status reader,
+  which folds mngr's agents event file into a mood (working when any agent
+  but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's `default_shortcut` on the first read after the
   registry has been read. A client record holds the client's active desktop,
@@ -138,7 +156,7 @@ Stop and Start of the whole app act on its supervisord program and are refused
 for critical apps; the desktop offers them on the window menu
 (`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
-`shell:capabilities`); a page that reports the path it is showing gets it
+`shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
 stored on its window and reopens there, and one that declared `navigation`
 is sent `shell:navigate` when an agent points its window elsewhere.
 
@@ -193,28 +211,34 @@ The backdrop shows the active desktop's shortcuts and windows; each window is
 an iframe of an app page under a title bar with the page's title and the
 window menu. The taskbar shows the desktop switcher, one entry per window of
 the active desktop, the launcher button, and the tray (the Presence widget,
-the desktop switcher, the update-staleness banner). Desktops are created, renamed, recoloured,
+the desktop switcher, the update-staleness banner). A pinned window's entry may float above
+the windows instead, drawn as the workspace's avatar (the chat's default); its
+context menu moves it between the bar and the desktop, switches its style, and
+opens the avatar chooser. Desktops are created, renamed, recoloured,
 re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
 removed on the backdrop.
 
-The launcher is the page for starting things, an overlay over the desktop
-rather than a window. Its resting contents: a search field; "Open new" (one
-tile per launch path of every non-internal app, the apps that declare a
-`launcher_rank` in their manifest first in rank order and the rest after
-them); "On this desktop" (the active desktop's windows by title); "Start
-something" (hardcoded intents, each a new chat seeded with a prompt, six at a
-time behind "See more"); and "Start from a template" (the published templates
-by category, in sideways rails, with a detail dialog whose "Make it mine"
-starts a chat that adopts the template). Typing in the search field swaps the
-overlay for results: the matching launch paths and windows, the matching
-intents, the matching templates. A seeded prompt goes to whichever app
-declares a launch path with a `message` param (the chat app's `new`), so the
-shell still names no app. The template catalog is a JSON document the shell
-fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (`catalog/README.md` at
-the repo root describes it), reuses for six hours, keeps the last good copy
-under `data/.state/system_interface/`, and serves to the page at
-`GET /api/templates-catalog`. A fresh install lands on its `Home` desktop with
-the launcher's tiles one click away.
+The launcher is a text field ("Start app or send message...") and the menu it
+opens above itself (`frontend/src/views/LauncherMenu.ts`, its rows computed by
+`reducers/launcherRows.ts`). The rows: one per launch path of every
+non-internal app, the apps that declare a `launcher_rank` in their manifest
+first in rank order and the rest after them; while typing, one per window of
+every desktop (by title, the active desktop's first; choosing one switches
+desktop and raises it); and at the foot the free-text rows, one per launch
+path that names a `text_param`, which run that launch path with the typed text
+as the param (`model/launch.ts`). The first free-text row is the primary
+action (Enter with no other row highlighted) and the second the secondary
+(Ctrl+Enter, Cmd+Enter on macOS); a free-text row of an app with an
+independent pinned window points this client's view of that window at the
+path rather than opening a new one, and a text whose encoded path would pass
+the window path bound is disabled with its reason. One row is always
+highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
+and a run closes the menu and clears the field. A framed page starts a chat
+without naming the chat app through `shell:start-with-text`, which the shell
+answers by running the primary free-text row (the Getting Started app's
+intents and templates use it). The shell names no app in any of this. A
+fresh install lands on its `Home` desktop with the Getting Started window
+open, placed there once by that app for the first client that connects.
 
 ## Running and developing
 
@@ -281,20 +305,23 @@ interface reload reach the browser as messages. See the `manage-desktop` skill f
 ## Updating the running UI
 
 The deployed system interface is the live web UI the user is looking at, so
-changes are not applied in place. The canonical flow is the
-`update-system-interface` agent skill: a change is delegated to a worker,
-tested in isolation, **previewed** to the user as a window
-(`reveal_system_interface.py preview --slug <name> --work-dir <dir>` boots the
-worker's already-built work_dir on a free port and registers it, with a
-labeled wrapper page, as the `si-preview` app; `unpreview` tears it down),
-and, once approved, applied through the general **update apply** shared with
-the `update-self` flow:
+changes are not applied in place. Its manifest says `critical = true`, which
+routes every edit through `update-app`'s careful flow
+(`.agents/skills/update-app/references/critical-app.md`): the change is made in
+an isolated worktree, **previewed** to the user as a window
+(`preview_app.py up --app system_interface --worktree <dir>` boots
+`system-interface --preview` from the worktree, over a seeded copy of the live
+state directory and a copied registry, and registers it with a labeled
+wrapper page as the `system_interface-preview` app; `down` tears it down),
+hardened by a background worker at approval, and applied through the general
+**update apply** shared with the `update-self` flow:
 
 ```bash
 python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-<slug>" \
     --worker-bundle "system_interface=<work_dir>/system/apps/system_interface/imbue/system_interface/static" \
-    --worker-bundle "chat=<work_dir>/system/apps/chat/imbue/chat/static"
+    --worker-bundle "chat=<work_dir>/system/apps/chat/imbue/chat/static" \
+    --keep-rollback-point
 ```
 
 The apply merges the worker's branch, classifies what changed and does only
@@ -444,4 +471,37 @@ check diffs the startup HEAD against the current one and reports only when a
 changed path is backend code this process imports, a manifest its environment
 was resolved from, or mngr. The banner
 informs only; acting on it stays with the agent.
+
+## The update notice
+
+The careful flow's apply (`update_self.py apply --keep-rollback-point`, see
+"Updating the running UI") does not discard its snapshots on success: it leaves
+`data/.state/update-apply/last-good.json`, a record of the merge it landed, the
+copies it kept, and the critical apps and supervisord programs included in rollback.
+A frontend apply includes both chat and shell (the critical bundle owners), even if only
+one app's source changed, because one build replaces every bundle. The shell turns that
+record into a notice only a person closes (`shell/update_notice.py`):
+one top banner beside the staleness one, naming every app the record names (or
+the workspace, when it names none), saying they were updated a moment ago and
+offering "Roll back" and "Everything seems good". It is one banner rather than a
+note on each touched app's windows because the record is one rollback point: a
+rollback takes everything it names back together. The shell watches the file and
+pushes every distinct reading over the socket as `update_notice_changed` (and
+seeds it on connect), so the banner appears, shows a rollback's progress and
+outcome, and goes away on every window without a reload.
+
+Both verbs are the update-self script's own subcommands, run rather than
+reimplemented (`POST /api/updates/pending/confirm` runs `confirm-last`, which
+drops the record, and the copies with it when no rollback ran, since a failed
+rollback keeps its copies for an agent; `POST /api/updates/pending/rollback` starts
+`rollback-last`, which reverts the merge forward, restores the copies, restarts
+only the recorded programs, and writes its progress and outcome back into the
+record). The rollback is launched detached in its own session: it restarts the
+shell's own program when the shell was touched, and supervisord stops that
+program as a group, so a child of the shell would die halfway through its own
+work. "Roll back" asks first, naming the update and what it restarts; a rollback
+whose diff reached the workspace's own setup restores the files and its outcome
+names the command an agent must run. A preview shell shows the notice but
+refuses both verbs. `GET /api/updates/pending` is how the careful flow learns a
+previous update is still unconfirmed.
 

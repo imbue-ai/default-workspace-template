@@ -23,14 +23,17 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 and copies its static fields onto the row: ``display_name``, ``critical``,
 ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
-and the names of the params), and ``window_closed_path``; the icon is read from the file the
+the names of the params, and ``text_param`` when given), ``pin`` (path, and style, scope, and
+default_mode when given), and ``window_closed_path``; the icon is read from the file the
 manifest names, relative to the manifest. Every manifest field is authoritative
 on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
 ``--name --url`` without a manifest registers rows for things with no app
-directory (owner-exec, the VM exec service, previews, isolated test servers).
+directory (owner-exec, the VM exec service, previews, isolated test servers);
+``--display-name`` gives such a row the label users read, since the raw service
+name is what the workspace falls back to.
 
 Icons
 -----
@@ -88,6 +91,13 @@ _LABEL_RANDOM_LENGTH = 8
 # (name + 1 hyphen + 8 random chars), with generous headroom.
 MAX_SERVICE_NAME_LENGTH = 32
 
+# Cap on a display name, mirroring ``app_manifest.primitives.DisplayName``
+# (this script is stdlib-only and cannot import the library). A row whose
+# display name breaks that rule fails validation on read and is skipped, which
+# hides the app entirely, so the rule is applied here at registration time; a
+# drift test in forward_port_test.py keeps the two copies identical.
+MAX_DISPLAY_NAME_LENGTH = 64
+
 # Service-name rule: lowercase alphanumeric/underscore runs separated by
 # single hyphens (no uppercase, no leading/trailing/consecutive hyphens).
 # The registered name becomes the leading label of the service's origin
@@ -114,7 +124,7 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # the first label of every standalone supervisord program with a hyphen in
 # its name: an app named ``share`` would claim ``share-gateway`` as its
 # ``share-<role>`` sidecar when its footprint is computed.
-RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env"})
+RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "agent"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
 # (icons in this repo run a few hundred bytes) while keeping apps.toml small:
@@ -141,8 +151,8 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# structured keys (``default_shortcut``, ``launch_paths``) are handled on their
-# own. ``program`` defaults to the name when the manifest omits it.
+# structured keys (``default_shortcut``, ``launch_paths``, ``pin``) are handled
+# on their own. ``program`` defaults to the name when the manifest omits it.
 _MANIFEST_STRING_KEYS = ("display_name", "priority", "program", "window_closed_path")
 _MANIFEST_BOOL_KEYS = ("critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
@@ -168,8 +178,13 @@ _MANIFEST_OWNED_KEYS = (
     "default_shortcut",
     "actions",
     "launch_paths",
+    "pin",
     "window_closed_path",
 )
+
+# The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
+# required. The row carries only what the manifest wrote, and the reader fills the defaults.
+_PIN_OPTIONAL_STRING_KEYS = ("style", "scope", "default_mode")
 
 # The TOML basic-string escapes for the characters that have a short form;
 # every other control character is written as ``\uXXXX``.
@@ -301,6 +316,15 @@ def mint_service_label(name: str) -> str:
         secrets.choice(_LABEL_RANDOM_ALPHABET) for _ in range(_LABEL_RANDOM_LENGTH)
     )
     return f"{name}-{suffix}"
+
+
+def validate_display_name(value: str) -> str | None:
+    """Return an error message when ``value`` cannot be a row's display name."""
+    if not value.strip():
+        return "display_name must not be empty"
+    if len(value) > MAX_DISPLAY_NAME_LENGTH:
+        return f"display_name must be at most {MAX_DISPLAY_NAME_LENGTH} characters, got {len(value)}"
+    return None
 
 
 def validate_service_name(name: str) -> str | None:
@@ -444,6 +468,15 @@ def _load_apps(path: Path) -> list[dict[str, object]]:
 
 
 def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
+    rendered = dump_registry(apps)
+
+    # A registration that changes nothing leaves the file alone. Every app
+    # re-registers on each start, so a program that restarts in a loop would
+    # otherwise hand the watchers a new mtime several times a second for a
+    # registry whose bytes never changed.
+    if path.exists() and path.read_text(encoding="utf-8") == rendered:
+        return
+
     # Atomic write: write to a temp file in the same directory, then os.replace()
     # into place. This guarantees that readers (like app-watcher) never observe
     # a truncated/partial file during the write window.
@@ -453,7 +486,7 @@ def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
     )
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write(dump_registry(apps))
+            f.write(rendered)
         os.replace(tmp_path, path)
     except Exception:
         if os.path.exists(tmp_path):
@@ -518,6 +551,13 @@ def _read_manifest(
             return {}, None, shortcut_error
         fields["default_shortcut"] = copied_shortcut
 
+    pin = raw.get("pin")
+    if pin is not None:
+        copied_pin, pin_error = _copied_pin(pin, path)
+        if copied_pin is None:
+            return {}, None, pin_error
+        fields["pin"] = copied_pin
+
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
         entries = raw.get(key)
         if entries is not None:
@@ -570,12 +610,27 @@ def _copied_default_shortcut(
     return {"launch": shortcut["launch"], "mode": shortcut["mode"]}, None
 
 
+def _copied_pin(pin: Any, path: Path) -> tuple[dict[str, object] | None, str | None]:
+    """The manifest's ``[pin]`` table as the registry row carries it: ``path``, and each of ``style``,
+    ``scope``, and ``default_mode`` the manifest wrote. Returns ``(copied, None)``, or ``(None, error)``
+    when the value is not shaped as the manifest requires."""
+    if not (isinstance(pin, dict) and isinstance(pin.get("path"), str)):
+        return None, f"manifest {str(path)!r}: pin must be a table with a string 'path'"
+    copied: dict[str, object] = {"path": pin["path"]}
+    for key in _PIN_OPTIONAL_STRING_KEYS:
+        if key in pin:
+            if not isinstance(pin[key], str):
+                return None, f"manifest {str(path)!r}: pin.{key} must be a string"
+            copied[key] = pin[key]
+    return copied, None
+
+
 def _copied_launch_path(
     launch_path: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, and
-    ``params`` (the param names) when it declares any. Returns ``(copied, None)``, or
-    ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``,
+    ``params`` (the param names) when it declares any, and ``text_param`` when it names one. Returns
+    ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
     if not (
         isinstance(launch_path, dict)
         and isinstance(launch_path.get("id"), str)
@@ -596,6 +651,11 @@ def _copied_launch_path(
         return None, params_error
     if param_names:
         copied["params"] = param_names
+    text_param = launch_path.get("text_param")
+    if text_param is not None:
+        if not isinstance(text_param, str):
+            return None, f"manifest {str(path)!r}: a launch path's text_param must be a string"
+        copied["text_param"] = text_param
     return copied, None
 
 
@@ -630,6 +690,7 @@ def _upsert(
     icon: str | None = None,
     internal: bool = False,
     program: str | None = None,
+    display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
 ) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
@@ -650,13 +711,16 @@ def _upsert(
     passing it sets the field and omitting it clears it, so a registration
     that stops passing it cannot leave a stale capability behind.
 
+    ``display_name`` is what users read instead of the raw service name, for a
+    row with no manifest to carry one, and is authoritative the same way.
+
     ``manifest_fields`` (a ``--manifest`` registration) is authoritative for
     every manifest-owned key the same way: each is set to the manifest's value
     or removed when the manifest omits it.
     """
     apps = _load_apps(path)
     manifest_owned = _manifest_owned_values(
-        manifest_fields, internal=internal, program=program
+        manifest_fields, internal=internal, program=program, display_name=display_name
     )
 
     # Update an existing entry's URL in place, minting a label only if one was
@@ -696,7 +760,10 @@ def _upsert(
 
 
 def _manifest_owned_values(
-    manifest_fields: dict[str, object] | None, internal: bool, program: str | None
+    manifest_fields: dict[str, object] | None,
+    internal: bool,
+    program: str | None,
+    display_name: str | None,
 ) -> dict[str, object]:
     """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
     if manifest_fields is not None:
@@ -714,6 +781,8 @@ def _manifest_owned_values(
         values["internal"] = True
     if program is not None:
         values["program"] = program
+    if display_name is not None:
+        values["display_name"] = display_name
     return values
 
 
@@ -741,7 +810,7 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, launcher_rank, default_shortcut, "
-            "launch_paths, window_closed_path) are copied onto the row on every call."
+            "launch_paths with their text_param, pin, window_closed_path) are copied onto the row on every call."
         ),
     )
     parser.add_argument(
@@ -774,6 +843,15 @@ def main() -> None:
         help="Remove the named app instead of adding it",
     )
     parser.add_argument(
+        "--display-name",
+        help=(
+            "What users read for this app instead of its raw service name, for "
+            "a registration with no manifest to carry one. Authoritative per "
+            "call: passing it sets the field, omitting it clears any "
+            "previously-stored value."
+        ),
+    )
+    parser.add_argument(
         "--internal",
         action="store_true",
         help=(
@@ -801,19 +879,29 @@ def main() -> None:
     if args.remove and args.program is not None:
         parser.error("--program cannot be combined with --remove")
 
+    if args.remove and args.display_name is not None:
+        parser.error("--display-name cannot be combined with --remove")
+
     if args.manifest is not None and (
         args.remove
         or args.icon_file is not None
         or args.no_icon
         or args.program is not None
         or args.internal
+        or args.display_name is not None
     ):
         parser.error(
-            "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, or --internal"
+            "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, "
+            "--display-name, or --internal"
         )
 
     if args.program is not None and not args.program.strip():
         parser.error("--program must not be empty")
+
+    if args.display_name is not None:
+        display_name_error = validate_display_name(args.display_name)
+        if display_name_error is not None:
+            parser.error(display_name_error)
 
     manifest_fields: dict[str, object] | None = None
     icon_path: Path | None = (
@@ -875,6 +963,7 @@ def main() -> None:
                     icon,
                     internal=args.internal,
                     program=args.program.strip() if args.program is not None else None,
+                    display_name=args.display_name,
                     manifest_fields=manifest_fields,
                 )
         finally:

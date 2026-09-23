@@ -1,17 +1,34 @@
 /**
  * The shell's WebSocket (desktop-interface contracts.md section 6), the one socket this window
- * holds. On connect the server sends ``apps_updated`` and ``desktops_updated``; the window answers
- * with its ``client_state`` (which client it is, on which desktop) and re-sends it on every
- * switch. ``placements_updated``, ``active_desktop_changed``, and the transient ``layout_op`` are
- * how this client's other windows, the shell's own edits, and an agent's ops reach this one;
- * ``presence_updated`` (also sent on connect) is who is connected to the workspace.
+ * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, ``avatar_status``,
+ * ``update_notice_changed``, and ``presence_updated``; the window answers with its ``client_state``
+ * (which client it is, on which desktop) and re-sends it on every switch. ``placements_updated``,
+ * ``active_desktop_changed``, ``client_entries_changed``, and the transient ``layout_op`` are how this
+ * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
+ * ``avatar_selection_changed`` are how the workspace's avatar reaches every window, ``update_notice_changed``
+ * how the update notice does, and ``presence_updated`` is who is connected to the workspace.
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
-import { parseAppRecords, parseDesktops, parsePresentUsers } from "../model/records";
-import type { AppRecord, Desktop, PresentUser } from "../model/records";
+import {
+  parseAppRecords,
+  parseAvatarSelectionChanged,
+  parseAvatarStatus,
+  parseDesktops,
+  parseEntries,
+  parsePresentUsers,
+  parseUpdateNoticeChanged,
+} from "../model/records";
+import type {
+  AppRecord,
+  AvatarStatus,
+  Desktop,
+  EntryPresentation,
+  PresentUser,
+  UpdateNoticeWire,
+} from "../model/records";
 
 /** The transient ops that reach the browser as messages: the rest are applied to the files. */
 export type LayoutOpName = "refresh" | "reload_system_interface";
@@ -34,11 +51,21 @@ export interface ActiveDesktopChangedEvent {
   readonly desktopId: string;
 }
 
+export interface ClientEntriesChangedEvent {
+  readonly clientId: string;
+  readonly entries: Readonly<Record<string, EntryPresentation>>;
+}
+
 export interface SocketHandlers {
   onAppsUpdated(apps: AppRecord[]): void;
   onDesktopsUpdated(desktops: Desktop[]): void;
   onPlacementsUpdated(event: PlacementsUpdatedEvent): void;
   onActiveDesktopChanged(event: ActiveDesktopChangedEvent): void;
+  onClientEntriesChanged(event: ClientEntriesChangedEvent): void;
+  onAvatarStatus(status: AvatarStatus): void;
+  onAvatarSelectionChanged(design: string): void;
+  /** The update notice as the shell now holds it, null once the record is cleared. */
+  onUpdateNoticeChanged(notice: UpdateNoticeWire | null): void;
   onLayoutOp(event: LayoutOpEvent): void;
   /** The connected users, one entry per user, on connect and whenever someone joins or leaves. */
   onPresenceUpdated(users: PresentUser[]): void;
@@ -65,6 +92,7 @@ interface RawSocketEvent {
   desktop_id?: unknown;
   client_id?: unknown;
   save_id?: unknown;
+  entries?: unknown;
 }
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface"];
@@ -157,6 +185,21 @@ export class ShellSocket implements DesktopSocket {
           clientId: String(event.client_id ?? ""),
           desktopId: String(event.desktop_id ?? ""),
         });
+        return;
+      case "client_entries_changed":
+        handlers.onClientEntriesChanged({
+          clientId: String(event.client_id ?? ""),
+          entries: parseEntries(event.entries),
+        });
+        return;
+      case "avatar_status":
+        handlers.onAvatarStatus(parseAvatarStatus(event));
+        return;
+      case "avatar_selection_changed":
+        handlers.onAvatarSelectionChanged(parseAvatarSelectionChanged(event));
+        return;
+      case "update_notice_changed":
+        handlers.onUpdateNoticeChanged(parseUpdateNoticeChanged(event));
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

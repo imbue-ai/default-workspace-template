@@ -24,10 +24,7 @@ from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
-from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import catalog_document
-from imbue.system_interface.testing import catalog_template_document
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
@@ -54,43 +51,6 @@ def client(app: Flask) -> FlaskClient:
     return app.test_client()
 
 
-def test_templates_catalog_route_answers_the_catalog_with_resolved_thumbnails(config: Config) -> None:
-    catalog_url = config.system_interface_template_catalog_url
-    fetcher = FakeTemplateCatalogFetcher(
-        body_by_url={
-            catalog_url: catalog_document(
-                catalog_template_document("inbox"),
-                shelves=[{"key": "popular", "title": "Most popular", "slugs": ["inbox"]}],
-            )
-        }
-    )
-    test_client = create_application(build_test_state(config=config, template_catalog_fetcher=fetcher)).test_client()
-
-    response = test_client.get("/api/templates-catalog")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["is_stale"] is False
-    assert body["catalog"]["shelves"][0]["slugs"] == ["inbox"]
-    (template,) = body["catalog"]["templates"]
-    assert template["thumbnail_url"] == catalog_url.rsplit("/", 1)[0] + "/thumbnails/someone--inbox.svg"
-
-
-def test_templates_catalog_route_says_when_nothing_could_be_loaded(config: Config) -> None:
-    test_client = create_application(
-        build_test_state(config=config, template_catalog_fetcher=FakeTemplateCatalogFetcher())
-    ).test_client()
-    response = test_client.get("/api/templates-catalog")
-    assert response.status_code == 503
-    assert response.get_json() == {"detail": "failed to load templates"}
-
-
-def test_templates_catalog_route_answers_null_when_no_catalog_is_configured(client: FlaskClient) -> None:
-    response = client.get("/api/templates-catalog")
-    assert response.status_code == 200
-    assert response.get_json() == {"catalog": None, "is_stale": False}
-
-
 def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Path) -> None:
     """When the static dir has index.html, the server serves it."""
     static_dir = tmp_path / "static"
@@ -106,6 +66,21 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     # Both the app and the placeholder are HTTP 200 HTML, so the header is
     # the only thing that distinguishes them to a health check.
     assert response.headers[FRONTEND_BUILT_HEADER] == "true"
+
+
+def test_a_preview_shells_page_says_so_and_carries_no_staleness_banner(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    state = build_test_state(is_preview=True)
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
+
+    assert response.status_code == 200
+    assert 'name="system-interface-preview"' in response.text
+    assert 'content="true"' in response.text
+    assert "system-interface-update-staleness" not in response.text
 
 
 def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
@@ -416,26 +391,43 @@ def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     handle_exception and surfaced every 404/405 as a 500 (observed live on a
     method-not-allowed destroy call).
     """
-    # Non-GET probes are the observable cases: the SPA catch-all intentionally
-    # serves the frontend for any unknown GET, so those return 200 by design.
     assert client.post("/api/definitely-not-a-route").status_code == 405
     assert client.put("/api/layout/broadcast").status_code == 405
+
+
+def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient) -> None:
+    """The SPA catch-all serves the app shell for any unknown GET, which is right for a
+    client-side route and wrong for a caller of the API: a 200 page where JSON was expected
+    reads as success to a script and as a parse error to a browser."""
+    response = client.get("/api/definitely-not-a-route")
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == "No such API route: /api/definitely-not-a-route"
+    assert client.get("/api").status_code == 404
+    # A client-side route still renders the shell.
+    assert client.get("/some/client/route").status_code == 200
 
 
 @pytest.mark.flaky
 @pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
-    """On connect the socket sends the shell's inventory and desktops."""
+    """On connect the socket sends the shell's inventory, desktops, the avatar's status, and the update notice."""
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(2)]
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(4)]
         finally:
             close_ws(ws)
 
-    assert [message["type"] for message in messages] == ["apps_updated", "desktops_updated"]
+    assert [message["type"] for message in messages] == [
+        "apps_updated",
+        "desktops_updated",
+        "avatar_status",
+        "update_notice_changed",
+    ]
     assert messages[0]["apps"] == []
     assert messages[1]["desktops"] == []
+    assert messages[2] == {"type": "avatar_status", "mood": "idle", "is_stale": True}
+    assert messages[3]["notice"] is None
 
 
 _VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com", display_name="Bob")
@@ -517,12 +509,13 @@ def test_websocket_connect_sends_the_connected_users(app: Flask) -> None:
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(3)]
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(5)]
         finally:
             close_ws(ws)
 
-    assert messages[2]["type"] == "presence_updated"
-    assert [user["user_id"] for user in messages[2]["users"]] == ["user-bob-4471"]
+    # The connected users follow the apps, desktops, avatar status, and update notice.
+    assert messages[4]["type"] == "presence_updated"
+    assert [user["user_id"] for user in messages[4]["users"]] == ["user-bob-4471"]
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:

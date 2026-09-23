@@ -1,8 +1,13 @@
+from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import EntryMode
+from app_manifest.manifest import LocationScope
 from app_manifest.manifest import OPEN_LAUNCH_PATH_ID
+from app_manifest.manifest import Pin
+from app_manifest.manifest import PinStyle
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
@@ -14,6 +19,7 @@ from pydantic import Field
 from pydantic import model_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -32,6 +38,21 @@ from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
 
 
+class FloatingPosition(FrozenModel):
+    """Where a client keeps a floating entry: the top-left corner of its box, in fractions of the backdrop."""
+
+    x: float = Field(ge=0.0, le=1.0, description="Left edge, 0..1")
+    y: float = Field(ge=0.0, le=1.0, description="Top edge, 0..1")
+
+
+class EntryPresentation(FrozenModel):
+    """How one client shows one pinned entry (pinned-taskbar-entries plan section 3.4); global across desktops."""
+
+    mode: EntryMode = Field(description="In the taskbar, or floating above the windows")
+    style: PinStyle = Field(description="Plain, or the style the pin declares")
+    position: FloatingPosition | None = Field(default=None, description="The floating position; None for the default")
+
+
 class ClientRecord(FrozenModel):
     """What the shell keeps about one browser context (desktop contracts.md section 4.3)."""
 
@@ -41,6 +62,9 @@ class ClientRecord(FrozenModel):
     user_id: UserId | None = Field(
         default=None,
         description="The signed-in visitor the client last arrived as; None for the owner or an anonymous client",
+    )
+    entries: dict[str, EntryPresentation] = Field(
+        default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
 
 
@@ -72,6 +96,18 @@ def default_shortcut_wire_json(shortcut: DefaultShortcut | None) -> dict[str, st
 
 
 @pure
+def pin_wire_json(pin: Pin | None) -> dict[str, str] | None:
+    if pin is None:
+        return None
+    return {
+        "path": str(pin.path),
+        "style": pin.style.value,
+        "scope": pin.scope.value,
+        "default_mode": pin.default_mode.value,
+    }
+
+
+@pure
 def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
     """The ``app`` object of desktop contracts.md section 5.5."""
     row = entry.row
@@ -87,8 +123,16 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "launch_paths": [launch_path_wire_json(launch_path) for launch_path in effective_launch_paths(row)],
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "launcher_rank": row.launcher_rank,
+        "pin": pin_wire_json(row.pin),
         "is_running": entry.is_running,
     }
+
+
+class AppPin(FrozenModel):
+    """A registered app's pin: the app, and the table its manifest declares (pinned-taskbar-entries plan section 3.1)."""
+
+    app: AppName = Field(description="The pinned app")
+    pin: Pin = Field(description="The pin as the registry row carries it")
 
 
 class ClientStateReport(FrozenModel):
@@ -149,6 +193,7 @@ def launch_path_wire_json(launch_path: RegistryLaunchPath) -> dict[str, Any]:
         "label": str(launch_path.label),
         "path": str(launch_path.path),
         "params": [str(param) for param in launch_path.params],
+        "text_param": str(launch_path.text_param) if launch_path.text_param is not None else None,
     }
 
 
@@ -215,6 +260,13 @@ class Window(FrozenModel):
     title: WindowTitle = Field(description="What the page last reported; empty means the app's display name")
     opened_at: AwareDatetime = Field(description="When the window was opened")
     is_settling: bool = Field(description="True from an open at a launch path until the page's first location report")
+    is_pinned: bool = Field(
+        default=False, description="Whether this is the app's pinned window on the desktop: permanent, never closed"
+    )
+    scope: LocationScope = Field(
+        default=LocationScope.LINKED,
+        description="Whether every client follows the shared path and title, or each client keeps its own",
+    )
 
 
 class Desktop(FrozenModel):
@@ -279,9 +331,19 @@ class WindowOpenRequest(FrozenModel):
     )
 
 
+class StoredWindowPath(FrozenModel):
+    """One client's path and title for an independent window (pinned-taskbar-entries plan section 5.1)."""
+
+    path: WindowPath = Field(description="Where the client's page of the window is")
+    title: WindowTitle = Field(description="What that page calls itself; empty means the app's display name")
+
+
 class WindowLocationReport(FrozenModel):
     """The body of ``POST /api/desktops/<id>/windows/<window_id>/location``."""
 
+    client_id: ClientId = Field(
+        description="The client whose page reported, whose own path an independent window keeps"
+    )
     path: WindowPath = Field(description="Where the page is now")
     title: WindowTitle = Field(description="What the page calls itself now")
 
@@ -298,6 +360,13 @@ class DesktopChangeOutcome(FrozenModel):
 
     desktop: Desktop = Field(description="The desktop after the edit")
     is_written: bool = Field(description="Whether the edit changed the desktop and was written")
+
+
+class DesktopsChangeOutcome(FrozenModel):
+    """What an edit over every desktop that may change nothing came to: the desktops, and whether they were written."""
+
+    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in creation order")
+    is_written: bool = Field(description="Whether the edit changed a desktop and the file was written")
 
 
 class PlacementsEditOutcome(FrozenModel):
@@ -325,18 +394,45 @@ class DesktopDeleteOutcome(FrozenModel):
 
 
 @pure
-def desktop_wire_json(desktop: Desktop) -> dict[str, Any]:
-    """The ``desktop`` object of desktop contracts.md section 4.1."""
-    return desktop.model_dump(mode="json")
+def desktop_wire_json(
+    desktop: Desktop, client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]]
+) -> dict[str, Any]:
+    """The ``desktop`` object of desktop contracts.md section 5.2: the record of section 4.1 with each window
+    carrying ``client_paths``, the path each client's page of an independent window is at (empty for a linked
+    window, and for a client at the home path), so a reader of the shell's windows sees what every client shows."""
+    return {
+        **desktop.model_dump(mode="json"),
+        "windows": [window_wire_json(window, client_paths.get(window.id, {})) for window in desktop.windows],
+    }
 
 
 @pure
-def window_wire_json(window: Window) -> dict[str, Any]:
-    """The ``window`` object of desktop contracts.md section 4.1."""
-    return window.model_dump(mode="json")
+def window_wire_json(window: Window, client_paths: Mapping[ClientId, WindowPath]) -> dict[str, Any]:
+    """The ``window`` object of desktop contracts.md section 5.2 (section 4.1's record plus ``client_paths``)."""
+    return {
+        **window.model_dump(mode="json"),
+        "client_paths": {str(client_id): str(path) for client_id, path in client_paths.items()},
+    }
 
 
 @pure
-def desktop_layout_wire_json(layout: DesktopLayout) -> dict[str, Any]:
-    """The ``layout`` object of desktop contracts.md section 4.2."""
-    return layout.model_dump(mode="json")
+def desktop_layout_wire_json(
+    layout: DesktopLayout, window_paths: Mapping[WindowId, StoredWindowPath]
+) -> dict[str, Any]:
+    """The ``layout`` object of desktop contracts.md section 4.2, with the client's stored paths for the desktop's
+    independent windows (pinned-taskbar-entries plan section 5.3)."""
+    return {
+        **layout.model_dump(mode="json"),
+        "window_paths": {str(window_id): stored.model_dump(mode="json") for window_id, stored in window_paths.items()},
+    }
+
+
+@pure
+def effective_window(window: Window, stored: StoredWindowPath | None) -> Window:
+    """The window as one client sees it: an independent window wears the client's stored path and title (the home
+    path with no title when it has none); a linked window is the shared record."""
+    if window.scope is LocationScope.LINKED or stored is None:
+        return window
+    return window.model_copy_update(
+        to_update(window.field_ref().path, stored.path), to_update(window.field_ref().title, stored.title)
+    )

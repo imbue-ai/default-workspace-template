@@ -183,9 +183,27 @@ class WebSocketBroadcaster(MutableModel):
             }
         )
 
+    def broadcast_avatar_status(self, status: Mapping[str, Any]) -> None:
+        """The avatar's mood or staleness changed (pinned-taskbar-entries plan section 4.6); every window redraws it."""
+        self.broadcast({"type": "avatar_status", **status})
+
+    def broadcast_avatar_selection_changed(self, design: str) -> None:
+        """The workspace's avatar design was written; every window draws it."""
+        self.broadcast({"type": "avatar_selection_changed", "design": design})
+
+    def broadcast_client_entries_changed(self, client_id: str, entries: Mapping[str, Any]) -> None:
+        """A client's presentation of its pinned entries was written; its own windows take it."""
+        self.broadcast_to_client(
+            {"type": "client_entries_changed", "client_id": client_id, "entries": entries}, client_id
+        )
+
     def broadcast_active_desktop_changed(self, client_id: str, desktop_id: str) -> None:
         """A client's stored active desktop moved; its other windows switch to it."""
         self.broadcast({"type": "active_desktop_changed", "client_id": client_id, "desktop_id": desktop_id})
+
+    def broadcast_update_notice_changed(self, notice: Mapping[str, Any] | None) -> None:
+        """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""
+        self.broadcast({"type": "update_notice_changed", "notice": dict(notice) if notice is not None else None})
 
     def broadcast_layout_op(
         self,

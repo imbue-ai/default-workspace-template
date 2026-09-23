@@ -8,31 +8,61 @@ import type { DesktopApi } from "../store/DesktopStore";
 import type { PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import type {
+  AvatarCatalog,
   ClientArrival,
+  ClientRecord,
   Desktop,
   DesktopShortcut,
+  EntryPresentation,
   GridCell,
   Layout,
+  StoredWindowPath,
   Wallpaper,
   WindowRecord,
 } from "../model/records";
 import { withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
 import type { DesktopSocket, SocketHandlers } from "../store/socket";
+import { clientRecord } from "./records";
+
+/** The frame the shell answers for a pinned window a client has never placed (the shell's own constant). */
+export const PINNED_WINDOW_FRAME = { x: 0.46, y: 0.05, width: 0.5, height: 0.9 };
 
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
-  clients: { id: string; active_desktop: string | null }[] = [];
+  clients: ClientRecord[] = [];
   /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
    *  the desktops as the shell would), and the name of the one it replaced. */
   arrival: Pick<ClientArrival, "created_desktop" | "replaced_desktop_name"> = {
     created_desktop: null,
     replaced_desktop_name: null,
   };
-  /** ``<desktop>/<client>`` -> the stored layout. */
-  readonly layouts = new Map<string, Layout>();
+  /** ``<desktop>/<client>`` -> the stored placements and their stamp. */
+  readonly layouts = new Map<string, Pick<Layout, "updated_at" | "placements">>();
+  /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
+  readonly windowPaths = new Map<string, StoredWindowPath>();
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
+  /** While set, the client records, a layout, and the catalog answer only once this settles: a test holds
+   *  those reads open. */
+  readGate: Promise<void> | null = null;
+
+  /** Hold the reads open until the answered function is called. */
+  holdReads(): () => void {
+    let answer: () => void = () => undefined;
+    this.readGate = new Promise((resolve) => {
+      answer = resolve;
+    });
+    return answer;
+  }
+  avatars: AvatarCatalog = {
+    designs: [
+      { id: "gummy-seal", label: "Gummy seal", source_path: null },
+      { id: "jelly-cat", label: "Jelly cat", source_path: null },
+    ],
+    selected: "gummy-seal",
+    default: "gummy-seal",
+  };
   private stampCounter = 0;
   private windowCounter = 0;
 
@@ -56,14 +86,32 @@ export class FakeDesktopApi implements DesktopApi {
     return desktop;
   }
 
+  /** The client's stored layout of the desktop, with its paths for the desktop's independent windows, and, as the
+   *  shell answers it, every pinned window the client never placed at the pinned frame, minimized, below the stack. */
   layoutOf(desktopId: string, clientId: string): Layout {
-    return this.layouts.get(`${desktopId}/${clientId}`) ?? { updated_at: null, placements: [] };
+    const stored = this.layouts.get(`${desktopId}/${clientId}`) ?? { updated_at: null, placements: [] };
+    const windows = this.desktops.find((desktop) => desktop.id === desktopId)?.windows ?? [];
+    const window_paths: Record<string, StoredWindowPath> = {};
+    for (const window of windows) {
+      const path = this.windowPaths.get(`${clientId}/${window.id}`);
+      if (window.scope === "independent" && path !== undefined) window_paths[window.id] = path;
+    }
+    const placed = new Set(stored.placements.map((placement) => placement.window_id));
+    const pinned = windows
+      .filter((window) => window.is_pinned && !placed.has(window.id))
+      .map((window) => ({
+        window_id: window.id,
+        frame: PINNED_WINDOW_FRAME,
+        state: "NORMAL" as const,
+        is_minimized: true,
+      }));
+    return { ...stored, placements: [...pinned, ...stored.placements], window_paths };
   }
 
-  writeLayout(desktopId: string, clientId: string, layout: Layout): Layout {
+  writeLayout(desktopId: string, clientId: string, layout: Pick<Layout, "updated_at" | "placements">): Layout {
     const stamped = { ...layout, updated_at: this.stamp() };
     this.layouts.set(`${desktopId}/${clientId}`, stamped);
-    return stamped;
+    return this.layoutOf(desktopId, clientId);
   }
 
   async fetchDesktops(): Promise<Desktop[]> {
@@ -172,6 +220,8 @@ export class FakeDesktopApi implements DesktopApi {
       title: "",
       opened_at: this.stamp(),
       is_settling: request.launch !== null,
+      is_pinned: false,
+      scope: "linked",
     };
     this.replace({ ...desktop, windows: [...desktop.windows, window] });
     this.writeLayout(
@@ -186,21 +236,37 @@ export class FakeDesktopApi implements DesktopApi {
     this.calls.push(`closeWindow:${desktopId}:${windowId}`);
     this.refuse();
     const desktop = this.desktop(desktopId);
+    // As the shell does (a 409): a pinned window is never closed.
+    if (desktop.windows.some((candidate) => candidate.id === windowId && candidate.is_pinned)) {
+      throw new Error(`Window ${windowId} is pinned and cannot be closed; minimize it instead`);
+    }
     this.replace({ ...desktop, windows: desktop.windows.filter((candidate) => candidate.id !== windowId) });
     // As the shell does: the window leaves every client's layout of the desktop, each rewrite stamped.
     for (const [key, layout] of [...this.layouts]) {
       const [layoutDesktopId, clientId] = key.split("/");
-      const dropped = withoutPlacement(layout, windowId);
-      if (layoutDesktopId === desktopId && dropped !== layout) this.writeLayout(desktopId, clientId, dropped);
+      const before = { ...layout, window_paths: {} };
+      const dropped = withoutPlacement(before, windowId);
+      if (layoutDesktopId === desktopId && dropped !== before) this.writeLayout(desktopId, clientId, dropped);
     }
   }
 
-  async reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<WindowRecord> {
-    this.calls.push(`reportWindowLocation:${desktopId}:${windowId}:${path}:${title}`);
+  async reportWindowLocation(
+    desktopId: string,
+    windowId: string,
+    clientId: string,
+    path: string,
+    title: string,
+  ): Promise<WindowRecord> {
+    this.calls.push(`reportWindowLocation:${desktopId}:${windowId}:${clientId}:${path}:${title}`);
     this.refuse();
     const desktop = this.desktop(desktopId);
     const window = desktop.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) throw new Error(`No window ${windowId}`);
+    // As the shell does: an independent window's report is the reporting client's alone; the record keeps its home path.
+    if (window.scope === "independent") {
+      this.windowPaths.set(`${clientId}/${windowId}`, { path, title });
+      return { ...window, path, title };
+    }
     const updated = { ...window, path, title, is_settling: false };
     this.replace({
       ...desktop,
@@ -212,6 +278,7 @@ export class FakeDesktopApi implements DesktopApi {
   async fetchPlacements(desktopId: string, clientId: string): Promise<Layout> {
     this.calls.push(`fetchPlacements:${desktopId}`);
     this.refuse();
+    if (this.readGate !== null) await this.readGate;
     return this.layoutOf(desktopId, clientId);
   }
 
@@ -245,15 +312,40 @@ export class FakeDesktopApi implements DesktopApi {
     };
   }
 
-  async fetchClients(): Promise<{ id: string; active_desktop: string | null }[]> {
+  async fetchClients(): Promise<ClientRecord[]> {
     this.calls.push("fetchClients");
     this.refuse();
+    if (this.readGate !== null) await this.readGate;
     return [...this.clients];
   }
 
   async setAppLifecycle(appName: string, action: "stop" | "start"): Promise<void> {
     this.calls.push(`setAppLifecycle:${appName}:${action}`);
     this.refuse();
+  }
+
+  async setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord> {
+    const position = presentation.position === null ? "-" : `${presentation.position.x},${presentation.position.y}`;
+    this.calls.push(`setEntryPresentation:${clientId}:${app}:${presentation.mode}:${presentation.style}:${position}`);
+    this.refuse();
+    const existing = this.clients.find((client) => client.id === clientId) ?? clientRecord(clientId);
+    const updated = { ...existing, entries: { ...existing.entries, [app]: presentation } };
+    this.clients = [...this.clients.filter((client) => client.id !== clientId), updated];
+    return updated;
+  }
+
+  async fetchAvatars(): Promise<AvatarCatalog> {
+    this.calls.push("fetchAvatars");
+    this.refuse();
+    if (this.readGate !== null) await this.readGate;
+    return this.avatars;
+  }
+
+  async selectAvatar(design: string): Promise<void> {
+    this.calls.push(`selectAvatar:${design}`);
+    this.refuse();
+    if (!this.avatars.designs.some((candidate) => candidate.id === design)) throw new Error(`No design ${design}`);
+    this.avatars = { ...this.avatars, selected: design };
   }
 }
 

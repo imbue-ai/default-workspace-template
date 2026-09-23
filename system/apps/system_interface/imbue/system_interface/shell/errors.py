@@ -62,6 +62,10 @@ class WindowNotFoundError(ShellError, LookupError):
         super().__init__(f"Window '{window}' not found")
 
 
+class PinnedWindowError(ShellError, ValueError):
+    """A pinned window cannot be closed (answered 409); minimizing is how it leaves the screen."""
+
+
 class StalePlacementsSaveError(ShellError, ValueError):
     """A browser's placements save is based on an older layout than the one stored (answered 409)."""
 
@@ -72,3 +76,15 @@ class WallpaperNotFoundError(ShellError, LookupError):
 
 class GridSearchExhaustedError(ShellError, AssertionError):
     """The unbounded nearest-free-cell search ran out of rings without finding a free cell, which cannot happen."""
+
+
+class UpdateNoticeRecordError(ShellError, ValueError):
+    """The kept rollback point's file does not hold a record."""
+
+
+class UpdateNoticeRefusedError(ShellError, ValueError):
+    """The update notice is not in a state the verb applies to: nothing kept, a rollback already running, or one done."""
+
+
+class UpdateNoticeCommandError(ShellError, RuntimeError):
+    """The update-self script behind a notice verb could not be run, or failed."""

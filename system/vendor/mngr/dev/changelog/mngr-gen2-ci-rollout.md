@@ -1,3 +1,0 @@
-The release teardown job's stale-CI-slice sweep now goes through the deployment-test orchestrator (`test_deployments.py sweep-ci-slices`), which runs it under the `ci-infra` activation instead of exporting the gen-1 pool key by hand, so it can reach gen-2 CI boxes with a certificate signed by the ci tier's SSH CA. The warm-cache job's comment describes the same credential path.
-
-The `test-minds-snapshot` job installs Playwright Chromium at a HOME-independent path before the `minds_services` step, so the three browser-driven services tests (hosted signup pages, web chrome) run in the release dispatch instead of skipping.
