@@ -162,9 +162,10 @@ def load_or_create_signing_secret(path: Path, relay_token: str) -> str:
 def discard_signing_secret(path: Path) -> bool:
     """Delete the signing secret so every session it signed (the owner's included) stops verifying; False when there
     was none to delete."""
-    if not path.exists():
+    try:
+        path.unlink()
+    except FileNotFoundError:
         return False
-    path.unlink()
     return True
 
 
