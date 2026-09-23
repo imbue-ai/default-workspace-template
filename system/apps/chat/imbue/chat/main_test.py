@@ -12,6 +12,7 @@ from imbue.chat.main import build_application
 from imbue.chat.main import build_production_state
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.primitives import ChatId
+from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 
@@ -70,7 +71,9 @@ def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
     try:
         state.agent_manager.record_message_sent(ChatId("agent-stamped"))
         state.chat_settings.write(ChatSettings(fast_mode_default=FastModeMode.ON))
+        filed = state.secret_requests.file_request("agent-stamped", "scratch-probe", ["PROBE_TOKEN"], "r")
         assert (tmp_path / "scratch" / STAMPS_FILENAME).exists()
         assert (tmp_path / "scratch" / SETTINGS_FILENAME).exists()
+        assert (tmp_path / "scratch" / SECRET_REQUESTS_DIRNAME / f"{filed.request.request_id}.json").exists()
     finally:
         state.shutdown()

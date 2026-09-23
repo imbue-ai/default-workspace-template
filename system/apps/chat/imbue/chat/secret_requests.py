@@ -8,8 +8,9 @@ single-quoted so any string survives ``source`` and ``with_secrets.py``), and th
 agent is told the file and the variable names -- never the values, which touch no
 log line, no exception message, and no persisted record.
 
-Requests persist one JSON file each under ``data/.apps/chat/secret-requests/`` so a chat
-app restart keeps a pending card live. A second pending request for the same file
+Requests persist one JSON file each under ``secret-requests/`` in the chat's data
+directory (``data/.apps/chat/`` for the live chat) so a chat app restart keeps a pending
+card live. A second pending request for the same file
 supersedes the first: only the newest card accepts input.
 """
 
@@ -43,8 +44,9 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 
-# Both relative to the repo root, which is every chat app process's cwd.
-DEFAULT_REQUESTS_DIRECTORY: Final[Path] = Path("data/.apps/chat/secret-requests")
+# The requests' directory, under the chat's data directory.
+SECRET_REQUESTS_DIRNAME: Final[str] = "secret-requests"
+# Relative to the repo root, which is every chat app process's cwd.
 DEFAULT_SECRETS_DIRECTORY: Final[Path] = Path("data/.secrets")
 ENV_FILE_SUFFIX: Final[str] = ".env"
 

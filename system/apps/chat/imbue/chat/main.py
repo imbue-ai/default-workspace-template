@@ -32,8 +32,8 @@ from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
-from imbue.chat.secret_requests import DEFAULT_REQUESTS_DIRECTORY
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
+from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import shell_base_url
@@ -164,7 +164,7 @@ def build_production_state(
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
         secret_requests=SecretRequestStore(
-            requests_directory=DEFAULT_REQUESTS_DIRECTORY, secrets_directory=DEFAULT_SECRETS_DIRECTORY
+            requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
     )
     # Eviction wiring: when the manager sees an agent destroyed or its lifecycle
