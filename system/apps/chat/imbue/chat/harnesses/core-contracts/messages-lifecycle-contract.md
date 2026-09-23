@@ -35,10 +35,10 @@ before it can be delivered (the agent was stopped and the send starts it, or its
 launched but not yet reported it accepts input) is **Connecting**: the placeholder stays as it
 is, and "Connecting…" with a pulsing dot shows beside the model bar until the send resolves. The
 backend decides it (``active_agent.is_connecting`` on the chat's snapshot), from the agent's
-lifecycle and the harness's own ready signal (claude's ``session_started``, pi's
-``pi_session_started``, codex's live connection); the frontend only renders it. A message sent
-to a chat still being created is waiting on the same thing and reads the same way. Connecting
-is not a separate state for conservation: the message is Sending throughout.
+lifecycle and the harness's own signal that it accepts input; the frontend only renders it. A
+message sent to a chat still being created is waiting on the same thing and reads the same way:
+that chat has no snapshot yet, so the frontend reads the wait off the create's reported phase.
+Connecting is not a separate state for conservation: the message is Sending throughout.
 
 **Conservation:** a message is always in exactly one state; every transition is explicit and
 observable. No message ever vanishes (no state) or ghosts (shown in a state it is not in).
