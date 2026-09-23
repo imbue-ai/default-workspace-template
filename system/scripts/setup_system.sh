@@ -239,10 +239,9 @@ curl -fsSL "${CURL_RETRY[@]}" https://claude.ai/install.sh > /tmp/install_claude
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
 # Fail the build/provision right here on a pin mismatch. mngr's own runtime
-# version check still runs when a claude agent is created, but since the
-# services agent stopped being a claude agent that check would not fire until
-# the first chat agent is created on first boot -- far too late to catch a
-# Dockerfile/settings.toml desync cheaply.
+# version check only warns (version_mismatch = "WARN" in .mngr/settings.toml)
+# and does not run until the first chat agent is created on first boot, so this
+# is the one place an installer/pin desync fails loudly.
 installed_claude_version="$(/root/.local/bin/claude --version | awk '{print $1}')"
 if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
     echo "Installed claude version ${installed_claude_version} does not match pinned CLAUDE_CODE_VERSION ${CLAUDE_CODE_VERSION}" >&2
@@ -277,7 +276,8 @@ npm install -g "@openai/codex@${CODEX_VERSION}"
 command -v codex >/dev/null
 codex --version
 
-# OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
+# OpenCode CLI (pinned; standalone binary, no Node needed). Keep in sync with
+# agent_types.opencode.version in .mngr/settings.toml. Its installer reads
 # VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
 # binary into /usr/local/bin like the other downloaded tools.
 curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash
