@@ -40,7 +40,10 @@ handles the things that are easy to get wrong by hand:
   hooks (which otherwise bleed into -- and intermittently hijack -- the answer).
   ``system`` is required: it frames the task and is the neutralizing instruction.
   (``--bare`` would also strip that project context, but it cannot authenticate
-  without an API key, so the isolated cwd is the keyless workaround.)
+  without an API key, so the isolated cwd is the keyless workaround.) Its session
+  is not persisted (``--no-session-persistence``): claude files a persisted
+  session under a ``projects/`` directory named for the cwd, so every call would
+  leave one more directory behind.
 
 - ``claude_p_task(prompt, *, append_system=None, system=None, model=...,
   permission_mode="bypassPermissions")`` -- a one-shot agentic task that needs

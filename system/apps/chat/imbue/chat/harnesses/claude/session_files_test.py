@@ -1,15 +1,13 @@
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
-
 from imbue.chat.harnesses.claude.session_files import MissingSessionScanSchedule
-from imbue.chat.harnesses.claude.session_files import claude_project_dir_name
 from imbue.chat.harnesses.claude.session_files import claude_session_ids
 from imbue.chat.harnesses.claude.session_files import expected_session_file
 from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_files import move_claude_sessions
 from imbue.mngr.primitives import AgentId
+from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
 
 
 def test_session_ids_are_the_agents_uuid_then_the_history_in_first_mention_order(tmp_path: Path) -> None:
@@ -80,25 +78,11 @@ def test_a_session_already_at_the_destination_is_left_alone(tmp_path: Path) -> N
     assert (source / "projects" / "-home-user-workspace" / f"{session_id}.jsonl").exists()
 
 
-@pytest.mark.parametrize(
-    ("work_dir", "project_dir_name"),
-    [
-        # Both taken from a production account's projects/ tree.
-        ("/mngr-vol/home/workspace", "-mngr-vol-home-workspace"),
-        ("/tmp/claude_p_completion_ep8jl34j", "-tmp-claude-p-completion-ep8jl34j"),
-    ],
-)
-def test_the_project_dir_is_the_work_dir_with_every_non_alphanumeric_character_dashed(
-    work_dir: str, project_dir_name: str
-) -> None:
-    assert claude_project_dir_name(work_dir) == project_dir_name
-
-
 def test_a_session_filed_under_its_work_dir_is_found_at_the_expected_path(tmp_path: Path) -> None:
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
     session_id = uuid4().hex
-    session_file = _session(tmp_path / "config", claude_project_dir_name(str(work_dir)), session_id)
+    session_file = _session(tmp_path / "config", encode_claude_project_dir_name(work_dir), session_id)
 
     assert expected_session_file(tmp_path / "config" / "projects", session_id, str(work_dir)) == session_file
     assert expected_session_file(tmp_path / "config" / "projects", uuid4().hex, str(work_dir)) is None
@@ -112,7 +96,7 @@ def test_a_work_dir_reached_through_a_symlink_finds_the_session_claude_filed_und
     linked_work_dir = tmp_path / "linked-workspace"
     linked_work_dir.symlink_to(real_work_dir)
     session_id = uuid4().hex
-    session_file = _session(tmp_path / "config", claude_project_dir_name(str(real_work_dir.resolve())), session_id)
+    session_file = _session(tmp_path / "config", encode_claude_project_dir_name(real_work_dir.resolve()), session_id)
 
     assert expected_session_file(tmp_path / "config" / "projects", session_id, str(linked_work_dir)) == session_file
 

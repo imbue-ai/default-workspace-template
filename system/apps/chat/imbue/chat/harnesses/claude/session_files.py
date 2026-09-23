@@ -10,7 +10,6 @@ agent is what keeps a rebind a continuation rather than a new conversation.
 """
 
 import os
-import re
 import shutil
 from pathlib import Path
 from typing import Final
@@ -19,14 +18,13 @@ from loguru import logger as _loguru_logger
 
 from imbue.imbue_common.ids import InvalidRandomIdError
 from imbue.mngr.primitives import AgentId
+from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
 
 logger = _loguru_logger
 
 # Where mngr's SessionStart hook lists every session the agent has run, first mention first.
 SESSION_ID_HISTORY_FILENAME: Final = "claude_session_id_history"
 PROJECTS_DIRNAME: Final = "projects"
-
-_PROJECT_DIR_NAME_UNSAFE_CHARACTER: Final = re.compile(r"[^A-Za-z0-9]")
 
 
 def claude_session_ids(agent_state_dir: Path, agent_id: str) -> tuple[str, ...]:
@@ -82,11 +80,6 @@ def move_claude_sessions(session_ids: tuple[str, ...], source_config_dir: Path, 
     return moved
 
 
-def claude_project_dir_name(work_dir: str) -> str:
-    """The directory under ``projects/`` that claude files a session run from ``work_dir`` in."""
-    return _PROJECT_DIR_NAME_UNSAFE_CHARACTER.sub("-", work_dir)
-
-
 def expected_session_file(projects_dir: Path, session_id: str, work_dir: str) -> Path | None:
     """The session's main file where claude files it for a session run from ``work_dir``, or None.
 
@@ -95,7 +88,7 @@ def expected_session_file(projects_dir: Path, session_id: str, work_dir: str) ->
     """
     target_name = f"{session_id}.jsonl"
     for spelling in dict.fromkeys((work_dir, os.path.realpath(work_dir))):
-        candidate = projects_dir / claude_project_dir_name(spelling) / target_name
+        candidate = projects_dir / encode_claude_project_dir_name(Path(spelling)) / target_name
         if candidate.is_file():
             return candidate
     return None

@@ -37,7 +37,8 @@ class PathWatcher:
     """Watches a fixed set of paths and calls ``on_change`` when any of them change.
 
     ``on_change`` is invoked once at start (so the initial value is derived) and
-    then on every wake -- a watchdog event or the poll-interval timeout. It must be
+    then on every wake -- a watchdog event or the poll-interval timeout -- with wakes
+    closer together than ``min_cycle_interval_seconds`` batched into one call. It must be
     cheap and idempotent: callers rely on their own no-op guard to suppress
     redundant work, exactly as the activity recompute does.
     """

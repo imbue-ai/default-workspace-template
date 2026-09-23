@@ -12,9 +12,9 @@ from uuid import uuid4
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
-from imbue.chat.harnesses.claude.session_files import claude_project_dir_name
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
+from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
 
 
 def _user_event(index: int, content: str | None = None) -> dict[str, Any]:
@@ -1422,7 +1422,7 @@ def test_late_found_session_is_inserted_in_history_order(tmp_path: Path) -> None
     claude_config_dir = tmp_path / "claude_config"
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
-    project_dir = claude_config_dir / "projects" / claude_project_dir_name(str(work_dir))
+    project_dir = claude_config_dir / "projects" / encode_claude_project_dir_name(work_dir)
     project_dir.mkdir(parents=True)
     (agent_state_dir / "claude_session_id_history").write_text("session-1\nsession-2\n")
     # Only the newer session's file is on disk at first discovery.
@@ -1545,7 +1545,7 @@ def test_a_session_filed_under_the_work_dir_is_found_as_soon_as_it_lands_while_i
     )
     assert watcher.get_all_events() == []
 
-    project_dir = claude_config_dir / "projects" / claude_project_dir_name(str(work_dir))
+    project_dir = claude_config_dir / "projects" / encode_claude_project_dir_name(work_dir)
     project_dir.mkdir(parents=True)
     (project_dir / f"{session_id}.jsonl").write_text(json.dumps(_user_event(7)) + "\n")
 
