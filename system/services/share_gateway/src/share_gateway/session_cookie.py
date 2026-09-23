@@ -1,16 +1,16 @@
 """The workspace session: one HS256 JWT, delivered as two cookies scoped ``Domain=<workspace-domain>``.
 
 Set once by the login callback, verified (and its identity re-checked against the
-grants) on every request. 24 hours, fixed. The signing secret is generated in
+grants) on every request. 30 days, fixed. The signing secret is generated in
 the workspace and never leaves it, so a relay or connector compromise cannot
-mint sessions.
+mint sessions; unsharing deletes it, which invalidates every session at once.
 
-The payload is the requester's whole identity record -- ``user_id``, ``email``,
-``display_name``, ``avatar_url`` -- plus the ``owner`` flag, because the cookie
-is the only per-request source the gateway has: nothing polls the connector
-for profile data, and the record only changes when the user re-runs the
-handoff (sign-in, or the ``/_auth/refresh`` route). A cookie minted before the
-record carried a user id is treated as no session at all.
+The payload is the requester's identity record -- ``user_id`` and ``email`` --
+plus the ``owner`` flag. Nothing else: profile data (display name, avatar)
+lives in the connector and is fetched by whoever renders it, so the record only
+changes when the user re-runs the handoff (sign-in, or the ``/_auth/refresh``
+route). A cookie minted before the record carried a user id is treated as no
+session at all; profile claims an older gateway wrote are ignored.
 
 The same value is set twice, under two names, because no single cookie works
 in both places a visitor reaches a shared workspace from:
@@ -48,7 +48,7 @@ from share_gateway.identity import RequesterIdentity
 
 SESSION_COOKIE_NAME = "imbue_machine_session"
 PARTITIONED_SESSION_COOKIE_NAME = "imbue_machine_session_partitioned"
-SESSION_LIFETIME_SECONDS = 24 * 3600
+SESSION_LIFETIME_SECONDS = 30 * 24 * 3600
 
 _SESSION_COOKIE_NAMES = (SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME)
 _SESSION_ALGORITHM = "HS256"
@@ -64,10 +64,6 @@ def mint_session_cookie_value(signing_secret: str, identity: RequesterIdentity, 
         "iat": now,
         "exp": now + timedelta(seconds=SESSION_LIFETIME_SECONDS),
     }
-    if identity.display_name:
-        payload["display_name"] = identity.display_name
-    if identity.avatar_url:
-        payload["avatar_url"] = identity.avatar_url
     return jwt.encode(payload, signing_secret, algorithm=_SESSION_ALGORITHM)
 
 
@@ -95,13 +91,7 @@ def verify_session_cookie_value(
     email = _optional_text_claim(claims, "email")
     if user_id is None or email is None:
         return None
-    return RequesterIdentity(
-        user_id=user_id,
-        email=email,
-        is_owner=bool(claims.get("owner", False)),
-        display_name=_optional_text_claim(claims, "display_name"),
-        avatar_url=_optional_text_claim(claims, "avatar_url"),
-    )
+    return RequesterIdentity(user_id=user_id, email=email, is_owner=bool(claims.get("owner", False)))
 
 
 def verify_session_from_cookies(

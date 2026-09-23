@@ -1,1 +1,11 @@
 This branch carries the share identity cleanup merged from `josh/sharing-cleanup` (`X-Imbue-Identity`, user-id grants, the identity refresh route); that branch's own entry (`mngr-sharing-cleanup.md`) describes the changes in full. No gateway changes are needed for the shared-desktop work.
+
+- Fixed the Caddyfile so caddy really strips a client-supplied `X-Imbue-Identity` header *before* `forward_auth` injects the verified one. Caddy's built-in directive order runs `forward_auth` ahead of `request_header`, so the strip was deleting the value the gateway had just injected and no backend ever saw an identity over a share; the rendered global options now carry `order request_header before forward_auth`, and a test runs the real `caddy adapt` (when the binary is on PATH) to prove the handler order.
+
+- The login callback now says what went wrong instead of one generic refusal, and logs every denial (never the token). A callback whose nonce or handoff token no longer verifies (a reopened link, the back button, a redirect that outlived the 60-second token) heals itself: a visitor who already holds a session is sent on to their destination, and anyone else is sent through the broker exactly once more; only a failed retry shows the new "Sign-in link expired" page (403). A missing or malformed grants file shows "Sharing is misconfigured" (503, also from `/_auth/verify` for non-owners) telling the visitor the owner must fix the workspace's sharing settings; a verified account without a grant still gets "Not shared with you".
+
+- The identity record shrank to `owner`, `user_id`, and `email`: the session cookie and the `X-Imbue-Identity` header no longer carry `display_name` or `avatar_url`. Profiles live in the connector and are fetched on demand by whatever renders them; profile claims from an older broker's handoff token or an older gateway's cookie are ignored.
+
+- The workspace session cookie now lasts 30 days instead of 24 hours.
+
+- Unsharing deletes the session-cookie signing secret (`data/.secrets/share_gateway_signing_key`), so every existing session -- the owner's included -- is invalidated the moment the share ends; the next share mints a fresh secret. The TLS key and cert still persist for a fast re-share.

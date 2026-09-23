@@ -5,9 +5,13 @@ cookie verified, identity re-checked against the grants file, Origin policy
 enforced, session cookie stripped from what the service sees, the verified
 identity handed on as ``X-Imbue-Identity``). Visitors without a session are
 bounced to the accounts broker and land back on ``/_auth/callback``, which
-verifies the broker's handoff token and sets the workspace session cookie.
-``/_auth/refresh`` re-runs that handoff for a signed-in visitor whose profile
-changed, so their own requests carry the new record before the session expires.
+verifies the broker's handoff token and sets the workspace session cookie. A
+callback whose nonce or token no longer verifies (a reopened link, a slow
+redirect) heals itself: a visitor who already holds a session is sent on, and
+anyone else is sent through the broker once more; only a second failure shows
+the "Sign-in link expired" page. ``/_auth/refresh`` re-runs the handoff for a
+signed-in visitor whose account record changed, so their own requests carry the
+new record before the session expires.
 """
 
 import json
@@ -71,30 +75,61 @@ height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
 <p>This workspace exists, but your account has not been granted access to this page.</p></div></body></html>
 """
 
+_EXPIRED_LOGIN_PAGE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Sign-in link expired</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
+height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<body><div><h1>Sign-in link expired</h1>
+<p>This sign-in link was already used or has expired. Open the workspace link again.</p></div></body></html>
+"""
+
+_MISCONFIGURED_PAGE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Sharing is misconfigured</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
+height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<body><div><h1>Sharing is misconfigured</h1>
+<p>This workspace's sharing settings could not be read, so nobody can be let in right now.
+The workspace owner needs to fix the workspace's sharing settings.</p></div></body></html>
+"""
+
+
+class PendingLogin:
+    """One in-flight broker login: when its nonce was minted, and whether it is already the retry of a failed callback."""
+
+    def __init__(self, created_at: float, is_retry: bool) -> None:
+        self.created_at = created_at
+        self.is_retry = is_retry
+
 
 class PendingLoginRegistry:
     """Nonces for in-flight broker logins: minted at redirect time, consumed once at the callback."""
 
     def __init__(self) -> None:
-        self._created_at_by_nonce: dict[str, float] = {}
+        self._pending_login_by_nonce: dict[str, PendingLogin] = {}
         self._lock = threading.Lock()
 
-    def mint(self) -> str:
+    def mint(self, is_retry: bool) -> str:
+        # A retry nonce marks the one self-heal round trip a failed callback
+        # gets: when the callback that consumes it fails too, the visitor sees
+        # the expired-link page instead of being bounced to the broker again.
         nonce = secrets.token_urlsafe(24)
         now = time.monotonic()
         with self._lock:
-            self._created_at_by_nonce = {
-                pending_nonce: created_at
-                for pending_nonce, created_at in self._created_at_by_nonce.items()
-                if now - created_at < _PENDING_LOGIN_TTL_SECONDS
+            self._pending_login_by_nonce = {
+                pending_nonce: pending_login
+                for pending_nonce, pending_login in self._pending_login_by_nonce.items()
+                if now - pending_login.created_at < _PENDING_LOGIN_TTL_SECONDS
             }
-            self._created_at_by_nonce[nonce] = now
+            self._pending_login_by_nonce[nonce] = PendingLogin(created_at=now, is_retry=is_retry)
         return nonce
 
-    def consume(self, nonce: str) -> bool:
+    def consume(self, nonce: str) -> PendingLogin | None:
+        """Take the pending login for ``nonce`` (single-use); None when unknown, already consumed, or expired."""
         with self._lock:
-            created_at = self._created_at_by_nonce.pop(nonce, None)
-        return created_at is not None and time.monotonic() - created_at < _PENDING_LOGIN_TTL_SECONDS
+            pending_login = self._pending_login_by_nonce.pop(nonce, None)
+        if pending_login is None or time.monotonic() - pending_login.created_at >= _PENDING_LOGIN_TTL_SECONDS:
+            return None
+        return pending_login
 
 
 def _is_html_navigation(method: str, accept_header: str, is_websocket_upgrade: bool) -> bool:
@@ -136,8 +171,16 @@ def build_gateway_app(
     auth_origin = f"https://{auth_label}.{workspace_domain}"
     chrome_origin = materials.chrome_origin
 
+    auth_host = f"{auth_label}.{workspace_domain}"
+
     def _forbidden() -> Response:
         return Response(_FORBIDDEN_PAGE, status=403, mimetype="text/html")
+
+    def _expired_login() -> Response:
+        return Response(_EXPIRED_LOGIN_PAGE, status=403, mimetype="text/html")
+
+    def _misconfigured() -> Response:
+        return Response(_MISCONFIGURED_PAGE, status=503, mimetype="text/html")
 
     def _apply_health_cors(response: Response) -> Response:
         """Echo the hosted-chrome origin so it can probe /_health with credentials.
@@ -239,7 +282,7 @@ def build_gateway_app(
         if identity is None:
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
-                return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False)
+                return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False)
             _log_denied("no session on a non-HTML request", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
@@ -250,9 +293,9 @@ def build_gateway_app(
         if not identity.is_owner:
             try:
                 grants = load_grants(grants_path)
-            except GrantsError:
-                _log_denied("grants file is missing or malformed (failing closed)", host)
-                return _forbidden()
+            except GrantsError as exc:
+                _log_denied(f"grants file is missing or malformed (failing closed): {exc}", host)
+                return _misconfigured()
             if not grants.allows(identity.user_id, identity.email, service_name):
                 _log_denied("session identity is not granted this service", host)
                 return _forbidden()
@@ -273,8 +316,14 @@ def build_gateway_app(
         token = request.args.get("token", "")
         state = request.args.get("state", "")
         next_url = request.args.get("next", "")
-        if not token or not state or not pending_logins.consume(state):
-            return _forbidden()
+        pending_login = pending_logins.consume(state) if state else None
+        is_retry = pending_login is not None and pending_login.is_retry
+        if pending_login is None:
+            return _recover_from_failed_handoff(
+                "callback nonce is unknown, already used, or expired", next_url, is_retry
+            )
+        if not token:
+            return _recover_from_failed_handoff("callback carries no handoff token", next_url, is_retry)
         try:
             handoff = verify_handoff_token(
                 token=token,
@@ -283,51 +332,68 @@ def build_gateway_app(
                 jwks_cache=jwks_cache,
                 jti_registry=jti_registry,
             )
-        except HandoffVerificationError:
-            return _forbidden()
+        except HandoffVerificationError as exc:
+            return _recover_from_failed_handoff(f"handoff token failed verification: {exc}", next_url, is_retry)
         try:
             grants = load_grants(grants_path)
-        except GrantsError:
-            return _forbidden()
+        except GrantsError as exc:
+            _log_denied(f"grants file is missing or malformed (failing closed): {exc}", auth_host)
+            return _misconfigured()
         # The owner always has access regardless of the grants file (the broker
         # vouched for ownership by user id, so an owner never needs an explicit
         # grant to reach their own workspace). Non-owners still need a grant.
         if not handoff.is_owner and not grants.allows_any(handoff.user_id, handoff.email):
+            _log_denied(f"signed-in account {handoff.user_id} has no grant on this workspace", auth_host)
             return _forbidden()
         _upgrade_invite(grants, handoff)
 
+        response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
+        set_session_cookie(
+            response, mint_session_cookie_value(signing_secret, handoff, workspace_domain), workspace_domain
+        )
+        return response
+
+    def _recover_from_failed_handoff(reason: str, next_url: str, is_retry: bool) -> Response:
+        # A callback that cannot be verified is usually benign -- a reopened
+        # link, a back button, a redirect that outlived the 60-second token --
+        # so rather than a dead end: a visitor who already holds a session is
+        # simply sent on, and anyone else gets exactly one more trip through
+        # the broker (on a retry nonce). A retry that fails again is the end.
+        _log_denied(reason, auth_host)
+        if verify_session_from_cookies(signing_secret, request.cookies, workspace_domain) is not None:
+            return Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
+        if is_retry:
+            return _expired_login()
+        return _redirect_to_broker(next_url if _is_workspace_url(next_url) else "", is_confirmed=True, is_retry=True)
+
+    def _post_login_redirect_target(next_url: str) -> str:
         # Bounce onward to the origin the visitor was reaching, but only if it
         # is genuinely one of this workspace's own origins. The bare domain no
         # longer routes, so the safe fallback is the shell (system_interface)
         # label origin; failing that, the workspace's own shell service simply
         # is not registered and there is nowhere sensible to land.
+        if _is_workspace_url(next_url):
+            return next_url
         label_to_name = get_label_to_name()
         shell_label = next((label for label, name in label_to_name.items() if name == _SHELL_SERVICE_NAME), None)
-        redirect_target = f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
-        if next_url.startswith("https://"):
-            next_host = next_url.removeprefix("https://").split("/", 1)[0]
-            is_ours, _service = service_for_host(next_host, workspace_domain, label_to_name, auth_label)
-            if is_ours:
-                redirect_target = next_url
-
-        response = Response(status=302, headers={"Location": redirect_target})
-        set_session_cookie(response, mint_session_cookie_value(signing_secret, handoff, workspace_domain), workspace_domain)
-        return response
+        return f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
 
     @app.get("/_auth/refresh")
     def refresh() -> Response:
-        # Re-run the broker handoff for whoever is asking, so a user who changed
-        # their name or avatar gets a session carrying the new record. No
+        # Re-run the broker handoff for whoever is asking, so a user whose
+        # account record changed gets a session carrying the new record. No
         # session is required: the broker resolves the visitor's own accounts
         # session, and the callback re-checks the grants as on a first visit.
         # ``confirmed=1`` skips the "Continue as" interstitial a visitor already
         # passed once; it is a UX property only (the token still goes solely to
         # this workspace's own auth origin).
         requested_next = request.args.get("next", "")
-        return _redirect_to_broker(requested_next if _is_workspace_url(requested_next) else "", is_confirmed=True)
+        return _redirect_to_broker(
+            requested_next if _is_workspace_url(requested_next) else "", is_confirmed=True, is_retry=False
+        )
 
-    def _redirect_to_broker(next_url: str, is_confirmed: bool) -> Response:
-        nonce = pending_logins.mint()
+    def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool) -> Response:
+        nonce = pending_logins.mint(is_retry=is_retry)
         # The broker delivers its post-login callback to the dedicated auth
         # origin (the only label serving /_auth/callback), then bounces to
         # ``next`` (the origin the visitor was actually reaching).

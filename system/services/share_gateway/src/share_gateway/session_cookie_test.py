@@ -9,6 +9,7 @@ from flask import Response
 from share_gateway.identity import RequesterIdentity
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
+from share_gateway.session_cookie import SESSION_LIFETIME_SECONDS
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
@@ -19,13 +20,7 @@ from share_gateway.testing import set_cookies_by_name
 _DOMAIN = "host-aaaa.bbbb.us1.imbueminds.com"
 _SECRET = "signing-secret-77f1"
 _BOB = RequesterIdentity(user_id="user-bob-4471", email="bob@example.com", is_owner=False)
-_OWNER = RequesterIdentity(
-    user_id="user-owner-9c21",
-    email="owner@example.com",
-    is_owner=True,
-    display_name="Owner Person",
-    avatar_url="https://accounts.example.com/users/user-owner-9c21/avatar/abc",
-)
+_OWNER = RequesterIdentity(user_id="user-owner-9c21", email="owner@example.com", is_owner=True)
 
 
 def test_session_cookie_roundtrips_the_whole_identity_record() -> None:
@@ -33,16 +28,30 @@ def test_session_cookie_roundtrips_the_whole_identity_record() -> None:
     assert verify_session_cookie_value(_SECRET, value, _DOMAIN) == _OWNER
 
 
-def test_session_cookie_omits_absent_profile_fields() -> None:
+def test_session_cookie_payload_carries_only_identity_and_lasts_thirty_days() -> None:
     value = mint_session_cookie_value(_SECRET, _BOB, _DOMAIN)
     claims = jwt.decode(value, _SECRET, algorithms=["HS256"], audience=_DOMAIN)
-    assert "display_name" not in claims
-    assert "avatar_url" not in claims
-    identity = verify_session_cookie_value(_SECRET, value, _DOMAIN)
-    assert identity == _BOB
-    assert identity is not None
-    assert identity.display_name is None
-    assert identity.avatar_url is None
+    assert set(claims) == {"user_id", "email", "owner", "aud", "iat", "exp"}
+    assert claims["exp"] - claims["iat"] == SESSION_LIFETIME_SECONDS == 30 * 24 * 3600
+
+
+def test_session_cookie_ignores_profile_claims_an_older_gateway_wrote() -> None:
+    now = datetime.now(timezone.utc)
+    legacy = jwt.encode(
+        {
+            "user_id": "user-bob-4471",
+            "email": "bob@example.com",
+            "owner": False,
+            "display_name": "Bob",
+            "avatar_url": "https://accounts.example.com/users/user-bob-4471/avatar/1234",
+            "aud": _DOMAIN,
+            "iat": now,
+            "exp": now + timedelta(hours=1),
+        },
+        _SECRET,
+        algorithm="HS256",
+    )
+    assert verify_session_cookie_value(_SECRET, legacy, _DOMAIN) == _BOB
 
 
 def test_session_cookie_rejects_wrong_secret_domain_and_garbage() -> None:
@@ -77,6 +86,7 @@ def test_set_session_cookie_sets_a_plain_copy_and_a_partitioned_copy() -> None:
         assert "Secure" in header
         assert "HttpOnly" in header
         assert f"Domain={_DOMAIN}" in header
+        assert f"Max-Age={30 * 24 * 3600}" in header
     # The plain copy is what a top-level visit (Safari included) keeps: Lax,
     # so a foreign site's subresource requests never carry it. Only the iframe
     # copy is SameSite=None, and only it carries the CHIPS attribute.

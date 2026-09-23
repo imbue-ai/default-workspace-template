@@ -1,4 +1,9 @@
+import json
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from share_gateway.caddyfile import build_frame_ancestors_policy
 from share_gateway.caddyfile import build_label_to_name
@@ -124,10 +129,7 @@ def test_caddyfile_confines_auth_surface_to_the_dedicated_auth_label() -> None:
 def test_caddyfile_appends_frame_ancestors_allowing_own_family_and_chrome() -> None:
     rendered = _render()
 
-    assert (
-        f"header Content-Security-Policy \"frame-ancestors 'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}\""
-        in rendered
-    )
+    assert f"header Content-Security-Policy \"frame-ancestors 'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}\"" in rendered
 
 
 def test_caddyfile_frame_ancestors_omits_chrome_when_share_carries_none() -> None:
@@ -144,14 +146,12 @@ def test_caddyfile_routes_health_site_wide_and_unauthenticated() -> None:
     # behind forward_auth) so the chrome can probe any workspace origin it has.
     assert "handle /_health {" in rendered
     health_idx = rendered.index("handle /_health {")
-    forward_auth_idx = rendered.index("forward_auth")
+    forward_auth_idx = rendered.index("forward_auth 127.0.0.1:8791")
     assert health_idx < forward_auth_idx
 
 
 def test_build_frame_ancestors_policy_shapes() -> None:
-    assert build_frame_ancestors_policy(_DOMAIN, _CHROME_ORIGIN) == (
-        f"'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}"
-    )
+    assert build_frame_ancestors_policy(_DOMAIN, _CHROME_ORIGIN) == (f"'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}")
     assert build_frame_ancestors_policy(_DOMAIN, "") == f"'self' https://*.{_DOMAIN}"
 
 
@@ -171,9 +171,13 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     assert "request_header -X-Imbue-Identity" in rendered
     assert "X-Share-Owner" not in rendered
     assert "copy_headers X-Share-Filtered-Cookie>Cookie X-Imbue-Identity" in rendered
-    # The strip precedes the forward_auth block, so no inbound copy can survive.
+    # Textual position inside a handle block does NOT decide when the strip
+    # runs: caddy sorts directives by its own order, which puts forward_auth
+    # before request_header. Only the global order override makes the strip
+    # run first; test_caddy_adapt_runs_the_identity_strip_before_forward_auth
+    # proves the resulting handler order against the real binary.
+    assert "order request_header before forward_auth" in rendered
     forward_auth_directive = "forward_auth 127.0.0.1:8791"
-    assert rendered.index("request_header -X-Imbue-Identity") < rendered.index(forward_auth_directive)
     # The refresh route is served at every origin, ahead of the auth-gated handle.
     assert "handle /_auth/refresh {" in rendered
     assert rendered.index("handle /_auth/refresh {") < rendered.index(forward_auth_directive)
@@ -182,3 +186,78 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so
     # it must not be advertised via Alt-Svc.
     assert "protocols h1 h2" in rendered
+
+
+_CADDY_BINARY = shutil.which("caddy")
+_CADDY_ADAPT_TIMEOUT_SECONDS = 30
+
+
+def _adapt_with_caddy(caddyfile_text: str, tmp_path: Path) -> object:
+    """The JSON config the real caddy binary compiles the Caddyfile into."""
+    caddyfile_path = tmp_path / "Caddyfile"
+    caddyfile_path.write_text(caddyfile_text)
+    assert _CADDY_BINARY is not None
+    result = subprocess.run(
+        [_CADDY_BINARY, "adapt", "--config", str(caddyfile_path), "--adapter", "caddyfile"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=_CADDY_ADAPT_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    return json.loads(result.stdout)
+
+
+def _as_json_object(node: object) -> dict[str, object] | None:
+    if not isinstance(node, dict):
+        return None
+    return {str(key): value for key, value in node.items()}
+
+
+def _is_forward_auth_handler(node: object) -> bool:
+    handler = _as_json_object(node)
+    return handler is not None and handler.get("handler") == "reverse_proxy" and "handle_response" in handler
+
+
+def _is_identity_strip_handler(node: object) -> bool:
+    handler = _as_json_object(node)
+    if handler is None or handler.get("handler") != "headers":
+        return False
+    request_ops = _as_json_object(handler.get("request"))
+    if request_ops is None:
+        return False
+    deleted_headers = request_ops.get("delete")
+    return isinstance(deleted_headers, list) and "X-Imbue-Identity" in deleted_headers
+
+
+def _find_handler_list_containing_forward_auth(node: object) -> list[object] | None:
+    """The one ``handle`` list (anywhere in the adapted config) that holds the forward_auth handler."""
+    if isinstance(node, list):
+        handlers = list(node)
+        if any(_is_forward_auth_handler(handler) for handler in handlers):
+            return handlers
+        children: list[object] = handlers
+    elif isinstance(node, dict):
+        children = list(node.values())
+    else:
+        return None
+    for child in children:
+        found = _find_handler_list_containing_forward_auth(child)
+        if found is not None:
+            return found
+    return None
+
+
+@pytest.mark.skipif(_CADDY_BINARY is None, reason="the caddy binary is not on PATH")
+def test_caddy_adapt_runs_the_identity_strip_before_forward_auth(tmp_path: Path) -> None:
+    # The strip and the injection live in the same handle block, so the only
+    # thing that decides whether a forged X-Imbue-Identity survives is the
+    # order caddy compiles them into. Ask the real binary.
+    config = _adapt_with_caddy(_render(), tmp_path)
+
+    auth_handlers = _find_handler_list_containing_forward_auth(config)
+    assert auth_handlers is not None
+    strip_indexes = [idx for idx, handler in enumerate(auth_handlers) if _is_identity_strip_handler(handler)]
+    forward_auth_indexes = [idx for idx, handler in enumerate(auth_handlers) if _is_forward_auth_handler(handler)]
+    assert len(strip_indexes) == 1
+    assert len(forward_auth_indexes) == 1
+    assert strip_indexes[0] < forward_auth_indexes[0]
