@@ -11,6 +11,8 @@ Internal documentation for the workspace machinery.
   `workspace-app-model/` plan it grew out of stays as history.
   The plan that separates chats from agents (so a chat can switch harness) is
   `blueprint/chat-agent-split/plan-chat-agent-split.md`.
+  The launcher's next shape and the Getting Started app are
+  `blueprint/launcher-and-getting-started/plan-launcher-and-getting-started.md`.
 - `avatar-designs.md` - How to draw and register a desktop avatar design (the
   drawing format the shell validates, and the registration helper).
 - `style_guide.md` - The code style guide, a symlink to the copy

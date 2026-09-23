@@ -80,6 +80,8 @@ _TRIGGER_TIMEOUT_MS = 20000
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
 # The chat root's path with the fixture chat selected: what a link, and the agent's auto-open, open.
 _FIXTURE_ROOT_PATH = chat_root_path(ChatId(FIXTURE_AGENT_ID))
+# A second agent beside the fixture's, for the flows that need a choice of chats.
+_SECOND_AGENT_ID = "agent-5e2e5e2e5e2e5e2e5e2e5e2e5e2e5e2e"
 
 
 def _chat_root(page: Page) -> FrameLocator:
@@ -119,6 +121,7 @@ def _running_e2e_server(
     tmp_path: Path,
     session_events: list[dict[str, Any]] | None = None,
     is_account_signed_in: bool = True,
+    additional_agents: Sequence[tuple[str, str]] = (),
 ) -> AbstractContextManager[RunningWorkspace]:
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
@@ -126,6 +129,7 @@ def _running_e2e_server(
         find_free_port(),
         find_free_port(),
         session_events=session_events,
+        additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
     )
 
@@ -221,13 +225,13 @@ def _open_fixture_chat(page: Page, server: RunningWorkspace) -> None:
 
 
 def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
-    """Run the chat app's ``new`` launch path from the launcher's tile, and return the frame of the chat the root
-    created and shows."""
+    """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
+    typed), and return the frame of the chat the root created and shows."""
     _land(page, server)
-    page.locator("[data-launcher-field] input").click()
-    overlay = page.locator("[data-launcher-overlay]")
-    expect(overlay).to_be_visible(timeout=10000)
-    overlay.locator(f'.launcher-tile[data-launch="{CHAT_APP_NAME}:new"]').click()
+    page.locator("[data-launcher-field] textarea").click()
+    menu = page.locator("[data-launcher-overlay]")
+    expect(menu).to_be_visible(timeout=10000)
+    menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
     expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
     return _chat(page, None)
 
@@ -362,7 +366,12 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
             "model": "claude-opus-4-6",
             "content": [
                 {"type": "text", "text": "Let me read that file."},
-                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file_path": "/tmp/project/test.txt"}},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_tc1",
+                    "name": "Read",
+                    "input": {"file_path": "/tmp/project/test.txt"},
+                },
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -699,6 +708,71 @@ def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_roo
         assert _chat(page).locator(".message-user", has_text=draft).count() == 0
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_the_send_launch_path_offers_the_picker_and_sends_the_text_to_the_chat_picked(
+    tmp_path: Path, page: Page
+) -> None:
+    """The ``send`` launch path off a ``navigate`` (the desktop's Ctrl+Enter row), with two chats to choose from: the
+    picker opens over them; Escape drops it and the text with it, and picking a chat sends the text there through
+    the ordinary send and selects it. Either way the window's stored path goes back to the selection alone, so a
+    reload of the window offers nothing again (launcher-and-getting-started plan section 4.5)."""
+    with _running_e2e_server(tmp_path, additional_agents=[(_SECOND_AGENT_ID, "Second chat")]) as server:
+        _open_fixture_chat(page, server)
+        expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        client_id = _client_id(page)
+        _wait_for_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        root = _chat_root(page)
+        text = "Carry on with the seal"
+
+        def _navigate_to_send() -> None:
+            navigated = _post_op(
+                server,
+                {
+                    "op": "navigate",
+                    "args": {
+                        "window": _the_chat_window(server)["id"],
+                        "path": "/send?" + urllib.parse.urlencode({"message": text}),
+                        "client": client_id,
+                    },
+                    "requester": None,
+                },
+            )
+            assert navigated == 200
+            expect(root.locator("[data-send-picker]")).to_be_visible(timeout=15000)
+            expect(root.locator(".send-picker-text")).to_contain_text(text)
+
+        _navigate_to_send()
+        root.locator("[data-send-picker-search]").press("Escape")
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        assert messenger.sent == []
+
+        _navigate_to_send()
+        root.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]').click()
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=10.0)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        # The recording messenger writes nothing into the fixture transcript, so the bubble is not looked for.
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_send_launch_path_with_one_chat_sends_to_it_without_the_picker(tmp_path: Path, page: Page) -> None:
+    """The ``send`` launch path as a document load (a window opened at it when the chat has no independent pinned
+    window here, or a link), on a workspace with one chat: the root waits for the chats to arrive, then sends the
+    text to the one there is with no picker, selects it, and moves its own URL to the selection alone, so a reload
+    of the document sends nothing again. The root behaves the same visited directly, so no shell frames it here."""
+    with _running_e2e_server(tmp_path) as server:
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        text = "Carry on with the seal"
+        page.goto(f"{server.chat_url}/send?" + urllib.parse.urlencode({"message": text}))
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=15.0)
+        expect(page).to_have_url(f"{server.chat_url}{_FIXTURE_ROOT_PATH}", timeout=10000)
+        assert page.locator("[data-send-picker]").count() == 0
+
+
 # starting a chat
 
 
@@ -731,15 +805,23 @@ def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_i
     tmp_path: Path, page: Page
 ) -> None:
     """With an account signed in the create runs immediately on it; the page says so while the
-    create runs, and the composer arrives when the agent registers."""
+    create runs, and the composer arrives when the agent registers. The launcher points the chat's pinned
+    window at ``/new`` in place, so the create can land before the notice is looked for: either is
+    accepted, and the composer is what must arrive."""
     with _running_e2e_server(tmp_path) as server:
         chat = _start_new_chat(page, server)
-        expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
+        creating_or_landed = chat.locator(".message-list-creating, .message-input-textbox")
+        expect(creating_or_landed.first).to_be_visible(timeout=15000)
+        if chat.locator(".message-list-creating").count() > 0:
+            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat")
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
         assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
 
 
+# Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
+# once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
@@ -751,7 +833,7 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     with _running_e2e_server(tmp_path) as server:
         chat = _start_new_chat(page, server)
         failed = chat.locator(".message-list-create-failed")
-        expect(failed).to_contain_text("This chat could not be started", timeout=20000)
+        expect(failed).to_contain_text("This chat could not be started", timeout=45000)
         expect(failed).to_contain_text("exited with code 3")
         expect(failed).to_contain_text("create failed on purpose")
         expect(failed.locator(".message-list-create-retry")).to_be_visible()

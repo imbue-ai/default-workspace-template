@@ -117,6 +117,8 @@ export interface LaunchPath {
   readonly path: string;
   /** The names of the query parameters the shell may append. */
   readonly params: readonly string[];
+  /** The param the launcher fills with typed text, which makes this a free-text row; null for none. */
+  readonly text_param: string | null;
 }
 
 export interface DefaultShortcut {
@@ -371,6 +373,7 @@ function parseLaunchPath(raw: unknown): LaunchPath {
     label: asString(record.label, "launch_path.label"),
     path: asString(record.path, "launch_path.path"),
     params: asArray(record.params ?? [], "launch_path.params").map((param) => asString(param, "launch_path.param")),
+    text_param: asOptionalString(record.text_param, "launch_path.text_param"),
   };
 }
 

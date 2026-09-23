@@ -38,6 +38,9 @@ export const SHELL_FOCUSED = "shell:focused";
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
 export const SHELL_OPEN = "shell:open";
+/** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
+ *  launcher's primary text action with it, so a page never names the app that takes it. */
+export const SHELL_START_WITH_TEXT = "shell:start-with-text";
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, and the
@@ -81,6 +84,8 @@ export interface ShellConnection {
   location(path: string, title: string): void;
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
+  /** Ask the shell to start something with ``text``: its launcher's primary text action (a new chat on a stock machine). */
+  startWithText(text: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -167,6 +172,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
+    startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
 }

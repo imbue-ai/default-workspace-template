@@ -215,8 +215,8 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     assert [desktop["id"] for desktop in document["desktops"]] == ["home"]
     assert [window["id"] for window in document["desktops"][0]["windows"]] == [window["id"]]
     assert {entry["name"]: entry["launch_paths"] for entry in document["apps"]} == {
-        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": []}],
-        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": []}],
+        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": [], "text_param": None}],
+        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": [], "text_param": None}],
     }
     by_id = {entry["id"]: entry for entry in document["clients"]}
     assert by_id["c1"]["active_desktop"] == "home" and by_id["c1"]["shown"] == [window["id"]]

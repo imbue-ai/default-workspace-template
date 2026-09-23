@@ -57,7 +57,7 @@ what landed:
 Hardened <app> on branch `<branch>`.
 - Change: <one-sentence>
 - Frontend / backend: <which, and the files touched>
-- Bundles built: <the static/ path of every bundle you built, both when the shared library changed>
+- Bundles built: <the static/ path of every bundle you built, all three when the shared library changed>
 - Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```

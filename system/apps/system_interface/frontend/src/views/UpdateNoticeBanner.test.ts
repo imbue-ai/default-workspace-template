@@ -4,7 +4,7 @@
  * delivers, which verbs it offers, the confirmation before a rollback, and how a refusal is shown.
  */
 import "../testing/dom";
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

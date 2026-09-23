@@ -409,7 +409,8 @@ stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
 **When the update touches a critical app (`system/apps/system_interface/`,
-`system/apps/chat/`, `system/apps/terminal/`), `system/libs/workspace_ui/`, or
+`system/apps/chat/`, `system/apps/terminal/`), `system/apps/getting_started/frontend/`,
+`system/libs/workspace_ui/`, or
 `system/package.json` / `system/package-lock.json` at all** (the trees the
 critical bundles are built from, the same set the careful flow's freshness
 check names), also take the `editing critical apps` lease through the apply, as
@@ -430,10 +431,11 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/` and the chat app's), append `--worker-bundle system_interface=<path>
---worker-bundle chat=<path>` so the exact builds the worker validated are
-installed instead of a live build; the apply installs them only as a pair (one
-`npm run build` emits both), and builds live when either is missing or stale.
+`static/`, the chat app's, and the Getting Started app's), append
+`--worker-bundle system_interface=<path> --worker-bundle chat=<path>
+--worker-bundle getting_started=<path>` so the exact builds the worker validated
+are installed instead of a live build; the apply installs them only as a set (one
+`npm run build` emits them all), and builds live when any is missing or stale.
 
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the

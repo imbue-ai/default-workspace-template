@@ -25,7 +25,7 @@ import type {
 } from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
 import type { UpdateNotice } from "../model/UpdateNotice";
-import { DRAFT_PARAM, isPathShowingChat, launchTilesOf, promptTargetOfTiles } from "../model/launch";
+import { DRAFT_PARAM, freeTextRowsOf, isPathShowingChat } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -340,10 +340,11 @@ export function findWindow(state: DesktopState, windowId: string): { desktop: De
   return null;
 }
 
-/** The app that holds chats: the one that can start one, which is the one declaring a launch path
- *  that takes a ``message``. The shell names no app. Null when this machine has no such app. */
+/** The app that holds chats: the one that can start one from typed text, which is the one whose
+ *  launch path declares a ``text_param`` (the launcher's primary free-text row). The shell names no
+ *  app. Null when this machine has no such app. */
 export function chatApp(state: DesktopState): AppRecord | null {
-  return promptTargetOfTiles(launchTilesOf(state.apps))?.app ?? null;
+  return freeTextRowsOf(state.apps)[0]?.app ?? null;
 }
 
 /** A window showing the chat ``chatId``, with the desktop it is on, or null when none is.

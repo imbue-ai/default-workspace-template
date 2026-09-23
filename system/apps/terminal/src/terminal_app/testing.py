@@ -39,7 +39,13 @@ FAKE_CREATED_EPOCH_BASE: Final[int] = 1_700_000_000
 # Where a test source starts a terminal created without a workdir.
 DEFAULT_TEST_WORKDIR: Final[Workdir] = Workdir("/home/user/workspace")
 # The command a test source gives a new session (the fake tmux records it, never runs it).
-TEST_SESSION_COMMAND: Final[tuple[str, ...]] = ("python3", "/opt/oom_tag_service.py", "terminal-session", "bash", "-l")
+TEST_SESSION_COMMAND: Final[tuple[str, ...]] = (
+    "python3",
+    "/opt/oom_tag_service.py",
+    "terminal-session",
+    "bash",
+    "-l",
+)
 # The origin label a test registry gives the pty, the row the wrapper page reads.
 TEST_PTY_LABEL: Final[str] = "terminal-pty-c3d4"
 # What a test's stand-in for the shell's built contract module says.
@@ -340,7 +346,9 @@ def build_pages_test_client(
 class TerminalEnvironment(FrozenModel):
     """Where a terminal process under test keeps its files, and the registry it registers in."""
 
-    scratch_dir: Path = Field(description="The test's own directory for manifests, stores, and logs")
+    scratch_dir: Path = Field(
+        description="The test's own directory for manifests, stores, and logs"
+    )
     registry_path: Path = Field(description="The apps.toml registrations land in")
 
 
@@ -384,7 +392,7 @@ def write_terminal_manifest(directory: Path, app_name: str) -> Path:
         "\n"
         "[[launch_paths]]\n"
         'id = "new"\n'
-        'label = "New Terminal"\n'
+        'label = "Terminal"\n'
         'path = "/new"\n'
     )
     return manifest_path

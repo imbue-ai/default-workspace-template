@@ -264,9 +264,12 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
     # The file viewer: dufs, the tiny static file server the program runs
-    # directly. It holds little memory and supervisord restarts it if shed, so
-    # this is the most expendable built-in service of all.
+    # directly. It holds little memory and supervisord restarts it if shed.
     "files": 75,
+    # The Getting Started page: one static page and a cached catalog. A shed costs
+    # one reload of a window that shows nothing of the user's, so this is the most
+    # expendable built-in service of all.
+    "getting-started": 80,
     "user": USER_SERVICE,
     # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the

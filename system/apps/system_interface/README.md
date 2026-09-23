@@ -56,8 +56,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
   `/wallpapers/<kind>/<name>`), the per-app Stop and Start
   (`/api/apps/<name>/stop|start`), clients (`/api/clients`), client activity
-  (`/api/client-activity`), the inventory (`/api/inventory`), the templates
-  catalog (`/api/templates-catalog`), each client's pinned-entry presentation
+  (`/api/client-activity`), the inventory (`/api/inventory`), each client's
+  pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), and the loopback-only
@@ -146,7 +146,7 @@ Stop and Start of the whole app act on its supervisord program and are refused
 for critical apps; the desktop offers them on the window menu
 (`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
-`shell:capabilities`); a page that reports the path it is showing gets it
+`shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
 stored on its window and reopens there, and one that declared `navigation`
 is sent `shell:navigate` when an agent points its window elsewhere.
 
@@ -163,24 +163,27 @@ opens the avatar chooser. Desktops are created, renamed, recoloured,
 re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
 removed on the backdrop.
 
-The launcher is the page for starting things, an overlay over the desktop
-rather than a window. Its resting contents: a search field; "Open new" (one
-tile per launch path of every non-internal app, the apps that declare a
-`launcher_rank` in their manifest first in rank order and the rest after
-them); "On this desktop" (the active desktop's windows by title); "Start
-something" (hardcoded intents, each a new chat seeded with a prompt, six at a
-time behind "See more"); and "Start from a template" (the published templates
-by category, in sideways rails, with a detail dialog whose "Make it mine"
-starts a chat that adopts the template). Typing in the search field swaps the
-overlay for results: the matching launch paths and windows, the matching
-intents, the matching templates. A seeded prompt goes to whichever app
-declares a launch path with a `message` param (the chat app's `new`), so the
-shell still names no app. The template catalog is a JSON document the shell
-fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (`catalog/README.md` at
-the repo root describes it), reuses for six hours, keeps the last good copy
-under `data/.state/system_interface/`, and serves to the page at
-`GET /api/templates-catalog`. A fresh install lands on its `Home` desktop with
-the launcher's tiles one click away.
+The launcher is a text field ("Start app or send message...") and the menu it
+opens above itself (`frontend/src/views/LauncherMenu.ts`, its rows computed by
+`reducers/launcherRows.ts`). The rows: one per launch path of every
+non-internal app, the apps that declare a `launcher_rank` in their manifest
+first in rank order and the rest after them; while typing, one per window of
+every desktop (by title, the active desktop's first; choosing one switches
+desktop and raises it); and at the foot the free-text rows, one per launch
+path that names a `text_param`, which run that launch path with the typed text
+as the param (`model/launch.ts`). The first free-text row is the primary
+action (Enter with no other row highlighted) and the second the secondary
+(Ctrl+Enter, Cmd+Enter on macOS); a free-text row of an app with an
+independent pinned window points this client's view of that window at the
+path rather than opening a new one, and a text whose encoded path would pass
+the window path bound is disabled with its reason. One row is always
+highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
+and a run closes the menu and clears the field. A framed page starts a chat
+without naming the chat app through `shell:start-with-text`, which the shell
+answers by running the primary free-text row (the Getting Started app's
+intents and templates use it). The shell names no app in any of this. A
+fresh install lands on its `Home` desktop with the Getting Started window
+open, placed there once by that app for the first client that connects.
 
 ## Running and developing
 
@@ -420,9 +423,9 @@ The careful flow's apply (`update_self.py apply --keep-rollback-point`, see
 "Updating the running UI") does not discard its snapshots on success: it leaves
 `data/.state/update-apply/last-good.json`, a record of the merge it landed, the
 copies it kept, and the critical apps and supervisord programs included in rollback.
-A frontend apply includes both chat and shell, even if only one app's source changed,
-because it replaces both bundles. The shell turns that record into a notice only a
-person closes (`shell/update_notice.py`):
+A frontend apply includes both chat and shell (the critical bundle owners), even if only
+one app's source changed, because one build replaces every bundle. The shell turns that
+record into a notice only a person closes (`shell/update_notice.py`):
 one top banner beside the staleness one, naming every app the record names (or
 the workspace, when it names none), saying they were updated a moment ago and
 offering "Roll back" and "Everything seems good". It is one banner rather than a

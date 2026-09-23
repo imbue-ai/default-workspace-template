@@ -5,7 +5,6 @@ import re
 import shlex
 from typing import Any
 from typing import Final
-from typing import assert_never
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -33,11 +32,8 @@ from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
-from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
-from imbue.system_interface.template_catalog import TemplateCatalogAvailability
-from imbue.system_interface.template_catalog import catalog_wire_json
 from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
 from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
@@ -424,32 +420,6 @@ def _health_endpoint() -> Response:
 # Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
 API_PREFIX: Final[str] = "api/"
 
-TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
-_TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
-
-
-def _templates_catalog_endpoint() -> Response:
-    """The launcher's template catalog: the freshest copy the store holds, with each drawing
-    resolved to a URL; ``catalog`` is null when no catalog URL is configured, and a 503 says
-    nothing could be loaded."""
-    state = get_state()
-    reading = state.template_catalog.read()
-    match reading.availability:
-        case TemplateCatalogAvailability.DISABLED:
-            return json_response({"catalog": None, "is_stale": False})
-        case TemplateCatalogAvailability.UNAVAILABLE:
-            return json_response({"detail": _TEMPLATES_UNAVAILABLE_DETAIL}, status_code=HTTP_SERVICE_UNAVAILABLE)
-        case TemplateCatalogAvailability.FRESH | TemplateCatalogAvailability.STALE:
-            assert reading.catalog is not None, "a fresh or stale reading carries its catalog"
-            return json_response(
-                {
-                    "catalog": catalog_wire_json(reading.catalog, state.template_catalog.catalog_url),
-                    "is_stale": reading.availability is TemplateCatalogAvailability.STALE,
-                }
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-
 
 def _serve_app_contract() -> Response:
     """Serve the browser-side contract module (desktop contracts.md section 7) from the shell's own origin.
@@ -642,7 +612,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
-    application.add_url_rule(TEMPLATES_CATALOG_PATH, view_func=_templates_catalog_endpoint, methods=["GET"])
     register_shell_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
