@@ -35,8 +35,8 @@ BACKUP_EVENT_SOURCE: Final[EventSource] = EventSource("backup")
 
 EVENTS_FILENAME: Final[str] = "events.jsonl"
 
-# The size at which the runner moves the events log aside. `host-backup-now`'s
-# in-flight scan reads this much of the log's end, so it covers the current file.
+# The size at which the runner moves the events log aside. It checks only at the
+# start of a tick, so the log can grow past this until the next tick starts.
 EVENTS_LOG_ROTATION_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_ROTATED_EVENTS_LOGS: Final[int] = 2
 
