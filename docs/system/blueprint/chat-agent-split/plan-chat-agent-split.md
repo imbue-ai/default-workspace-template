@@ -347,12 +347,13 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
     "activity_state": "THINKING",
     "model_choice": {"...": "..."},
     "queued_messages": [],
-    "shoulder_tap_available": false
+    "shoulder_tap_available": false,
+    "is_connecting": false
   }
 }
 ```
 
-- `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, and the tap button from.
+- `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, the tap button, and "Connecting…" beside the model bar (`is_connecting`: a send is waiting for the agent to come up) from.
   It carries no `lane`: the lane is the account's, and the page reads it off the account row it already holds for `account_id`, which is all the switch rule needs (5.1: any account but the chat's own is a switch; the kind, a rebind or a handoff, is read by harness and lane, since two lanes can share one harness).
   The frontend never calls an agent-keyed route.
 - `handoff` is `null` except while converging (section 5.4, section 6): one shape for both kinds of switch, since the page renders them the same way.
