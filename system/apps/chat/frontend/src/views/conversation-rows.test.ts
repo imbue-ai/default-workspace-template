@@ -174,9 +174,29 @@ describe("buildConversationRows", () => {
     expect(chipRow.anchorEventId).toBe("a-c1");
   });
 
-  // Prose breaks a chip row, so it also breaks the merge: the run resumes as a
-  // fresh row below it rather than swallowing the message.
-  it("splits a chip run around prose spoken mid-turn", () => {
+  // The line of intent and the calls that carry it out are one message the
+  // harness happened to split, so they share a row and the chips sit tucked
+  // under the sentence rather than a full message gap below it.
+  it("tucks a chip run onto the prose that introduces it", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      assistantText("t2", "Checking how much disk and memory this workspace is using."),
+      toolMsg("t3", "c1", "Check disk usage"),
+      toolMsg("t4", "c2", "Check disk and memory"),
+      assistantText("t5", "plenty of room", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    // The prose and both calls are one row, standing where the prose does; the
+    // result stays its own message below.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t5"]);
+    expect(rows.find((r) => r.key === "a-t2")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
+  });
+
+  // Only chip-only events accrete onto a run: prose is a message in its own
+  // right, so it ends the run in progress and heads the next one.
+  it("ends a chip run at prose, which then heads a run of its own", () => {
     const events: TranscriptEvent[] = [
       userMsg("t1", "go"),
       toolMsg("t2", "c1", "Show the current date"),
@@ -188,13 +208,16 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4", "a-c3", "a-t6"]);
+    // c1+c2 on one chip row, then the mid-turn prose heading a row that takes
+    // c3 with it, then the wrap-up reply.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4", "a-t6"]);
+    expect(rows.find((r) => r.key === "a-c1")!.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
     expect(rows.find((r) => r.key === "a-t4")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
   });
 
   // A sub-agent is a whole conversation rather than an action, so its card is
-  // not a chip and cannot join a chip row -- the runs either side stay separate.
-  it("keeps a sub-agent card out of the chip runs around it", () => {
+  // not a chip: it cannot join the chip row above it, and ends that run.
+  it("ends a chip run at a sub-agent card", () => {
     const events: TranscriptEvent[] = [
       userMsg("t1", "go"),
       toolMsg("t2", "c1", "Show the current date"),
@@ -205,7 +228,9 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-c2", "a-c3", "a-t5"]);
+    // The card does not fold into c1's chip row; it heads its own, which c3
+    // then joins the way it would inside a single event.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-c2", "a-t5"]);
     expect(rows.find((r) => r.key === "a-c2")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
   });
 
