@@ -24,6 +24,8 @@ from imbue.chat.primitives import ChatId
 
 _CHAT_ID = ChatId("agent-seeded")
 _CREATED_AT = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+# The last seeded turn a bare-number reply picks from.
+_OPTIONS_TURN = SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over")
 
 
 def _turns() -> tuple[SeedTurn, ...]:
@@ -92,11 +94,7 @@ def _seeded_chat_dir(tmp_path: Path, turns: tuple[SeedTurn, ...]) -> Path:
 def test_the_launch_message_carries_the_seeded_conversation_ahead_of_the_users_words(tmp_path: Path) -> None:
     """What the chat's first agent is started with: every seeded turn, in order and whole, then
     the message the user actually sent -- which on its own ("1") names nothing at all."""
-    turns = (
-        SeedTurn(role=SeedRole.USER, text="Wait.. what is honest software?"),
-        SeedTurn(role=SeedRole.ASSISTANT, text="Software that works **for you**."),
-        SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over"),
-    )
+    turns = (*_turns(), _OPTIONS_TURN)
 
     launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
 
@@ -110,7 +108,7 @@ def test_the_launch_message_shows_the_user_only_what_they_typed(tmp_path: Path) 
     """The two halves of the fix are one contract: what the agent reads carries the conversation,
     and what the page renders is the user's own turn. The detector table is the seam, so the
     message this module builds is classified here rather than taken on faith."""
-    turns = (SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over"),)
+    turns = (_OPTIONS_TURN,)
 
     launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
 
@@ -142,7 +140,7 @@ def test_a_chat_with_no_readable_seed_is_launched_with_the_users_message_alone(t
 def test_a_slash_command_first_send_is_launched_as_typed(tmp_path: Path) -> None:
     """A harness runs a message as a command only when the slash leads it, so the context block
     is left off rather than turning the command into prose."""
-    turns = (SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over"),)
+    turns = (_OPTIONS_TURN,)
 
     launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "/deep-research honest software")
 
