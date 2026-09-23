@@ -596,7 +596,9 @@ def test_a_seeded_chats_launch_carries_the_conversation_the_chat_opened_on(
     try:
         seeded = manager.seed_chat("Getting started", turns)
         manager.create_chat("", chat_id=seeded.chat_id, message="1")
-        assert wait_until(lambda: manager.get_provisional_chat(seeded.chat_id) is None, timeout_seconds=10)
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+        )
     finally:
         manager.stop()
 
