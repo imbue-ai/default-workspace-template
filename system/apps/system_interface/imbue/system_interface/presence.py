@@ -281,11 +281,10 @@ class PresenceSweep(MutableModel):
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
-            self._thread = None
 
     @property
     def is_running(self) -> bool:
-        """Whether the sweep thread is alive (started and not yet stopped)."""
+        """Whether the sweep thread is alive: started, and not yet exited after a stop."""
         return self._thread is not None and self._thread.is_alive()
 
     def sweep_once(self, now: datetime) -> bool:
