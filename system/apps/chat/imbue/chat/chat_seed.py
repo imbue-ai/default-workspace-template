@@ -189,8 +189,12 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
     (``harnesses/message_display.py``).
 
     Returns ``message`` unchanged when the chat has no seed to carry (a damaged or absent file),
-    which is the behaviour of a chat that never had one.
+    which is the behaviour of a chat that never had one, and for a slash command: a harness runs a
+    message as a command only when it begins with the slash, so a block ahead of it would turn the
+    command into prose.
     """
+    if message.lstrip().startswith("/"):
+        return message
     events = read_seed_events(chat_dir)
     transcript = seed_transcript(events)
     if not transcript:
