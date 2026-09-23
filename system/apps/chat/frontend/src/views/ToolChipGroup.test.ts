@@ -191,6 +191,17 @@ describe("the tool chip row", () => {
     setBlockExpanded("chip:c-kept", false);
   });
 
+  // Tailwind v4 emits nothing for a utility that does not resolve, so the
+  // collapse is asserted on the class the group actually carries: at the edges
+  // of a message its own margin has to give way to the message's, or the seam
+  // between two messages ends up wider than every other seam.
+  it("gives up its own margin at the edges of the message it sits in", () => {
+    mount([chip(read)]);
+    const group = root.querySelector(".tool-chip-group")!;
+    expect(group.className).toContain("first:mt-0");
+    expect(group.className).toContain("last:mb-0");
+  });
+
   it("marks a failed call on the chip itself, before anything is opened", () => {
     mount([chip(read), chip(exec)], [result({ tool_call_id: "c2", is_error: true })]);
     expect(chipButtons()[0].className).toContain("text-faint");

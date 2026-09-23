@@ -95,6 +95,14 @@ function chipKey(call: ToolCall): string {
   return `chip:${call.tool_call_id}`;
 }
 
+/** The group's own margins separate it from its SIBLINGS inside a message: the
+ *  prose that introduces it above, anything that follows below. At the edges of
+ *  a message they would instead add to the message's own margin, making that
+ *  seam wider than every other seam in the transcript -- so there they collapse
+ *  and the message rhythm alone does the spacing. Same reason, and the same
+ *  shape, as the `p:last-child` rules the markdown blocks carry. */
+const GROUP_CLASS = "tool-chip-group my-1.5 first:mt-0 last:mb-0";
+
 /** `-ml-1` cancels the first chip's own left padding, so the row's ink starts
  *  where the prose above it does: a ghost button needs that padding for its
  *  hover fill to have a shape, but the padding is chrome. It tracks the chip's
@@ -298,7 +306,7 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
     // line, which breaks the wrap exactly where it sits: the chip that opened it
     // ends its line, the panel spans the width underneath, and the rest of the
     // run resumes below.
-    return m("div", { class: "tool-chip-group my-1.5" }, [
+    return m("div", { class: GROUP_CLASS }, [
       m(
         "div",
         { class: ROW_CLASS },
