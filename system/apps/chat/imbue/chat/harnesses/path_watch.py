@@ -7,8 +7,9 @@ files: the model tracking (re-deriving an agent's choice whenever its live
 the one shared primitive that already exists --
 :class:`~imbue.chat.watcher_common.WakeOnChangeHandler` plus
 ``POLL_INTERVAL_SECONDS`` -- into a small object that watches a set of paths and
-invokes ``on_change`` on every real filesystem event (with the poll interval as a
-safety net for missed events).
+invokes ``on_change`` on real filesystem events, batched to at most one call per
+``min_cycle_interval_seconds`` (with the poll interval as a safety net for missed
+events).
 
 Per-path rule: an existing directory is watched recursively (so codex's rotating
 rollout files under a stable sessions root all wake the loop without rescheduling);
