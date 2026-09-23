@@ -87,7 +87,7 @@ class _CodexDualChannelWorld:
         self.accepted: list[str] = []
         self.text_by_cid: dict[str, str] = {}
         self._expected: dict[str, MessageState] = {}
-        # cids a shoulder-tap re-sent: while Sending they render as visible "Sending..." chips, so they
+        # cids a shoulder-tap re-sent: while Sending they render as visible not-yet-real bubbles, so they
         # ride the chip snapshot (a plain fresh-send Sending does NOT -- the frontend paints its own).
         self._resend_cids: set[str] = set()
         self._returned_handed_off: set[str] = set()

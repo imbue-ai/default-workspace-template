@@ -932,7 +932,7 @@ def test_shoulder_tap_resends_the_queue_as_one_combined_turn_delivered_together(
     sink.user_turns.clear()
     assert ledger.shoulder_tap().status == "tapped"
 
-    # Through the resend the two messages stay visible as "Sending..." chips (A1a), never removed.
+    # Through the resend the two messages stay visible as Sending chips (A1a), never removed.
     assert ledger.state_of(second) == MessageState.SENDING
     assert ledger.state_of(third) == MessageState.SENDING
     assert [(chip["content"], chip["is_sending"]) for chip in ledger.queued_snapshot()] == [
