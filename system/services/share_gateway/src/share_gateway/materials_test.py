@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -8,6 +10,8 @@ from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import parse_share_materials
 from share_gateway.materials import read_share_materials
+
+_TOK_123_DIGEST = hashlib.sha256(b"tok-123").hexdigest()
 
 _VALID = """
 export SHARE_WORKSPACE_DOMAIN=host-aaaa.bbbb.us1.imbueminds.com
@@ -79,13 +83,13 @@ def test_signing_secret_minted_under_one_relay_token_is_replaced_under_another(t
     [
         "a-bare-secret-from-an-earlier-gateway",
         '["a-bare-secret-from-an-earlier-gateway"]',
-        '{"relay_token_sha256": "0123abcd"}',
-        '{"secret": "", "relay_token_sha256": "0123abcd"}',
-        '{"secret": 12345, "relay_token_sha256": "0123abcd"}',
+        json.dumps({"relay_token_sha256": _TOK_123_DIGEST}),
+        json.dumps({"secret": "", "relay_token_sha256": _TOK_123_DIGEST}),
+        json.dumps({"secret": 12345, "relay_token_sha256": _TOK_123_DIGEST}),
         '{"secret": "a-bare-secret-from-an-earlier-gateway"}',
     ],
 )
-def test_signing_secret_file_without_a_relay_token_binding_is_replaced(tmp_path: Path, stored_text: str) -> None:
+def test_malformed_signing_secret_file_is_replaced_and_rebound(tmp_path: Path, stored_text: str) -> None:
     secret_path = tmp_path / "signing_key"
     secret_path.write_text(stored_text)
 
