@@ -52,10 +52,18 @@
    A chip row is read like the prose it sits with -- a line saying what the
    agent did -- so it wraps on the same edge; left to the full width it would
    run past the text above it and stop looking like part of the same message.
-   Tool BLOCKS are chrome and still keep the full width. */
+   Tool BLOCKS are chrome and still keep the full width.
+
+   `.pv-ungrouped` is the inline run inside a progress block -- work or prose
+   that happened with no step open. Everything else on that thread already
+   stops at the gutter (the task rows by their utility, the final reply by the
+   line below), so without this it was the one place a reply ran the full
+   column and read as a wider kind of text than the same words elsewhere. */
 .message-assistant .message-content.markdown-content,
-.pv-final .message-content.markdown-content,
-.message-assistant .tool-chip-group {
+.message-assistant .tool-chip-group,
+.pv-ungrouped .message-content.markdown-content,
+.pv-ungrouped .tool-chip-group,
+.pv-final .message-content.markdown-content {
   max-width: calc(100% - var(--width-agent-gutter));
 }
 
