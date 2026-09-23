@@ -552,8 +552,14 @@ def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> No
 
 
 def _are_npm_dependencies_missing(npm_root: Path) -> bool:
-    """Whether ``npm_root`` has no node_modules, so a build there has no tsc or vite."""
-    return not (npm_root / "node_modules").is_dir()
+    """Whether ``npm_root`` lacks a finished npm install, so a build there may have no tsc or vite.
+
+    The node_modules directory standing is no sign of one: ``npm ci`` empties it but
+    keeps the directory, so one that died leaves it empty or half-filled. npm writes
+    ``node_modules/.package-lock.json`` only once an install completes, and ``npm ci``
+    deletes it along with everything else first.
+    """
+    return not (npm_root / "node_modules" / ".package-lock.json").is_file()
 
 
 def _is_recovery_npm_ci_needed(
@@ -622,8 +628,8 @@ def _recover_running_state(
         ):
             # No copy to put back: compile from source. node_modules likewise
             # has to match the restored lockfile when its own copy is gone, and
-            # has to exist at all: a forward pass that installed a worker bundle
-            # never ran `npm ci`, and one whose `npm ci` died emptied it.
+            # has to be installed at all: a forward pass that installed a worker
+            # bundle never ran `npm ci`, and one whose `npm ci` died emptied it.
             if _are_npm_dependencies_missing(frontend.npm_root) or (
                 plan.frontend_manifest
                 and _is_recovery_npm_ci_needed(frontend, restored)
@@ -1018,7 +1024,7 @@ def apply_update(
         # Whether the npm manifest *changed* says nothing about whether the
         # dependencies are *installed*: a merge that touches neither
         # package.json nor package-lock.json still has to build, and a tree with
-        # no node_modules has no tsc or vite to build with. Either is reason
+        # no finished install has no tsc or vite to build with. Either is reason
         # enough to refresh. The bundle-copy shortcut still wins over both:
         # installing a verified worker bundle needs no node_modules.
         if usable_worker_bundles is None and (

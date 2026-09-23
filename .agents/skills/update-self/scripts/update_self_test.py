@@ -1240,6 +1240,12 @@ def _write_app(
     )
 
 
+def _finish_npm_install(node_modules: Path) -> None:
+    """Leave ``node_modules`` as a completed npm install does: holding npm's hidden lockfile."""
+    node_modules.mkdir(parents=True, exist_ok=True)
+    (node_modules / ".package-lock.json").write_text("{}")
+
+
 def _make_apply_repo(tmp_path: Path) -> Path:
     """A repo root shaped like the live tree: the npm workspace at ``system/`` over the shell's frontend."""
     repo_root = tmp_path / "repo"
@@ -1248,7 +1254,7 @@ def _make_apply_repo(tmp_path: Path) -> Path:
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
     # A live workspace has its dependencies installed; a tree without them is the
     # exception, and the tests that want it remove this.
-    (repo_root / update_layout.NPM_ROOT_DIR / "node_modules").mkdir(parents=True)
+    _finish_npm_install(repo_root / update_layout.NPM_ROOT_DIR / "node_modules")
     # The workspace's mngr pin, as build_workspace.sh and the refresh both read it.
     (repo_root / update_layout.PYPROJECT_PATH).write_text(
         "[tool.uv.sources]\n"
@@ -5402,15 +5408,25 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
     assert (node_modules / "left-pad.js").read_text() == "restored"
 
 
+@pytest.mark.parametrize(
+    "is_directory_left_standing",
+    [
+        pytest.param(False, id="no-node-modules"),
+        # What a dead `npm ci` leaves: it empties node_modules but keeps the directory.
+        pytest.param(True, id="emptied-by-a-dead-npm-ci"),
+    ],
+)
 def test_a_rollback_rebuild_into_a_tree_with_no_node_modules_installs_first(
-    unbuilt_apply_repo: Path, tmp_path: Path
+    unbuilt_apply_repo: Path, tmp_path: Path, is_directory_left_standing: bool
 ) -> None:
     # The forward pass installed the worker's bundles, so it never ran `npm ci`, and no
-    # manifest changed -- yet the tree has no node_modules. With no bundle copy to put
-    # back, recovery has to build, and a build with no dependencies dies on
+    # manifest changed -- yet the tree has no installed node_modules. With no bundle
+    # copy to put back, recovery has to build, and a build with no dependencies dies on
     # `tsc: not found`: an emergency instead of the clean rollback it should be.
     node_modules = unbuilt_apply_repo / update_layout.NPM_ROOT_DIR / "node_modules"
     shutil.rmtree(node_modules)
+    if is_directory_left_standing:
+        node_modules.mkdir()
     worker_bundles = _make_worker_bundles(tmp_path, stamp=_FRONTEND_TREE_HASH)
     runner = _verifiable_runner(_FRONTEND_DIFF, unbuilt_apply_repo)
     runner.respond(
@@ -5425,7 +5441,7 @@ def test_a_rollback_rebuild_into_a_tree_with_no_node_modules_installs_first(
 
     def install_or_count_restarts(argv: list[str]) -> None:
         if argv[:2] == ["npm", "ci"]:
-            node_modules.mkdir()
+            _finish_npm_install(node_modules)
             runner.respond(("npm", "run", "build"), _Result())
         if tuple(argv[:4]) == _RESTART:
             restarts["seen"] += 1
