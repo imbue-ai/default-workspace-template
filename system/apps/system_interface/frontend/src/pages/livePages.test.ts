@@ -5,7 +5,7 @@
  * over their windows' content boxes in the interleaved stacking order, inert unless focused,
  * hidden when minimized, destroyed when closed; they are greeted after every load, told shown
  * and hidden, and follow their windows' stored paths in place or by reload; and their own
- * ``shell:location``, ``shell:focused``, and ``shell:open`` reach the store.
+ * ``shell:location``, ``shell:focused``, ``shell:open``, and ``shell:start-with-text`` reach the store.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,12 +19,21 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_SHOWN,
+  SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
+import type { Placement } from "../model/records";
 import { activeFocusedWindowId } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
-import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  placementRecord,
+  themeMetricsRecord,
+  windowRecord,
+} from "../testing/records";
 import { LivePagesLayer } from "./livePages";
 
 const METRICS = themeMetricsRecord();
@@ -42,9 +51,9 @@ let windows: HTMLElement;
 let layer: LivePagesLayer;
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
-function renderChrome(): void {
+function renderChrome(...extraWindowIds: string[]): void {
   windows.innerHTML = "";
-  for (const windowId of ["win-1", "win-2", "win-3"]) {
+  for (const windowId of ["win-1", "win-2", "win-3", ...extraWindowIds]) {
     const chrome = document.createElement("div");
     chrome.setAttribute("data-window-id", windowId);
     const content = document.createElement("div");
@@ -103,6 +112,22 @@ function messageFromPage(windowId: string, data: Record<string, unknown>): void 
   window.dispatchEvent(
     new MessageEvent("message", { data, source: frameOf(windowId).contentWindow, origin: window.location.origin }),
   );
+}
+
+/** An independent pinned ``win-4`` of the docs app on the home desktop, this client's page of it at ``/?doc=7``
+ *  ("Seven"), placed by ``placements`` in this client's layout, shown with its chrome; answers its frame. */
+async function showIndependentWindow(placements: Placement[]): Promise<HTMLIFrameElement> {
+  const [home, work] = api.desktops;
+  const independent = windowRecord("win-4", "docs", "/", { is_pinned: true, scope: "independent" });
+  api.desktops = [{ ...home, windows: [...home.windows, independent] }, work];
+  api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+  api.writeLayout("home", CLIENT, { updated_at: null, placements });
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell" });
+  await settle();
+  renderChrome("win-4");
+  layer.reconcile();
+  return frameOf("win-4");
 }
 
 beforeEach(async () => {
@@ -322,7 +347,7 @@ describe("the contract", () => {
     layer.reconcile();
     expect(spy).not.toHaveBeenCalled();
     await settle();
-    expect(api.calls).toContain("reportWindowLocation:home:win-1:/?doc=2:Second");
+    expect(api.calls).toContain("reportWindowLocation:home:win-1:client-1:/?doc=2:Second");
     // The broadcast that follows carries the path the page already reported: no navigation either.
     socket.deliver().onDesktopsUpdated(api.desktops);
     layer.reconcile();
@@ -365,6 +390,27 @@ describe("the contract", () => {
     expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
   });
 
+  it("follows this client's own navigation even back to a path the page just reported leaving", async () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // The chooser's draft: this client points its own page at the draft path.
+    expect(await store.navigateOwnWindow("win-1", "/?draft=a")).toBe(true);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?draft=a" }]);
+    // The page takes the draft and reports its selection alone, leaving the draft path behind.
+    messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=1", title: "" });
+    await settle();
+    layer.reconcile();
+    spy.mockClear();
+    // The same draft again: a stale-snapshot guard would call this "the path the page reported leaving" and skip
+    // it; a navigation this client asked for is followed.
+    expect(await store.navigateOwnWindow("win-1", "/?draft=a")).toBe(true);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?draft=a" }]);
+  });
+
   it("a report the shell refuses leaves the page to follow the stored path again", async () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
@@ -383,7 +429,7 @@ describe("the contract", () => {
     load("win-1");
     messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: ` ${"t".repeat(300)} ` });
     await settle();
-    expect(api.calls).toContain(`reportWindowLocation:home:win-1:/?doc=2:${"t".repeat(256)}`);
+    expect(api.calls).toContain(`reportWindowLocation:home:win-1:client-1:/?doc=2:${"t".repeat(256)}`);
   });
 
   it("a local edit between a page's report and the broadcast does not point the page back", async () => {
@@ -433,6 +479,102 @@ describe("the contract", () => {
     expect(docsSpy).not.toHaveBeenCalled();
   });
 
+  it("an independent window's page opens at this client's own path, and follows only that path", async () => {
+    const frame = await showIndependentWindow([
+      placementRecord("win-2", { is_minimized: true }),
+      placementRecord("win-1"),
+      placementRecord("win-4"),
+    ]);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    expect(frame.title).toBe("Seven");
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-4", path: "/?doc=7" });
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // Its own report is stored for this client and never bounces, whatever the shared record says.
+    messageFromPage("win-4", { type: SHELL_LOCATION, path: "/?doc=8", title: "Eight" });
+    await settle();
+    expect(api.calls).toContain("reportWindowLocation:home:win-4:client-1:/?doc=8:Eight");
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-2" });
+    await settle();
+    layer.reconcile();
+    expect(spy).not.toHaveBeenCalled();
+    expect(store.getState().desktops[0].windows.find((window) => window.id === "win-4")?.path).toBe("/");
+    // An agent's navigate for this client arrives as a stored path with the layout, and the page follows it.
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=9", title: "Eight" });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-3" });
+    await settle();
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
+  });
+
+  it("leaves an independent window's hidden page alone while another desktop is active", async () => {
+    const frame = await showIndependentWindow([placementRecord("win-4")]);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // The work desktop's layout knows nothing of this client's path for the window; neither it nor a desktops
+    // update while it is active sends the hidden page to the home path.
+    await store.switchDesktop("work");
+    layer.reconcile();
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    layer.reconcile();
+    expect(wrapperOf("win-4").style.display).toBe("none");
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_HIDDEN }]);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    // Back on its desktop, the stored path is the one the page is at, so nothing moves it.
+    await store.switchDesktop("home");
+    renderChrome("win-4");
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_NAVIGATE);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+  });
+
+  it("does not move an independent window's page while its desktop's layout is still being read", async () => {
+    const frame = await showIndependentWindow([placementRecord("win-4")]);
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    await store.switchDesktop("work");
+    layer.reconcile();
+    spy.mockClear();
+    // Back to home with its layout held open: a desktops update meanwhile knows no stored path for the page.
+    const answerLayout = api.holdReads();
+    const switching = store.switchDesktop("home");
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(store.getState().isLayoutLoaded).toBe(false);
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_NAVIGATE);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+    answerLayout();
+    await switching;
+    renderChrome("win-4");
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_NAVIGATE);
+    expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
+  });
+
+  it("reloads and greets an independent window's hidden page at this client's own path", async () => {
+    await showIndependentWindow([placementRecord("win-4")]);
+    load("win-4");
+    await store.switchDesktop("work");
+    layer.reconcile();
+    // The work desktop's layout knows nothing of this client's path for the window; an agent's refresh of the
+    // app still reloads the hidden page where it is, and the handshake after the load names that path.
+    const reloads = spyOnSrc("win-4");
+    socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
+    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=7"]);
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "home", path: "/?doc=7" });
+  });
+
   it("raises the window of a page that says it took focus", () => {
     store.restoreWindow("win-2");
     layer.reconcile();
@@ -449,6 +591,24 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_OPEN, address: "app:docs?instance=x" });
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:open ignored"));
+    warn.mockRestore();
+  });
+
+  it("runs a page's shell:start-with-text as the primary text action, and warns when it carries no text", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    socket.deliver().onAppsUpdated([
+      appRecord("docs", {
+        url: "http://127.0.0.1:7001",
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+      notes,
+    ]);
+    messageFromPage("win-1", { type: SHELL_START_WITH_TEXT, text: "hello there" });
+    await settle();
+    expect(api.calls).toContain("openWindow:home:docs:/new?message=hello+there:new:new");
+    messageFromPage("win-1", { type: SHELL_START_WITH_TEXT });
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:start-with-text ignored"));
     warn.mockRestore();
   });
 

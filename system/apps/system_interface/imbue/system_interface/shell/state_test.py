@@ -13,12 +13,14 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
+from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import TEST_NOW
@@ -35,7 +37,9 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
 ) -> None:
     registry_path = write_two_app_registry(tmp_path)
     inventory = build_inventory(registry_path, broadcaster)
-    built = build_shell_state(tmp_path / "state", registry_path, broadcaster, inventory=inventory)
+    built = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=inventory, repo_root=tmp_path / "repo"
+    )
     shell = built.model_copy_update(to_update(built.field_ref().client_prune_interval_seconds, 0.05))
     stale_at = TEST_NOW - CLIENT_RETENTION - timedelta(days=1)
     (home,) = shell.list_desktops()
@@ -44,11 +48,18 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
         ClientStateReport(client_id=ClientId("old"), active_desktop=DesktopId("home")), stale_at
     )
     shell.placements.save_browser_layout("home", "old", (placement_record(window_id),), None, {window_id}, stale_at)
+    shell.window_paths.set_path(
+        ClientId("old"),
+        window_id,
+        StoredWindowPath(path=WindowPath("/x"), title=WindowTitle("")),
+        lambda: {window_id},
+    )
     shell.start()
     try:
-        # The prune at start took the stale client and its layout file.
+        # The prune at start took the stale client, its layout file, and its window paths.
         assert shell.clients.get_client("old") is None
         assert shell.placements.read_layout(home.id, "old", {window_id}).placements == ()
+        assert shell.window_paths.read_paths(ClientId("old"), {window_id}) == {}
         # A client that goes stale while the shell runs is taken by the periodic prune.
         shell.clients.record_report(
             ClientStateReport(client_id=ClientId("later"), active_desktop=DesktopId("home")), stale_at
@@ -107,7 +118,7 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     hints: list[WindowClosedHint] = []
     shell = _shell_recording_hints(tmp_path, broadcaster, hints)
     shell.list_desktops()
-    work = shell.desktops.create_desktop("Work", "#123456", 1, ())
+    work = shell.desktops.create_desktop("Work", "#123456", 1, (), ())
     first = _open(shell, work.id, "terminal", "/?session=terminal-1")
     second = _open(shell, work.id, "terminal", "/?session=terminal-2")
     _open(shell, work.id, "files", "/")

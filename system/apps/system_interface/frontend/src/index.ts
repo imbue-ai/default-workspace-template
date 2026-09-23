@@ -1,7 +1,7 @@
 import m from "mithril";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
-import { setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
+import { FOCUS_CHAT, announceReadyToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import "./style.css";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
@@ -59,6 +59,10 @@ function bootstrap(): void {
   // shell side of the app contract.
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
+  setEmbedderMessageHandler(FOCUS_CHAT, (message) => {
+    const chatId = message.chatId;
+    if (typeof chatId === "string" && chatId !== "") void desktopStore.focusChat(chatId);
+  });
   const rootElement = document.getElementById("app");
   if (rootElement) {
     m.mount(rootElement, {
@@ -71,7 +75,11 @@ function bootstrap(): void {
         }),
     });
   }
-  void desktopStore.start(takeDeepLinkFromLocation());
+  const started = desktopStore.start(takeDeepLinkFromLocation());
+  // Announced once the page can act on what the embedder held, not merely once a handler is
+  // registered: a focus-chat ask needs the desktops ``start`` reads and the apps the socket
+  // delivers, and the embedder sends it the moment this announcement lands.
+  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
 }
 
 window.addEventListener("load", bootstrap);

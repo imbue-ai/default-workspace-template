@@ -1,12 +1,14 @@
-"""Surfacing the window of a chat created from outside the workspace, once, where the user is.
+"""Surfacing a chat created from outside the workspace, once, where the user is.
 
-A chat the Mind app starts -- the update run behind "Update now", the help chat behind "Ask
-an agent" -- carries a label asking for its window to be opened when it appears. The app cannot
-open a window itself: it is outside the workspace, and the user may not be looking yet. So the
-chat app reacts to the label on a newly observed agent and asks the shell to open a chat root
-window showing the chat (the desktop op route's ``open`` with the app's name and the root's path
-for the chat, desktop-interface plan section 9.1) for every connected client, on whatever
-desktop each client is on.
+A chat the Mind app starts -- the welcome chat it seeds, the update run behind "Update now", the
+help chat behind "Ask an agent" -- carries a label asking to be shown when it appears. The app
+cannot show it itself: it is outside the workspace, and the user may not be looking yet. So the
+chat app reacts to the label on a newly observed agent and asks the shell to show the chat in
+this app's pinned window (pinned-taskbar-entries plan section 4.8): the desktop op route's
+``navigate`` of ``pinned`` to the root's path for the chat, then ``restore`` of it, for every
+connected client, on whatever desktop each client is on. The pinned window is independent, so
+each client's own view moves and nobody else's does. A shell whose desktop holds no pinned window
+of this app (a manifest without the pin) is asked to ``open`` a root window instead, as before.
 
 A chat is owed its window exactly once. Delivery is remembered on disk, so a restart of this app
 (the update run itself restarts it) neither re-pops a window the user has since closed nor loses
@@ -50,10 +52,11 @@ AUTO_OPEN_LABELS: Final[tuple[str, ...]] = ("auto_open", "assist")
 # The shell has no hook for a client arriving, so a window opened later is found by asking.
 FLUSH_INTERVAL_SECONDS: Final[float] = 3.0
 
-# Beside the chat app's other per-workspace state (see ``message_stamps``).
-DEFAULT_LEDGER_PATH: Final[Path] = Path("data/.apps/chat/auto_opened_chats.json")
+# Beside the chat app's other per-workspace state (see ``message_stamps``), in its data directory.
+LEDGER_FILENAME: Final[str] = "auto_opened_chats.json"
 
 _DELIVERED_KEY: Final = "delivered"
+HTTP_NOT_FOUND: Final[int] = 404
 
 
 def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
@@ -66,12 +69,31 @@ def chat_root_path(chat_id: ChatId) -> str:
 
 
 def open_chat_op_body(chat_id: ChatId, client_id: str) -> dict[str, Any]:
-    """The desktop ``open`` op that shows the chat to one client (desktop-interface contracts.md section 8)."""
+    """The desktop ``open`` op that shows the chat to one client in a root window of its own (desktop-interface
+    contracts.md section 8): the fallback when this app has no pinned window on the client's desktop."""
     return {
         "op": "open",
         "args": {"app": CHAT_APP_NAME, "path": chat_root_path(chat_id), "client": client_id},
         "requester": None,
     }
+
+
+# The requester the pinned-window ops carry: this app, with no marker (``pinned`` needs only the app).
+_PINNED_REQUESTER: Final[dict[str, str]] = {"app": CHAT_APP_NAME, "marker": ""}
+
+
+def navigate_pinned_op_body(chat_id: ChatId, client_id: str) -> dict[str, Any]:
+    """Point the client's view of this app's pinned window at the chat (desktop-interface contracts.md section 8)."""
+    return {
+        "op": "navigate",
+        "args": {"window": "pinned", "path": chat_root_path(chat_id), "client": client_id},
+        "requester": _PINNED_REQUESTER,
+    }
+
+
+def restore_pinned_op_body(client_id: str) -> dict[str, Any]:
+    """Show the client's pinned window of this app, raised."""
+    return {"op": "restore", "args": {"window": "pinned", "client": client_id}, "requester": _PINNED_REQUESTER}
 
 
 class AutoOpenLedger(MutableModel):
@@ -212,25 +234,40 @@ class ShellLayoutClient(FrozenModel):
         ]
 
     def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
+        """Show the chat to the client in this app's pinned window; with no pinned window on the client's desktop
+        (a 404 for ``pinned``), open a root window on the chat instead. True once the chat is showing."""
+        navigated = self._post_op(
+            navigate_pinned_op_body(chat_id, client_id), f"point the pinned window at chat {chat_id}"
+        )
+        if navigated is None:
+            return False
+        if navigated.status_code == HTTP_NOT_FOUND:
+            opened = self._post_op(open_chat_op_body(chat_id, client_id), f"open chat {chat_id}")
+            return opened is not None and not opened.is_error
+        if navigated.is_error:
+            return False
+        # The window is pointed at the chat whether or not the restore lands (the client may be compact, say).
+        self._post_op(restore_pinned_op_body(client_id), "restore the pinned window")
+        return True
+
+    def _post_op(self, body: Mapping[str, Any], described: str) -> httpx.Response | None:
+        """Post one op; None when the shell could not be reached, the answer (refusals included) otherwise."""
         try:
             response = httpx.post(
-                f"{self.shell_url}/api/layout/broadcast",
-                json=open_chat_op_body(chat_id, client_id),
-                timeout=SHELL_POST_TIMEOUT_SECONDS,
+                f"{self.shell_url}/api/layout/broadcast", json=body, timeout=SHELL_POST_TIMEOUT_SECONDS
             )
         except httpx.HTTPError as e:
-            logger.debug("Could not ask the shell at {} to open chat {}: {}", self.shell_url, chat_id, e)
-            return False
+            logger.debug("Could not ask the shell at {} to {}: {}", self.shell_url, described, e)
+            return None
         if response.is_error:
             logger.info(
-                "The shell refused to open chat {} for client {} ({}): {}",
-                chat_id,
-                client_id,
+                "The shell refused to {} for client {} ({}): {}",
+                described,
+                body["args"].get("client"),
                 response.status_code,
                 response.text.strip()[:300],
             )
-            return False
-        return True
+        return response
 
 
 class DisconnectedShell(FrozenModel):

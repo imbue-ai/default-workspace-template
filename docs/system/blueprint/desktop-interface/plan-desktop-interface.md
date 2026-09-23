@@ -31,7 +31,7 @@ The full definitions are in [concepts.md](concepts.md); this table is the vocabu
 | Shortcut | A grid cell on the backdrop that runs a launch path |
 | Launch path | A path under an app's origin that the manifest declares as a way to start something |
 | Taskbar | The bottom bar: launcher field, window entries, system tray |
-| Launcher | The taskbar's text field and the overlay it opens |
+| Launcher | The taskbar's text field and the menu it opens |
 | Tray widget | One component of the system tray; V1: Desktops |
 | Live page | The one iframe a client keeps for one window |
 | Compact mode, touch mode | Render policies from viewport width and pointer type |
@@ -201,6 +201,7 @@ A viewport resize re-renders every window from the same fractions, so windows sc
 Close removes the window from the desktop for every client: the shell drops it from `desktops.json`, drops it from every layout of that desktop, destroys every client's page for it, and broadcasts.
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 The shell itself has no notion of stopping or deleting what the window showed; what the window showed is the app's to keep or collect, and the terminal and the browser collect it once no window shows it, told of the close through the manifest's `window_closed_path` and sweeping the shell's windows regardless (`docs/system/specs/window-bound-resources.md`).
+A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord all minimize it instead (pinned-taskbar-entries plan section 3.2).
 
 ### 4.6 Following the URL
 
@@ -236,17 +237,19 @@ Adding a shortcut: the launcher's tiles offer "Add to desktop" for each launch p
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
-The tray's widgets are Presence (one avatar per connected user, drawn only when someone is recorded; the share identity spec) and Desktops (concepts.md 2.8); each is one component, and adding another is adding a component to a list.
+A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
+The tray's widgets are Presence (one avatar per connected user, drawn only when someone is recorded; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
 ### 4.11 The launcher
 
-The launcher field is a text input at the taskbar's left.
-Focusing it opens the overlay above it; typing filters.
-Resting content is today's New Tab page with its instance rows replaced by windows: the search field is the taskbar field itself; "Open new" is one tile per launch path of every non-internal app, ranked apps first; "On this desktop" lists the active desktop's windows by title, minimized ones marked; "Start something" and "Start from a template" are unchanged, seeding a chat through the launch path that declares a `message` param.
-Search results are windows across every desktop (title and app name, switching desktop on choice), launch paths, intents, and templates.
-A choice opens a window on the active desktop and closes the overlay; Escape and a click outside close it.
-The overlay is never persisted and never a window.
+The launcher field is a text input at the taskbar's left, with the placeholder "Start app or send message...".
+Focusing it opens a menu above it; typing filters the menu's rows (launcher-and-getting-started plan sections 3.1 and 3.5).
+The rows: one per launch path of every non-internal app, ranked apps first; a row per window of every desktop while typing (title and app name, switching desktop on choice); and, at the foot, the free-text rows, one per launch path that declares a `text_param`, which send the typed text (the chat's new chat as the primary, run by Enter with nothing else highlighted, and its send to an existing chat as the secondary, run by Ctrl+Enter).
+One row is always highlighted; the arrows move it, Enter runs it, a click runs the clicked row.
+A choice opens a window on the active desktop and closes the menu; Escape and a click outside close it.
+The "Start something" intents and the template shelves that were the New Tab page's are the Getting Started app's, which starts a chat with a seeded text through `shell:start-with-text`.
+The menu is never persisted and never a window.
 
 ### 4.12 Compact mode and touch mode
 
@@ -373,6 +376,7 @@ A page that nests a further frame of its own (the chat root, section 9.1) relays
 It drops `instances` and `instances_url`.
 `actions` becomes `launch_paths`: `[[launch_paths]] id, label, path, params`, where `path` is a path under the app origin and `params` is the documented list of query parameter names the shell may append.
 `default_shortcut.action` becomes `default_shortcut.launch`, naming a declared launch path id or `open`.
+A `[pin]` table (`path`, and optionally `style`, `scope`, `default_mode`) declares the app's pinned window (pinned-taskbar-entries plan section 7.1).
 `forward_port.py` copies the new fields onto the registry row and drops the old ones; the app watcher and minds read `name`, `url`, `label`, `icon` as before.
 
 ## 9. The built-in apps
@@ -466,8 +470,8 @@ The order is additive first: the apps learn the new contract and gain their laun
 - Theme switching and a settings route; V1 ships one theme.
 - Wallpaper upload from the settings dialog; V1 lists files already in the wallpapers directory.
 - Taskbar auto-hide; window cycling and keyboard move and resize; a status signal from pages to the taskbar; a window-targeted shortcut kind.
-- A multiplayer chat; avatars beyond the presence widget's.
-- A richer launcher (type-ahead over app contents through an app-declared search route).
+- A multiplayer chat (the avatar is specified by the pinned-taskbar-entries plan; presence ships as the tray's Presence widget).
+- A richer launcher (type-ahead over app contents through an app-declared search route); the launcher's menu lists launch paths, windows, and free-text rows only, and the New Tab sections are the Getting Started app's.
 - Narrowing a per-app share grant to the terminal alone, which needs its pty origin admitted with it.
 - Reporting a terminal's in-tmux session switch as a location, which needs the ttyd client to learn the session name.
 - Full-screen mode for a window.

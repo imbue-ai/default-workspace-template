@@ -1,9 +1,11 @@
 /**
  * Following the URL (desktop-interface plan section 4.6, contracts.md section 7): after every
- * ``desktops_updated``, each live page whose window's stored path differs from the path the page
- * last reported (or was last pointed at) is navigated -- in place, when the page declared it
- * handles navigation, else by reloading its frame. A page whose last report equals the stored
- * path is left alone, which is how the driving client's own report never bounces back.
+ * ``desktops_updated`` and every layout load, each live page whose window's stored path differs
+ * from the path the page last reported (or was last pointed at) is navigated -- in place, when
+ * the page declared it handles navigation, else by reloading its frame. The stored path is the
+ * window's shared one, or for an independent window the one this client keeps (which arrives
+ * with the layout). A page whose last report equals the stored path is left alone, which is how
+ * the driving client's own report never bounces back.
  */
 
 import type { WindowRecord } from "../model/records";

@@ -30,7 +30,8 @@ def shell_base_url() -> str:
 
 
 def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
-    """Every window path of ``app`` across every desktop, or None when the shell could not be read.
+    """Every window path of ``app`` across every desktop (an independent window's home path and each client's own
+    path of it), or None when the shell could not be read.
 
     None is never "no windows": an app that collects what no window shows must skip a sweep it
     cannot ground in the shell's own answer, so an unreachable shell, a non-JSON body, and a
@@ -68,10 +69,16 @@ def window_paths_of_app(document: Any, app: AppName) -> list[str] | None:
                 return None
             window_app = window.get("app")
             path = window.get("path")
-            if not isinstance(window_app, str) or not isinstance(path, str):
+            client_paths = window.get("client_paths", {})
+            if not isinstance(window_app, str) or not isinstance(path, str) or not isinstance(client_paths, dict):
+                return None
+            if not all(isinstance(client_path, str) for client_path in client_paths.values()):
                 return None
             if window_app == app:
                 paths.append(path)
+                # An independent window's shared path stays its home path; what each client's page shows rides
+                # beside it, and any one of them keeps a resource alive.
+                paths.extend(client_paths.values())
     return paths
 
 

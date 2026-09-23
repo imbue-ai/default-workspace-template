@@ -93,6 +93,7 @@ export function Window(): m.Component<WindowAttrs> {
           "data-window-state": state,
           "data-minimized": "false",
           "data-focused": isFocused ? "true" : "false",
+          "data-pinned": window.is_pinned ? "true" : "false",
           class: "window absolute",
           style: {
             ...rectStyle(rect),

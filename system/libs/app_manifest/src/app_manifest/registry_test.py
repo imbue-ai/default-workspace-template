@@ -41,6 +41,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.default_shortcut is None
     assert row.launch_paths == ()
     assert row.launcher_rank is None
+    assert row.pin is None
     assert row.window_closed_path is None
 
 
@@ -57,8 +58,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "critical = false\n"
         'priority = "files"\n'
         'default_shortcut = {launch = "new", mode = "focus"}\n'
-        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"]}, {id = "recent", label = "Recent", path = "/recent"}]\n'
+        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}]\n'
         "launcher_rank = 20\n"
+        'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
     )
 
@@ -73,13 +75,30 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.default_shortcut is not None
     assert row.default_shortcut.launch == "new"
     assert [
-        (launch_path.id, launch_path.label, launch_path.path, launch_path.params)
+        (launch_path.id, launch_path.label, launch_path.path, launch_path.params, launch_path.text_param)
         for launch_path in row.launch_paths
     ] == [
-        ("new", "New File Viewer", "/", ("path",)),
-        ("recent", "Recent", "/recent", ()),
+        ("new", "New File Viewer", "/", ("path",), "path"),
+        ("recent", "Recent", "/recent", (), None),
     ]
     assert row.launcher_rank == 20
+    assert row.pin is not None
+    assert (row.pin.path, row.pin.style.value, row.pin.scope.value, row.pin.default_mode.value) == (
+        "/",
+        "avatar",
+        "independent",
+        "floating",
+    )
+
+
+def test_a_pin_on_a_row_reads_its_defaults_for_the_keys_the_manifest_left_out(tmp_path: Path) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:5000"\npin = {path = "/"}\n')
+
+    (row,) = read_registry(registry)
+
+    assert row.pin is not None
+    assert (row.pin.style.value, row.pin.scope.value, row.pin.default_mode.value) == ("plain", "linked", "bar")
 
 
 def test_a_row_that_fails_validation_is_skipped_and_logged(tmp_path: Path) -> None:

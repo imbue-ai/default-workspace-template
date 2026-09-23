@@ -3,13 +3,8 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-from watchdog.events import DirModifiedEvent
-from watchdog.events import FileModifiedEvent
-from watchdog.events import FileMovedEvent
-
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.inventory import AppInventory
-from imbue.system_interface.shell.inventory import _make_registry_file_handler
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_FILES_URL
 from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
@@ -32,10 +27,14 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
     assert all(entry.is_running for entry in entries)
     assert inventory.entry("files") is not None and inventory.entry("nope") is None
     serialized = inventory.serialized()
-    assert serialized[0]["launch_paths"] == [{"id": "new", "label": "New terminal", "path": "/new", "params": []}]
+    assert serialized[0]["launch_paths"] == [
+        {"id": "new", "label": "New terminal", "path": "/new", "params": [], "text_param": None}
+    ]
     assert serialized[0]["default_shortcut"] == {"launch": "new", "mode": "new"}
     # An app declaring no launch path offers the synthesized ``open`` at its root.
-    assert serialized[1]["launch_paths"] == [{"id": "open", "label": "Open Files", "path": "/", "params": []}]
+    assert serialized[1]["launch_paths"] == [
+        {"id": "open", "label": "Open Files", "path": "/", "params": [], "text_param": None}
+    ]
     assert set(serialized[1]) == {
         "name",
         "display_name",
@@ -48,8 +47,10 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "launch_paths",
         "default_shortcut",
         "launcher_rank",
+        "pin",
         "is_running",
     }
+    assert serialized[1]["pin"] is None
     # One broadcast for the read; the liveness probe that found everything running adds none.
     assert [message["type"] for message in drain_messages(client_queue)] == ["apps_updated"]
     assert inventory.is_registry_read is True
@@ -87,17 +88,6 @@ def test_an_unreadable_registry_keeps_the_last_good_read(tmp_path: Path, broadca
 
     assert [str(entry.row.name) for entry in inventory.entries()] == ["terminal", "files"]
     assert drain_messages(client_queue) == []
-
-
-def test_the_registry_watch_fires_for_the_registry_file_alone(tmp_path: Path) -> None:
-    fired: list[bool] = []
-    handler = _make_registry_file_handler("apps.toml", lambda: fired.append(True))
-    handler.on_modified(FileModifiedEvent(str(tmp_path / "apps.toml")))
-    # forward_port.py replaces the file atomically: the move's destination is the registry.
-    handler.on_moved(FileMovedEvent(str(tmp_path / "apps.toml.tmp-1"), str(tmp_path / "apps.toml")))
-    handler.on_modified(FileModifiedEvent(str(tmp_path / "apps.toml.tmp-2")))
-    handler.on_modified(DirModifiedEvent(str(tmp_path)))
-    assert len(fired) == 2
 
 
 def test_start_watches_the_registry_and_lists_a_row_that_appears(

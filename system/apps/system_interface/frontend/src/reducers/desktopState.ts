@@ -1,13 +1,31 @@
 /**
  * The desktop's state and the reducers over it (desktop-interface plan section 6.2): one frozen
  * record of what this client knows (the apps, the desktops, the active desktop, this client's
- * layout of it, the render modes), and every verb of plan section 4 as a pure
- * ``(state, event) -> state`` step. The store applies these, schedules redraws, and saves when a
- * step marked the layout dirty; nothing here reads the DOM or the network.
+ * layout of it, the render modes, this client's presentation of each pinned entry, the avatar),
+ * and every verb of plan section 4 as a pure ``(state, event) -> state`` step. The store applies
+ * these, schedules redraws, and saves when a step marked the layout dirty; nothing here reads the
+ * DOM or the network.
  */
 
-import type { AppRecord, Desktop, Frame, Layout, Placement, WindowRecord, WindowState } from "../model/records";
+import type {
+  AppRecord,
+  AvatarStatus,
+  Desktop,
+  EntryMode,
+  EntryPresentation,
+  FloatingPosition,
+  Frame,
+  LaunchPath,
+  Layout,
+  PinStyle,
+  Placement,
+  StoredWindowPath,
+  WindowRecord,
+  WindowState,
+} from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
+import type { UpdateNotice } from "../model/UpdateNotice";
+import { DRAFT_PARAM, freeTextRowsOf, isPathShowingChat } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -38,7 +56,30 @@ export interface DesktopState {
   /** The version the last save wrote, so ``isLayoutDirty`` is a comparison rather than a flag. */
   readonly savedLayoutVersion: number;
   readonly modes: RenderModes;
+  /** This client's presentation of each pinned entry, by app name (global across desktops). */
+  readonly entries: Readonly<Record<string, EntryPresentation>>;
+  /** The avatar every window of the workspace draws (pinned-taskbar-entries plan section 4.6). */
+  readonly avatar: AvatarState;
+  /** The rollback point the last update-app careful-flow apply kept, until a person closes its notice. */
+  readonly updateNotice: UpdateNotice | null;
 }
+
+/** The avatar as this window draws it: the workspace's design, the design a failed load falls back to, and
+ *  the last status the shell pushed (stale and idle until one arrives). */
+export interface AvatarState {
+  readonly design: string;
+  readonly defaultDesign: string;
+  readonly status: AvatarStatus;
+}
+
+/** The design drawn until the shell says otherwise: the one the shell bundles as its default. */
+export const INITIAL_AVATAR_DESIGN = "gummy-seal";
+
+export const INITIAL_AVATAR_STATE: AvatarState = {
+  design: INITIAL_AVATAR_DESIGN,
+  defaultDesign: INITIAL_AVATAR_DESIGN,
+  status: { mood: "idle", is_stale: true },
+};
 
 export function initialDesktopState(clientId: string, modes: RenderModes): DesktopState {
   return {
@@ -53,6 +94,9 @@ export function initialDesktopState(clientId: string, modes: RenderModes): Deskt
     layoutVersion: 0,
     savedLayoutVersion: 0,
     modes,
+    entries: {},
+    avatar: INITIAL_AVATAR_STATE,
+    updateNotice: null,
   };
 }
 
@@ -61,6 +105,11 @@ export type DesktopEvent =
   | { readonly type: "desktops_updated"; readonly desktops: readonly Desktop[] }
   | { readonly type: "desktop_activated"; readonly desktopId: string }
   | { readonly type: "layout_loaded"; readonly desktopId: string; readonly layout: Layout }
+  | {
+      readonly type: "window_paths_loaded";
+      readonly desktopId: string;
+      readonly windowPaths: Readonly<Record<string, StoredWindowPath>>;
+    }
   | {
       readonly type: "layout_saved";
       readonly desktopId: string;
@@ -80,7 +129,15 @@ export type DesktopEvent =
     }
   | { readonly type: "window_closed_here"; readonly desktopId: string; readonly windowId: string }
   | { readonly type: "window_location_reported"; readonly desktopId: string; readonly window: WindowRecord }
-  | { readonly type: "render_modes_changed"; readonly modes: RenderModes };
+  | { readonly type: "render_modes_changed"; readonly modes: RenderModes }
+  /** This client's entry presentations, as its record or a ``client_entries_changed`` says. */
+  | { readonly type: "entries_updated"; readonly entries: Readonly<Record<string, EntryPresentation>> }
+  /** The ``avatar_status`` the shell pushed. */
+  | { readonly type: "avatar_status_updated"; readonly status: AvatarStatus }
+  /** The workspace's design, as the catalog or an ``avatar_selection_changed`` says. */
+  | { readonly type: "avatar_selection_updated"; readonly design: string; readonly defaultDesign: string | null }
+  /** The ``update_notice_changed`` the shell pushed (and its seed on connect); null once the record is cleared. */
+  | { readonly type: "update_notice_changed"; readonly notice: UpdateNotice | null };
 
 /** Whether a gesture has changed the layout since the last save wrote it. */
 export function isLayoutDirty(state: DesktopState): boolean {
@@ -145,10 +202,19 @@ function withWindowClosedHere(state: DesktopState, desktopId: string, windowId: 
   return { ...state, desktops, layout };
 }
 
-/** The window's record as the location route answered it, in place; nothing for a window since gone. */
+/** The window's record as the location route answered it, in place; nothing for a window since gone. An
+ *  independent window's answer is this client's own path and title, which live beside the layout rather than on
+ *  the shared record (not a gesture: the layout's version is untouched). */
 function withWindowLocationReported(state: DesktopState, desktopId: string, window: WindowRecord): DesktopState {
   const desktop = state.desktops.find((candidate) => candidate.id === desktopId);
   if (desktop === undefined || !desktop.windows.some((candidate) => candidate.id === window.id)) return state;
+  if (window.scope === "independent") {
+    if (desktopId !== state.activeDesktopId) return state;
+    const stored = state.layout.window_paths[window.id];
+    if (stored?.path === window.path && stored.title === window.title) return state;
+    const window_paths = { ...state.layout.window_paths, [window.id]: { path: window.path, title: window.title } };
+    return { ...state, layout: { ...state.layout, window_paths } };
+  }
   const desktops = state.desktops.map((candidate) =>
     candidate.id === desktopId
       ? { ...candidate, windows: candidate.windows.map((current) => (current.id === window.id ? window : current)) }
@@ -174,6 +240,11 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
         layoutVersion: state.layoutVersion + 1,
         savedLayoutVersion: state.layoutVersion + 1,
       };
+    case "window_paths_loaded":
+      // The client's stored paths alone: the placements file did not move, so the local placements (a gesture
+      // still waiting to be saved among them) stay as they are.
+      if (event.desktopId !== state.activeDesktopId) return state;
+      return { ...state, layout: { ...state.layout, window_paths: event.windowPaths } };
     case "layout_saved": {
       if (event.desktopId !== state.activeDesktopId) return state;
       // A save answered after a newer layout was loaded says nothing about the layout now held.
@@ -199,6 +270,21 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       return withWindowLocationReported(state, event.desktopId, event.window);
     case "render_modes_changed":
       return { ...state, modes: event.modes };
+    case "entries_updated":
+      return { ...state, entries: event.entries };
+    case "avatar_status_updated":
+      return { ...state, avatar: { ...state.avatar, status: event.status } };
+    case "avatar_selection_updated":
+      return {
+        ...state,
+        avatar: {
+          ...state.avatar,
+          design: event.design,
+          defaultDesign: event.defaultDesign ?? state.avatar.defaultDesign,
+        },
+      };
+    case "update_notice_changed":
+      return { ...state, updateNotice: event.notice };
   }
 }
 
@@ -219,11 +305,62 @@ export function openableApps(state: DesktopState): AppRecord[] {
   return state.apps.filter((app) => !app.internal);
 }
 
+/** Where a draft goes (pinned-taskbar-entries plan section 4.7): a pinned window on the active desktop whose app
+ *  declares, at the pin's home path, a launch path taking ``draft``; the path to navigate the window to is that
+ *  launch path's with the text. Null when no pinned app takes a draft. */
+export interface DraftTarget {
+  readonly window: WindowRecord;
+  readonly launchPath: LaunchPath;
+}
+
+export function draftTargetOf(state: DesktopState): DraftTarget | null {
+  for (const window of activeDesktop(state)?.windows ?? []) {
+    if (!window.is_pinned) continue;
+    const app = appByName(state, window.app);
+    const pinPath = app?.pin?.path;
+    const launchPath = app?.launch_paths.find(
+      (candidate) => candidate.path === pinPath && candidate.params.includes(DRAFT_PARAM),
+    );
+    if (launchPath !== undefined) return { window, launchPath };
+  }
+  return null;
+}
+
+/** The app's pinned window on the active desktop (the shell keeps one per pinned app per desktop), or null. */
+export function pinnedWindowOf(state: DesktopState, app: string): WindowRecord | null {
+  return activeDesktop(state)?.windows.find((window) => window.app === app && window.is_pinned) ?? null;
+}
+
 /** A window of any desktop, with the desktop it is on. */
 export function findWindow(state: DesktopState, windowId: string): { desktop: Desktop; window: WindowRecord } | null {
   for (const desktop of state.desktops) {
     const window = desktop.windows.find((candidate) => candidate.id === windowId);
     if (window !== undefined) return { desktop, window };
+  }
+  return null;
+}
+
+/** The app that holds chats: the one that can start one from typed text, which is the one whose
+ *  launch path declares a ``text_param`` (the launcher's primary free-text row). The shell names no
+ *  app. Null when this machine has no such app. */
+export function chatApp(state: DesktopState): AppRecord | null {
+  return freeTextRowsOf(state.apps)[0]?.app ?? null;
+}
+
+/** A window showing the chat ``chatId``, with the desktop it is on, or null when none is.
+ *  The active desktop's windows are read as this client sees them; every other desktop's are read
+ *  as the shared record, since an independent window's path is this client's own and only the
+ *  active desktop's layout is loaded. */
+export function windowShowingChat(
+  state: DesktopState,
+  chatId: string,
+): { desktop: Desktop; window: WindowRecord } | null {
+  for (const desktop of state.desktops) {
+    const isActive = desktop.id === state.activeDesktopId;
+    for (const window of desktop.windows) {
+      const seen = isActive ? effectiveWindow(state, window) : window;
+      if (isPathShowingChat(seen.path, chatId)) return { desktop, window };
+    }
   }
   return null;
 }
@@ -249,6 +386,19 @@ export function windowTitle(window: WindowRecord, app: AppRecord | undefined): s
   return app?.display_name ?? window.app;
 }
 
+/** The window as this client sees it: an independent window on the active desktop wears the client's stored path
+ *  and title (the home path with no title when it has none); a linked window is the shared record. */
+export function effectiveWindow(state: DesktopState, window: WindowRecord): WindowRecord {
+  if (window.scope === "linked") return window;
+  const stored = state.layout.window_paths[window.id];
+  return stored === undefined ? window : { ...window, path: stored.path, title: stored.title };
+}
+
+/** The title this client shows for the window. */
+export function effectiveWindowTitle(state: DesktopState, window: WindowRecord, app: AppRecord | undefined): string {
+  return windowTitle(effectiveWindow(state, window), app);
+}
+
 /** Whether the workspace can stop and start this app: supervised, not critical to the workspace,
  *  and not running inside a critical app's program (the shell refuses those the same way). */
 export function isAppStoppable(state: DesktopState, app: AppRecord): boolean {
@@ -261,6 +411,15 @@ export function isWindowMinimized(placements: readonly Placement[], windowId: st
   return placements.find((placement) => placement.window_id === windowId)?.is_minimized ?? true;
 }
 
+/** What a pinned entry looks like for this client: the mode and style it chose, or the pin's defaults. */
+export interface EntryLook {
+  readonly mode: EntryMode;
+  readonly style: PinStyle;
+  /** The style the pin declares, which the client may choose over plain; ``plain`` when it declares none. */
+  readonly declaredStyle: PinStyle;
+  readonly position: FloatingPosition | null;
+}
+
 /** One entry of the taskbar: a window of the active desktop, in opening order. */
 export interface TaskbarEntry {
   readonly window: WindowRecord;
@@ -268,6 +427,26 @@ export interface TaskbarEntry {
   readonly title: string;
   readonly isMinimized: boolean;
   readonly isFocused: boolean;
+  /** The app's pinned window: its entry is always there, and its Close minimizes it rather than closing it. */
+  readonly isPinned: boolean;
+  /** How this client shows the entry; null for an ordinary window's entry. */
+  readonly look: EntryLook | null;
+}
+
+/** The look a pinned entry has for this client (plan section 3.4): its own presentation, else the pin's defaults. */
+export function entryLook(state: DesktopState, window: WindowRecord, app: AppRecord | undefined): EntryLook | null {
+  if (!window.is_pinned) return null;
+  const pin = app?.pin ?? null;
+  const declaredStyle = pin?.style ?? "plain";
+  const own = state.entries[window.app];
+  // A stored style is plain or the declared one; one stored under an earlier manifest falls back.
+  const ownStyle = own !== undefined && (own.style === "plain" || own.style === declaredStyle) ? own.style : null;
+  return {
+    mode: own?.mode ?? pin?.default_mode ?? "bar",
+    style: ownStyle ?? declaredStyle,
+    declaredStyle,
+    position: own?.position ?? null,
+  };
 }
 
 export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
@@ -280,9 +459,27 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
     return {
       window,
       app,
-      title: windowTitle(window, app),
+      title: effectiveWindowTitle(state, window, app),
       isMinimized: isWindowMinimized(placements, window.id),
       isFocused: window.id === focused,
+      isPinned: window.is_pinned,
+      look: entryLook(state, window, app),
     };
   });
+}
+
+/** Whether an entry is drawn floating right now: its mode says so, and the desktop is not compact (which
+ *  renders every entry in the bar without rewriting the mode). */
+export function isEntryFloating(entry: TaskbarEntry, modes: RenderModes): boolean {
+  return entry.look !== null && entry.look.mode === "floating" && !modes.isCompact;
+}
+
+/** The entries the bar draws, in opening order. */
+export function barEntries(state: DesktopState): TaskbarEntry[] {
+  return taskbarEntries(state).filter((entry) => !isEntryFloating(entry, state.modes));
+}
+
+/** The entries drawn floating above the windows. */
+export function floatingEntries(state: DesktopState): TaskbarEntry[] {
+  return taskbarEntries(state).filter((entry) => isEntryFloating(entry, state.modes));
 }

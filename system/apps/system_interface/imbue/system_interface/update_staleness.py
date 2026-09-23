@@ -66,6 +66,11 @@ STALENESS_TREE_MOVED = "updated-not-activated"
 # is running; absent when consistent.
 UPDATE_STALENESS_META_TAG = "system-interface-update-staleness"
 
+# The meta tag a preview shell's page carries (absent on the live shell), which
+# the frontend reads to hide the verbs a preview refuses.
+PREVIEW_META_TAG = "system-interface-preview"
+PREVIEW_META_CONTENT = "true"
+
 # Bound on the git reads. rev-parse/diff on a local repo are milliseconds; the
 # bound only keeps a wedged git from stalling the app shell.
 _GIT_TIMEOUT_SECONDS = 10.0
@@ -81,19 +86,16 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # lockfile (see ``_BACKEND_MANIFESTS``), or anything else agents routinely
 # commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
-# a tree moved by anything else.) Everything under the vendored mngr tree but
-# docs and tests counts -- a missed skew is the failure this whole detector
-# exists to prevent.
+# a tree moved by anything else.)
 #
 # The imported-source prefixes are every workspace tree this process runs code
-# from: its own backend, the vendored mngr tree (its shared libraries are
-# imported here; the tree counts as a whole rather than module by module), and
-# the manifest library. All are editable installs resolving straight into these
-# trees, so the moment one advances this process is running old code.
+# from: its own backend and the manifest library. Both are editable
+# installs resolving straight into these trees, so the moment one advances this process is
+# running old code. mngr (imported in-process and shelled out to) is installed from the commit
+# pyproject.toml pins, so a move of that pin reaches this list through the root manifests below.
 # ``test_every_imported_workspace_package_is_covered`` holds this list to the
 # app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
-_VENDORED_MNGR_PREFIX = "system/vendor/mngr/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
     "system/libs/app_manifest/",
@@ -128,8 +130,6 @@ def _is_path_relevant_to_this_server(path: str) -> bool:
     """Whether a change to ``path`` leaves this running server stale."""
     if path in _BACKEND_MANIFESTS:
         return True
-    if path.startswith(_VENDORED_MNGR_PREFIX):
-        return not path.endswith(".md") and not _is_test_file(path)
     if path.startswith(_IMPORTED_SOURCE_PREFIXES):
         return path.endswith(".py") and not _is_test_file(path)
     return False
@@ -187,7 +187,7 @@ def _read_changed_paths(repo_root: Path, since_head: str) -> list[str] | None:
     like :func:`_read_head`, everything degrades to "no banner".
     """
     # ``-z``: without it git C-quotes any path with a non-ASCII byte
-    # (``"system/vendor/mngr/.../l\303\257st.py"``), which then starts with a
+    # (``"system/apps/system_interface/.../l\303\257st.py"``), which then starts with a
     # quote and matches no prefix rule.
     output = _read_git(["git", "diff", "--name-only", "-z", since_head, "HEAD"], repo_root)
     if output is None:

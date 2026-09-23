@@ -14,7 +14,9 @@ from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.auto_open import is_auto_open_labeled
+from imbue.chat.auto_open import navigate_pinned_op_body
 from imbue.chat.auto_open import open_chat_op_body
+from imbue.chat.auto_open import restore_pinned_op_body
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import serve_app
@@ -184,9 +186,20 @@ def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
     assert any("wrong shape" in record for record in loguru_records)
 
 
-def test_the_open_op_names_the_chat_app_and_the_root_path_for_the_chat() -> None:
-    """The desktop op route's ``open`` (desktop-interface contracts.md section 8): the app by name and a path, never
-    the tabbed shell's address form, which the desktop frontend no longer reads."""
+def test_the_ops_name_the_pinned_window_for_the_chat_and_the_open_fallback_names_the_app() -> None:
+    """The desktop op route (desktop-interface contracts.md section 8): the pinned window is navigated to the chat
+    and restored under this app's requester; the fallback ``open`` names the app by name and a path, never the
+    tabbed shell's address form."""
+    assert navigate_pinned_op_body(ChatId("agent-1"), "c1") == {
+        "op": "navigate",
+        "args": {"window": "pinned", "path": "/?chat=agent-1", "client": "c1"},
+        "requester": {"app": "chat", "marker": ""},
+    }
+    assert restore_pinned_op_body("c1") == {
+        "op": "restore",
+        "args": {"window": "pinned", "client": "c1"},
+        "requester": {"app": "chat", "marker": ""},
+    }
     assert open_chat_op_body(ChatId("agent-1"), "c1") == {
         "op": "open",
         "args": {"app": "chat", "path": "/?chat=agent-1", "client": "c1"},
@@ -194,26 +207,37 @@ def test_the_open_op_names_the_chat_app_and_the_root_path_for_the_chat() -> None
     }
 
 
-def test_the_shell_client_posts_the_open_op_and_reads_the_shell_s_answer() -> None:
-    """A 2xx from the op route is an accepted open; a refusal (a 412 with no client, say) is not."""
+def test_the_shell_client_navigates_and_restores_the_pinned_window_and_falls_back_to_an_open() -> None:
+    """A 2xx to the navigate shows the chat (the restore follows, its answer not consulted); a 404 for ``pinned``
+    means no pinned window on that desktop, so a root window is opened instead; a refusal (a 412 with no client,
+    say) is not a delivery."""
     posted: list[Any] = []
     application = Flask("stub-shell")
 
     def _broadcast() -> Any:
-        posted.append(request.get_json())
-        return (
-            (jsonify({"detail": "no client"}), 412)
-            if posted[-1]["args"]["client"] == "nobody"
-            else jsonify({"ok": True})
-        )
+        body = request.get_json()
+        posted.append(body)
+        client_id = body["args"]["client"]
+        if client_id == "nobody":
+            return jsonify({"detail": "no client"}), 412
+        if client_id == "unpinned" and body["args"].get("window") == "pinned":
+            return jsonify({"detail": "no pinned window"}), 404
+        return jsonify({"ok": True})
 
     application.add_url_rule("/api/layout/broadcast", view_func=_broadcast, methods=["POST"], endpoint="broadcast")
     with serve_app(application) as served:
         client = ShellLayoutClient(shell_url=served.http_url)
         assert client.open_chat(ChatId("agent-1"), "c1") is True
+        assert client.open_chat(ChatId("agent-1"), "unpinned") is True
         assert client.open_chat(ChatId("agent-1"), "nobody") is False
 
-    assert posted == [open_chat_op_body(ChatId("agent-1"), "c1"), open_chat_op_body(ChatId("agent-1"), "nobody")]
+    assert posted == [
+        navigate_pinned_op_body(ChatId("agent-1"), "c1"),
+        restore_pinned_op_body("c1"),
+        navigate_pinned_op_body(ChatId("agent-1"), "unpinned"),
+        open_chat_op_body(ChatId("agent-1"), "unpinned"),
+        navigate_pinned_op_body(ChatId("agent-1"), "nobody"),
+    ]
 
 
 def test_the_disconnected_shell_reaches_nobody() -> None:

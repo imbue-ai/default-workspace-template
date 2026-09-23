@@ -69,6 +69,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
@@ -79,6 +80,8 @@ from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.observe import acquire_observe_lock
+from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import SystemInterfaceState
@@ -116,6 +119,35 @@ def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
             yield
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
+    """Hold the observe lock for the body, standing in for a live ``mngr observe``.
+
+    The chat's follower reads the lock as the observer's liveness, so a test that wants
+    the stream to count as up holds it while writing events with mngr's own writer.
+    """
+    fd = acquire_observe_lock(events_base_dir)
+    try:
+        yield
+    finally:
+        release_observe_lock(fd)
+
+
+def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
+    """An isolated mngr host dir with its own profile, opted into pytest, local provider only.
+
+    A real ``mngr`` spawned from a test inherits ``PYTEST_CURRENT_TEST`` and refuses any
+    config that does not opt in, so the profile written here is the only one it may load.
+    """
+    profile_dir = host_dir / "profiles" / "isolated"
+    profile_dir.mkdir(parents=True)
+    (host_dir / "config.toml").write_text('profile = "isolated"\n')
+    (profile_dir / "settings.toml").write_text(
+        "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
+    )
+    (profile_dir / "tmux_onboarding_shown").write_text("")
 
 
 def is_e2e_browser_installed() -> bool:
@@ -213,6 +245,7 @@ def make_chat_handoff_record(
     handoff_id: str = "handoff-1",
     held_sends: tuple[HeldSend, ...] | None = None,
     target_account_id: str = "acct-openai",
+    model_pick: ModelPick | None = None,
 ) -> ChatHandoffRecord:
     """The handoff entry of a hand-built record: a claude chat named ``Chat 1`` moving to a codex account."""
     started_at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
@@ -234,6 +267,7 @@ def make_chat_handoff_record(
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
+        model_pick=model_pick,
     )
 
 
@@ -246,6 +280,7 @@ def make_chat_rebind_record(
     target_account_id: str = "acct-anthropic-2",
     previous_account_id: str = "acct-anthropic",
     error: str | None = None,
+    model_pick: ModelPick | None = None,
 ) -> ChatRebindRecord:
     """The rebind entry of a hand-built record: a claude chat's agent moving to a second Anthropic account.
 
@@ -272,6 +307,7 @@ def make_chat_rebind_record(
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
+        model_pick=model_pick,
         error=error,
     )
 
@@ -778,8 +814,9 @@ def running_workspace(
             is_critical=True,
             default_shortcut=("new", "new"),
             display_name="Chat",
-            launch_paths=(("new", "New Chat", "/new"),),
-            launch_params={"new": ("account_id", "message")},
+            launch_paths=(("new", "New Chat", "/new"), ("send", "Send to chat...", "/send")),
+            launch_params={"new": ("account_id", "message"), "send": ("message",)},
+            launch_text_params={"new": "message", "send": "message"},
         )
     ]
     write_registry(registry_path, *rows)

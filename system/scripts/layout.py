@@ -167,6 +167,9 @@ EXIT_CONFLICT = 3
 # The caller's own chat window. Valid wherever a window is named; the shell resolves it from
 # the op's ``requester`` (and refuses it with a 400 when the op carries none).
 _SELF_REF = "self"
+# The caller's app's pinned window on the target desktop (the chat's root window), resolved from the
+# op's ``requester`` too (a 400 with none, a 404 when the app has no pinned window there).
+_PINNED_REF = "pinned"
 
 
 def _workspace_base_url() -> str:
@@ -263,12 +266,14 @@ def _app_name(value: str) -> str:
 
 
 def _window_ref(value: str) -> str:
-    """An argument that names a window: a window id, ``self``, or an app name."""
-    if value == _SELF_REF or _WINDOW_ID_PATTERN.fullmatch(value):
+    """An argument that names a window: a window id, ``self``, ``pinned`` (your app's pinned window), or an app name."""
+    if value in (_SELF_REF, _PINNED_REF) or _WINDOW_ID_PATTERN.fullmatch(value):
         return value
     _refuse_retired_spelling(value)
     if not _is_app_name(value):
-        _fail(f"{value!r} is not a window: give a window id (win-<hex>, from 'desktops'), 'self', or an app name")
+        _fail(
+            f"{value!r} is not a window: give a window id (win-<hex>, from 'desktops'), 'self', 'pinned', or an app name"
+        )
     return value
 
 
@@ -477,6 +482,9 @@ def _listed_window(window: dict[str, Any]) -> dict[str, Any]:
         "path": window.get("path"),
         "title": window.get("title"),
         "is_settling": window.get("is_settling"),
+        "is_pinned": window.get("is_pinned", False),
+        "scope": window.get("scope", "linked"),
+        "client_paths": window.get("client_paths", {}),
     }
 
 
@@ -686,7 +694,7 @@ def _cmd_navigate(args: argparse.Namespace) -> int:
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
     if bool(args.window) == bool(args.app):
-        _fail("refresh takes a window (a window id, 'self', or an app name) or --app <name> for every page of an app")
+        _fail("refresh takes a window (a window id, 'self', 'pinned', or an app name) or --app <name> for every page of an app")
     if args.app:
         if args.client or args.desktop:
             _fail("refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it")
@@ -796,7 +804,7 @@ def _add_json_argument(subparser: argparse.ArgumentParser) -> None:
 
 def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str) -> None:
     subparser = subparsers.add_parser(verb, help=help_text)
-    subparser.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    subparser.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     _add_target_arguments(subparser)
     subparser.set_defaults(func=_window_op(verb, past_tense))
 
@@ -870,7 +878,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_window_verb(subparsers, "close", "Close a window for everyone", "closed")
 
     p_place = subparsers.add_parser("place", help="Snap a window to a zone or set its frame")
-    p_place.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    p_place.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     p_place.add_argument("--zone", choices=_ZONES, default=None, help="Snap to the left or right half, or maximize")
     p_place.add_argument(
         "--frame", default=None, metavar="X,Y,WIDTH,HEIGHT", help="The frame in fractions of the backdrop (0..1)"
@@ -879,13 +887,13 @@ def main(argv: list[str] | None = None) -> int:
     p_place.set_defaults(func=_cmd_place)
 
     p_navigate = subparsers.add_parser("navigate", help="Point a window at another path under its app")
-    p_navigate.add_argument("window", help="A window id (win-<hex>), 'self', or an app name")
+    p_navigate.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     p_navigate.add_argument("path", help="The path under the app's origin, starting with '/'")
     _add_target_arguments(p_navigate)
     p_navigate.set_defaults(func=_cmd_navigate)
 
     p_refresh = subparsers.add_parser("refresh", help="Reload one window's page, or every page of an app")
-    p_refresh.add_argument("window", nargs="?", default=None, help="A window id (win-<hex>), 'self', or an app name")
+    p_refresh.add_argument("window", nargs="?", default=None, help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     p_refresh.add_argument("--app", default=None, help="Reload every page of this app, on every client")
     _add_target_arguments(p_refresh)
     p_refresh.set_defaults(func=_cmd_refresh)

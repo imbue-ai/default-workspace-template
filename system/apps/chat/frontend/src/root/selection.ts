@@ -1,7 +1,8 @@
 /**
  * The chat root's URL: the selected chat rides the ``chat`` query parameter, so the root's path
  * is ``/?chat=<id>`` (what it reports as its location) and ``/`` with nothing selected.
- * ``/new`` is the launch path: the root with a chat just created (plan section 9.1).
+ * ``/new`` is the launch path: the root with a chat just created (plan section 9.1); ``/send``
+ * the root with its send picker open over a text (launcher-and-getting-started plan section 4.5).
  */
 
 // A chat id is its first agent's id (the backend's ``AGENT_ID_PATTERN`` in ``primitives.py``).
@@ -9,9 +10,12 @@ const AGENT_ID_PATTERN = /^agent-[A-Za-z0-9_-]{1,120}$/;
 
 export const CHAT_QUERY_KEY = "chat";
 export const NEW_CHAT_PATHNAME = "/new";
+export const SEND_CHAT_PATHNAME = "/send";
 // The launch path's params (system/apps/chat/app.toml).
 export const ACCOUNT_ID_PARAM = "account_id";
 export const MESSAGE_PARAM = "message";
+// The root's own param (system/apps/chat/app.toml): text for the composer of the chat the root shows, unsent.
+export const DRAFT_PARAM = "draft";
 
 /** The chat the URL selects, or null for none (or an id that cannot be a chat's). */
 export function selectionFromSearch(search: string): string | null {
@@ -31,6 +35,21 @@ export function rootPathFor(chatId: string | null): string {
 /** Whether ``pathname`` (under ``basePath``) is the ``new`` launch path. */
 export function isNewChatPath(pathname: string, basePath: string): boolean {
   return pathname === `${basePath}${NEW_CHAT_PATHNAME}` || pathname === `${basePath}${NEW_CHAT_PATHNAME}/`;
+}
+
+/** Whether ``pathname`` (under ``basePath``) is the ``send`` launch path. */
+export function isSendPath(pathname: string, basePath: string): boolean {
+  return pathname === `${basePath}${SEND_CHAT_PATHNAME}` || pathname === `${basePath}${SEND_CHAT_PATHNAME}/`;
+}
+
+/** The text the ``send`` launch path carries for the picker, "" for none. */
+export function sendTextFromSearch(search: string): string {
+  return new URLSearchParams(search).get(MESSAGE_PARAM) ?? "";
+}
+
+/** The draft the root's URL hands the shown chat's composer, "" for none. */
+export function draftFromSearch(search: string): string {
+  return new URLSearchParams(search).get(DRAFT_PARAM) ?? "";
 }
 
 export interface NewChatParams {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, windowRecord } from "../testing/records";
@@ -46,6 +46,15 @@ describe("Window", () => {
     expect(element.querySelector("[data-window-content]")).not.toBeNull();
     expect(element.querySelectorAll("[data-resize-edge]")).toHaveLength(8);
     expect(element.querySelector(".window-title")?.textContent).toBe("Plan");
+    expect(element.getAttribute("data-pinned")).toBe("false");
+    expect(element.querySelector('[data-window-control="close"]')).not.toBeNull();
+  });
+
+  it("a pinned window is marked and keeps its close control", () => {
+    const element = render({ window: windowRecord("win-1", "docs", "/", { is_pinned: true }) });
+    expect(element.getAttribute("data-pinned")).toBe("true");
+    expect(element.querySelector('[data-window-control="close"]')).not.toBeNull();
+    expect(element.querySelector('[data-window-control="minimize"]')).not.toBeNull();
   });
 
   it("keeps the resize handles outside the clipped frame, so they can overhang the border", () => {

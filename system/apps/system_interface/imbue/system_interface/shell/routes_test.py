@@ -9,6 +9,7 @@ from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.identity import RequestIdentity
@@ -25,8 +26,11 @@ from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
+from imbue.system_interface.shell.testing import write_rollback_point
+from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.testing import FakeSupervisorServer
@@ -117,6 +121,29 @@ def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: 
 # Section 5: stop and start
 
 
+def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """Stop and start act on supervisord, which a preview shares with the live shell, so a preview refuses them
+    with a detail naming itself and touches no program. Opening a window edits the preview's own state copy, so
+    it goes through, and the document says which kind of shell answered."""
+    fake_supervisor.statename_by_program["files"] = "RUNNING"
+    registry_path = write_two_app_registry(tmp_path, registry_row_toml("plain", "http://localhost:1", program="plain"))
+    inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
+    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+    client = application.test_client()
+
+    refusals = [client.post("/api/apps/plain/stop"), client.post("/api/apps/plain/start")]
+    assert [refusal.status_code for refusal in refusals] == [403, 403]
+    assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
+    assert fake_supervisor.statename_by_program.get("plain") is None
+    _register_client(application, "c1", "home")
+    assert _open_window(client, "terminal", "/new").status_code == 201
+    assert client.get("/api/inventory").get_json()["is_preview"] is True
+
+
 def test_stop_and_start_drive_the_supervised_program(
     tmp_path: Path,
     broadcaster: WebSocketBroadcaster,
@@ -180,18 +207,19 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     window = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]
 
     clients = client.get("/api/clients").get_json()["clients"]
-    assert [(entry["id"], entry["is_connected"], entry["active_desktop"]) for entry in clients] == [
-        ("c1", True, "home"),
-        ("c2", False, "home"),
+    assert [(entry["id"], entry["is_connected"], entry["active_desktop"], entry["entries"]) for entry in clients] == [
+        ("c1", True, "home", {}),
+        ("c2", False, "home", {}),
     ]
 
     document = client.get("/api/inventory").get_json()
-    assert set(document) == {"desktops", "apps", "clients"}
+    assert set(document) == {"is_preview", "desktops", "apps", "clients"}
+    assert document["is_preview"] is False
     assert [desktop["id"] for desktop in document["desktops"]] == ["home"]
     assert [window["id"] for window in document["desktops"][0]["windows"]] == [window["id"]]
     assert {entry["name"]: entry["launch_paths"] for entry in document["apps"]} == {
-        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": []}],
-        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": []}],
+        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": [], "text_param": None}],
+        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": [], "text_param": None}],
     }
     by_id = {entry["id"]: entry for entry in document["clients"]}
     assert by_id["c1"]["active_desktop"] == "home" and by_id["c1"]["shown"] == [window["id"]]
@@ -291,6 +319,340 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     _register_client(app, "c1", "home")
 
     assert resolve_client(shell, {}, OpRequester(app=AppName("files"), marker="")) is None
+
+
+# Pinned windows (pinned-taskbar-entries plan sections 3.2 and 4.5)
+
+
+def _pinned_shell(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    *extra_rows: str,
+    pin: tuple[str, str, str, str] = ("/", "plain", "linked", "bar"),
+) -> Flask:
+    """The shell over the two-app registry plus a ``buddy`` app pinned as ``pin`` (path, style, scope, default
+    mode) and ``extra_rows``."""
+    registry_path = write_two_app_registry(
+        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=pin), *extra_rows
+    )
+    return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
+
+
+def test_every_desktop_holds_one_pinned_window_per_pinned_app_and_a_new_desktop_is_born_with_one(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    # A connected window that has read nothing yet: the route's read below is the first, and reconciles.
+    client_queue = _shell(app).broadcaster.register()
+    _shell(app).broadcaster.set_client_info(client_queue, "c1", "home")
+
+    (home,) = client.get("/api/desktops").get_json()["desktops"]
+    (pinned,) = home["windows"]
+    assert (pinned["app"], pinned["path"], pinned["is_pinned"], pinned["scope"]) == ("buddy", "/", True, "linked")
+    assert pinned["title"] == "" and pinned["is_settling"] is False
+    # The reconcile that created it was announced once, after the read; a second read announces nothing.
+    assert [message["type"] for message in drain_messages(client_queue)] == ["desktops_updated"]
+    assert client.get("/api/desktops").get_json()["desktops"][0]["windows"] == [pinned]
+    assert drain_messages(client_queue) == []
+    # The inventory's app carries the pin.
+    by_name = {entry["name"]: entry for entry in client.get("/api/inventory").get_json()["apps"]}
+    assert by_name["buddy"]["pin"] == {"path": "/", "style": "plain", "scope": "linked", "default_mode": "bar"}
+    assert by_name["files"]["pin"] is None
+
+    created = client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4}).get_json()
+    (born,) = created["windows"]
+    assert born["app"] == "buddy" and born["is_pinned"] is True and born["id"] != pinned["id"]
+    # An open at the home path with the default focus behaviour finds the pinned window.
+    focused = _open_window(client, "buddy", "/")
+    assert focused.status_code == 200 and focused.get_json() == {"window": pinned, "is_new": False}
+
+
+def test_a_pinned_window_is_refused_a_close_by_the_route_and_by_the_op(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+
+    refused = client.post(f"/api/desktops/home/windows/{pinned['id']}/close")
+    assert refused.status_code == 409 and "minimize" in refused.get_json()["detail"]
+    op_refused = _op(client, "close", {"window": pinned["id"]}, _TERMINAL_REQUESTER)
+    assert op_refused.status_code == 400 and "minimize" in op_refused.get_json()["detail"]
+    assert [window["id"] for window in _desktop_windows(client)] == [pinned["id"]]
+    # Minimizing is what the op offers instead, and an ordinary window still closes.
+    minimized = _op(client, "minimize", {"window": pinned["id"]}, _TERMINAL_REQUESTER)
+    assert minimized.get_json()["layout"]["placements"][-1]["is_minimized"] is True
+    ordinary = _open_window(client, "buddy", "/?doc=2", if_present="new").get_json()["window"]
+    assert client.post(f"/api/desktops/home/windows/{ordinary['id']}/close").status_code == 204
+
+
+def test_an_app_registered_later_is_reconciled_on_the_next_read_and_a_withdrawn_pin_frees_its_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster)
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
+    assert client.get("/api/desktops").get_json()["desktops"][0]["windows"] == []
+
+    write_two_app_registry(
+        tmp_path, registry_row_toml("buddy", "http://localhost:7002", pin=("/", "plain", "linked", "bar"))
+    )
+    inventory.reload_registry()
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    assert pinned["app"] == "buddy" and pinned["is_pinned"] is True
+
+    write_two_app_registry(tmp_path, registry_row_toml("buddy", "http://localhost:7002"))
+    inventory.reload_registry()
+    (freed,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    assert freed["id"] == pinned["id"] and freed["is_pinned"] is False
+    assert client.post(f"/api/desktops/home/windows/{freed['id']}/close").status_code == 204
+
+
+def test_pinned_names_the_requesters_pinned_window_for_navigate_and_restore(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """``pinned`` in a window argument is the requesting app's pinned window on the desktop, whatever path the client
+    sees it at: a chat's auto-open navigates it for one client and restores it; an app with no pin gets a 404 and an
+    op with no requester a 400."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    requester = {"app": "buddy", "marker": ""}
+    navigated = client.post(
+        "/api/layout/broadcast",
+        json={
+            "op": "navigate",
+            "args": {"window": "pinned", "path": "/?doc=7", "client": "c1"},
+            "requester": requester,
+        },
+    )
+    assert navigated.status_code == 200
+    assert navigated.get_json()["window_id"] == pinned["id"]
+    assert client.get("/api/placements/home?client=c1").get_json()["window_paths"][pinned["id"]]["path"] == "/?doc=7"
+    restored = client.post(
+        "/api/layout/broadcast",
+        json={"op": "restore", "args": {"window": "pinned", "client": "c1"}, "requester": requester},
+    )
+    assert restored.status_code == 200
+    (placement,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
+    assert (placement["window_id"], placement["is_minimized"]) == (pinned["id"], False)
+    assert (
+        client.post(
+            "/api/layout/broadcast",
+            json={
+                "op": "restore",
+                "args": {"window": "pinned", "client": "c1"},
+                "requester": {"app": "files", "marker": ""},
+            },
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/layout/broadcast",
+            json={"op": "restore", "args": {"window": "pinned", "client": "c1"}, "requester": None},
+        ).status_code
+        == 400
+    )
+
+
+def test_a_pinned_window_first_shows_at_the_pinned_frame_and_a_restore_writes_it_there(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A client that never placed the pinned window reads it at the pinned frame, minimized, below every stored
+    placement; an agent's restore then writes that frame into the client's layout."""
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    (placement,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
+    assert placement["window_id"] == pinned["id"]
+    assert placement["is_minimized"] is True
+    assert placement["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+    answer = client.post(
+        "/api/layout/broadcast",
+        json={"op": "restore", "args": {"window": pinned["id"], "client": "c1"}, "requester": None},
+    )
+    assert answer.status_code == 200
+    (written,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
+    assert written["is_minimized"] is False
+    assert written["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+
+
+def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays_the_home_path(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A report on an independent window is stored for the reporting client alone, announced to that client with
+    a shell-minted save id, and answered as that client sees the window; the shared record keeps the home path
+    and an empty title, another client sees its own path (or the home path), and ``navigate`` moves one client."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    first_queue = _register_client(app, "c1", "home")
+    second_queue = _register_client(app, "c2", "home")
+    (pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    assert pinned["scope"] == "independent"
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    located = client.post(
+        f"/api/desktops/home/windows/{pinned['id']}/location",
+        json={"client_id": "c1", "path": "/?doc=1", "title": "First"},
+    )
+    assert located.status_code == 200
+    assert (located.get_json()["path"], located.get_json()["title"]) == ("/?doc=1", "First")
+    shared = client.get("/api/desktops").get_json()["desktops"][0]["windows"][0]
+    assert (shared["path"], shared["title"]) == ("/", "")
+    # What each client shows rides beside the shared record, for a reader of the shell's windows.
+    assert pinned["client_paths"] == {}
+    assert shared["client_paths"] == {"c1": "/?doc=1"}
+    assert located.get_json()["client_paths"] == {"c1": "/?doc=1"}
+    # The reporting client's windows are told through placements_updated naming that client (which, as with every
+    # layout write, every window hears and only that client's apply); the shared desktops are not re-announced.
+    announced = drain_messages(first_queue)
+    assert [(message["type"], message["client_id"]) for message in announced] == [("placements_updated", "c1")]
+    assert announced[0]["save_id"].startswith("save-")
+    assert [(message["type"], message["client_id"]) for message in drain_messages(second_queue)] == [
+        ("placements_updated", "c1")
+    ]
+    layout = client.get("/api/placements/home?client=c1").get_json()
+    assert layout["window_paths"] == {pinned["id"]: {"path": "/?doc=1", "title": "First"}}
+    assert layout["updated_at"] is None
+    assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+    # The same report again is silent.
+    client.post(
+        f"/api/desktops/home/windows/{pinned['id']}/location",
+        json={"client_id": "c1", "path": "/?doc=1", "title": "First"},
+    )
+    assert drain_messages(first_queue) == []
+    # A report without a client is refused.
+    assert (
+        client.post(
+            f"/api/desktops/home/windows/{pinned['id']}/location", json={"path": "/x", "title": ""}
+        ).status_code
+        == 400
+    )
+
+    # ``navigate`` writes the target client's path and keeps its title; the other client is untouched.
+    navigated = _op(client, "navigate", {"window": pinned["id"], "path": "/?doc=2", "client": "c1"}, None)
+    assert navigated.status_code == 200
+    assert navigated.get_json()["layout"]["window_paths"] == {pinned["id"]: {"path": "/?doc=2", "title": "First"}}
+    assert navigated.get_json()["desktop"]["windows"][0]["path"] == "/"
+    assert [message["type"] for message in drain_messages(first_queue)] == ["placements_updated"]
+    assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+    drain_messages(second_queue)
+    # A linked window still moves for everyone through the same route.
+    linked = _open_window(client, "terminal", "/?session=t1").get_json()["window"]
+    client.post(
+        f"/api/desktops/home/windows/{linked['id']}/location",
+        json={"client_id": "c2", "path": "/?session=t2", "title": "Two"},
+    )
+    assert [window["path"] for window in _desktop_windows(client)] == ["/", "/?session=t2"]
+    assert "desktops_updated" in [message["type"] for message in drain_messages(first_queue)]
+
+    # ``self`` looks for the requester's marker in the window's path as the target client sees it: c1's own
+    # path carries it, c2's (the home path) does not.
+    requester = {"app": "buddy", "marker": "2"}
+    focused = _op(client, "focus", {"window": "self", "client": "c1"}, requester)
+    assert focused.status_code == 200 and focused.get_json()["window_id"] == pinned["id"]
+    assert _op(client, "focus", {"window": "self", "client": "c2"}, requester).status_code == 404
+    drain_messages(first_queue)
+    assert _op(client, "refresh", {"window": "self", "client": "c1"}, requester).status_code == 200
+    (refresh,) = [message for message in drain_messages(first_queue) if message["type"] == "layout_op"]
+    assert (refresh["args"], refresh["target_client_id"]) == ({"window": pinned["id"]}, "c1")
+
+
+def test_a_clients_stored_paths_on_other_desktops_survive_a_report(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A client's window-paths file spans every desktop: a report on one desktop's independent pinned window keeps
+    the same client's stored path for another desktop's, and each layout answers its own desktop's entry."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (home_pinned,) = client.get("/api/desktops").get_json()["desktops"][0]["windows"]
+    created = client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4}).get_json()
+    (research_pinned,) = created["windows"]
+
+    for desktop_id, window_id, doc in (("home", home_pinned["id"], 1), ("research", research_pinned["id"], 2)):
+        client.post(
+            f"/api/desktops/{desktop_id}/windows/{window_id}/location",
+            json={"client_id": "c1", "path": f"/?doc={doc}", "title": f"Doc {doc}"},
+        )
+    assert client.get("/api/placements/home?client=c1").get_json()["window_paths"] == {
+        home_pinned["id"]: {"path": "/?doc=1", "title": "Doc 1"}
+    }
+    assert client.get("/api/placements/research?client=c1").get_json()["window_paths"] == {
+        research_pinned["id"]: {"path": "/?doc=2", "title": "Doc 2"}
+    }
+
+
+def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_checked_against_the_pin(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "avatar", "linked", "floating"))
+    client = app.test_client()
+    first_queue = _register_client(app, "c1", "home")
+    second_queue = _register_client(app, "c2", "home")
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    written = client.post(
+        "/api/clients/c1/entries/buddy",
+        json={"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}},
+    )
+    assert written.status_code == 200
+    assert written.get_json()["entries"] == {
+        "buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}
+    }
+    assert written.get_json()["is_connected"] is True
+    assert drain_messages(first_queue) == [
+        {
+            "type": "client_entries_changed",
+            "client_id": "c1",
+            "entries": {"buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}},
+        }
+    ]
+    assert drain_messages(second_queue) == []
+    listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
+    assert "buddy" in listed["c1"]["entries"] and listed["c2"]["entries"] == {}
+    # The plain style is always on offer; a style the pin does not declare, an unpinned app, an unknown app, a
+    # position outside the backdrop, and an unknown client are refused.
+    plain = client.post("/api/clients/c1/entries/buddy", json={"mode": "bar", "style": "plain", "position": None})
+    assert plain.status_code == 200 and plain.get_json()["entries"]["buddy"]["mode"] == "bar"
+    assert (
+        client.post(
+            "/api/clients/c1/entries/buddy", json={"mode": "bar", "style": "dot", "position": None}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/clients/c1/entries/files", json={"mode": "bar", "style": "plain", "position": None}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/clients/c1/entries/nope", json={"mode": "bar", "style": "plain", "position": None}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/clients/c1/entries/buddy",
+            json={"mode": "floating", "style": "plain", "position": {"x": 1.5, "y": 0}},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/clients/ghost/entries/buddy", json={"mode": "bar", "style": "plain", "position": None}
+        ).status_code
+        == 404
+    )
 
 
 # The desktop routes (desktop contracts.md section 5)
@@ -441,24 +803,27 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
     # A location report replaces the path and title, ends the settling, and is silent when it changes nothing.
     located = client.post(
         f"/api/desktops/home/windows/{window['id']}/location",
-        json={"path": "/?session=terminal-1", "title": "  Build log  "},
+        json={"client_id": "c1", "path": "/?session=terminal-1", "title": "  Build log  "},
     )
     assert located.status_code == 200
     assert located.get_json()["title"] == "Build log" and located.get_json()["is_settling"] is False
     drain_messages(first_queue)
     again = client.post(
         f"/api/desktops/home/windows/{window['id']}/location",
-        json={"path": "/?session=terminal-1", "title": "Build log"},
+        json={"client_id": "c1", "path": "/?session=terminal-1", "title": "Build log"},
     )
     assert again.status_code == 200 and drain_messages(first_queue) == []
     assert (
         client.post(
-            "/api/desktops/home/windows/win-00000000000000ff/location", json={"path": "/", "title": ""}
+            "/api/desktops/home/windows/win-00000000000000ff/location",
+            json={"client_id": "c1", "path": "/", "title": ""},
         ).status_code
         == 404
     )
     assert (
-        client.post(f"/api/desktops/home/windows/{window['id']}/location", json={"path": "x", "title": ""}).status_code
+        client.post(
+            f"/api/desktops/home/windows/{window['id']}/location", json={"client_id": "c1", "path": "x", "title": ""}
+        ).status_code
         == 400
     )
 
@@ -482,6 +847,7 @@ def test_placements_are_saved_per_client_and_a_stale_save_is_refused(client: Fla
         "version": 1,
         "updated_at": None,
         "placements": [],
+        "window_paths": {},
     }
     assert client.get("/api/placements/home").status_code == 400
     assert client.get("/api/placements/nowhere?client=c2").status_code == 404
@@ -546,7 +912,7 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     listed = _op(client, "desktops", {}, requester)
     assert listed.status_code == 200 and [desktop["id"] for desktop in listed.get_json()["desktops"]] == ["home"]
     # The read ops answer the whole inventory document, apps and clients included.
-    assert set(listed.get_json()) == {"ok", "desktops", "apps", "clients"}
+    assert set(listed.get_json()) == {"ok", "is_preview", "desktops", "apps", "clients"}
     assert [entry["id"] for entry in listed.get_json()["clients"]] == ["c1"]
 
     # An open at a launch path with params, and one at an explicit path.
@@ -885,3 +1251,102 @@ def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_repo
     # A client of hers that had a record was moved along with her.
     record = _shell(app).clients.get_client("c-alice")
     assert record is not None and record.active_desktop == "alice"
+
+
+# The update notice
+
+
+def _repo_root(app: Flask) -> Path:
+    return _shell(app).update_notice.repo_root
+
+
+def test_the_pending_update_is_the_kept_rollback_point_or_null(client: FlaskClient, app: Flask) -> None:
+    assert client.get("/api/updates/pending").get_json() is None
+    write_rollback_point(_repo_root(app), apps=["terminal", "system_interface"], needs_system_services_restart=True)
+    notice = client.get("/api/updates/pending").get_json()
+    assert notice["apps"] == ["terminal", "system_interface"]
+    assert notice["needs_system_services_restart"] is True
+    assert notice["progress"] is None and notice["outcome"] is None
+
+
+def test_confirming_the_pending_update_closes_it_through_the_script(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    write_rollback_point(_repo_root(app))
+
+    assert client.post("/api/updates/pending/confirm").status_code == 204
+
+    assert [call["argv"] for call in read_stub_update_self_calls(_repo_root(app))] == [["confirm-last"]]
+    assert client.get("/api/updates/pending").get_json() is None
+    # Nothing left to confirm: a second click is told so rather than run the script again.
+    refused = client.post("/api/updates/pending/confirm")
+    assert refused.status_code == 409 and "no update notice" in refused.get_json()["detail"]
+
+
+def test_a_failing_confirm_names_the_failure_and_keeps_the_notice(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app), exit_code=1)
+    write_rollback_point(_repo_root(app))
+    failed = client.post("/api/updates/pending/confirm")
+    assert failed.status_code == 500
+    assert "told to fail" in failed.get_json()["detail"]
+    assert client.get("/api/updates/pending").get_json() is not None
+
+
+@pytest.mark.timeout(30)
+def test_rolling_back_the_pending_update_starts_the_script_and_answers_accepted(
+    client: FlaskClient, app: Flask
+) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    write_rollback_point(_repo_root(app), apps=["terminal"])
+
+    accepted = client.post("/api/updates/pending/rollback")
+
+    assert accepted.status_code == 202
+    wait_for(lambda: len(read_stub_update_self_calls(_repo_root(app))) == 1, timeout=10.0)
+    assert read_stub_update_self_calls(_repo_root(app))[0]["argv"] == ["rollback-last"]
+
+
+@pytest.mark.timeout(30)
+def test_a_rollback_the_script_refuses_answers_conflict_with_the_scripts_reason(
+    client: FlaskClient, app: Flask
+) -> None:
+    write_stub_update_self_script(_repo_root(app), exit_code=1)
+    write_rollback_point(_repo_root(app), apps=["terminal"])
+
+    refused = client.post("/api/updates/pending/rollback")
+
+    assert refused.status_code == 409
+    assert "told to fail" in refused.get_json()["detail"]
+    assert client.get("/api/updates/pending").get_json()["progress"] is None
+
+
+def test_a_rollback_is_refused_while_one_runs_and_once_the_point_settled(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    assert client.post("/api/updates/pending/rollback").status_code == 409
+
+    write_rollback_point(_repo_root(app), progress="Reverting the update")
+    running = client.post("/api/updates/pending/rollback")
+    assert running.status_code == 409 and "already running" in running.get_json()["detail"]
+
+    write_rollback_point(_repo_root(app), outcome="Rolled back to the previous version.")
+    settled = client.post("/api/updates/pending/rollback")
+    assert settled.status_code == 409 and "already rolled back" in settled.get_json()["detail"]
+    assert read_stub_update_self_calls(_repo_root(app)) == []
+
+
+def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The notice is live workspace state; a preview shows it (its page is the live shell's page, one app
+    swapped) but the two verbs act on the live tree and its copies."""
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
+    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+    write_stub_update_self_script(_repo_root(application))
+    write_rollback_point(_repo_root(application))
+    client = application.test_client()
+
+    assert client.get("/api/updates/pending").get_json()["apps"] == ["terminal"]
+    for verb in ("confirm", "rollback"):
+        refusal = client.post(f"/api/updates/pending/{verb}")
+        assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
+    assert read_stub_update_self_calls(_repo_root(application)) == []
+    assert client.get("/api/updates/pending").get_json() is not None

@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
-import { appRecord, desktopRecord, placementRecord, windowRecord } from "../testing/records";
+import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
 import {
   activeFocusedWindowId,
   activePlacements,
+  barEntries,
+  effectiveWindow,
+  effectiveWindowTitle,
+  entryLook,
+  floatingEntries,
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
+  pinnedWindowOf,
   reduceDesktopState,
   renderedState,
   taskbarEntries,
@@ -16,7 +22,7 @@ import type { DesktopEvent, DesktopState } from "./desktopState";
 
 const MODES = { isCompact: false, isTouch: false };
 const home = desktopRecord("home", {
-  windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b")],
+  windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b", { is_pinned: true })],
 });
 const work = desktopRecord("work");
 
@@ -30,7 +36,7 @@ function loaded(): DesktopState {
     { type: "apps_updated", apps: [appRecord("docs"), appRecord("notes")] },
     { type: "desktops_updated", desktops: [home, work] },
     { type: "desktop_activated", desktopId: "home" },
-    { type: "layout_loaded", desktopId: "home", layout: { updated_at: "t1", placements: [placementRecord("win-1")] } },
+    { type: "layout_loaded", desktopId: "home", layout: layoutRecord([placementRecord("win-1")], "t1") },
   );
 }
 
@@ -47,7 +53,7 @@ describe("loading", () => {
     const state = reduceDesktopState(loaded(), {
       type: "layout_loaded",
       desktopId: "work",
-      layout: { updated_at: "t9", placements: [] },
+      layout: layoutRecord([], "t9"),
     });
     expect(state.layout.updated_at).toBe("t1");
   });
@@ -98,7 +104,7 @@ describe("the window verbs", () => {
     const reloaded = reduceDesktopState(gestured, {
       type: "layout_loaded",
       desktopId: "home",
-      layout: { updated_at: "t3", placements: [placementRecord("win-2")] },
+      layout: layoutRecord([placementRecord("win-2")], "t3"),
     });
     const late = reduceDesktopState(reloaded, {
       type: "layout_saved",
@@ -162,7 +168,7 @@ describe("opens and closes this client made", () => {
     const before = reduceDesktopState(loaded(), {
       type: "layout_loaded",
       desktopId: "home",
-      layout: { updated_at: "t2", placements: [placementRecord("win-1"), stored] },
+      layout: layoutRecord([placementRecord("win-1"), stored], "t2"),
     });
     const state = reduceDesktopState(before, {
       type: "window_opened_here",
@@ -203,10 +209,119 @@ describe("opens and closes this client made", () => {
     expect(gone).toBe(state);
   });
 
+  it("takes the client's window paths alone without touching the placements or their version", () => {
+    const gestured = reduceDesktopState(loaded(), { type: "window_minimized", windowId: "win-1" });
+    const state = reduceDesktopState(gestured, {
+      type: "window_paths_loaded",
+      desktopId: "home",
+      windowPaths: { "win-2": { path: "/?doc=4", title: "Four" } },
+    });
+    expect(state.layout.placements).toBe(gestured.layout.placements);
+    expect(state.layoutVersion).toBe(gestured.layoutVersion);
+    expect(isLayoutDirty(state)).toBe(true);
+    expect(state.layout.window_paths).toEqual({ "win-2": { path: "/?doc=4", title: "Four" } });
+    expect(reduceDesktopState(state, { type: "window_paths_loaded", desktopId: "work", windowPaths: {} })).toBe(state);
+  });
+
+  it("keeps an independent window's answered location beside the layout, not on the shared record", () => {
+    const independent = windowRecord("win-3", "docs", "/", { is_pinned: true, scope: "independent" });
+    const before = reduceDesktopState(loaded(), {
+      type: "desktops_updated",
+      desktops: [{ ...home, windows: [...home.windows, independent] }, work],
+    });
+    const state = reduceDesktopState(before, {
+      type: "window_location_reported",
+      desktopId: "home",
+      window: { ...independent, path: "/?doc=5", title: "Five" },
+    });
+    expect(state.desktops[0].windows[2].path).toBe("/");
+    expect(state.layout.window_paths).toEqual({ "win-3": { path: "/?doc=5", title: "Five" } });
+    expect(isLayoutDirty(state)).toBe(false);
+    expect(effectiveWindow(state, independent).path).toBe("/?doc=5");
+    expect(effectiveWindowTitle(state, independent, appRecord("docs"))).toBe("Five");
+    expect(effectiveWindowTitle(before, independent, appRecord("docs"))).toBe("Docs");
+    expect(taskbarEntries(state).map((entry) => entry.title)).toEqual(["Docs", "Notes", "Five"]);
+    // The same answer again changes nothing; one for another desktop is not this layout's.
+    expect(
+      reduceDesktopState(state, {
+        type: "window_location_reported",
+        desktopId: "home",
+        window: { ...independent, path: "/?doc=5", title: "Five" },
+      }),
+    ).toBe(state);
+  });
+
   it("drops a closed window and its placement", () => {
     const state = reduceDesktopState(loaded(), { type: "window_closed_here", desktopId: "home", windowId: "win-1" });
     expect(state.desktops[0].windows.map((window) => window.id)).toEqual(["win-2"]);
     expect(state.layout.placements).toEqual([]);
+  });
+});
+
+describe("pinned entries", () => {
+  const pinnedApp = appRecord("buddy", {
+    pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
+  });
+  const pinned = windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" });
+
+  function withPinned(): DesktopState {
+    return reduceAll(
+      loaded(),
+      { type: "apps_updated", apps: [appRecord("docs"), appRecord("notes"), pinnedApp] },
+      { type: "desktops_updated", desktops: [{ ...home, windows: [...home.windows, pinned] }, work] },
+    );
+  }
+
+  it("give a pinned entry the pin's defaults until the client chooses, and split the bar from the floating", () => {
+    const state = withPinned();
+    expect(entryLook(state, pinned, pinnedApp)).toEqual({
+      mode: "floating",
+      style: "avatar",
+      declaredStyle: "avatar",
+      position: null,
+    });
+    expect(entryLook(state, home.windows[0], appRecord("docs"))).toBeNull();
+    expect(pinnedWindowOf(state, "buddy")).toBe(pinned);
+    expect(pinnedWindowOf(state, "docs")).toBeNull();
+    expect(barEntries(state).map((entry) => entry.window.id)).toEqual(["win-1", "win-2"]);
+    expect(floatingEntries(state).map((entry) => entry.window.id)).toEqual(["win-9"]);
+    const chosen = reduceDesktopState(state, {
+      type: "entries_updated",
+      entries: { buddy: { mode: "bar", style: "plain", position: { x: 0.1, y: 0.2 } } },
+    });
+    expect(entryLook(chosen, pinned, pinnedApp)).toEqual({
+      mode: "bar",
+      style: "plain",
+      declaredStyle: "avatar",
+      position: { x: 0.1, y: 0.2 },
+    });
+    expect(barEntries(chosen).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
+    expect(floatingEntries(chosen)).toEqual([]);
+    // A style stored while the pin declared it is not drawn once the pin declares plain.
+    const kept = reduceDesktopState(state, {
+      type: "entries_updated",
+      entries: { buddy: { mode: "bar", style: "avatar", position: null } },
+    });
+    const plainPin = appRecord("buddy", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" } });
+    expect(entryLook(kept, pinned, plainPin)?.style).toBe("plain");
+    expect(entryLook(kept, pinned, pinnedApp)?.style).toBe("avatar");
+    // An app the shell no longer lists, or one with no pin, reads as a plain bar entry.
+    expect(entryLook(state, pinned, undefined)).toEqual({
+      mode: "bar",
+      style: "plain",
+      declaredStyle: "plain",
+      position: null,
+    });
+  });
+
+  it("render every entry in the bar while compact without rewriting the mode", () => {
+    const compact = reduceDesktopState(withPinned(), {
+      type: "render_modes_changed",
+      modes: { isCompact: true, isTouch: true },
+    });
+    expect(floatingEntries(compact)).toEqual([]);
+    expect(barEntries(compact).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
+    expect(entryLook(compact, pinned, pinnedApp)?.mode).toBe("floating");
   });
 });
 
@@ -228,10 +343,16 @@ describe("selectors", () => {
     });
     expect(state.modes.isTouch).toBe(true);
     expect(
-      taskbarEntries(state).map((entry) => [entry.window.id, entry.title, entry.isMinimized, entry.isFocused]),
+      taskbarEntries(state).map((entry) => [
+        entry.window.id,
+        entry.title,
+        entry.isMinimized,
+        entry.isFocused,
+        entry.isPinned,
+      ]),
     ).toEqual([
-      ["win-1", "Docs", false, true],
-      ["win-2", "Notes", true, false],
+      ["win-1", "Docs", false, true, false],
+      ["win-2", "Notes", true, false, true],
     ]);
   });
 

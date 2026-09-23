@@ -9,16 +9,33 @@
 
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
-import { launchPathOf, launchPathWithParams } from "../model/launch";
+import {
+  DRAFT_PARAM,
+  NO_TEXT_APP_REASON,
+  chatPath,
+  freeTextRowsOf,
+  launchPathOf,
+  launchPathWithParams,
+  launchRowKindOf,
+  textPathOf,
+} from "../model/launch";
 import { applyPresence } from "../model/Presence";
 import type {
   AppRecord,
+  AvatarCatalog,
+  AvatarDesign,
   ClientArrival,
+  ClientRecord,
   Desktop,
   DesktopShortcut,
+  EntryMode,
+  EntryPresentation,
+  FloatingPosition,
   GridCell,
   IfPresent,
+  LaunchPath,
   Layout,
+  PinStyle,
   Placement,
   PresentUser,
   ShortcutMode,
@@ -26,7 +43,10 @@ import type {
   WindowRecord,
   WindowState,
 } from "../model/records";
+import { isSameWindowPaths } from "../model/records";
 import { SaveIdMinter } from "../model/saveIds";
+import { isPreviewShell } from "../model/PreviewShell";
+import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
 import {
   MAXIMIZED_FRAME,
@@ -40,6 +60,7 @@ import {
   unsnapFrame,
 } from "../geometry/frames";
 import type { PixelPoint, PixelRect, PixelSize, ResizeEdge } from "../geometry/frames";
+import { defaultFloatingPosition, floatingEntryRect, floatingPositionFromPixels } from "../geometry/floating";
 import { cellAtPoint, gridDimensions } from "../geometry/grid";
 import type { GridDimensions } from "../geometry/grid";
 import { placementOf } from "../geometry/stack";
@@ -47,17 +68,31 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  chatApp,
+  draftTargetOf,
+  effectiveWindow,
+  effectiveWindowTitle,
+  entryLook,
   findWindow,
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
+  openableApps,
+  pinnedWindowOf,
   reduceDesktopState,
   renderedState,
+  windowShowingChat,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState } from "../reducers/desktopState";
 import { cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
-import type { ActiveDesktopChangedEvent, DesktopSocket, LayoutOpEvent, PlacementsUpdatedEvent } from "./socket";
+import type {
+  ActiveDesktopChangedEvent,
+  ClientEntriesChangedEvent,
+  DesktopSocket,
+  LayoutOpEvent,
+  PlacementsUpdatedEvent,
+} from "./socket";
 
 // A gesture's save lands shortly after it ends; the shell edits the saved layout for agent ops, and
 // an op that follows a gesture has to see the gesture in the file.
@@ -75,12 +110,21 @@ export interface DesktopApi {
   removeDesktopShortcut(desktopId: string, app: string, launch: string): Promise<Desktop>;
   openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome>;
   closeWindow(desktopId: string, windowId: string): Promise<void>;
-  reportWindowLocation(desktopId: string, windowId: string, path: string, title: string): Promise<WindowRecord>;
+  reportWindowLocation(
+    desktopId: string,
+    windowId: string,
+    clientId: string,
+    path: string,
+    title: string,
+  ): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   arriveClient(clientId: string): Promise<ClientArrival>;
-  fetchClients(): Promise<{ id: string; active_desktop: string | null }[]>;
+  fetchClients(): Promise<ClientRecord[]>;
   setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void>;
+  setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
+  fetchAvatars(): Promise<AvatarCatalog>;
+  selectAvatar(design: string): Promise<void>;
 }
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
@@ -105,6 +149,13 @@ export interface StoreDependencies {
   readonly notify: (message: string) => void;
   /** Reload the whole interface (the ``reload_system_interface`` op). */
   readonly reloadInterface: () => void;
+}
+
+/** A navigation this client asked for on its own page (the chooser's draft), which the live pages honour
+ *  even where the page just reported leaving that very path. */
+export interface OwnNavigation {
+  readonly windowId: string;
+  readonly path: string;
 }
 
 /** A window move in progress: the rendered rectangle it started from and where it is now. */
@@ -138,7 +189,15 @@ export interface ShortcutGesture {
   readonly targetCell: GridCell;
 }
 
-export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture;
+/** A floating entry being dragged: its box's top-left corner follows the pointer less the grab offset. */
+export interface FloatingEntryGesture {
+  readonly kind: "floating-entry";
+  readonly app: string;
+  readonly grabOffset: PixelPoint;
+  readonly currentRect: PixelRect;
+}
+
+export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture | FloatingEntryGesture;
 
 type Listener = () => void;
 
@@ -160,9 +219,18 @@ export class DesktopStore {
   private hasSocketConnected = false;
   // The path each window's page reported last, so a report answered out of order is not applied.
   private readonly latestReportedPaths = new Map<string, string>();
-  // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast), and
-  // not by a local edit: the live pages follow their windows' stored paths after the shell speaks.
+  /** The one navigation this client asked for itself and has not yet followed (``navigateOwnWindow``). */
+  private ownNavigation: OwnNavigation | null = null;
+  // Bumped by every desktops record the shell hands over (the bootstrap's read, each broadcast, its answer to a
+  // linked window's navigate this window landed), and not by a local edit: the live pages follow their windows'
+  // stored paths after the shell speaks.
   private desktopsRevision = 0;
+  // Bumped by every layout the shell hands over: an independent window's stored path arrives with the layout.
+  private layoutLoadsRevision = 0;
+  // Bumped by every push of the workspace's selection and of this client's entries: a read issued before a
+  // push answers older than the push, and must not overwrite it.
+  private avatarSelectionPushes = 0;
+  private entryPushes = 0;
   // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
@@ -200,6 +268,11 @@ export class DesktopStore {
     return this.desktopsRevision;
   }
 
+  /** How many times the shell has handed over a layout, which carries this client's paths for independent windows. */
+  getLayoutLoadsRevision(): number {
+    return this.layoutLoadsRevision;
+  }
+
   /** Whether this client's layout holds a placement for the window. While a window settles, only the
    *  client that opened it has one (the shell places the requesting client's layout at open, and every
    *  other client defers its gestures on the window), so this tells the opener from the rest. */
@@ -211,9 +284,10 @@ export class DesktopStore {
     return gridDimensions(this.backdrop, this.metrics);
   }
 
-  /** Whether the workspace can stop and start the app (supervised, not critical, not inside a critical program). */
+  /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
+   *  not from a preview shell, whose stop and start would reach the live workspace's supervisord. */
   canStopApp(app: AppRecord): boolean {
-    return isAppStoppable(this.state, app);
+    return !isPreviewShell() && isAppStoppable(this.state, app);
   }
 
   /** The rectangle a placement renders at, in backdrop pixels (the compact override and the fit applied). */
@@ -262,8 +336,15 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
   }
 
-  /** Connect, post this client's arrival, land on the deep link's desktop else the one the shell answered,
-   *  fetch the layout, and honour the deep link's open or launch. */
+  /** Resolves once the app list has landed. It arrives only over the socket, so ``start`` resolving
+   *  does not imply it: a caller that needs the apps (which app holds chats, which window is pinned)
+   *  waits on this too. */
+  whenAppsLoaded(): Promise<void> {
+    return this.appsLoaded;
+  }
+
+  /** Connect, post this client's arrival, read this client's record, land on the deep link's desktop
+   *  else the one the shell answered, fetch the layout, and honour the deep link's open or launch. */
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
       onConnected: () => this.takeConnected(),
@@ -271,9 +352,19 @@ export class DesktopStore {
       onDesktopsUpdated: (desktops) => this.takeDesktops(desktops),
       onPlacementsUpdated: (event) => this.takePlacementsUpdated(event),
       onActiveDesktopChanged: (event) => this.takeActiveDesktopChanged(event),
+      onClientEntriesChanged: (event) => this.takeClientEntriesChanged(event),
+      onAvatarStatus: (status) => this.dispatch({ type: "avatar_status_updated", status }),
+      onAvatarSelectionChanged: (design) => {
+        this.avatarSelectionPushes += 1;
+        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null });
+      },
+      onUpdateNoticeChanged: (wire) =>
+        this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
     });
+    void this.loadAvatarSelection();
+    const entryPushesBefore = this.entryPushes;
     // The arrival comes first: it may seed a desktop for this user, which the desktops read then includes.
     let arrival: ClientArrival | null;
     try {
@@ -283,8 +374,15 @@ export class DesktopStore {
       arrival = null;
     }
     let desktops: Desktop[];
+    let clients: ClientRecord[];
     try {
-      desktops = await this.deps.api.fetchDesktops();
+      [desktops, clients] = await Promise.all([
+        this.deps.api.fetchDesktops(),
+        this.deps.api.fetchClients().catch((error: unknown) => {
+          console.warn("[si] could not read the client records", error);
+          return [];
+        }),
+      ]);
     } catch (error) {
       console.warn("[si] could not read the desktops", error);
       this.deps.notify(`Could not read the desktops: ${(error as Error).message}`);
@@ -293,7 +391,11 @@ export class DesktopStore {
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
     this.replacedDesktop = replacedDesktopOf(arrival);
-    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, arrival?.desktop_id ?? null);
+    const own = clients.find((client) => client.id === this.deps.clientId);
+    this.takeFetchedEntries(own, entryPushesBefore);
+    // The shell's answer says where this client lands; without one (the arrival failed), the recorded desktop.
+    const landing = arrival?.desktop_id ?? own?.active_desktop ?? null;
+    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, landing);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -316,15 +418,21 @@ export class DesktopStore {
   /** The client record is the shell's word after a reconnect: another window of this client may have
    *  switched desktops meanwhile (the ``active_desktop_changed`` is gone), and reporting this window's
    *  own desktop would move the whole client back to it. So the recorded desktop is adopted as a push
-   *  when it differs, and the layout is read again either way, for the ``placements_updated`` missed. */
+   *  when it differs, and the layout is read again either way, for the ``placements_updated`` missed.
+   *  The record's entries and the workspace's selection are taken again too, for the
+   *  ``client_entries_changed`` and ``avatar_selection_changed`` missed (the server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
+    const entryPushesBefore = this.entryPushes;
     try {
       const clients = await this.deps.api.fetchClients();
-      recorded = clients.find((client) => client.id === this.deps.clientId)?.active_desktop ?? null;
+      const own = clients.find((client) => client.id === this.deps.clientId);
+      this.takeFetchedEntries(own, entryPushesBefore);
+      recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);
     }
+    void this.loadAvatarSelection();
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
     if (recorded !== null && isRecordedKnown && recorded !== this.state.activeDesktopId) {
       await this.switchDesktop(recorded, { isFollowingPush: true });
@@ -402,6 +510,174 @@ export class DesktopStore {
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
     if (event.clientId !== this.deps.clientId || event.desktopId === this.state.activeDesktopId) return;
     void this.switchDesktop(event.desktopId, { isFollowingPush: true });
+  }
+
+  private takeClientEntriesChanged(event: ClientEntriesChangedEvent): void {
+    if (event.clientId !== this.deps.clientId) return;
+    this.entryPushes += 1;
+    this.dispatch({ type: "entries_updated", entries: event.entries });
+  }
+
+  /** This client's entries as its fetched record carries them, unless a push landed while the records were
+   *  read: the push is newer than the answer. */
+  private takeFetchedEntries(own: ClientRecord | undefined, entryPushesBefore: number): void {
+    if (own === undefined || this.entryPushes !== entryPushesBefore) return;
+    this.dispatch({ type: "entries_updated", entries: own.entries });
+  }
+
+  /** The workspace's design and the fallback, from the catalog; a read that fails leaves the initial ones, and
+   *  a selection pushed while the catalog was read stands over the catalog's older answer. */
+  private async loadAvatarSelection(): Promise<void> {
+    const pushesBefore = this.avatarSelectionPushes;
+    try {
+      const catalog = await this.deps.api.fetchAvatars();
+      const design = this.avatarSelectionPushes === pushesBefore ? catalog.selected : this.state.avatar.design;
+      this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: catalog.default });
+    } catch (error) {
+      console.warn("[si] could not read the avatar designs", error);
+    }
+  }
+
+  /** The designs on offer, read anew on every call so one an agent registered meanwhile is listed. */
+  async fetchAvatarDesigns(): Promise<readonly AvatarDesign[]> {
+    return (await this.deps.api.fetchAvatars()).designs;
+  }
+
+  /** Hand ``text`` to the pinned window that takes a draft (plan section 4.7): this client's view of it is pointed
+   *  at the draft path, as an agent's navigate would be, and the window is restored and raised; the page drafts the
+   *  text into a chat's composer and reports the selection back. False when no pinned app on this desktop takes one. */
+  async draftIntoPinnedWindow(text: string): Promise<boolean> {
+    const target = draftTargetOf(this.state);
+    if (target === null) return false;
+    const path = launchPathWithParams(target.launchPath, { [DRAFT_PARAM]: text });
+    const isTaken = await this.navigateOwnWindow(target.window.id, path);
+    this.restoreWindow(target.window.id);
+    return isTaken;
+  }
+
+  /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window already showing it is
+   *  switched to and raised, wherever it is; otherwise this client's view of the chat app's pinned
+   *  window is pointed at the chat, as a draft is, so the chat lands where this viewer reads chats;
+   *  with no pinned window to take it, the chat opens in a window of its own. False when nothing
+   *  showed it -- this machine has no app that holds chats, or the shell refused the ask. */
+  async focusChat(chatId: string): Promise<boolean> {
+    const shown = windowShowingChat(this.state, chatId);
+    if (shown !== null) {
+      if (shown.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(shown.desktop.id);
+      this.restoreWindow(shown.window.id);
+      return true;
+    }
+    const app = chatApp(this.state);
+    if (app === null) return false;
+    const pinned = pinnedWindowOf(this.state, app.name);
+    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), null, "focus")) !== null;
+    const isTaken = await this.navigateOwnWindow(pinned.id, chatPath(chatId));
+    this.restoreWindow(pinned.id);
+    return isTaken;
+  }
+
+  /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is
+   *  written through the shell and the answer applied as a load rather than as the page's own report, so the
+   *  following step moves the page there (a page's own report is the one thing the following never bounces back,
+   *  and applying it that way would leave the page where it was). False when the shell refused. */
+  async navigateOwnWindow(windowId: string, path: string): Promise<boolean> {
+    const found = findWindow(this.state, windowId);
+    if (found === null) return false;
+    const title = effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
+    let reported: WindowRecord;
+    try {
+      reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
+    } catch (error) {
+      this.deps.notify(`Could not move the window: ${(error as Error).message}`);
+      return false;
+    }
+    // Marked only once the answer is applied, for the one follow that application triggers: set any earlier, a
+    // refusal or a broadcast landing meanwhile would leave the mark to lift the guard for some other follow.
+    if (found.window.scope === "independent") {
+      if (found.desktop.id !== this.state.activeDesktopId) return true;
+      this.ownNavigation = { windowId, path };
+      this.layoutLoadsRevision += 1;
+      this.dispatch({
+        type: "window_paths_loaded",
+        desktopId: found.desktop.id,
+        windowPaths: { ...this.state.layout.window_paths, [windowId]: { path: reported.path, title: reported.title } },
+      });
+      return true;
+    }
+    this.ownNavigation = { windowId, path };
+    this.desktopsRevision += 1;
+    this.dispatch({ type: "window_location_reported", desktopId: found.desktop.id, window: reported });
+    return true;
+  }
+
+  /** The navigation this client asked for itself since the pages last followed, handed over once. */
+  takeOwnNavigation(): OwnNavigation | null {
+    const own = this.ownNavigation;
+    this.ownNavigation = null;
+    return own;
+  }
+
+  /** Choose the workspace's avatar design; every window (this one included) follows the shell's broadcast. */
+  async selectAvatar(design: string): Promise<void> {
+    try {
+      await this.deps.api.selectAvatar(design);
+    } catch (error) {
+      this.deps.notify(`Could not change the avatar: ${(error as Error).message}`);
+    }
+  }
+
+  /** Write how this client shows a pinned entry (its mode, style, and floating position). Applied at once, so a
+   *  released drag lands where it was dropped rather than at the old spot until the shell answers. A push that
+   *  lands while the shell answers is its newer word (the shell announces every write, this one included, before
+   *  answering it) and stands: without one, the record the shell answers is taken, and a refusal puts that
+   *  entry's old presentation back (another entry written meanwhile is not undone with it). */
+  async setEntryPresentation(app: string, presentation: EntryPresentation): Promise<void> {
+    const previous = this.state.entries[app];
+    const entryPushesBefore = this.entryPushes;
+    this.dispatch({ type: "entries_updated", entries: { ...this.state.entries, [app]: presentation } });
+    try {
+      const record = await this.deps.api.setEntryPresentation(this.deps.clientId, app, presentation);
+      if (this.entryPushes !== entryPushesBefore) return;
+      this.dispatch({ type: "entries_updated", entries: record.entries });
+    } catch (error) {
+      this.deps.notify(`Could not change the entry: ${(error as Error).message}`);
+      if (this.entryPushes !== entryPushesBefore) return;
+      const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
+      this.dispatch({
+        type: "entries_updated",
+        entries: previous === undefined ? others : { ...others, [app]: previous },
+      });
+    }
+  }
+
+  /** The presentation a write of one field starts from: the entry's current look. */
+  private presentationOf(app: string): EntryPresentation | null {
+    const window = pinnedWindowOf(this.state, app);
+    if (window === null) return null;
+    const look = entryLook(this.state, window, appByName(this.state, app));
+    return look === null ? null : { mode: look.mode, style: look.style, position: look.position };
+  }
+
+  setEntryMode(app: string, mode: EntryMode): Promise<void> {
+    const current = this.presentationOf(app);
+    return current === null ? Promise.resolve() : this.setEntryPresentation(app, { ...current, mode });
+  }
+
+  setEntryStyle(app: string, style: PinStyle): Promise<void> {
+    const current = this.presentationOf(app);
+    return current === null ? Promise.resolve() : this.setEntryPresentation(app, { ...current, style });
+  }
+
+  /** Where a floating entry's box is right now, in backdrop pixels: the drag's rectangle while one moves it,
+   *  else its stored position (the default corner when it has none), clamped into the backdrop. */
+  renderedFloatingEntryRect(app: string, position: FloatingPosition | null): PixelRect {
+    const gesture = this.gesture;
+    if (gesture !== null && gesture.kind === "floating-entry" && gesture.app === app) return gesture.currentRect;
+    return floatingEntryRect(
+      position ?? defaultFloatingPosition(this.backdrop, this.metrics),
+      this.backdrop,
+      this.metrics,
+    );
   }
 
   handleLayoutOp(event: LayoutOpEvent): void {
@@ -533,15 +809,64 @@ export class DesktopStore {
     return this.runLaunch(shortcut.target.app, shortcut.target.launch, shortcut.mode);
   }
 
-  /** Run a launch path with params (a seeded prompt): always opens a new window. */
-  async openLaunchPath(app: string, launch: string, params: Readonly<Record<string, string>>): Promise<void> {
-    const record = appByName(this.state, app);
-    const launchPath = record === undefined ? null : launchPathOf(record, launch);
-    if (record === undefined || launchPath === null) {
-      this.deps.notify(`Cannot open: ${app} has no launch path ${launch}`);
-      return;
+  /** The app and launch path a launcher row names, or null (told to the user) when the app declares no such path. */
+  private launchOf(appName: string, launchId: string): { app: AppRecord; launchPath: LaunchPath } | null {
+    const app = appByName(this.state, appName);
+    const launchPath = app === undefined ? null : launchPathOf(app, launchId);
+    if (app === undefined || launchPath === null) {
+      this.deps.notify(`Cannot open: ${appName} has no launch path ${launchId}`);
+      return null;
     }
-    await this.openWindowAt(record.name, launchPathWithParams(launchPath, params), launchPath.id, "new");
+    return { app, launchPath };
+  }
+
+  /** Run a launch-path row (launcher plan section 3.3): a launch path at its app's pin path raises the pinned window
+   *  on the active desktop and opens nothing; every other opens a new window at the path. */
+  async runLaunchRow(appName: string, launchId: string): Promise<void> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return;
+    if (launchRowKindOf(found.app, found.launchPath) === "focus") {
+      const pinned = pinnedWindowOf(this.state, found.app.name);
+      if (pinned !== null) {
+        this.restoreWindow(pinned.id);
+        return;
+      }
+    }
+    await this.openWindowAt(found.app.name, found.launchPath.path, found.launchPath.id, "new");
+  }
+
+  /** Run a free-text row with ``text`` (launcher plan section 3.2), pinned-first: when the app has an independent
+   *  pinned window on the active desktop, this client's view of it is pointed at the launch path with the text
+   *  (the write an agent's navigate makes, which moves this client's page alone) and the window is restored and
+   *  raised; otherwise a new window opens at that path. A linked pinned window is never navigated to a launch
+   *  path, since every client would run it. False when the text cannot go (over the path bound) or the shell
+   *  refused, each told to the user. */
+  async runFreeText(appName: string, launchId: string, text: string): Promise<boolean> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return false;
+    const target = textPathOf(found.launchPath, text);
+    if (target.kind === "disabled") {
+      this.deps.notify(target.reason);
+      return false;
+    }
+    const pinned = pinnedWindowOf(this.state, found.app.name);
+    if (pinned !== null && pinned.scope === "independent") {
+      const isTaken = await this.navigateOwnWindow(pinned.id, target.path);
+      this.restoreWindow(pinned.id);
+      return isTaken;
+    }
+    return (await this.openWindowAt(found.app.name, target.path, found.launchPath.id, "new")) !== null;
+  }
+
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
+   *  with no free-text row on the machine the user is told. */
+  async startWithText(text: string): Promise<boolean> {
+    const [primary] = freeTextRowsOf(openableApps(this.state));
+    if (primary === undefined) {
+      this.deps.notify(NO_TEXT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout
@@ -595,12 +920,27 @@ export class DesktopStore {
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
-  /** The minds close chord: the focused window is told, then closed for everyone. */
+  /** The minds close chord: the focused window is told, then closed for everyone; a pinned window, which is never
+   *  closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
     const focused = activeFocusedWindowId(this.state);
     if (focused === null) return;
+    if (findWindow(this.state, focused)?.window.is_pinned === true) {
+      this.minimizeWindow(focused);
+      return;
+    }
     this.pageDriver?.requestClose(focused);
     await this.closeWindow(focused);
+  }
+
+  /** What every human-facing Close does (the title bar's control, the two menus): close the window for everyone,
+   *  or, for a pinned window, which is never closed, minimize it, so the habit of reaching for the control holds. */
+  async closeOrMinimizeWindow(windowId: string): Promise<void> {
+    if (findWindow(this.state, windowId)?.window.is_pinned === true) {
+      this.minimizeWindow(windowId);
+      return;
+    }
+    await this.closeWindow(windowId);
   }
 
   /** Whether showing the window has to wait: it is still settling on another client's open, and this
@@ -652,18 +992,20 @@ export class DesktopStore {
   }
 
   /** A page reported where it is; posted to the window's location route when it differs from the stored
-   *  record, and the record the route answers is taken at once, so the stored path is the reported one
-   *  before the broadcast lands (a broadcast from another cause meanwhile must not read the report as a
-   *  move to follow). A settling window's first report ends the settling, so it always goes. Answers
-   *  whether the shell took the report (or had nothing to take); false when it refused. */
+   *  record (this client's own for an independent window), and the record the route answers is taken at once,
+   *  so the stored path is the reported one before the broadcast lands (a broadcast from another cause
+   *  meanwhile must not read the report as a move to follow). A settling window's first report ends the
+   *  settling, so it always goes. Answers whether the shell took the report (or had nothing to take); false
+   *  when it refused. */
   async reportLocation(windowId: string, path: string, title: string): Promise<boolean> {
     const found = findWindow(this.state, windowId);
     if (found === null) return false;
-    if (!found.window.is_settling && found.window.path === path && found.window.title === title) return true;
+    const seen = effectiveWindow(this.state, found.window);
+    if (!seen.is_settling && seen.path === path && seen.title === title) return true;
     this.latestReportedPaths.set(windowId, path);
     let reported: WindowRecord;
     try {
-      reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, path, title);
+      reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
     } catch (error) {
       console.warn(`[si] the shell did not take the location of ${windowId}`, error);
       return false;
@@ -834,6 +1176,49 @@ export class DesktopStore {
     void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
   }
 
+  /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. Nothing moves
+   *  in compact mode, or for an app with no pinned window on the active desktop. */
+  beginFloatingEntryDrag(app: string, pointer: PixelPoint, grabOffset: PixelPoint): void {
+    if (this.state.modes.isCompact) return;
+    const current = this.presentationOf(app);
+    if (current === null) return;
+    const start = this.renderedFloatingEntryRect(app, current.position);
+    this.gesture = { kind: "floating-entry", app, grabOffset, currentRect: start };
+    this.updateFloatingEntryDrag(pointer);
+  }
+
+  /** The pointer moved during a floating entry drag; no redraw, as for a window move: the App paints the
+   *  entry's rectangle straight onto it, and ``renderedFloatingEntryRect`` answers the live value meanwhile. */
+  updateFloatingEntryDrag(pointer: PixelPoint): void {
+    const gesture = this.gesture;
+    if (gesture === null || gesture.kind !== "floating-entry") return;
+    const corner = { x: pointer.x - gesture.grabOffset.x, y: pointer.y - gesture.grabOffset.y };
+    const clamped = floatingPositionFromPixels(corner, this.backdrop, this.metrics);
+    this.gesture = { ...gesture, currentRect: floatingEntryRect(clamped, this.backdrop, this.metrics) };
+  }
+
+  /** The rectangle the desktop draws a floating entry at now, from the app alone: the drag's while one moves it,
+   *  else its stored position's. What the paint of a drag writes onto the entry per pointer move and when the
+   *  gesture ends, as ``windowRect`` is for a window. */
+  floatingEntryRectOf(app: string): PixelRect {
+    return this.renderedFloatingEntryRect(app, this.presentationOf(app)?.position ?? null);
+  }
+
+  /** The drag ended: the position is written to the client record, once. */
+  endFloatingEntryDrag(pointer: PixelPoint): void {
+    const gesture = this.gesture;
+    if (gesture === null || gesture.kind !== "floating-entry") return;
+    this.updateFloatingEntryDrag(pointer);
+    const settled = this.gesture;
+    this.gesture = null;
+    this.notifyListeners();
+    if (settled === null || settled.kind !== "floating-entry") return;
+    const current = this.presentationOf(settled.app);
+    if (current === null) return;
+    const position = floatingPositionFromPixels(settled.currentRect, this.backdrop, this.metrics);
+    void this.setEntryPresentation(settled.app, { ...current, position });
+  }
+
   cancelGesture(): void {
     if (this.gesture === null) return;
     this.gesture = null;
@@ -904,16 +1289,24 @@ export class DesktopStore {
       return;
     }
     if (sequence !== this.layoutFetchSequence || desktopId !== this.state.activeDesktopId) return;
-    // Already applied (this window's own save, or a broadcast that carried nothing new).
-    if (this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at && !isLayoutDirty(this.state))
+    // An unchanged stamp says the placements file did not move (this window's own save, or a broadcast that
+    // carried nothing new for it): only the client's window paths, which change without moving the stamp, are
+    // taken, and a gesture still waiting to be saved is kept rather than thrown away with a reload.
+    if (this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at) {
+      if (isSameWindowPaths(layout.window_paths, this.state.layout.window_paths)) return;
+      this.layoutLoadsRevision += 1;
+      this.dispatch({ type: "window_paths_loaded", desktopId, windowPaths: layout.window_paths });
       return;
+    }
+    this.layoutLoadsRevision += 1;
     this.dispatch({ type: "layout_loaded", desktopId, layout });
   }
 
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
   gestureRectFor(windowId: string): PixelRect | null {
     const gesture = this.gesture;
-    if (gesture === null || gesture.kind === "shortcut" || gesture.windowId !== windowId) return null;
+    if (gesture === null || gesture.kind === "shortcut" || gesture.kind === "floating-entry") return null;
+    if (gesture.windowId !== windowId) return null;
     return gesture.currentRect;
   }
 

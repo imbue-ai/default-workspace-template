@@ -38,9 +38,7 @@ from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_wire_json
-from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
-from imbue.system_interface.shell.data_types import window_wire_json
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
@@ -63,6 +61,7 @@ from imbue.system_interface.shell.layout_ops import DesktopOpArguments
 from imbue.system_interface.shell.layout_ops import INVENTORY_OPS
 from imbue.system_interface.shell.layout_ops import LOAD_OP
 from imbue.system_interface.shell.layout_ops import OpRequester
+from imbue.system_interface.shell.layout_ops import PINNED_WINDOW
 from imbue.system_interface.shell.layout_ops import RELOAD_SYSTEM_INTERFACE_OP
 from imbue.system_interface.shell.layout_ops import SELF_WINDOW
 from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
@@ -173,15 +172,15 @@ def _existing_wallpaper(wallpaper: Wallpaper | None) -> Wallpaper | None:
 
 
 def list_desktops() -> ResponseReturnValue:
-    return jsonify({"desktops": [desktop_wire_json(desktop) for desktop in _shell().list_desktops()]})
+    shell = _shell()
+    return jsonify({"desktops": shell.desktops_wire_json(shell.list_desktops())})
 
 
 def create_desktop() -> ResponseReturnValue:
     body = parse_request_body(DesktopMetadataRequest)
     shell = _shell()
-    desktop = shell.desktops.create_desktop(body.name, body.color, body.glyph, shell.seed_shortcuts())
-    shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop)), HTTP_CREATED
+    desktop = shell.create_desktop(body.name, body.color, body.glyph)
+    return jsonify(shell.desktop_wire_json(desktop)), HTTP_CREATED
 
 
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
@@ -189,7 +188,7 @@ def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
@@ -197,7 +196,7 @@ def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(body.wallpaper))
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def delete_desktop(desktop_id: str) -> ResponseReturnValue:
@@ -211,7 +210,7 @@ def set_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
     shortcut = DesktopShortcut(target=_validated_target(shell, body.target), mode=body.mode, cell=body.cell)
     desktop = shell.desktops.set_shortcut(desktop_id, shortcut)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def move_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
@@ -219,7 +218,7 @@ def move_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.move_shortcut(desktop_id, body.app, body.launch, body.cell)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
@@ -227,7 +226,7 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
     shell = _shell()
     desktop = shell.desktops.remove_shortcut(desktop_id, body.app, body.launch)
     shell.broadcast_desktops_updated()
-    return jsonify(desktop_wire_json(desktop))
+    return jsonify(shell.desktop_wire_json(desktop))
 
 
 # Section 5.3: windows
@@ -237,7 +236,7 @@ def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
     outcome = _shell().open_window(desktop_id, body, is_minimized=False)
     return (
-        jsonify({"window": window_wire_json(outcome.window), "is_new": outcome.is_new}),
+        jsonify({"window": _shell().window_wire_json(outcome.window), "is_new": outcome.is_new}),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
     )
 
@@ -249,44 +248,54 @@ def close_window(desktop_id: str, window_id: str) -> ResponseReturnValue:
 
 def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowLocationReport)
-    window = _shell().report_window_location(desktop_id, WindowId(window_id), body.path, body.title)
-    return jsonify(window_wire_json(window))
+    window = _shell().report_window_location(desktop_id, WindowId(window_id), body.client_id, body.path, body.title)
+    return jsonify(_shell().window_wire_json(window))
 
 
 # Section 5.4: placements
 
 
+def _layout_wire_json(shell: ShellState, desktop: Desktop, client_id: ClientId) -> dict[str, Any]:
+    """The client's layout of the desktop with its stored paths for the desktop's independent windows."""
+    return desktop_layout_wire_json(
+        shell.read_desktop_layout(desktop, client_id), shell.read_window_paths(desktop, client_id)
+    )
+
+
 def get_placements(desktop_id: str) -> ResponseReturnValue:
     client_id = ClientId(request.args.get("client", ""))
-    return jsonify(desktop_layout_wire_json(_shell().read_desktop_layout(desktop_id, client_id)))
+    shell = _shell()
+    return jsonify(_layout_wire_json(shell, shell.get_desktop(desktop_id), client_id))
 
 
 def save_placements(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(PlacementsSaveRequest)
     saved = _shell().save_browser_placements(desktop_id, body)
     # The stamp is spelled as the read route spells it, so the window compares like with like.
-    return jsonify({"updated_at": desktop_layout_wire_json(saved)["updated_at"] if saved is not None else None})
+    return jsonify({"updated_at": desktop_layout_wire_json(saved, {})["updated_at"] if saved is not None else None})
 
 
 # Section 5.5: the arrival, wallpapers, and the inventory document
 
 
-@pure
-def arrival_wire_json(outcome: ClientArrivalOutcome | None) -> dict[str, Any]:
+def arrival_wire_json(shell: ShellState, outcome: ClientArrivalOutcome | None) -> dict[str, Any]:
     """The answer of ``POST /api/clients/<client_id>/arrive`` (desktop contracts.md section 5.5); None (no desktop
     yet) answers three nulls."""
     if outcome is None:
         return {"desktop_id": None, "created_desktop": None, "replaced_desktop_name": None}
     return {
         "desktop_id": str(outcome.desktop_id),
-        "created_desktop": desktop_wire_json(outcome.created_desktop) if outcome.created_desktop is not None else None,
+        "created_desktop": (
+            shell.desktop_wire_json(outcome.created_desktop) if outcome.created_desktop is not None else None
+        ),
         "replaced_desktop_name": outcome.replaced_desktop_name,
     }
 
 
 def arrive_client(client_id: str) -> ResponseReturnValue:
     """A shell page has loaded for ``client_id``: settle the desktop it lands on from the requester's identity."""
-    return jsonify(arrival_wire_json(_shell().arrive_client(ClientId(client_id), request_identity())))
+    shell = _shell()
+    return jsonify(arrival_wire_json(shell, shell.arrive_client(ClientId(client_id), request_identity())))
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
@@ -328,8 +337,8 @@ def resolved_client_wire_json(record: ClientRecord, is_connected: bool, desktops
 
 
 def inventory_document_json(shell: ShellState) -> dict[str, Any]:
-    """The one document of desktop contracts.md section 5.5: every desktop, every app, and every known client with
-    ``shown``, the windows of its active desktop that its layout does not minimize."""
+    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, every desktop, every
+    app, and every known client with ``shown``, the windows of its active desktop that its layout does not minimize."""
     desktops = shell.list_desktops()
     desktops_by_id = {desktop.id: desktop for desktop in desktops}
     connected = shell.broadcaster.connected_client_ids()
@@ -343,7 +352,8 @@ def inventory_document_json(shell: ShellState) -> dict[str, Any]:
             shown = _shown_window_ids(desktop, layout)
         clients.append({**_client_wire_json_on(record, str(record.id) in connected, active), "shown": shown})
     return {
-        "desktops": [desktop_wire_json(desktop) for desktop in desktops],
+        "is_preview": get_state().is_preview,
+        "desktops": shell.desktops_wire_json(desktops),
         "apps": shell.inventory.serialized(),
         "clients": clients,
     }
@@ -473,11 +483,25 @@ def _app_name_or_raise(raw: str, what: str) -> AppName:
         raise LayoutOpError(f"{what} {raw!r} is not an app name: {e}") from e
 
 
-def _resolve_window(desktop: Desktop, layout: DesktopLayout, raw: str, requester: OpRequester | None) -> Window:
-    """The window an op names: a window id, ``self`` (the requester's app's window whose path carries its marker),
-    or an app name (that app's most recently focused window in this client's layout)."""
+def _resolve_window(
+    desktop: Desktop,
+    seen_windows: Sequence[Window],
+    layout: DesktopLayout,
+    raw: str,
+    requester: OpRequester | None,
+) -> Window:
+    """The window an op names, as the shared record: a window id, ``self`` (the requester's app's window whose path,
+    as the target client sees it in ``seen_windows``, carries its marker), ``pinned`` (the requester's app's pinned
+    window on the desktop), or an app name (that app's most recently focused window in this client's layout)."""
     if not raw:
-        raise LayoutOpError("this op needs a window: a window id, 'self', or an app name")
+        raise LayoutOpError("this op needs a window: a window id, 'self', 'pinned', or an app name")
+    if raw == PINNED_WINDOW:
+        if requester is None:
+            raise LayoutOpError("'pinned' names the requester's app's pinned window, but this op carried no requester")
+        pinned = next((window for window in desktop.windows if window.is_pinned and window.app == requester.app), None)
+        if pinned is None:
+            raise WindowNotFoundError(f"pinned ({requester.app} has no pinned window on desktop {desktop.id})")
+        return pinned
     if raw == SELF_WINDOW:
         if requester is None or not requester.marker:
             raise LayoutOpError(
@@ -486,14 +510,14 @@ def _resolve_window(desktop: Desktop, layout: DesktopLayout, raw: str, requester
         own = next(
             (
                 window
-                for window in desktop.windows
+                for window in seen_windows
                 if window.app == requester.app and path_carries_marker(window.path, requester.marker)
             ),
             None,
         )
         if own is None:
             raise WindowNotFoundError(f"self ({requester.app} carrying {requester.marker!r} on desktop {desktop.id})")
-        return own
+        return require_window(desktop, own.id)
     try:
         window_id = WindowId(raw)
     except InvalidShellValueError:
@@ -596,7 +620,7 @@ def _open_unplaced(
             "ok": True,
             "desktop_id": str(desktop.id),
             "client_id": None,
-            "desktop": desktop_wire_json(shell.get_desktop(desktop.id)),
+            "desktop": shell.desktop_wire_json(shell.get_desktop(desktop.id)),
             "layout": None,
             "window_id": str(outcome.window.id),
         }
@@ -605,14 +629,13 @@ def _open_unplaced(
 
 def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> ResponseReturnValue:
     desktop = shell.get_desktop(target.desktop.id)
-    layout = shell.read_desktop_layout(desktop.id, target.client_id)
     return jsonify(
         {
             "ok": True,
             "desktop_id": str(desktop.id),
             "client_id": str(target.client_id),
-            "desktop": desktop_wire_json(desktop),
-            "layout": desktop_layout_wire_json(layout),
+            "desktop": shell.desktop_wire_json(desktop),
+            "layout": _layout_wire_json(shell, desktop, target.client_id),
             "window_id": str(window_id) if window_id is not None else None,
         }
     )
@@ -663,8 +686,9 @@ def _op_window(
     shell: ShellState, op: str, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> WindowId:
     desktop = target.desktop
-    layout = shell.read_desktop_layout(desktop.id, target.client_id)
-    window = _resolve_window(desktop, layout, arguments.window, requester)
+    layout = shell.read_desktop_layout(desktop, target.client_id)
+    seen_windows = shell.windows_for_client(desktop, target.client_id)
+    window = _resolve_window(desktop, seen_windows, layout, arguments.window, requester)
     match op:
         case "focus":
             shell.edit_desktop_layout(
@@ -700,11 +724,17 @@ def _op_window(
             else:
                 raise LayoutOpError("place needs a zone (left, right, maximized) or a frame (x,y,width,height)")
         case "close":
+            if window.is_pinned:
+                raise LayoutOpError(f"window {window.id} is pinned and cannot be closed; minimize it instead")
             shell.close_window(desktop.id, window.id)
         case "navigate":
             if not arguments.path:
                 raise LayoutOpError("navigate needs a path")
-            shell.report_window_location(desktop.id, window.id, WindowPath(arguments.path), window.title)
+            # As if the target client's page had reported it: an independent window moves for that client alone.
+            seen = next(candidate for candidate in seen_windows if candidate.id == window.id)
+            shell.report_window_location(
+                desktop.id, window.id, target.client_id, WindowPath(arguments.path), seen.title
+            )
         case _:
             raise LayoutOpError(f"Op {op!r} has no window handler")
     return window.id
@@ -791,8 +821,9 @@ def _refresh_window(
     shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> ResponseReturnValue:
     """The transient one-window ``refresh``: the window's page on the target client."""
-    layout = shell.read_desktop_layout(target.desktop.id, target.client_id)
-    window = _resolve_window(target.desktop, layout, arguments.window, requester)
+    layout = shell.read_desktop_layout(target.desktop, target.client_id)
+    seen_windows = shell.windows_for_client(target.desktop, target.client_id)
+    window = _resolve_window(target.desktop, seen_windows, layout, arguments.window, requester)
     shell.broadcaster.broadcast_layout_op(
         "refresh",
         {"window": str(window.id)},

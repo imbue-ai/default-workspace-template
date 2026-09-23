@@ -15,7 +15,7 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
-import { getPendingPick, pendingSwitchTarget, setPendingAccount, switchKind } from "../models/PendingLane";
+import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
@@ -50,16 +50,11 @@ const MAX_TEXTAREA_HEIGHT_PX = 200;
  * by them). Attachment status looks are resolved in code, one utility per
  * property. */
 
-/** The composer card. The two-layer shadows are design-system-exceptions: a
- *  unique upward-cast composer shadow (negative y, Notion-charcoal base) with
- *  an accent-tinted glow on focus, which no elevation-scale value expresses;
- *  the border/shadow transition runs its two properties at different speeds,
- *  hence the arbitrary transition property. */
+/** The composer card. No shadow: it sits at the foot of its own pane
+ *  rather than floating over the transcript. */
 const INPUT_BOX_CLASS =
   "message-input-box flex flex-col rounded-xl border bg-composer " +
-  "shadow-[0_-4px_20px_rgba(55,53,47,0.06),0_-1px_6px_rgba(55,53,47,0.04)] " +
-  "[transition:border-color_150ms,box-shadow_var(--dur-slow)] focus-within:border-accent " +
-  "focus-within:shadow-[0_-4px_24px_rgba(47,107,79,0.08),0_-1px_8px_rgba(47,107,79,0.06)]";
+  "[transition:border-color_150ms] focus-within:border-accent";
 
 const ATTACHMENT_DETAIL_BASE = "composer-attachment-detail text-(length:--font-size-helper)";
 
@@ -297,7 +292,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
             "span",
             {
               class: "composer-attachment-name truncate text-(length:--font-size-body) text-primary",
-              ...hoverTooltipAttrs(attachment.fileName),
+              ...hoverTooltipAttrs(attachment.fileName, "above"),
             },
             attachment.fileName,
           ),
@@ -329,7 +324,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                 xs: true,
                 extra: "composer-attachment-remove shrink-0",
                 "aria-label": "Remove attachment",
-                ...hoverTooltipAttrs("Remove attachment"),
+                ...hoverTooltipAttrs("Remove attachment", "above"),
                 onclick: () => removeComposerAttachment(chatId, attachment.localId),
               },
               m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
@@ -1008,11 +1003,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
 
       /**
        * What the armed switch will do, above the composer (spec 5.1): the account the next message
-       * moves the chat to and the model picked for it, with a way to call the choice off. A handoff
-       * also offers a way back into the dialog; a rebind was armed without one, and carries no pick
-       * to change.
+       * moves the chat to and the model picked for it, with a way back into the dialog to change the
+       * pick and a way to call the choice off.
        */
-      function renderSwitchStrip(target: ProviderAccount, isHandoff: boolean): m.Children {
+      function renderSwitchStrip(target: ProviderAccount): m.Children {
         const pick = chatId ? getPendingPick(chatId) : null;
         const destination = pick === null ? target.label : `${target.label}, ${pick.label}`;
         return m(
@@ -1029,20 +1023,18 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
               { class: "message-input-switch-strip-text" },
               `Your next message switches this chat to ${destination}`,
             ),
-            isHandoff
-              ? m(
-                  Button,
-                  {
-                    variant: "ghost",
-                    sm: true,
-                    extra: "message-input-switch-change",
-                    onclick: () => {
-                      if (chatId) openSwitchDialog(chatId, target);
-                    },
-                  },
-                  "Change",
-                )
-              : null,
+            m(
+              Button,
+              {
+                variant: "ghost",
+                sm: true,
+                extra: "message-input-switch-change",
+                onclick: () => {
+                  if (chatId) openSwitchDialog(chatId, target);
+                },
+              },
+              "Change",
+            ),
             m(
               Button,
               {
@@ -1121,9 +1113,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
           declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
           actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
-          switchTarget !== null
-            ? renderSwitchStrip(switchTarget, chat === undefined || switchKind(chat, switchTarget) === "handoff")
-            : null,
+          switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
           m("input", {
             type: "file",
             multiple: true,
@@ -1191,7 +1181,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                     icon: true,
                     round: true,
                     extra: "message-input-attach-button shrink-0",
-                    ...hoverTooltipAttrs("Attach files"),
+                    ...hoverTooltipAttrs("Attach files", "above"),
                     "aria-label": "Attach files",
                     onclick: openFilePicker,
                   },
@@ -1205,7 +1195,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                         sm: true,
                         extra: "message-input-cancel-switch-button shrink-0",
                         readonly: isCancelSwitchInFlight,
-                        ...hoverTooltipAttrs("Keep this chat on its current agent; your message comes back here"),
+                        ...hoverTooltipAttrs(
+                          "Keep this chat on its current agent; your message comes back here",
+                          "above",
+                        ),
                         "aria-label": "Cancel switch",
                         onclick: () => void handleCancelSwitch(),
                       },
@@ -1225,7 +1218,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                         // it only hands messages back when there are some parked in the harness,
                         // so promising that unconditionally described a case that usually is not
                         // the one in front of the user.
-                        ...hoverTooltipAttrs(stopButtonLabel),
+                        ...hoverTooltipAttrs(stopButtonLabel, "above"),
                         "aria-label": stopButtonLabel,
                         onclick: handleStopToComposer,
                       },
@@ -1241,7 +1234,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                         variant: "primary",
                         sm: true,
                         extra: "message-input-send-button message-input-send-button--switch shrink-0",
-                        ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`),
+                        ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
                         "aria-label": "Switch and send",
                         onclick: handleSubmit,
                       },
@@ -1262,7 +1255,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                           icon: true,
                           round: true,
                           extra: "message-input-send-button shrink-0",
-                          ...hoverTooltipAttrs("Send message"),
+                          ...hoverTooltipAttrs("Send message", "above"),
                           "aria-label": "Send message",
                           onclick: handleSubmit,
                         },

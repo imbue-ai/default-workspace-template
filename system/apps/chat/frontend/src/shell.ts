@@ -17,6 +17,7 @@ import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/ap
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { rootPathFor } from "./root/selection";
+import { prependToComposer } from "./views/MessageInput";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
 export function subagentViewPath(key: string): string {
@@ -82,7 +83,12 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     // The chat root frames chat pages from this same origin and drives them by calling in
     // rather than by messaging (it never sends the shell's messages); the shell's own frames
     // ignore this, since a cross-origin parent cannot reach it.
-    const embedApi: ChatPageEmbedApi = { handshake: onHandshake, shown: onShown, hidden: onHidden };
+    const embedApi: ChatPageEmbedApi = {
+      handshake: onHandshake,
+      shown: onShown,
+      hidden: onHidden,
+      prependDraft: (text) => prependToComposer(chatId, text),
+    };
     window.chatPageEmbed = embedApi;
   }
   if (!connection.isFramed) {

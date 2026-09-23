@@ -13,11 +13,24 @@ launcher_rank = 10
 launch = "root"
 mode = "new"
 
+# The chat's pinned taskbar entry (docs/system/blueprint/pinned-taskbar-entries/): one root window on
+# every desktop, never closed, showing each viewer their own selected chat.
+[pin]
+path = "/"
+style = "avatar"
+scope = "independent"
+default_mode = "floating"
+
 # The desktop interface opens a window at a launch path; the params ride as query parameters.
 [[launch_paths]]
 id = "root"
 label = "Chat"
 path = "/"
+# A draft lands in the composer of the selected chat (else the most recent, else a new one), unsent:
+# what the desktop's "Design your own..." hands the pinned chat window.
+params = [
+    {name = "draft", label = "Draft message", required = false},
+]
 
 [[launch_paths]]
 id = "new"
@@ -27,3 +40,25 @@ params = [
     {name = "account_id", label = "Provider account", required = false},
     {name = "message", label = "First message", required = false},
 ]
+# The launcher's primary free-text row: what is typed into the desktop's field becomes the first message.
+text_param = "message"
+
+# The launcher's secondary free-text row (Ctrl+Enter): the root offers a picker over the chats and sends the text
+# to the one picked, through its ordinary send.
+[[launch_paths]]
+id = "send"
+label = "Send to chat..."
+path = "/send"
+params = [{name = "message", label = "Message to send", required = false}]
+text_param = "message"
+
+# A chat preview is a secondary chat: it follows the live observer and reads the
+# live accounts, but writes nothing the live chat owns. It opens on the chat list
+# with the conversation the user is in selected ({key} is a chat id).
+[preview]
+command = ["chat-app", "--secondary"]
+env = {CHAT_PORT = "{port:main}", CHAT_HOST = "{host}", CHAT_DATA_DIR = "{copy:data}"}
+copies = {data = "data/.apps/chat"}
+health_path = "/api/health"
+open_path = "/?chat={key}"
+open_path_takes_key = true

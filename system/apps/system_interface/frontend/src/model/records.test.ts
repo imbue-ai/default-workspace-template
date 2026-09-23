@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   parseClientArrival,
   WireShapeError,
+  isSameWindowPaths,
   parseAppRecord,
+  parseAvatarCatalog,
+  parseAvatarStatus,
+  parseClientRecord,
   parseClientRecords,
   parseDesktop,
   parseLayout,
-  parseClientRecord,
   parsePresentUsers,
   parseWallpaperListings,
   shortcutKey,
@@ -37,6 +40,21 @@ describe("parseDesktop", () => {
     expect(desktop.wallpaper).toEqual({ kind: "bundled", name: "dawn" });
     expect(desktop.shortcuts[0].target).toEqual({ kind: "launch", app: "docs", launch: "new" });
     expect(desktop.windows[0].path).toBe("/?doc=1");
+  });
+
+  it("reads a V1 window record with the pin fields defaulted, and a pinned window's own", () => {
+    const desktop = parseDesktop(DESKTOP_WIRE);
+    expect(desktop.windows[0].is_pinned).toBe(false);
+    expect(desktop.windows[0].scope).toBe("linked");
+    const pinned = parseDesktop({
+      ...DESKTOP_WIRE,
+      windows: [{ ...DESKTOP_WIRE.windows[0], is_pinned: true, scope: "independent" }],
+    });
+    expect(pinned.windows[0].is_pinned).toBe(true);
+    expect(pinned.windows[0].scope).toBe("independent");
+    expect(() =>
+      parseDesktop({ ...DESKTOP_WIRE, windows: [{ ...DESKTOP_WIRE.windows[0], scope: "personal" }] }),
+    ).toThrow(WireShapeError);
   });
 
   it("reads a null wallpaper and refuses a desktop of the wrong shape", () => {
@@ -80,10 +98,29 @@ describe("parseLayout", () => {
     });
     expect(layout.updated_at).toBe("2026-09-19T14:12:40.001Z");
     expect(layout.placements[0].state).toBe("NORMAL");
+    // A layout with no ``window_paths`` (the save route's echo) reads as one with none.
     expect(parseLayout({ version: 1, updated_at: null, placements: [] })).toEqual({
       updated_at: null,
       placements: [],
+      window_paths: {},
     });
+  });
+
+  it("reads the client's stored paths for independent windows, and tells two sets apart", () => {
+    const layout = parseLayout({
+      version: 1,
+      updated_at: null,
+      placements: [],
+      window_paths: { "win-1": { path: "/?doc=2", title: "Second" } },
+    });
+    expect(layout.window_paths).toEqual({ "win-1": { path: "/?doc=2", title: "Second" } });
+    expect(() => parseLayout({ updated_at: null, placements: [], window_paths: { "win-1": { path: 3 } } })).toThrow(
+      WireShapeError,
+    );
+    expect(isSameWindowPaths(layout.window_paths, { "win-1": { path: "/?doc=2", title: "Second" } })).toBe(true);
+    expect(isSameWindowPaths(layout.window_paths, { "win-1": { path: "/?doc=2", title: "Other" } })).toBe(false);
+    expect(isSameWindowPaths(layout.window_paths, {})).toBe(false);
+    expect(isSameWindowPaths({}, {})).toBe(true);
   });
 
   it("refuses a placement in an unknown state", () => {
@@ -114,6 +151,19 @@ describe("parseAppRecord", () => {
     expect(app.default_shortcut).toEqual({ launch: "new", mode: "new" });
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
+    expect(app.pin).toBeNull();
+  });
+
+  it("reads an app's pin and refuses one outside the vocabularies", () => {
+    const wire = { name: "docs", url: "http://127.0.0.1:1" };
+    const pinned = parseAppRecord({
+      ...wire,
+      pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
+    });
+    expect(pinned.pin).toEqual({ path: "/", style: "avatar", scope: "independent", default_mode: "floating" });
+    expect(() =>
+      parseAppRecord({ ...wire, pin: { path: "/", style: "dot", scope: "linked", default_mode: "bar" } }),
+    ).toThrow(WireShapeError);
   });
 
   it("reads a focus shortcut and a null rank", () => {
@@ -162,8 +212,50 @@ describe("the small helpers", () => {
       active_desktop: null,
       last_seen: "now",
       is_connected: true,
+      entries: {},
     });
+    expect(
+      parseClientRecord({
+        id: "c1",
+        active_desktop: null,
+        last_seen: "now",
+        is_connected: true,
+        entries: { docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } },
+      }).entries,
+    ).toEqual({ docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } });
+    expect(() =>
+      parseClientRecord({
+        id: "c1",
+        active_desktop: null,
+        last_seen: "now",
+        is_connected: true,
+        entries: { docs: { mode: "hidden", style: "plain", position: null } },
+      }),
+    ).toThrow(WireShapeError);
     expect(shortcutKey("docs", "new")).toBe("docs:new");
+  });
+
+  it("reads the avatar status and catalog, refusing a mood outside the vocabulary", () => {
+    expect(parseAvatarStatus({ mood: "working", is_stale: true })).toEqual({ mood: "working", is_stale: true });
+    expect(() => parseAvatarStatus({ mood: "listening", is_stale: false })).toThrow(WireShapeError);
+    expect(
+      parseAvatarCatalog({
+        designs: [
+          { id: "gummy-seal", label: "Gummy seal", source_path: null },
+          { id: "mine", label: "Mine", source_path: "/tmp/mine.svg" },
+        ],
+        selected: "mine",
+        default: "gummy-seal",
+      }),
+    ).toEqual({
+      designs: [
+        { id: "gummy-seal", label: "Gummy seal", source_path: null },
+        { id: "mine", label: "Mine", source_path: "/tmp/mine.svg" },
+      ],
+      selected: "mine",
+      default: "gummy-seal",
+    });
+    expect(() => parseAvatarCatalog({ designs: [], selected: "x" })).toThrow(WireShapeError);
   });
 
   it("refuses a clients or wallpapers document missing its list instead of reading it as empty", () => {
