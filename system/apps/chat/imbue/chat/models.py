@@ -269,7 +269,8 @@ class QueuedMessageState(FrozenModel):
         description=(
             "True while this chip is a message the backend is actively re-sending (a codex "
             "shoulder-tap's interrupt+resend, Fix 3): it stays continuously visible but is rendered "
-            "'Sending...' rather than as a plain queued chip, so it never blinks out (contract A1a). "
+            "as the faded not-yet-real bubble rather than as a plain queued chip, so it never blinks "
+            "out (contract A1a). "
             "False for an ordinary parked queue chip."
         ),
     )
