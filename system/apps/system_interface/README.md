@@ -188,9 +188,12 @@ way. The shell sends the connected set on every WebSocket connect and pushes
 heartbeat brings someone in and, from a sweep every 10 seconds, when
 someone's heartbeats have stopped. The taskbar's Presence tray widget draws
 one avatar per user. Over a share that widget also links to the gateway's
-identity refresh, for a visitor who changed their name or avatar. A visitor
-granted a single app never loads the shell and so never appears: they are in
-one app, not in the workspace.
+identity refresh, which re-runs the sign-in so a visitor whose account record
+changed (a new verified email, say) carries it before their session expires; a
+changed name or avatar needs no refresh, it reaches the tray through the
+profile cache (below) within five minutes. A visitor granted a single app never
+loads the shell and so never appears: they are in one app, not in the
+workspace.
 
 **Profiles.** A user's display name and avatar come from imbue_cloud, not the
 header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`

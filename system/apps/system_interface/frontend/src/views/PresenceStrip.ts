@@ -1,6 +1,7 @@
 /**
  * The Presence tray widget: who is here, and who you are. One avatar per connected user,
- * plus (on a share) the link that refreshes your own identity after a name or avatar change.
+ * plus (on a share) the link that re-runs your own sign-in after your account record changed (a new
+ * verified email, say); names and avatars are the connector's profile and need no refresh.
  *
  * Renders nothing while nobody is recorded, which is every unshared workspace: an owner
  * without an account is never recorded, so a workspace that carries no identity keeps the
@@ -58,9 +59,9 @@ export function PresenceStrip(): m.Component {
                 {
                   class: "presence-refresh ml-1 type-helper text-secondary hover:text-primary",
                   href: refreshUrl,
-                  title: "Reload your name and avatar from your account",
+                  title: "Sign in again to pick up a change to your account (your name and avatar refresh on their own)",
                 },
-                "Refresh my profile",
+                "Refresh my sign-in",
               ),
         ],
       );
