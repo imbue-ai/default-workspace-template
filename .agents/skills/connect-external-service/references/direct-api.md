@@ -79,8 +79,8 @@ When the user takes the OAuth option:
    the refreshed tokens live where the guard protects them.
 4. The consent screen needs a browser whose `localhost` callback resolves inside
    this workspace: open the consent URL in a fleet browser (`agentic-browser-fleet
-   new`, then `playwright-cli` to navigate), `handoff` it, and show its window
-   to the user to approve (the skill's handoff section has the command).
+   new`, then `playwright-cli` to navigate) and `handoff` it to the user to
+   approve.
 5. Every later call runs under the wrapper; the SDK refreshes its own tokens from
    the cache.
 

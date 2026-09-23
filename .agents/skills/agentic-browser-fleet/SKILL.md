@@ -40,7 +40,8 @@ browser, starting it again if it was stopped. Browsers are addressed by name eve
   attach line says it is still starting, wait a few seconds and run `ls`.
 - `new` also opens the browser's window on the user's desktop, **minimized**: it waits in their
   taskbar, and they do not see it until they click it or you show it (see "Live view" below).
-  That is right while you browse on your own; show it once they should watch or take over.
+  That is right while you browse on your own; show it once they should watch. `handoff` shows
+  it for you.
   **The browser lives as long as some window shows it**: when the
   user closes its last window, the browser is stopped (its logins and tabs are kept) and your
   next command fails -- that is the user telling you to stop, so do not `new` it straight back
@@ -189,11 +190,9 @@ credentials: **do not try to solve it yourself** -- you will fail and may get th
 uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
 
-`handoff` puts you at the **front** of the resume queue and hands control to the human (pinned, so
-it will not pass to another agent). It does **not** show the window: it only makes sure one exists,
-minimized. In the **same turn**: show the window (`python3 system/scripts/layout.py open browser
---path "/?session=browser-1"`), tell the user exactly what to do and on which page, then **end your
-turn**. You are woken first when they hand
+`handoff` puts you at the **front** of the resume queue, hands control to the human (pinned, so
+it will not pass to another agent), and brings the browser's window up in front of them. In the
+**same turn**: tell the user exactly what to do and on which page, then **end your turn**. You are woken first when they hand
 it back -- re-`snapshot` to confirm the challenge cleared, then carry on.
 
 ## Live view vs. your output
@@ -201,8 +200,9 @@ it back -- re-`snapshot` to confirm the challenge cleared, then carry on.
 The browser streams to a window on the desktop of whoever is watching your chat, and it follows
 whatever tab you are acting on. `new` and your first command open that window automatically, but
 minimized, and only when the shell can tell which screen asked (the client that last messaged your
-chat, else the one connected client). To put it in front of the user -- they asked to see the
-browser, or you are handing it over -- show it yourself:
+chat, else the one connected client); `handoff` opens it in front. To put it in front of the user
+at any other time -- they asked to see the browser, or should watch what you do -- show it
+yourself:
 
 ```bash
 python3 system/scripts/layout.py open browser --path "/?session=browser-1"
@@ -259,9 +259,8 @@ playwright-cli -s=browser-1 hover e12                  # put the wheel over the 
 playwright-cli -s=browser-1 mousewheel 0 800
 playwright-cli -s=browser-1 find "the thing you want"  # repeat until rows stop advancing
 
-# Hit a CAPTCHA -- hand it over, show it, then STOP.
+# Hit a CAPTCHA -- hand it over, then STOP.
 uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
-python3 system/scripts/layout.py open browser --path "/?session=browser-1"
 ```
 
 ## Don'ts
