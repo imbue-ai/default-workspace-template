@@ -42,12 +42,11 @@ export interface GestureListener {
   thresholdPx(): number;
   /** Whether a binding may start a drag right now (compact mode turns window drags off). */
   isDraggable(binding: GestureBinding): boolean;
-  /** A press landed on a handle, before it is known to be a drag. The live pages go inert from here
-   *  rather than from ``onBegin``: the threshold is only crossed by moves the root sees, and a press
-   *  a few pixels from a focused page (the resize strips overhang the frame by less than the
-   *  threshold) would otherwise spend those pixels inside that page, where the root sees nothing. */
+  /** A press landed on a handle, before it is known to be a drag. The live pages go inert from here:
+   *  only a move the root sees crosses the threshold, and a handle sits close enough to a page that
+   *  the pixels before it can be spent inside one. */
   onPressStart(binding: GestureBinding): void;
-  /** The press ended, as a click, a drag, a long press, or an interruption. Always answers a press start. */
+  /** The press ended, however it ended. Always answers a press start. */
   onPressEnd(binding: GestureBinding): void;
   /** ``point`` is in the root's own coordinates (the backdrop's pixels). */
   onBegin(binding: GestureBinding, point: PixelPoint, pressPoint: PixelPoint): void;
@@ -196,9 +195,8 @@ export class PointerGestureSource implements GestureSource {
       if (pending === null || !isSamePointer(pending, event)) return;
       // No button held: the press ended where the root could not see it (released outside the window,
       // or over a live page while the window had lost focus); the pointer is only hovering now. A drag
-      // that had begun ends where the pointer last held it rather than being thrown away -- the user let
-      // go meaning to drop it there, and the hovering the root does see is after the fact. The listener's
-      // begin is still always answered by an end or a cancel.
+      // that had begun ends at the last point it was held at, not where the hovering has since reached,
+      // and a begin is still always answered by an end or a cancel.
       if (event.buttons === 0) {
         const held = pending;
         finish();

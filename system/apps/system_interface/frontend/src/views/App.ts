@@ -205,9 +205,8 @@ export function App(): m.Component<AppAttrs> {
         if (binding.kind === "taskbar-entry") return false;
         return !current.getState().modes.isCompact;
       },
-      // The pages are inert for the whole press, not just the drag: the pixels before the threshold
-      // are spent beside the handle, often over a neighbouring page, and a move the root cannot see
-      // is a move the threshold never counts.
+      // Inert for the whole press: the pixels before the threshold are spent beside the handle, often
+      // over a neighbouring page, and a move the root cannot see is a move the threshold never counts.
       onPressStart: () => {
         pages?.setGestureActive(true);
       },
