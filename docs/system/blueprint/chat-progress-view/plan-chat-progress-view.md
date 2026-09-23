@@ -143,7 +143,7 @@
   keeps the state it had at that turn's end (active, static icon) and does not
   retroactively flip to done when the step later closes. The same id renders as
   two independent nodes across the two sections, each with its own state.
-- This is the existing behavior and is preserved unchanged. It is good UX: a user
+- This is the existing behavior and is kept. It is good UX: a user
   who sends a small clarification mid-task does not force the agent to restart or
   redeclare its steps; the work continues under the same step.
 - Carryover is transcript-native: a step carries over iff it is still on the
