@@ -93,23 +93,6 @@ jobs:
       - name: Install Playwright browsers
         run: uv run playwright install --with-deps chromium
 
-      # The share gateway's Caddyfile test proves the rendered directive order
-      # by running the real `caddy adapt`, and skips without the binary. Install
-      # the release the workspace image pins (version and checksum read from
-      # setup_system.sh, so there is one place to bump) so CI runs the proof.
-      - name: Install caddy for the share gateway's Caddyfile adapt test
-        run: |
-          set -euo pipefail
-          caddy_version="$(sed -n 's/^: "\${CADDY_VERSION:=\([^}]*\)}"$/\1/p' system/scripts/setup_system.sh)"
-          caddy_sha256="$(sed -n 's/^ *x86_64) caddy_goarch="amd64"; caddy_sha256="\([0-9a-f]\{64\}\)" ;;$/\1/p' system/scripts/setup_system.sh)"
-          test -n "${caddy_version}"
-          test -n "${caddy_sha256}"
-          curl -fsSL --retry 3 "https://github.com/caddyserver/caddy/releases/download/v${caddy_version}/caddy_${caddy_version}_linux_amd64.tar.gz" -o /tmp/caddy.tar.gz
-          echo "${caddy_sha256}  /tmp/caddy.tar.gz" | sha256sum -c -
-          mkdir -p "${HOME}/.local/bin"
-          tar -xzf /tmp/caddy.tar.gz -C "${HOME}/.local/bin" caddy
-          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
-
       - name: Build and test the frontends (system/ npm workspace)
         working-directory: system
         run: |
