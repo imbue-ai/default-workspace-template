@@ -66,6 +66,7 @@ from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -783,17 +784,13 @@ def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_reviv
     is_connecting_at_connect: list[bool] = []
     is_connecting_at_revive: list[bool] = []
 
-    def is_chat_connecting() -> bool:
-        snapshot = manager.get_chat_snapshot(agent_id)
-        return snapshot is not None and snapshot.active_agent.is_connecting
-
     # The first connect attempt runs before the send reports NOT_READY, so this reading is the
     # pre-send check's alone.
     def record_connecting_at_connect() -> None:
-        is_connecting_at_connect.append(is_chat_connecting())
+        is_connecting_at_connect.append(is_chat_connecting(manager, agent_id))
 
     def fake_start(agent_name: str) -> None:
-        is_connecting_at_revive.append(is_chat_connecting())
+        is_connecting_at_revive.append(is_chat_connecting(manager, agent_id))
         bring_up()
 
     with (
@@ -808,8 +805,7 @@ def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_reviv
     assert ledger.sent == [("hi", "m-1")]
     assert is_connecting_at_connect[0] is True
     assert is_connecting_at_revive == [True]
-    final = manager.get_chat_snapshot(agent_id)
-    assert final is not None and final.active_agent.is_connecting is False
+    assert is_chat_connecting(manager, agent_id) is False
 
 
 def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_manager: AgentManager) -> None:
