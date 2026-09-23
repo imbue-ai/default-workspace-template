@@ -207,9 +207,10 @@ The create route is likewise how a chat is made from outside the chat page:
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
 `name`, `account_id`, and `message`, the request takes `labels` for the chat's
 agent (`auto_open=true` has the shell surface its window; the labels the app sets
-itself are refused), `is_installation_check_skipped` (the update run's waiver of
-the claude version check the in-container mngr would otherwise fail the create
-on), and `should_wait`, which holds the answer until `mngr create` has finished:
+itself are refused), `is_installation_check_skipped` (a waiver of the claude
+version check the in-container mngr would otherwise fail the create on, which the
+script sends on every create so the update chat that repairs it can be made), and
+`should_wait`, which holds the answer until `mngr create` has finished:
 the chat's identity when it landed, a 500 carrying the create's own reason when
 it failed, a 504 if it is still running at the wait's ceiling. The script falls
 back to a plain `mngr create --template chat` on the send's terms plus one of

@@ -581,7 +581,8 @@ class CreateChatRequest(FrozenModel):
     is_installation_check_skipped: bool = Field(
         default=False,
         description="Create the chat even if the workspace's claude binary no longer matches the template's pin, "
-        "for a caller that is about to repair that (the update run); a chat minted earlier keeps its own",
+        "so the update chat that repairs that can still be made (``message_chat.py --create`` asks for it on "
+        "every create); a chat minted earlier keeps its own",
     )
     should_wait: bool = Field(
         default=False,
