@@ -119,13 +119,13 @@
   of ungrouped prose in the section, rendered below the timeline. It is not a
   separately computed concept — it falls out of the ejection rule plus
   "prose with no step open is ungrouped."
+- This removes the three-way (leading / inter-step interjection / trailing)
+  boundary computation and the chip-boundary interactions.
 - A system chip or notice breaks the timeline the way a permission verdict does:
   the section closes, any open step carries over, and the chip heads the next
   section. What the agent said before it stays above it (as that section's
   reply), and the work it resumes renders below it. A chip landing inside an
   open handoff node stays in the handoff's turn instead.
-- This removes the three-way (leading / inter-step interjection / trailing)
-  boundary computation and the chip-boundary interactions.
 - **The `claude_tk_close_reoutput_nudge.sh` hook is removed**, not kept. Its
   premise is the *old* backward-scan reply rule — that prose written before a
   `tk close` stays buried inside the step, so the agent should re-output it after
