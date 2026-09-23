@@ -119,9 +119,7 @@ def render_caddyfile(
     https_port {https_port}
     # Caddy's built-in directive order runs forward_auth BEFORE request_header,
     # which would make the identity strip below delete the value forward_auth
-    # just injected. Reorder so the strip runs first (verified against the
-    # adapted JSON: the headers-delete handler precedes the forward_auth
-    # reverse_proxy in the same subroute).
+    # just injected. Reorder so the strip runs first.
     order request_header before forward_auth
     servers {{
         # h1/h2 only: h3 is UDP, which the SNI-passthrough relay can never
