@@ -384,8 +384,11 @@ def main() -> None:
             stack = _start_stack(materials)
         elif stack is not None:
             stack = _tick_running_stack(stack)
-        else:
-            pass
+        elif discard_signing_secret(materials_module.SIGNING_SECRET_FILE):
+            # Idle with no share: a secret the last unshare left behind (the
+            # runner was not up to see the materials go) must not sign the
+            # next share, or every cookie it signed would open that one too.
+            _log("Discarded a session signing secret left by an earlier share; its sessions are now invalid")
 
         if inotify_fd is not None:
             _wait_for_change_inotify(inotify_fd, POLL_INTERVAL_SECONDS)

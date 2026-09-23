@@ -63,12 +63,13 @@ def test_discarding_the_signing_secret_makes_the_next_share_mint_a_different_one
     secret_path = tmp_path / "signing_key"
     before_unshare = load_or_create_signing_secret(secret_path)
 
-    discard_signing_secret(secret_path)
+    assert discard_signing_secret(secret_path) is True
 
     assert not secret_path.exists()
     assert load_or_create_signing_secret(secret_path) != before_unshare
-    # Discarding when nothing was ever minted is a no-op, not an error.
-    discard_signing_secret(tmp_path / "never-minted")
+    # Discarding when nothing was ever minted is a no-op, not an error, and says so (the runner
+    # logs a removal only when there was one).
+    assert discard_signing_secret(tmp_path / "never-minted") is False
 
 
 def test_auth_label_is_created_once_reused_and_well_formed(tmp_path: Path) -> None:
