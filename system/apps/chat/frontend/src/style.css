@@ -47,10 +47,15 @@
    full-bleed text. A contextual rule rather than a utility: the prose element is
    MarkdownContent's own div, shared with the user bubble and every other render
    site, so the cap has to come from the context it sits in. The timeline's task
-   rows carry the same inset as a utility (see ProgressBlock / handoff-node);
-   tool blocks are chrome and keep the full width. */
+   rows carry the same inset as a utility (see ProgressBlock / handoff-node).
+
+   A chip row is read like the prose it sits with -- a line saying what the
+   agent did -- so it wraps on the same edge; left to the full width it would
+   run past the text above it and stop looking like part of the same message.
+   Tool BLOCKS are chrome and still keep the full width. */
 .message-assistant .message-content.markdown-content,
-.pv-final .message-content.markdown-content {
+.pv-final .message-content.markdown-content,
+.message-assistant .tool-chip-group {
   max-width: calc(100% - var(--width-agent-gutter));
 }
 

@@ -101,7 +101,12 @@ function chipKey(call: ToolCall): string {
  *  seam wider than every other seam in the transcript -- so there they collapse
  *  and the message rhythm alone does the spacing. Same reason, and the same
  *  shape, as the `p:last-child` rules the markdown blocks carry. */
-const GROUP_CLASS = "tool-chip-group my-1.5 first:mt-0 last:mb-0";
+/** `pl-4`: the run is indented from the prose, so a reader's eye can tell the
+ *  work apart from the words at a glance without either one needing a rule or a
+ *  fill to mark it. Padding rather than a margin so the cap above still lands
+ *  the right edge on the prose's; the row's own `-ml-1` and the first chip's
+ *  `px-1` cancel, so the chip's INK -- not its hover box -- starts on the inset.  */
+const GROUP_CLASS = "tool-chip-group my-1.5 pl-4 first:mt-0 last:mb-0";
 
 /** `-ml-1` cancels the first chip's own left padding, so the row's ink starts
  *  where the prose above it does: a ghost button needs that padding for its
