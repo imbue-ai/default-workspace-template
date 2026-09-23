@@ -494,7 +494,10 @@ def test_the_verbs_edit_one_placement_and_the_stack() -> None:
 def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_settled_windows_as_new_windows() -> None:
     settled = window_record(WindowId("win-000000000000000a"), "terminal", "/?session=terminal-1")
     settling = window_record(WindowId("win-000000000000000b"), "files", "/new", is_settling=True)
-    bare = desktop_with_windows(settled, settling)
+    pinned = window_record(
+        WindowId("win-000000000000000c"), "chat", "/", is_pinned=True, scope=LocationScope.INDEPENDENT
+    )
+    bare = desktop_with_windows(settled, settling, pinned)
     source = bare.model_copy_update(
         to_update(
             bare.field_ref().shortcuts,
@@ -508,15 +511,33 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_settle
         ),
         to_update(bare.field_ref().wallpaper, Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dunes"))),
     )
-    assert [window.id for window in settled_windows(source)] == [settled.id]
+    assert [window.id for window in settled_windows(source)] == [settled.id, pinned.id]
     later = TEST_NOW + timedelta(hours=1)
     seeded = desktop_seeded_from(
-        source, DesktopId("alice"), "Alice", "#16A34A", 1, [WindowId("win-00000000000000ff")], later
+        source,
+        DesktopId("alice"),
+        "Alice",
+        "#16A34A",
+        1,
+        [WindowId("win-00000000000000ff"), WindowId("win-00000000000000fe")],
+        later,
     )
     assert (seeded.id, seeded.name, seeded.color, seeded.glyph) == ("alice", "Alice", "#16A34A", 1)
     assert seeded.shortcuts == source.shortcuts and seeded.wallpaper == source.wallpaper
-    (copied,) = seeded.windows
+    copied, copied_pinned = seeded.windows
     assert (copied.id, copied.app, copied.path, copied.title) == ("win-00000000000000ff", "terminal", settled.path, "")
     assert copied.opened_at == later and copied.is_settling is False
+    assert (copied.is_pinned, copied.scope) == (False, LocationScope.LINKED)
+    # The pinned window comes over as the app's pinned window of the new desktop, so the ensure that runs on every
+    # read finds it and mints no second one.
+    assert (copied_pinned.id, copied_pinned.app, copied_pinned.is_pinned, copied_pinned.scope) == (
+        "win-00000000000000fe",
+        "chat",
+        True,
+        LocationScope.INDEPENDENT,
+    )
+    chat_pin = _pin("chat", scope=LocationScope.INDEPENDENT)
+    ensured = with_pinned_windows_ensured(without_pin_marks(seeded, {AppName("chat")}), [chat_pin], later)
+    assert ensured.desktop is seeded and ensured.is_written is False
     with pytest.raises(InvalidShellValueError):
         desktop_seeded_from(source, DesktopId("bob"), "Bob", "#16A34A", 1, [], later)
