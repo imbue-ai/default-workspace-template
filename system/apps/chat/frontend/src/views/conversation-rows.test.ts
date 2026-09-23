@@ -6,7 +6,12 @@ import type {
   AssistantMessageEvent,
   UserMessageEvent,
 } from "../models/Response";
-import { buildConversationRows, isSubagentRunning } from "./conversation-rows";
+import {
+  buildConversationRows,
+  isSubagentRunning,
+  ESTIMATED_ASSISTANT_HEIGHT_PX,
+  ESTIMATED_CHIP_ROW_HEIGHT_PX,
+} from "./conversation-rows";
 
 // --- Event builders (mirroring turn-grouping.test.ts) ---
 
@@ -74,6 +79,44 @@ function result(callId: string, output: string): ToolResultEvent {
   };
 }
 
+/** A plain (non-tk) tool call -- the kind that renders as a chip. */
+function toolMsg(ts: string, callId: string, note: string): AssistantMessageEvent {
+  return {
+    timestamp: ts,
+    type: "assistant_message",
+    event_id: `a-${callId}`,
+    source: "test",
+    model: "m",
+    text: "",
+    tool_calls: [{ tool_call_id: callId, tool_name: "Bash", input_chars: 24, action_note: note }],
+    stop_reason: "tool_use",
+    usage: null,
+    is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
+
+/** A delegation call, which renders as its own sub-agent card rather than a chip. */
+function agentMsg(ts: string, callId: string, description: string): AssistantMessageEvent {
+  return {
+    timestamp: ts,
+    type: "assistant_message",
+    event_id: `a-${callId}`,
+    source: "test",
+    model: "m",
+    text: "",
+    tool_calls: [{ tool_call_id: callId, tool_name: "Agent", input_chars: 24, description }],
+    stop_reason: "tool_use",
+    usage: null,
+    is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
+
 describe("buildConversationRows", () => {
   // The point of the shared builder: a subagent's transcript runs the same
   // section -> rows pipeline as the main chat, so a turn that declares tk steps
@@ -108,6 +151,62 @@ describe("buildConversationRows", () => {
 
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2"]);
     expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
+  });
+
+  // A harness emits one event per model response, so back-to-back tool calls
+  // arrive as separate events. They have to land on ONE row, or each renders a
+  // lone chip a full message gap below the last.
+  it("merges a run of consecutive tool-call events into one chip row", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      toolMsg("t2", "c1", "Show the current date"),
+      toolMsg("t3", "c2", "Check the app is running"),
+      assistantText("t4", "that is it", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    // One row for both calls, standing where the first of them does, and the
+    // wrap-up reply below it.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4"]);
+    const chipRow = rows.find((r) => r.key === "a-c1")!;
+    expect(chipRow.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
+    expect(chipRow.anchorEventId).toBe("a-c1");
+  });
+
+  // Prose breaks a chip row, so it also breaks the merge: the run resumes as a
+  // fresh row below it rather than swallowing the message.
+  it("splits a chip run around prose spoken mid-turn", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      toolMsg("t2", "c1", "Show the current date"),
+      toolMsg("t3", "c2", "Check the app is running"),
+      assistantText("t4", "halfway there"),
+      toolMsg("t5", "c3", "Read the log"),
+      assistantText("t6", "done", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4", "a-c3", "a-t6"]);
+    expect(rows.find((r) => r.key === "a-t4")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
+  });
+
+  // A sub-agent is a whole conversation rather than an action, so its card is
+  // not a chip and cannot join a chip row -- the runs either side stay separate.
+  it("keeps a sub-agent card out of the chip runs around it", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      toolMsg("t2", "c1", "Show the current date"),
+      agentMsg("t3", "c2", "Explore the codebase"),
+      toolMsg("t4", "c3", "Read the log"),
+      assistantText("t5", "done", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-c2", "a-c3", "a-t5"]);
+    expect(rows.find((r) => r.key === "a-c2")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
   });
 
   // A chat that moved to another agent shows the seam as its own row, the handoff node keyed by

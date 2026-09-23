@@ -260,6 +260,59 @@ export function renderAssistantMessage(
   );
 }
 
+/** Whether this call renders as a sub-agent card. Gated on the description,
+ *  which rides the tool input, so the card stands as soon as the Agent call is
+ *  issued -- before its subagent session is linked -- showing a non-clickable
+ *  "Running…" until `subagent_metadata.session_id` arrives. A sub-agent is a
+ *  whole conversation, not an action, so it never joins the chips. */
+function isSubagentCardCall(toolCall: ToolCall): boolean {
+  return toolCall.tool_name === "Agent" && Boolean(toolCall.subagent_metadata || toolCall.description);
+}
+
+/** Whether a call renders as a card of its own instead of joining the chip row.
+ *  Naming the rule once keeps {@link isChipOnlyEvent} from drifting away from
+ *  what appendEventParts actually does with a call. */
+function rendersAsCard(toolCall: ToolCall, result: ToolResultEvent | null): boolean {
+  return isSubagentCardCall(toolCall) || isFiledPermissionRequest(toolCall, result);
+}
+
+/** Whether an event's entire contribution to a run is chips: no thinking
+ *  toggle, no prose, and every call one that chips rather than cards. Nothing
+ *  in such an event can break a chip row, which is what lets a consecutive run
+ *  of them share one (see buildRows). */
+export function isChipOnlyEvent(event: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): boolean {
+  if (event.has_thinking) return false;
+  if (event.text) return false;
+  const toolCalls = event.tool_calls || [];
+  if (toolCalls.length === 0) return false;
+  return toolCalls.every((call) => !rendersAsCard(call, toolResults.get(call.tool_call_id) ?? null));
+}
+
+/**
+ * A run of chip-only events as ONE top-level row.
+ *
+ * A harness emits an event per model response, so a sequence of tool calls
+ * arrives as a sequence of events. A row each would stack one lone chip per
+ * row, a message-sized gap apart; handing the whole run to renderAssistantRun
+ * collapses them into the single wrapping chip row it is meant to be -- what a
+ * step's revealed work already gets.
+ *
+ * Unmemoized, unlike {@link renderAssistantMessage}: a chip-only run carries no
+ * prose by construction, so there is no markdown parse for a memo to save.
+ */
+export function renderAssistantRunRow(
+  events: AssistantMessageEvent[],
+  toolResults: Map<string, ToolResultEvent>,
+  chatId: string,
+): m.Vnode {
+  const key = events[0].event_id;
+  return m(
+    "div",
+    { id: key, class: "message message-assistant mb-5", key },
+    renderAssistantRun(events, toolResults, chatId),
+  );
+}
+
 export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning: boolean): m.Vnode {
   const metadata = toolCall.subagent_metadata;
   // Description and agent type come from the tool call itself, so the card renders fully
@@ -566,11 +619,8 @@ function appendEventParts(
     }
   }
   for (const toolCall of toolCalls) {
-    // Render the rich card as soon as we have the Agent call's description (from the tool
-    // input), even before its subagent session is linked; the card shows a non-clickable
-    // "Running…" state until subagent_metadata.session_id arrives. A sub-agent is a whole
-    // conversation, not an action, so it stays a card rather than joining the chips.
-    if (toolCall.tool_name === "Agent" && (toolCall.subagent_metadata || toolCall.description)) {
+    const result = toolResults.get(toolCall.tool_call_id) ?? null;
+    if (isSubagentCardCall(toolCall)) {
       // The Agent call's tool result arrives only when the sub-agent finishes, so its
       // absence is our signal that the sub-agent is still actively working.
       const subagentRunning = !toolResults.has(toolCall.tool_call_id);
@@ -578,7 +628,6 @@ function appendEventParts(
       children.push(renderSubagentCard(toolCall, chatId, subagentRunning));
       continue;
     }
-    const result = toolResults.get(toolCall.tool_call_id) ?? null;
     // A permission request renders as its own card (the request, a verdict or
     // button, and the raw call) rather than a chip: it is something to ACT on,
     // so it must not be one click away behind a chip.
