@@ -286,6 +286,9 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
   ```
 
+  A preview (`update-app`'s `preview_app.py`) runs the app under the same
+  wrapper, once per `[[secrets]]` block, reading the live `data/.secrets/`.
+
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
   (`new WebSocket("/ws")`), cookies (`Set-Cookie: Path=/`), and
