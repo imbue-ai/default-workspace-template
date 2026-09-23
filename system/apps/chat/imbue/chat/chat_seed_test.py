@@ -150,7 +150,7 @@ def test_a_slash_command_first_send_is_launched_as_typed(tmp_path: Path) -> None
 
 
 def test_a_seeded_conversation_too_long_to_carry_points_at_the_file_instead(tmp_path: Path) -> None:
-    """The message rides an argv, which is bounded, so past the inline limit the agent is sent to
+    """A message's delivery to the agent is bounded, so past the inline limit the agent is sent to
     the seed file -- the same choice a handoff makes with an oversized summary."""
     turns = (SeedTurn(role=SeedRole.ASSISTANT, text="x" * (INLINE_SEED_MAX_BYTES + 1)),)
 
