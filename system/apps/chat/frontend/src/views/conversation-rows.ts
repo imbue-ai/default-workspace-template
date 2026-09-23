@@ -17,10 +17,12 @@
  */
 
 import m from "mithril";
-import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
+import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
+  renderAssistantRunRow,
+  isChipOnlyEvent,
   renderPermissionItem,
   buildToolResultsWithSkillExpansions,
   computeAuthErrorHiddenEventIds,
@@ -36,6 +38,11 @@ import { renderHandoffNode } from "./handoff-node";
 export const ESTIMATED_USER_HEIGHT_PX = 90;
 export const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
 export const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
+// A merged chip row is one line of chips plus the message gap below it -- an
+// order of magnitude shorter than the prose message the assistant estimate is
+// sized for, and mis-estimating it by that much is what makes the scrollbar
+// lurch as such a row crosses the window edge.
+export const ESTIMATED_CHIP_ROW_HEIGHT_PX = 48;
 
 // Layout for the centered message column. Shared by the live transcript views
 // and the offscreen measurer, whose rows must lay out identically to measure
@@ -136,12 +143,37 @@ function buildRows(
     // blocks inline, the same as assistant messages outside a progress section.
     for (const item of section.items) {
       if (item.kind === "ungrouped") {
-        for (const event of item.events) {
+        // Consecutive chip-only events share ONE row, so their calls land on a
+        // single wrapping chip row instead of one lone chip per row a full
+        // message gap apart. Only those merge: an event with prose is the tall
+        // kind windowing exists to keep separate, and it breaks the chip row
+        // anyway, so it stays a row of its own.
+        let i = 0;
+        while (i < item.events.length) {
+          if (!isChipOnlyEvent(item.events[i], toolResults)) {
+            const event = item.events[i];
+            rows.push({
+              key: event.event_id,
+              estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+              anchorEventId: event.event_id,
+              render: () => renderAssistantMessage(event, toolResults, chatId),
+            });
+            i++;
+            continue;
+          }
+          const run: AssistantMessageEvent[] = [];
+          while (i < item.events.length && isChipOnlyEvent(item.events[i], toolResults)) {
+            run.push(item.events[i]);
+            i++;
+          }
+          // Keyed and anchored on the run's first event: the row stands where
+          // that event does in the transcript, which is what scroll
+          // persistence and the fill planner resolve a row by.
           rows.push({
-            key: event.event_id,
-            estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
-            anchorEventId: event.event_id,
-            render: () => renderAssistantMessage(event, toolResults, chatId),
+            key: run[0].event_id,
+            estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX,
+            anchorEventId: run[0].event_id,
+            render: () => renderAssistantRunRow(run, toolResults, chatId),
           });
         }
       } else if (item.kind === "permission") {
