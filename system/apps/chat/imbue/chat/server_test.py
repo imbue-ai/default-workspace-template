@@ -780,11 +780,19 @@ def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_reviv
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     ledger = _FakeCodexLedger()
     session, bring_up = _codex_session_down_until_started(ledger)
+    is_connecting_at_connect: list[bool] = []
     is_connecting_at_revive: list[bool] = []
 
-    def fake_start(agent_name: str) -> None:
+    def is_chat_connecting() -> bool:
         snapshot = manager.get_chat_snapshot(agent_id)
-        is_connecting_at_revive.append(snapshot is not None and snapshot.active_agent.is_connecting)
+        return snapshot is not None and snapshot.active_agent.is_connecting
+
+    # The first connect attempt runs before the send reports NOT_READY, so this reading is the
+    # pre-send check's alone.
+    session.ensure_live = lambda: is_connecting_at_connect.append(is_chat_connecting())
+
+    def fake_start(agent_name: str) -> None:
+        is_connecting_at_revive.append(is_chat_connecting())
         bring_up()
 
     with (
@@ -796,6 +804,7 @@ def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_reviv
 
     assert response.status_code == 200
     assert ledger.sent == [("hi", "m-1")]
+    assert is_connecting_at_connect[0] is True
     assert is_connecting_at_revive == [True]
     final = manager.get_chat_snapshot(agent_id)
     assert final is not None and final.active_agent.is_connecting is False
