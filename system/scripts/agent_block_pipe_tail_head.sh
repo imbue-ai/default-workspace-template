@@ -29,7 +29,8 @@ fi
 
 # `cat FILE... | head` is exempt: the file already holds the full output and can be re-read.
 # Only a `cat` that starts its pipeline counts -- in `cmd | cat | head` it is reading cmd's output.
-command=$(printf '%s\n' "$command" | sed -E 's/(^|[;&({`]|\|\|)[[:space:]]*cat([[:space:]](>&|&>|[^|;&(){}`])*)?\|[[:space:]]*(tail|head)/\1/g')
+# So the `&`, `(` or `{` before it must not itself follow a pipe (`cmd |& cat`, `cmd | (cat`, `cmd > >(cat`).
+command=$(printf '%s\n' "$command" | sed -E 's/(^|[;`]|\|\||[^|>]&|(^|[^|>({[:space:]])[[:space:]]*[({])[[:space:]]*cat([[:space:]](>&|&>|[^|;&(){}`])*)?\|[[:space:]]*(tail|head)/\1/g')
 
 # Check if the command pipes through tail or head (e.g. "| tail -20", "| head -5")
 # Match: pipe followed by optional whitespace, then tail or head, optionally with args

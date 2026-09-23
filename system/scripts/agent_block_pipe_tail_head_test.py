@@ -28,6 +28,7 @@ def _run(command: str) -> int:
         "cd /tmp && cat out.txt | tail -20",
         "ls; cat out.txt | head",
         "echo $(cat f | head -1)",
+        "cd /tmp && { cat out.txt | tail -20; }",
     ],
 )
 def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
@@ -40,6 +41,10 @@ def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
         "pytest | tail -20",
         # The cat is reading pytest's output, not a file.
         "pytest | cat | tail -20",
+        "pytest |& cat | tail -20",
+        "pytest | (cat | tail -20)",
+        "pytest | { cat | tail -20; }",
+        "pytest > >(cat | tail -20)",
         # One exempt pipe does not excuse another in the same command.
         "cat f | head; pytest | tail -5",
         "cat f && pytest | tail -5",
