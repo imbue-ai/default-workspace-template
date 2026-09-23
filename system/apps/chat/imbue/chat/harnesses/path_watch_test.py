@@ -112,8 +112,8 @@ def _keep_waking(watcher: PathWatcher, seconds: float) -> None:
 
 def test_a_stream_of_wakes_is_batched_into_one_refresh_per_minimum_interval(tmp_path: Path) -> None:
     """Every chat's transcript watcher watches its account's whole projects tree, so any
-    chat's write woke every watcher, and each wake was a full refresh. With a minimum
-    interval, a burst of wakes costs at most one refresh per interval."""
+    chat's writes wake every watcher; a burst of wakes costs at most one refresh per
+    minimum interval."""
     started_at: list[float] = []
     lock = threading.Lock()
 
