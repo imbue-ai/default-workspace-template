@@ -59,7 +59,8 @@ export function PresenceStrip(): m.Component {
                 {
                   class: "presence-refresh ml-1 type-helper text-secondary hover:text-primary",
                   href: refreshUrl,
-                  title: "Sign in again to pick up a change to your account (your name and avatar refresh on their own)",
+                  title:
+                    "Sign in again to pick up a change to your account (your name and avatar refresh on their own)",
                 },
                 "Refresh my sign-in",
               ),
