@@ -1,22 +1,14 @@
 """A pipe into tail/head is blocked unless it reads a file with `cat`."""
 
-import json
-import subprocess
-from pathlib import Path
-
 import pytest
-
-_GUARD = Path(__file__).resolve().parent / "agent_block_pipe_tail_head.sh"
+from guard_testing import run_guard
 
 
 def _run(command: str) -> int:
-    return subprocess.run(
-        ["bash", str(_GUARD)],
-        input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    ).returncode
+    return run_guard(
+        "agent_block_pipe_tail_head.sh",
+        {"tool_name": "Bash", "tool_input": {"command": command}},
+    )
 
 
 @pytest.mark.parametrize(
