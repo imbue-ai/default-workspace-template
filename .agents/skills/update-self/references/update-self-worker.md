@@ -171,8 +171,9 @@ target to the pre-merge local commit (the three-dot diff finds that fork point
 from `$TARGET_REF`), and the update range from that commit to the merge. On a
 retry whose target moved since the rolled-back attempt, that commit is Step
 1's revert of the rollback, which already carries the landed release, so the
-update range starts at the rollback instead: the tree the live workspace runs,
-against which the whole update is a change. On a retry of the same target the
+update range starts at the commit the revert sits on instead (the rollback,
+plus anything committed after it): the tree the live workspace runs, against
+which the whole update is a change. On a retry of the same target the
 revert leaves `git merge` nothing to merge, so the block finds the landed
 attempt's own merge, whose ranges already run from the pre-update local
 commit. `--package app-manifest` installs the library from the merged tree,
