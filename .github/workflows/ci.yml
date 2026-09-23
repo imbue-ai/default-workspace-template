@@ -100,6 +100,21 @@ jobs:
           npm run build
           npm test
 
+      # An older workspace container still has a noexec /tmp, where a test's stub
+      # executable is skipped and the real tool runs. This runner's /tmp is exec, so
+      # without this a pytest root that fails to load pytest-executable-tmp would pass
+      # here and break there. uv and the runner keep their state under $RUNNER_TEMP.
+      - name: Mount /tmp noexec, as an older workspace container has it
+        run: |
+          sudo mount -t tmpfs -o noexec,nosuid,nodev,mode=1777 tmpfs /tmp
+          printf '#!/bin/sh\nexit 0\n' > /tmp/exec-probe
+          chmod +x /tmp/exec-probe
+          if /tmp/exec-probe; then
+            echo "/tmp still runs files after the noexec mount" >&2
+            exit 1
+          fi
+          rm /tmp/exec-probe
+
       - name: Run root tests
         run: uv run pytest
 
