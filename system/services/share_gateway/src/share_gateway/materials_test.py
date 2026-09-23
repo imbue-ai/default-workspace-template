@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
@@ -72,11 +74,25 @@ def test_signing_secret_minted_under_one_relay_token_is_replaced_under_another(t
     assert load_or_create_signing_secret(secret_path, "tok-123") != earlier_share
 
 
-def test_signing_secret_file_without_a_relay_token_binding_is_replaced(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "stored_text",
+    [
+        "a-bare-secret-from-an-earlier-gateway",
+        '["a-bare-secret-from-an-earlier-gateway"]',
+        '{"relay_token_sha256": "0123abcd"}',
+        '{"secret": "", "relay_token_sha256": "0123abcd"}',
+        '{"secret": 12345, "relay_token_sha256": "0123abcd"}',
+        '{"secret": "a-bare-secret-from-an-earlier-gateway"}',
+    ],
+)
+def test_signing_secret_file_without_a_relay_token_binding_is_replaced(tmp_path: Path, stored_text: str) -> None:
     secret_path = tmp_path / "signing_key"
-    secret_path.write_text("a-bare-secret-from-an-earlier-gateway")
+    secret_path.write_text(stored_text)
 
-    assert load_or_create_signing_secret(secret_path, "tok-123") != "a-bare-secret-from-an-earlier-gateway"
+    minted = load_or_create_signing_secret(secret_path, "tok-123")
+
+    assert minted not in stored_text
+    assert load_or_create_signing_secret(secret_path, "tok-123") == minted
     assert (secret_path.stat().st_mode & 0o777) == 0o600
 
 
