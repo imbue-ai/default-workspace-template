@@ -18,6 +18,10 @@ def test_a_harness_that_writes_no_ready_marker_never_reads_as_starting(tmp_path:
     assert is_harness_starting_up(tmp_path, None, _PROCESS_STARTED) is False
 
 
+def test_an_agent_whose_state_dir_is_not_on_this_host_never_reads_as_starting(tmp_path: Path) -> None:
+    assert is_harness_starting_up(tmp_path / "absent", _DELETED_AT_LAUNCH, _PROCESS_STARTED) is False
+
+
 def test_a_marker_deleted_at_launch_reads_as_starting_until_it_is_written(tmp_path: Path) -> None:
     _touch_at(tmp_path / _PROCESS_STARTED, 3_000_000.0)
     assert is_harness_starting_up(tmp_path, _DELETED_AT_LAUNCH, _PROCESS_STARTED) is True
