@@ -21,6 +21,7 @@ watcher's lazy observer start.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -50,12 +51,19 @@ class PathWatcher:
     _observer: Any
     _watched_dirs: set[str]
     _thread: threading.Thread | None
+    _min_cycle_interval_seconds: float
 
     @classmethod
-    def build(cls, paths: tuple[Path, ...], on_change: Callable[[], None]) -> "PathWatcher":
+    def build(
+        cls, paths: tuple[Path, ...], on_change: Callable[[], None], min_cycle_interval_seconds: float = 0.0
+    ) -> "PathWatcher":
+        """``min_cycle_interval_seconds`` batches wakes: a wake that comes sooner than that
+        after the previous ``on_change`` started waits out the rest of it, so a burst of
+        writes costs one call instead of one per write."""
         self = cls.__new__(cls)
         self._paths = paths
         self._on_change = on_change
+        self._min_cycle_interval_seconds = min_cycle_interval_seconds
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
         self._observer = None
@@ -82,14 +90,20 @@ class PathWatcher:
 
     def _run(self) -> None:
         self._ensure_observers()
+        cycle_started_at = time.monotonic()
         self._on_change()
         while not self._stop_event.is_set():
             self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
+            remaining = cycle_started_at + self._min_cycle_interval_seconds - time.monotonic()
+            if remaining > 0:
+                self._stop_event.wait(timeout=remaining)
+            # Cleared after the batching wait, so the wakes that land during it are absorbed.
             self._wake_event.clear()
             if self._stop_event.is_set():
                 break
             # Retry scheduling any dir that has since appeared, then re-derive.
             self._ensure_observers()
+            cycle_started_at = time.monotonic()
             self._on_change()
 
     def _ensure_observers(self) -> None:

@@ -33,6 +33,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 from typing import Callable
+from typing import Final
 
 from loguru import logger as _loguru_logger
 
@@ -45,6 +46,11 @@ logger = _loguru_logger
 # Where one event's payloads live on disk: (file path, byte offset, byte length) of the
 # source line. Re-reading exactly that span and re-parsing reconstructs the payloads.
 EventSource = tuple[Path, int, int]
+
+# A watcher's paths are shared with other chats (claude's is the account's whole projects
+# tree), so writes arrive in bursts from every chat at once; each burst becomes one refresh
+# per this interval, at the cost of up to this much latency on a new event.
+_MIN_EMIT_CYCLE_INTERVAL_SECONDS: Final[float] = 0.25
 
 
 def is_complete_json_object(fragment: bytes) -> bool:
@@ -558,7 +564,9 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
         if self._path_watcher is not None:
             return
         self._prime()
-        self._path_watcher = PathWatcher.build(self._watch_paths(), self._emit_cycle)
+        self._path_watcher = PathWatcher.build(
+            self._watch_paths(), self._emit_cycle, min_cycle_interval_seconds=_MIN_EMIT_CYCLE_INTERVAL_SECONDS
+        )
         self._path_watcher.start()
 
     def _prime(self) -> None:

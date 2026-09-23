@@ -36,9 +36,11 @@ or the queue-snapshot callback.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from typing import Callable
+from typing import Final
 
 from loguru import logger as _loguru_logger
 
@@ -48,6 +50,8 @@ from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.queue_tracker import ClaudeQueueTracker
 from imbue.chat.harnesses.claude.session_files import PROJECTS_DIRNAME
 from imbue.chat.harnesses.claude.session_files import SESSION_ID_HISTORY_FILENAME
+from imbue.chat.harnesses.claude.session_files import MissingSessionScanSchedule
+from imbue.chat.harnesses.claude.session_files import expected_session_file
 from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_parser import QueueSignal
 from imbue.chat.harnesses.claude.session_parser import QueueSignalKind
@@ -62,6 +66,12 @@ from imbue.chat.harnesses.transcript_store import iter_line_spans
 from imbue.chat.harnesses.transcript_store import split_at_last_complete_line
 
 logger = _loguru_logger
+
+# A session the history names but that is not where claude files it for this agent's work
+# dir is scanned for across the whole projects tree on this schedule, not on every refresh:
+# a history can name a session whose file never lands, and every watcher wake refreshes.
+_MISSING_SESSION_FIRST_SCAN_DELAY_SECONDS: Final[float] = 1.0
+_MISSING_SESSION_MAX_SCAN_DELAY_SECONDS: Final[float] = 60.0
 
 
 def _is_dead_epoch_enqueue(signal: QueueSignal, process_epoch_started_at: float | None) -> bool:
@@ -105,6 +115,8 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
 
     _agent_state_dir: Path
     _claude_config_dir: Path
+    _work_dir: str | None
+    _missing_session_scans: MissingSessionScanSchedule
     _cursor_by_session: dict[str, _FileCursor]
     _main_session_ids: list[str]
     _tool_name_by_call_id: dict[str, str]
@@ -118,12 +130,17 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
     def build_loader(cls, agent_info: AgentInfo) -> "ClaudeTranscriptLoader":
         loader = cls.__new__(cls)
         loader._init_loader(agent_info.id)
-        loader._init_claude_state(agent_info.agent_state_dir, agent_info.claude_config_dir)
+        loader._init_claude_state(agent_info.agent_state_dir, agent_info.claude_config_dir, agent_info.work_dir)
         return loader
 
-    def _init_claude_state(self, agent_state_dir: Path, claude_config_dir: Path) -> None:
+    def _init_claude_state(self, agent_state_dir: Path, claude_config_dir: Path, work_dir: str | None) -> None:
         self._agent_state_dir = agent_state_dir
         self._claude_config_dir = claude_config_dir
+        self._work_dir = work_dir
+        self._missing_session_scans = MissingSessionScanSchedule.build(
+            first_delay_seconds=_MISSING_SESSION_FIRST_SCAN_DELAY_SECONDS,
+            max_delay_seconds=_MISSING_SESSION_MAX_SCAN_DELAY_SECONDS,
+        )
 
         # All guarded by the base's lock (held through _refresh_locked).
         self._cursor_by_session = {}
@@ -218,7 +235,6 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
             # the session unregistered and let the next refresh retry.
             file_path = self._find_session_file(session_id)
             if file_path is None:
-                logger.debug("Session file not found for {}, will retry on next cycle", session_id)
                 continue
             self._cursor_by_session[session_id] = _FileCursor(session_id, file_path)
             self._store.ensure_lane(session_id)
@@ -289,7 +305,25 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
                 self._subagent_tool_use_id[sub_id] = tool_use_id
 
     def _find_session_file(self, session_id: str) -> Path | None:
-        return find_session_file(self._claude_config_dir / PROJECTS_DIRNAME, session_id)
+        """Where the session's main file is: the path claude files it under for the work dir
+        (checked on every call, so a just-started session is found as soon as it lands),
+        else a scan of the whole projects tree when one is due."""
+        projects_dir = self._claude_config_dir / PROJECTS_DIRNAME
+        if self._work_dir is not None:
+            expected = expected_session_file(projects_dir, session_id, self._work_dir)
+            if expected is not None:
+                self._missing_session_scans.forget(session_id)
+                return expected
+        now = time.monotonic()
+        if not self._missing_session_scans.is_scan_due(session_id, now):
+            return None
+        found = find_session_file(projects_dir, session_id)
+        if found is not None:
+            self._missing_session_scans.forget(session_id)
+            return found
+        delay = self._missing_session_scans.record_miss(session_id, now)
+        logger.debug("Session file not found for {}; scanning for it again in {:.0f}s", session_id, delay)
+        return None
 
     # -- consumption ----------------------------------------------------------------------
 
@@ -485,6 +519,7 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
             agent_state_dir=agent_info.agent_state_dir,
             claude_config_dir=agent_info.claude_config_dir,
             on_events=on_events,
+            work_dir=agent_info.work_dir,
         )
 
     def __init__(
@@ -493,9 +528,10 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         agent_state_dir: Path,
         claude_config_dir: Path,
         on_events: Callable[[str, list[dict[str, Any]]], None],
+        work_dir: str | None = None,
     ) -> None:
         self._init_store_watcher(agent_id, on_events)
-        self._init_claude_state(agent_state_dir, claude_config_dir)
+        self._init_claude_state(agent_state_dir, claude_config_dir, work_dir)
 
         # The queued-message populator (the only harness-specific queue code) and the last
         # snapshot pushed to the agent manager, compared so an unchanged queue pushes
