@@ -183,14 +183,14 @@ base (all of them for an app built here, the modified ones for a built-in app
 the user changed). Empty means the creation is upstream's exactly as shipped,
 so the footprint evidence names no customization of it to carry -- it does
 not exempt the app from any gate the rules below apply to the merged set.
-`<package>.update.json`'s
-`diff.inside_footprint` is what the update changed inside that same
-footprint. A creation with both non-empty is one **the update touches**: 4a
-names it and its `references` as consumers, and 4b's customization survival
-covers it over exactly the files the `.update.json` lists. A creation with
-local content that the update did not reach by footprint is still a consumer
-for 4a to find by grep and interface coupling (its steps 2 and 3): the
-footprint is what the app owns, not what it depends on.
+`<package>.update.json`'s `diff.inside_footprint` is what the update changed
+inside that same footprint. A creation with both non-empty is one **the update
+touches**: 4a names it and its `references` as consumers, and 4b's
+customization survival covers it over exactly the files the `.update.json`
+lists. A creation with local content that the update did not reach by
+footprint is still a consumer for 4a to find by grep and interface coupling
+(its steps 2 and 3): the footprint is what the app owns, not what it depends
+on.
 
 Two limits of this evidence. The footprint is read from the merged tree, so
 the local side is measured against the merged manifest: a local edit under a
@@ -205,10 +205,10 @@ A `footprint` command that fails names a manifest the merged tree can no
 longer satisfy -- most often a `[[references]]` path the update deleted or
 moved. That is merge work: fix the reference in your branch (the root suite's
 `system/test_app_manifests.py` holds every manifest to it) and rerun the
-block; never drop the creation from the loop. An app directory with no `app.toml` has no
-footprint the library can compute, so its directory is its footprint, read by
-hand as before; a workspace-added skill has no footprint the update can reach
-at all and stays a consumer for step 2 to find.
+block; never drop the creation from the loop. An app directory with no
+`app.toml` has no footprint the library can compute, so its directory is its
+footprint, read by hand as before; a workspace-added skill has no footprint
+the update can reach at all and stays a consumer for step 2 to find.
 
 ### 4a. Identify impacted services, skills, and creations
 
