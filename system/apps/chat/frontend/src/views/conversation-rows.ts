@@ -17,7 +17,7 @@
  */
 
 import m from "mithril";
-import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent } from "../models/Response";
+import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
@@ -143,36 +143,45 @@ function buildRows(
     // blocks inline, the same as assistant messages outside a progress section.
     for (const item of section.items) {
       if (item.kind === "ungrouped") {
-        // Consecutive chip-only events share ONE row, so their calls land on a
-        // single wrapping chip row instead of one lone chip per row a full
-        // message gap apart. Only those merge: an event with prose is the tall
-        // kind windowing exists to keep separate, and it breaks the chip row
-        // anyway, so it stays a row of its own.
+        // A row is a RUN: one head event plus every chip-only event that
+        // follows it. A harness splits one model turn across an event per
+        // response, so "here is what I am about to do" and the calls that do it
+        // arrive as separate events; rendering each as its own row sets them a
+        // full message gap apart, when they are one message. Run them together
+        // and they lay out exactly as they would had the harness sent them as
+        // one event -- prose, then the chip row tucked under it.
         let i = 0;
         while (i < item.events.length) {
-          if (!isChipOnlyEvent(item.events[i], toolResults)) {
-            const event = item.events[i];
-            rows.push({
-              key: event.event_id,
-              estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
-              anchorEventId: event.event_id,
-              render: () => renderAssistantMessage(event, toolResults, chatId),
-            });
+          const start = i;
+          // The head joins unconditionally; only chip-only events accrete onto
+          // it, since anything else is a message in its own right.
+          i++;
+          while (i < item.events.length && isChipOnlyEvent(item.events[i], toolResults)) {
             i++;
+          }
+          const run = item.events.slice(start, i);
+          const head = run[0];
+          // A lone event that is not a chip run keeps the memoized single-message
+          // renderer -- nothing was merged, so there is nothing to gain by
+          // giving up the memo.
+          if (run.length === 1 && !isChipOnlyEvent(head, toolResults)) {
+            rows.push({
+              key: head.event_id,
+              estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+              anchorEventId: head.event_id,
+              render: () => renderAssistantMessage(head, toolResults, chatId),
+            });
             continue;
           }
-          const run: AssistantMessageEvent[] = [];
-          while (i < item.events.length && isChipOnlyEvent(item.events[i], toolResults)) {
-            run.push(item.events[i]);
-            i++;
-          }
-          // Keyed and anchored on the run's first event: the row stands where
-          // that event does in the transcript, which is what scroll
-          // persistence and the fill planner resolve a row by.
+          // Keyed and anchored on the run's head: the row stands where that
+          // event does in the transcript, which is what scroll persistence and
+          // the fill planner resolve a row by.
           rows.push({
-            key: run[0].event_id,
-            estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX,
-            anchorEventId: run[0].event_id,
+            key: head.event_id,
+            estimate: isChipOnlyEvent(head, toolResults)
+              ? ESTIMATED_CHIP_ROW_HEIGHT_PX
+              : ESTIMATED_ASSISTANT_HEIGHT_PX,
+            anchorEventId: head.event_id,
             render: () => renderAssistantRunRow(run, toolResults, chatId),
           });
         }

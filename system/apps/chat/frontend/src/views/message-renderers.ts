@@ -289,16 +289,20 @@ export function isChipOnlyEvent(event: AssistantMessageEvent, toolResults: Map<s
 }
 
 /**
- * A run of chip-only events as ONE top-level row.
+ * A run of assistant events as ONE top-level row.
  *
- * A harness emits an event per model response, so a sequence of tool calls
- * arrives as a sequence of events. A row each would stack one lone chip per
- * row, a message-sized gap apart; handing the whole run to renderAssistantRun
- * collapses them into the single wrapping chip row it is meant to be -- what a
- * step's revealed work already gets.
+ * A harness emits an event per model response, so what a reader sees as one
+ * message -- a line of intent, then the calls that carry it out -- arrives as
+ * several. A row each sets them a full message gap apart and stacks a lone chip
+ * per row; handing the run to renderAssistantRun lays them out exactly as they
+ * would have laid out had the harness sent them as one event: prose, then the
+ * single wrapping chip row tucked under it. Both are what a step's revealed
+ * work already gets.
  *
- * Unmemoized, unlike {@link renderAssistantMessage}: a chip-only run carries no
- * prose by construction, so there is no markdown parse for a memo to save.
+ * Unmemoized, unlike {@link renderAssistantMessage}, which is why buildRows
+ * sends a lone event there instead. The cost is a shallow vnode diff per
+ * redraw: MarkdownContent guards its own re-parse on unchanged content, so the
+ * markdown is not re-rendered either way.
  */
 export function renderAssistantRunRow(
   events: AssistantMessageEvent[],
