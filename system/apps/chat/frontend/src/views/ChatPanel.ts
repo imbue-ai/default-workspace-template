@@ -51,6 +51,7 @@ import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
 import { ModelProviderMenu } from "./ModelProviderMenu";
+import { ConnectingIndicator } from "./ConnectingIndicator";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
@@ -792,6 +793,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
               },
               [
                 m(ModelProviderMenu, { chatId }),
+                m(ConnectingIndicator, { chatId }),
                 m(FastModeNotice, { chatId }),
                 // The terminal back face attaches to the agent's own tmux session, which
                 // a chat still being created does not have: without a name the terminal

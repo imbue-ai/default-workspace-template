@@ -25,6 +25,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
@@ -93,6 +94,7 @@ from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -4493,3 +4495,54 @@ def test_status_mapping_follows_the_chat_row(
     lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
+
+
+def _is_chat_connecting(agent_manager: AgentManager, chat_id: str) -> bool:
+    snapshot = agent_manager.get_chat_snapshot(chat_id)
+    assert snapshot is not None
+    return snapshot.active_agent.is_connecting
+
+
+def test_a_chat_reads_as_connecting_while_any_of_its_sends_waits_on_the_agent(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="connecting-agent")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1") as mark_first:
+        mark_first()
+        with agent_manager.track_connecting_send(agent_id, "m-2") as mark_second:
+            mark_second()
+            assert _is_chat_connecting(agent_manager, agent_id)
+        # The second send resolved; the first still waits on the agent.
+        assert _is_chat_connecting(agent_manager, agent_id)
+    assert not _is_chat_connecting(agent_manager, agent_id)
+
+    # The page hears the change twice -- on, then off -- not once per mark.
+    assert drain_is_connecting_pushes(pushes, agent_id) == [True, False]
+
+
+def test_a_send_that_never_waits_on_the_agent_leaves_the_chat_alone(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="ready-agent")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1"):
+        assert not _is_chat_connecting(agent_manager, agent_id)
+
+    assert drain_is_connecting_pushes(pushes, agent_id) == []
+
+
+def test_a_send_that_fails_while_connecting_still_clears_the_mark(agent_manager: AgentManager) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="failing-agent")
+
+    with pytest.raises(SendFailedError):
+        with agent_manager.track_connecting_send(agent_id, "m-1") as mark_connecting:
+            mark_connecting()
+            raise SendFailedError("the agent is in shell mode")
+
+    assert not _is_chat_connecting(agent_manager, agent_id)

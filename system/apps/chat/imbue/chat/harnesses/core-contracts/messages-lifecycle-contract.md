@@ -25,10 +25,20 @@ when the CONTRACT changes.
 | state | meaning | UI |
 |---|---|---|
 | **Composer** | draft text, not sent | text in the input box |
-| **Sending** | submitted, in flight, not yet confirmed | "Sending…" |
+| **Sending** | submitted, in flight, not yet confirmed | the message as a faded placeholder bubble, no caption ("Sending…" below names this placeholder) |
 | **Queued** | accepted, parked in the harness's own queue (agent is mid-turn) | a queued chip |
 | **Delivered** | committed as a user turn in the agent's durable conversation | a user turn in the transcript |
 | **Returned** | came back to the composer, never delivered | text back in the input box |
+
+**Connecting — a sub-state of Sending.** A send that has to wait for the agent to come up
+before it can be delivered (the agent was stopped and the send starts it, or its harness has
+launched but not yet reported it accepts input) is **Connecting**: the placeholder stays as it
+is, and "Connecting…" with a pulsing dot shows beside the model bar until the send resolves. The
+backend decides it (``active_agent.is_connecting`` on the chat's snapshot), from the agent's
+lifecycle and the harness's own ready signal (claude's ``session_started``, pi's
+``pi_session_started``, codex's live connection); the frontend only renders it. A message sent
+to a chat still being created is waiting on the same thing and reads the same way. Connecting
+is not a separate state for conservation: the message is Sending throughout.
 
 **Conservation:** a message is always in exactly one state; every transition is explicit and
 observable. No message ever vanishes (no state) or ghosts (shown in a state it is not in).
@@ -63,7 +73,8 @@ delivered, change the model chip, or clear the queue ahead of the backend confir
 **The ONE permitted optimism — "Sending…", and it is BACKEND-DRIVEN.** The single optimistic
 state the frontend may invent is **"Sending…"**, shown immediately after it POSTs a message to
 the backend, when it does not yet know anything else about that message's state. Nothing else is
-ever optimistic.
+ever optimistic. It is drawn as the message itself, faded, with no caption: the fading says it
+has not landed, without asking the user to watch a status resolve.
 
 The principle: **backend-driven optimism.** The frontend may *paint* the "Sending…" placeholder,
 but it never *resolves* it — every transition out of "Sending…" (removal, correlation to a chip
@@ -185,7 +196,9 @@ rollout-poll.
 ## Part B — Per-operation contracts
 
 ### Send
-On POST the frontend shows "Sending…" immediately (the one permitted optimism, A2). A
+On POST the frontend shows "Sending…" (the faded placeholder) immediately (the one permitted
+optimism, A2), and "Connecting…" beside the model bar while the backend reports the send waiting
+on the agent (A1). A
 successful POST means the harness ACCEPTED the message; within a bounded time it then resolves
 to exactly one of Delivered (agent was idle: the message starts and commits a turn) / Queued
 (agent busy: parked in the harness queue) / Returned (accepted but never committed — the

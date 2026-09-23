@@ -79,6 +79,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -287,6 +288,10 @@ class HarnessSpec(FrozenModel):
     # agent that has been discovered but not yet wired up has no tracker to ask -- which
     # silently cost the prioritizer its aging for exactly the agents it most needs to age.
     process_started_marker_filename: str
+    # The marker the harness writes once a freshly launched process accepts input, which is how a
+    # send tells an agent still starting (shown as "Connecting...") from one that is up. None for a
+    # harness that writes none: its sends never read as connecting on this evidence.
+    startup_ready_marker: StartupReadyMarker | None = None
     # The special-event kinds this harness may emit. A parser emitting a kind outside its
     # own declaration is a bug; an empty set is the honest statement that a harness's
     # transcript carries no markers, not an omission.
@@ -328,6 +333,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=ClaudeTranscriptLoader,
         tracker_class=ClaudeActivityTracker,
         process_started_marker_filename=ClaudeActivityTracker.marker_filename,
+        # Written by claude's SessionStart hook; mngr's launch command deletes it first.
+        startup_ready_marker=StartupReadyMarker(filename="session_started", is_deleted_at_launch=True),
         binding_class=ClaudeAccountBinding,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
@@ -394,6 +401,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=PiTranscriptLoader,
         tracker_class=PiActivityTracker,
         process_started_marker_filename=PiActivityTracker.marker_filename,
+        # Written by mngr's pi lifecycle extension on session start, and left in place across
+        # launches, so a stale one is told apart by the process-started marker's mtime.
+        startup_ready_marker=StartupReadyMarker(filename="pi_session_started", is_deleted_at_launch=False),
         binding_class=PiAccountBinding,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,

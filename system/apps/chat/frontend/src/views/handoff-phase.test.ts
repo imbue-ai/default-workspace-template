@@ -19,6 +19,11 @@ import { renderHeldSends } from "./HeldSendView";
 
 const chats = new Map<string, ChatSnapshot>();
 
+function rowClassOf(bubble: { attrs: unknown }): string {
+  const attrs = bubble.attrs as { class?: string; className?: string };
+  return attrs.className ?? attrs.class ?? "";
+}
+
 describe("the words for a chat switching harness", () => {
   it("follows the phase, naming the harness each phase is about", () => {
     expect(handoffPhaseText(handoffStateFixture({ phase: "draining" }), "claude")).toBe(
@@ -72,7 +77,7 @@ describe("the words for a chat changing account in place", () => {
 });
 
 describe("the held-send bubbles", () => {
-  it("renders every held message from the snapshot, captioned like any send", () => {
+  it("renders every held message from the snapshot, faded like any send", () => {
     chats.set(
       "agent-1",
       chatSnapshotFixture("agent-1", {
@@ -90,9 +95,11 @@ describe("the held-send bubbles", () => {
     const text = JSON.stringify(bubbles);
     expect(text).toContain("Carry on in Codex");
     expect(text).toContain("and this");
-    // The switch's progress is the handoff node's to tell, not the bubbles'.
-    expect(text).toContain("Sending…");
+    // The switch's progress is the handoff node's to tell, not the bubbles', and a not-yet-real
+    // message carries no caption at all: the fading is what says it has not landed.
+    expect(text).not.toContain("Sending…");
     expect(text).not.toContain("Claude Code is writing a summary…");
+    expect(bubbles.every((bubble) => rowClassOf(bubble).includes("opacity-60"))).toBe(true);
   });
 
   it("stands the confirming message down once the switch marker carrying it is on the transcript", () => {
@@ -132,11 +139,13 @@ describe("the held-send bubbles", () => {
     expect(renderHeldSends(chat).map((bubble) => bubble.key)).toEqual(["held-m-2"]);
   });
 
-  it("captions a rebind's held messages the same way", () => {
+  it("renders a rebind's held messages the same way", () => {
     chats.set("agent-3", chatSnapshotFixture("agent-3", { handoff: rebindStateFixture() }));
-    const text = JSON.stringify(renderHeldSends("agent-3"));
+    const bubbles = renderHeldSends("agent-3");
+    const text = JSON.stringify(bubbles);
     expect(text).toContain("Carry on on the other account");
-    expect(text).toContain("Sending…");
+    expect(text).not.toContain("Sending…");
+    expect(bubbles.every((bubble) => rowClassOf(bubble).includes("opacity-60"))).toBe(true);
   });
 
   it("renders nothing for a chat that is not switching", () => {

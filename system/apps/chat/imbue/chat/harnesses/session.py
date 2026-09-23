@@ -110,6 +110,9 @@ class SessionDeps(FrozenModel):
     send_to_harness: Callable[[str], bool]
     # Push a fresh agents snapshot to clients (tap-button greying rides this).
     notify_agents_changed: Callable[[], None]
+    # Whether the harness's process has launched but not yet written its ready marker (False for a
+    # harness that writes none).
+    is_harness_starting_up: Callable[[], bool]
     # Whether the manager still tracks this agent (a connection built after teardown is dropped).
     is_tracked: Callable[[], bool]
     # Codex connection callbacks: the ledger's queue snapshot / committed user-turn fan-out.
@@ -149,6 +152,11 @@ class AgentHarnessSession(ABC):
     def ensure_live(self) -> None:
         """Bring up whatever live backend the harness needs (blocking OK). No-op default:
         a file harness has no daemon to connect."""
+
+    def is_starting_up(self) -> bool:
+        """Whether a send now would first wait for the harness to come up (the chat shows it as
+        connecting). Default: the harness's own ready marker says it has not finished starting."""
+        return self._deps.is_harness_starting_up()
 
     def on_lifecycle_dead(self) -> None:
         """The agent's mngr lifecycle is positively dead; drop live state that died with it.

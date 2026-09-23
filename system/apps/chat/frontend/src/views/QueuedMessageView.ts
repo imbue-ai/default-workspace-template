@@ -18,7 +18,7 @@
  *
  * A published entry is not necessarily a PARKED one: the backend flags an entry it is
  * about to type, or is typing, as ``is_sending``, and such an entry renders as the
- * "Sending…" bubble rather than a queued chip. A snapshot that is entirely ``is_sending``
+ * faded not-yet-real bubble rather than a queued chip. A snapshot that is entirely ``is_sending``
  * therefore gets no group chrome at all -- see ``renderQueuedMessages``.
  */
 
@@ -28,7 +28,7 @@ import type { QueuedMessage } from "../models/Chats";
 import { shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
-import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
+import { renderNotYetRealBubble } from "./OutgoingMessageView";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
@@ -82,18 +82,12 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  than the classifier -- a queued message is always shown verbatim.
  *
  *  A chip the backend reports as ``is_sending`` (a codex shoulder-tap's interrupt+resend)
- *  renders identically to the optimistic "Sending…" bubble (see OutgoingMessageView) -- same
- *  markup, same caption -- so a re-sent message stays continuously visible and reads "Sending…"
- *  through the resend rather than blinking out (contract A1a); the backend drives the transition
- *  to the committed turn. */
+ *  renders identically to the optimistic outgoing bubble (see OutgoingMessageView), so a
+ *  re-sent message stays continuously visible through the resend rather than blinking out
+ *  (contract A1a); the backend drives the transition to the committed turn. */
 function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
   if (queued.is_sending === true) {
-    return m("div", { class: OUTGOING_ROW_CLASS, key: `queued-${queued.queued_id}` }, [
-      m("div", { class: OUTGOING_BUBBLE_CLASS }, [
-        m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
-      ]),
-      m("div", { class: OUTGOING_STATUS_CLASS }, "Sending…"),
-    ]);
+    return renderNotYetRealBubble({ key: `queued-${queued.queued_id}`, content: queued.content });
   }
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
   // is the rhythm between queued bubbles).
@@ -122,7 +116,7 @@ export function renderQueuedMessages(chatId: string): m.Vnode[] {
   // "Queued messages" header and the tap button over those tells the user a message is
   // WAITING when the backend is reporting the opposite -- and the header is the only
   // reason an idle send ever looked queued, since the bubbles themselves already render
-  // as "Sending…". Bare bubbles, no group wrapper: identical markup to the optimistic
+  // as not-yet-real sends. Bare bubbles, no group wrapper: identical markup to the optimistic
   // ones they replace, so the handoff is invisible rather than a reflow.
   if (queued.every((message) => message.is_sending === true)) {
     return queued.map((message) => renderQueuedBubble(message));
