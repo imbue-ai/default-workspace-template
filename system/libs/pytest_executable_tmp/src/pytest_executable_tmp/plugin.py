@@ -42,21 +42,18 @@ def can_run_files_in(directory: Path) -> bool:
         probe_dir = Path(tempfile.mkdtemp(prefix="executable-probe-", dir=directory))
     except OSError:
         return False
+    probe = probe_dir / "probe"
     try:
-        probe = probe_dir / "probe"
         probe.write_text(_PROBE_SCRIPT)
         probe.chmod(0o700)
-        try:
-            return (
-                subprocess.run(
-                    [str(probe)], check=False, timeout=_PROBE_TIMEOUT_SECONDS
-                ).returncode
-                == 0
-            )
-        except PermissionError:
-            return False
+        completed = subprocess.run(
+            [str(probe)], check=False, timeout=_PROBE_TIMEOUT_SECONDS
+        )
+    except OSError:
+        return False
     finally:
         shutil.rmtree(probe_dir)
+    return completed.returncode == 0
 
 
 def select_temp_root(
