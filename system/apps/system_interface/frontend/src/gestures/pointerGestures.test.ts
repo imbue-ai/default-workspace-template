@@ -201,11 +201,11 @@ describe("PointerGestureSource", () => {
     expect(events).toEqual([]);
   });
 
-  it("a press released over a live page (no pointerup reaches the root) does not become a drag on the next hover", () => {
+  it("a press whose release the root never saw does not become a drag on the next hover", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70);
-    // The release landed in the focused window's iframe; the pointer hovers back over the shell.
+    // The release landed where the root could not see it; the pointer hovers back over the shell.
     pointer("pointermove", title, 150, 70, { buttons: 0 });
     pointer("pointermove", title, 190, 70, { buttons: 0 });
     expect(events).toEqual([]);

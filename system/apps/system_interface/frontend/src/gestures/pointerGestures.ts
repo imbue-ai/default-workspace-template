@@ -194,9 +194,9 @@ export class PointerGestureSource implements GestureSource {
     const onPointerMove = (event: PointerEvent): void => {
       if (pending === null || !isSamePointer(pending, event)) return;
       // No button held: the press ended where the root could not see it (released outside the window,
-      // or over a live page while the window had lost focus); the pointer is only hovering now. A drag
-      // that had begun ends at the last point it was held at, not where the hovering has since reached,
-      // and a begin is still always answered by an end or a cancel.
+      // or while the window had lost focus); the pointer is only hovering now. A drag that had begun
+      // ends at the last point it was held at, not where the hovering has since reached, and a begin
+      // is still always answered by an end or a cancel.
       if (event.buttons === 0) {
         const held = pending;
         finish();
