@@ -75,7 +75,6 @@ describe("PresenceStrip", () => {
     ]);
     expect(drawn[0].textContent).toBe("B");
     expect(drawn[1].querySelector("img")?.getAttribute("src")).toBe(owner.profile_picture_url);
-    // No identity of our own yet: nobody is marked as you.
     expect(root.querySelector("[data-presence-self]")).toBeNull();
     expect(drawn.map((element) => element.getAttribute("title"))).toEqual([
       "Bob (bob@example.com)",
