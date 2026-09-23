@@ -180,6 +180,25 @@ describe("a window drag", () => {
     expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("SNAPPED_LEFT");
     expect(preview.style.display).toBe("none");
   });
+
+  // The press, not the begin: the pixels a press spends reaching the drag threshold are spent beside the
+  // handle, and a page still live there takes the moves that would have crossed it.
+  it("makes the pages inert from the press, and gives them back when the press ends", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    // Every box measures as empty under jsdom, and a page over a content box with no area is hidden rather
+    // than laid out, which is the only step that writes the page's pointer events.
+    const content = document.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+    m.redraw.sync();
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect(page.style.pointerEvents).toBe("auto");
+    const listener = gestureListener as GestureListener;
+    listener.onPressStart(binding);
+    expect(page.style.pointerEvents).toBe("none");
+    listener.onPressEnd(binding);
+    expect(page.style.pointerEvents).toBe("auto");
+  });
 });
 
 describe("Escape", () => {
