@@ -9,8 +9,9 @@ on `PATH`. A workspace container mounts `/tmp` as a tmpfs, and Docker mounts a
 bare `--tmpfs` `noexec`. New containers mount it `exec`, but one created before
 that change still has `noexec`. There the stub cannot run, so `PATH` lookup
 skips it and the *real* tool runs instead. For the terminal app's tests that means the
-user's live tmux server, whose sessions the tests then kill. CI cannot see this:
-its runners have an executable `/tmp`.
+user's live tmux server, whose sessions the tests then kill. A CI runner's
+`/tmp` is executable, so CI remounts it `noexec` before its pytest steps: a
+pytest root that stops loading this plugin fails there too.
 
 At configure time the plugin runs a one-line script under the temp root pytest
 is about to use:
