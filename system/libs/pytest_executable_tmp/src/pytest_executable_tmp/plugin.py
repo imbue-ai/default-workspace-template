@@ -91,8 +91,7 @@ def _no_usable_root_message(rejected_roots: Sequence[Path]) -> str:
     return (
         f"pytest-executable-tmp: a file written under {listed} cannot be run (a noexec mount?). A test's stub "
         "executable on PATH would be skipped there, and the real program it stands in for would run instead. "
-        "Point --basetemp, PYTEST_DEBUG_TEMPROOT or TMPDIR (whichever this run uses) at a directory that allows "
-        "running files."
+        "Point --basetemp or PYTEST_DEBUG_TEMPROOT at a directory that allows running files."
     )
 
 
