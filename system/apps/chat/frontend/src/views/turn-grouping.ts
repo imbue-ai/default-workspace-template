@@ -38,9 +38,9 @@
  * same way, though it is not a turn the user took: it lands between two of the
  * agent's requests, so whatever the agent does next happens after it. The
  * section closes there, any open step carries over, and the chip heads the next
- * section. The reply the agent gave before it stays above
- * it, and the work it does after renders below it. The one exception is a chip
- * landing inside an open handoff node, which stays in the handoff's turn.
+ * section. The reply the agent gave before it stays above it, and the work it
+ * does after renders below it. The one exception is a chip landing inside an
+ * open handoff node, which stays in the handoff's turn.
  *
  * One message is never grouped under a step: an agent permission request. It
  * is lifted out into a dedicated inline break (the `permission` timeline item)
