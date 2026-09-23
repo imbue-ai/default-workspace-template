@@ -51,8 +51,8 @@ create route, so the chat is what a launcher-started chat would be: the app mint
 binds it to the workspace's default account and harness, names it (``--name``,
 else the next free "Chat N"), and sends the message as its first one. ``--label``
 adds a label to the chat's agent (``auto_open=true`` has the workspace surface its
-window); ``--skip-installation-check`` lets the create through a claude version
-check the workspace would otherwise fail, for the update run that repairs it.
+window). Every create waves the claude version check, so a workspace whose claude no
+longer matches its pin can still make the update chat that repairs it.
 The script waits for the chat app to finish the create and exits 0 with one
 JSON line on stdout, ``{"chat_id", "name", "display_name"}``, or 1 with the
 create's own failure on stderr. The backoff is a plain ``mngr create --template
@@ -108,7 +108,8 @@ CREATE_CHAT_PATH = "/api/chats/create"
 WAIT_FIELD = "should_wait"
 
 # Mirrors ``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING`` in the chat app's ``agent_manager.py``,
-# the setting the create route applies for ``is_installation_check_skipped``.
+# the setting the create route applies for ``is_installation_check_skipped``; the backoff
+# create applies it itself.
 SKIP_CLAUDE_INSTALLATION_CHECK_SETTING = "agent_types.claude.check_installation=false"
 
 CONNECT_TIMEOUT_SECONDS = 3.0
@@ -342,7 +343,7 @@ def create_request_body(request: CreateRequest) -> dict[str, object]:
         "name": request.name,
         "message": request.message,
         "labels": dict(request.labels),
-        "is_installation_check_skipped": request.is_installation_check_skipped,
+        "is_installation_check_skipped": True,
         WAIT_FIELD: True,
     }
 
@@ -384,19 +385,12 @@ def create_through_chat_app(
 
 
 class CreateRequest:
-    """What ``--create`` asks for: the chat's name, labels, message, and the version-check waiver."""
+    """What ``--create`` asks for: the chat's name, labels, and message."""
 
-    def __init__(
-        self,
-        name: str,
-        message: str,
-        labels: Mapping[str, str],
-        is_installation_check_skipped: bool,
-    ) -> None:
+    def __init__(self, name: str, message: str, labels: Mapping[str, str]) -> None:
         self.name = name
         self.message = message
         self.labels = dict(labels)
-        self.is_installation_check_skipped = is_installation_check_skipped
 
 
 def _run_mngr(
@@ -485,8 +479,7 @@ def create_through_mngr(request: CreateRequest) -> int:
     argv += ["--template", "chat", "--no-connect", "--label", "user_created=true"]
     for key, value in request.labels.items():
         argv += ["--label", f"{key}={value}"]
-    if request.is_installation_check_skipped:
-        argv += ["-S", SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
+    argv += ["-S", SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
     completed = _run_mngr(
         argv, request.message or None, ["--format", "jsonl"], capture_stdout=True
     )
@@ -574,11 +567,6 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="NAME=VALUE",
         help="A label for the new chat's agent (auto_open=true surfaces its window); repeatable.",
     )
-    create.add_argument(
-        "--skip-installation-check",
-        action="store_true",
-        help="Create the chat past a claude version check the workspace would otherwise fail.",
-    )
     return parser
 
 
@@ -593,10 +581,8 @@ def _validate_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         return
     if args.chat_id is None:
         parser.error("a chat id is required (or --create to make a new chat)")
-    if args.name or args.label or args.skip_installation_check:
-        parser.error(
-            "--name, --label, and --skip-installation-check apply only with --create"
-        )
+    if args.name or args.label:
+        parser.error("--name and --label apply only with --create")
 
 
 def main(
@@ -619,7 +605,6 @@ def main(
             name=args.name,
             message=text,
             labels=_parse_labels(parser, args.label),
-            is_installation_check_skipped=args.skip_installation_check,
         )
         return _create(base_url, request, clock, sleep)
     result = send_through_chat_app(
