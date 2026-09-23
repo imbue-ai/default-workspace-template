@@ -27,7 +27,7 @@ class StartupReadyMarker(FrozenModel):
 def _read_mtime(path: Path) -> float | None:
     try:
         return path.stat().st_mtime
-    except FileNotFoundError:
+    except OSError:
         return None
 
 
