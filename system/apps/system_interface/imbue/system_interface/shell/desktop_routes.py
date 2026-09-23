@@ -24,6 +24,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopLayout
@@ -66,7 +67,6 @@ from imbue.system_interface.shell.layout_ops import SELF_WINDOW
 from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -79,6 +79,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import op_only_args
 from imbue.system_interface.shell.route_helpers import parse_request_body
+from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_client
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
@@ -113,7 +114,6 @@ class DesktopSettingsRequest(FrozenModel):
     name: str = Field(description="The display name")
     color: str = Field(description="'#RRGGBB'")
     glyph: int = Field(description="The glyph index")
-    sharing: SharingMode = Field(description="shared or personal")
 
 
 class DesktopWallpaperRequest(FrozenModel):
@@ -186,7 +186,7 @@ def create_desktop() -> ResponseReturnValue:
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(DesktopSettingsRequest)
     shell = _shell()
-    desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph, body.sharing)
+    desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph)
     shell.broadcast_desktops_updated()
     return jsonify(shell.desktop_wire_json(desktop))
 
@@ -275,7 +275,27 @@ def save_placements(desktop_id: str) -> ResponseReturnValue:
     return jsonify({"updated_at": desktop_layout_wire_json(saved, {})["updated_at"] if saved is not None else None})
 
 
-# Section 5.5: wallpapers, and the inventory document
+# Section 5.5: the arrival, wallpapers, and the inventory document
+
+
+def arrival_wire_json(shell: ShellState, outcome: ClientArrivalOutcome | None) -> dict[str, Any]:
+    """The answer of ``POST /api/clients/<client_id>/arrive`` (desktop contracts.md section 5.5); None (no desktop
+    yet) answers three nulls."""
+    if outcome is None:
+        return {"desktop_id": None, "created_desktop": None, "replaced_desktop_name": None}
+    return {
+        "desktop_id": str(outcome.desktop_id),
+        "created_desktop": (
+            shell.desktop_wire_json(outcome.created_desktop) if outcome.created_desktop is not None else None
+        ),
+        "replaced_desktop_name": outcome.replaced_desktop_name,
+    }
+
+
+def arrive_client(client_id: str) -> ResponseReturnValue:
+    """A shell page has loaded for ``client_id``: settle the desktop it lands on from the requester's identity."""
+    shell = _shell()
+    return jsonify(arrival_wire_json(shell, shell.arrive_client(ClientId(client_id), request_identity())))
 
 
 def list_wallpapers_route() -> ResponseReturnValue:
@@ -396,6 +416,9 @@ def register_desktop_routes(application: Flask) -> None:
     )
     application.add_url_rule(
         "/api/placements/<desktop_id>", view_func=save_placements, methods=["POST"], endpoint="save_placements"
+    )
+    application.add_url_rule(
+        "/api/clients/<client_id>/arrive", view_func=arrive_client, methods=["POST"], endpoint="arrive_client"
     )
     application.add_url_rule(
         "/api/wallpapers", view_func=list_wallpapers_route, methods=["GET"], endpoint="list_wallpapers_route"
