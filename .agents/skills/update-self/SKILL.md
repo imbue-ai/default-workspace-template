@@ -518,29 +518,14 @@ resumes), and how to honor a rollback request are in
 
 ### 5d. Escalate the built-in defects this pass found
 
-The review gates are built to surface defects in built-in code, and they
-deliberately do not fix them locally -- a fix to a file byte-identical to the
-release only manufactures divergence the next update has to reconcile. That
-rule is right, and it means this pass is the only thing standing between those
-findings and nobody ever seeing them. A `submit-upstream-changes candidate`
-label is where the worker stops, not where the work stops.
-
-So before composing the results message: collect every finding this pass
-labelled a `submit-upstream-changes` candidate, plus anything else you hit that
-was a defect in built-in code (a failing built-in test, a step of this flow that
-broke and had to be worked around). For each, either
-
-- submit it -- `submit-upstream-changes` when you have a fix to template code
-  you can stand behind, otherwise the report POST in
-  `.agents/shared/references/report-built-in-issues.md` (which pops a modal
-  for the user to review and send). An mngr defect always goes in the report:
-  its fix is its own mngr PR, not a template one -- or
-- name it in the results message as an explicit recommendation, with the
-  submission offered.
-
-Send **one** report covering all of them, not one per finding: each POST pops
-its own modal over the user's workspace. "Recorded locally" is not a valid
-terminal state for a built-in defect.
+Before composing the results message, collect every finding the worker labelled
+a `submit-upstream-changes` candidate, plus any other defect in built-in code
+you hit this pass (a failing built-in test, a step of this flow that broke and
+had to be worked around). Escalate them together as AGENTS.md's "Updates"
+section describes -- one report via
+`.agents/shared/references/report-built-in-issues.md`, or
+`submit-upstream-changes` for a template fix -- or name each in the results
+message with the submission offered.
 
 Then compose the results message per `references/results-message.md`.
 
