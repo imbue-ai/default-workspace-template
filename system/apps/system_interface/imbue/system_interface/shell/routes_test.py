@@ -1168,17 +1168,25 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
 
 # Section 8: the show op
 
-# What the show tests ask ``buddy`` to show, and the one other path that already counts as showing it.
+# What the show tests ask ``buddy`` to show, the one other path that already counts as showing it, and the page
+# whose windows the show may point at it.
 _SHOW_PATH = "/?doc=agent-1"
 _SHOWING_PATH = "/agent-1"
+_REPOINTABLE_PAGE = "/"
 _BUDDY_REQUESTER = {"app": "buddy", "marker": ""}
 
 
-def _show(client: FlaskClient, client_id: str = "c1") -> Any:
+def _show(client: FlaskClient, client_id: str = "c1", repoint: tuple[str, ...] = (_REPOINTABLE_PAGE,)) -> Any:
     return _op(
         client,
         "show",
-        {"app": "buddy", "path": _SHOW_PATH, "showing": [_SHOWING_PATH], "client": client_id},
+        {
+            "app": "buddy",
+            "path": _SHOW_PATH,
+            "showing": [_SHOWING_PATH],
+            "repoint": list(repoint),
+            "client": client_id,
+        },
         _BUDDY_REQUESTER,
     )
 
@@ -1259,12 +1267,12 @@ def test_show_switches_the_client_to_another_desktop_already_showing_the_path(
     assert client.get("/api/placements/home?client=c1").get_json()["window_paths"] == {}
 
 
-def test_show_navigates_the_frontmost_shown_window_at_the_same_page_and_never_a_different_page(
+def test_show_navigates_the_frontmost_shown_window_on_a_repointable_page_and_never_another_page(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """With nothing showing it, the frontmost shown window of the app whose path is the same page (the path before
-    ``?``) is pointed at the path and raised; a window on another page of the app is never repointed, even when it
-    is on top, and a lower window on the same page is left alone."""
+    """With nothing showing it, the frontmost shown window of the app whose page (its path before ``?``) is one the
+    show names in ``repoint`` is pointed at the path and raised; a window on another page of the app is never
+    repointed, even when it is on top, and a lower window on a repointable page is left alone."""
     app = _pinned_shell(tmp_path, broadcaster)
     client = app.test_client()
     _register_client(app, "c1", "home")
@@ -1286,7 +1294,7 @@ def test_show_navigates_the_frontmost_shown_window_at_the_same_page_and_never_a_
     assert answer["layout"]["placements"][-1]["window_id"] == frontmost_same_page
 
 
-def test_show_passes_over_minimized_windows_at_the_same_page_for_the_pinned_window(
+def test_show_passes_over_minimized_windows_on_a_repointable_page_for_the_pinned_window(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A minimized window is not on screen, so it is not repointed: the app's pinned window on this desktop is
@@ -1309,6 +1317,45 @@ def test_show_passes_over_minimized_windows_at_the_same_page_for_the_pinned_wind
     assert _placement_of(client, minimized)["is_minimized"] is True
     assert _paths_by_window(client)[minimized] == "/?doc=agent-2"
     assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+
+
+def test_show_repoints_a_window_on_any_page_the_show_names_whatever_page_the_path_is_on(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The pages a show may repoint are the ones it names, not the page its path is on: a shown window of the app on
+    a named page is pointed at the path, though that page is not the path's own."""
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    on_named_page = _window_id_at(client, "buddy", "/list?sort=recent")
+
+    shown = _show(client, repoint=("/list",))
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"]) == ("navigated", on_named_page)
+    assert _paths_by_window(client)[on_named_page] == _SHOW_PATH
+
+
+def test_show_with_no_repointable_page_leaves_a_shown_window_on_the_paths_own_page_for_the_pinned_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A show that names no page to repoint repoints no window, even one shown on top at the path's own page with
+    only its query string differing: the shell reads nothing into a query string, so the pinned window takes it."""
+    app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    same_page = _window_id_at(client, "buddy", "/?doc=agent-2")
+    pinned_id = next(window["id"] for window in _desktop_windows(client) if window["is_pinned"])
+
+    shown = _show(client, repoint=())
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"]) == ("pinned", pinned_id)
+    assert answer["layout"]["window_paths"][pinned_id]["path"] == _SHOW_PATH
+    assert _paths_by_window(client)[same_page] == "/?doc=agent-2"
+    assert answer["layout"]["placements"][-1]["window_id"] == pinned_id
 
 
 def test_show_reads_an_independent_window_at_the_path_its_client_sees(
@@ -1360,6 +1407,9 @@ def test_show_opens_a_window_at_the_path_when_the_app_has_no_pinned_window(
         pytest.param({"app": "buddy"}, "path", id="no-path"),
         pytest.param({"app": "nobody", "path": _SHOW_PATH}, "nobody", id="unregistered-app"),
         pytest.param({"app": "buddy", "path": _SHOW_PATH, "showing": ["agent-1"]}, "agent-1", id="unrooted-showing"),
+        pytest.param({"app": "buddy", "path": _SHOW_PATH, "repoint": ["list"]}, "list", id="unrooted-repoint"),
+        pytest.param({"app": "buddy", "path": _SHOW_PATH, "repoint": ["/?doc=x"]}, "/?doc=x", id="repoint-query"),
+        pytest.param({"app": "buddy", "path": _SHOW_PATH, "repoint": ["/#top"]}, "/#top", id="repoint-fragment"),
     ],
 )
 def test_a_show_without_an_app_and_paths_it_can_use_is_a_400(

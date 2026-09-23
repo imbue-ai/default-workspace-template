@@ -43,6 +43,7 @@ from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import WindowPage
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
@@ -662,7 +663,7 @@ def stacked_windows(view: ClientDesktopView) -> list[tuple[Window, WindowPlaceme
 
 @pure
 def page_of_path(path: str) -> str:
-    """The page a path is at: the path without its query string."""
+    """The page a path is at: the path without its query string or fragment."""
     return urlsplit(path).path
 
 
@@ -673,26 +674,27 @@ def choose_show_target(
     app: AppName,
     path: WindowPath,
     showing: AbstractSet[WindowPath],
+    repoint: AbstractSet[WindowPage],
 ) -> ShowChoice:
     """Where a ``show`` op puts ``path`` for one client (desktop contracts.md section 8): a window of ``app`` already at
     ``path`` or a path in ``showing``, on the client's active desktop before its ``others`` and frontmost first; else
-    the frontmost shown window of ``app`` on the active desktop at the same page as ``path``; else the app's pinned
+    the frontmost shown window of ``app`` on the active desktop whose page is in ``repoint``; else the app's pinned
     window on the active desktop; else a new window there."""
     shown_paths = {path, *showing}
     for view in (active, *others):
         for window, _placement in stacked_windows(view):
             if window.app == app and window.path in shown_paths:
                 return ShowChoice(outcome=ShowOutcome.RAISED, desktop_id=view.desktop.id, window=window)
-    same_page = next(
+    repointable = next(
         (
             window
             for window, placement in stacked_windows(active)
-            if window.app == app and not placement.is_minimized and page_of_path(window.path) == page_of_path(path)
+            if window.app == app and not placement.is_minimized and page_of_path(window.path) in repoint
         ),
         None,
     )
-    if same_page is not None:
-        return ShowChoice(outcome=ShowOutcome.NAVIGATED, desktop_id=active.desktop.id, window=same_page)
+    if repointable is not None:
+        return ShowChoice(outcome=ShowOutcome.NAVIGATED, desktop_id=active.desktop.id, window=repointable)
     pinned = next((window for window in active.seen_windows if window.app == app and window.is_pinned), None)
     if pinned is not None:
         return ShowChoice(outcome=ShowOutcome.PINNED, desktop_id=active.desktop.id, window=pinned)

@@ -141,10 +141,12 @@ posted, by the shell's page once and then by the shell's backend
 (`POST /api/embedder-messages`, `shell/embedder_messages.py`), to the route it
 named, with the client whose page received it. The shell reads no payload. An
 app that wants a window for what it was told asks the op route's `show`, which
-takes the app, a path, and the other paths that count as already showing it,
-and picks the window itself: one already showing it (switching desktops if it
-must), else the frontmost window on screen at the same page (pointed at the
-path), else the app's pinned window, else a new one.
+takes the app, a path, the other paths that count as already showing it, and
+the pages whose windows it may point at the path, and picks the window itself:
+one already showing it (switching desktops if it must), else the frontmost
+window on screen at one of those pages (pointed at the path), else the app's
+pinned window, else a new one. The shell reads no meaning into a path's query
+string.
 
 ### How the shell learns about apps
 

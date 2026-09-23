@@ -272,7 +272,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `context` | | read-only; every client's recent activity (`{"ok", "clients"}`) |
 | `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
-| `show` | `app`, `path`, `showing?` | put the app's page at `path` on the client's screen, choosing the window (below); answers the window id and `shown` |
+| `show` | `app`, `path`, `showing?`, `repoint?` | put the app's page at `path` on the client's screen, choosing the window (below); answers the window id and `shown` |
 | `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the launch path (`launch`, else the app's `default_shortcut.launch`, else its first) with `params` as the query string; a window of the app at that path is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
@@ -285,10 +285,10 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `wallpaper` | `wallpaper` | set the desktop's wallpaper |
 
 `window` is a window id, `self`, or an app name (that app's most recently focused window on the target client's active desktop).
-`show` knows nothing of what the path shows. `showing` is a list of the app's other paths that count as already showing it (`path` itself always does). For the target client, every path as that client sees it (its own stored path for an independent window), the first of these that applies:
+`show` knows nothing of what the path shows and reads no meaning into a query string. `showing` is a list of the app's other paths that count as already showing it (`path` itself always does). `repoint` is a list of the app's pages, each a path with no query string or fragment, whose windows `show` may point at `path`; absent or empty, step 2 below repoints nothing. A `showing` entry that is not a path, or a `repoint` entry that is not a page, is a `400`. For the target client, every path as that client sees it (its own stored path for an independent window), the first of these that applies:
 
 1. `raised`: a window of `app` at `path` or a `showing` path, on the client's active desktop before any other and nearest the top of the client's stack first, minimized or not, is restored and raised; one on another desktop is raised there and the client switched to that desktop.
-2. `navigated`: the shown (not minimized) window of `app` on the active desktop nearest the top of the stack whose path is the same page as `path` (equal before any `?`) is set to `path` as `navigate` sets it (a linked window moves for every client, an independent one for this client) and raised; a window of the app on another page is never repointed.
+2. `navigated`: the shown (not minimized) window of `app` on the active desktop nearest the top of the stack whose page (its path before any `?` or `#`) is in `repoint` is set to `path` as `navigate` sets it (a linked window moves for every client, an independent one for this client) and raised; a window of the app on any other page is never repointed.
 3. `pinned`: the app's pinned window on the active desktop is set to `path` the same way and restored.
 4. `opened`: a window of `app` at `path` is opened on the active desktop for the client, shown and on top.
 

@@ -75,6 +75,7 @@ from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import WindowPage
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
@@ -743,13 +744,16 @@ def _show(
         raise LayoutOpError("show needs a path")
     path = WindowPath(arguments.path)
     showing = {WindowPath(candidate) for candidate in arguments.showing}
+    repoint = {WindowPage(candidate) for candidate in arguments.repoint}
     client_id = target.client_id
     others = [
         _client_desktop_view(shell, desktop, client_id)
         for desktop in shell.list_desktops()
         if desktop.id != target.desktop.id
     ]
-    choice = choose_show_target(_client_desktop_view(shell, target.desktop, client_id), others, app, path, showing)
+    choice = choose_show_target(
+        _client_desktop_view(shell, target.desktop, client_id), others, app, path, showing, repoint
+    )
     desktop = shell.get_desktop(choice.desktop_id)
     if choice.window is None:
         request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, launch=None)

@@ -87,6 +87,9 @@ class DesktopOpArguments(FrozenModel):
     showing: tuple[str, ...] = Field(
         default=(), description="The other paths that count as already showing a ``show``'s path"
     )
+    repoint: tuple[str, ...] = Field(
+        default=(), description="The pages, without a query string, whose windows a ``show`` may point at its path"
+    )
     launch: LaunchPathId | None = Field(
         default=None,
         description="The launch path an ``open`` runs (None for the app's default) or a shortcut op names",
