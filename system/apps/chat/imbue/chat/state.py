@@ -61,7 +61,7 @@ class ChatAppState(MutableModel):
     is_secondary: bool = Field(
         default=False,
         description="A second chat beside the live one (a preview): it reports no client activity to the shell, "
-        "whose activity log is the live chat's",
+        "whose activity log is the live chat's, and answers no secret card, whose answer belongs to the live chat",
     )
     # The workspace-wide chat settings the settings routes read and write; the manager reads
     # the same store at create. In memory unless the composition root points it at the file.
