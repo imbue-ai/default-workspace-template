@@ -181,6 +181,7 @@ def _restore_tree(
 # "applied and undone". This prefix is how :func:`_has_rollback_since` tells
 # them apart.
 _ROLLBACK_SUBJECT_PREFIX = "Roll back update apply"
+ROLLBACK_REVERT_SUBJECT_PREFIX = f'Revert "{_ROLLBACK_SUBJECT_PREFIX}'
 
 
 def _commit_rollback(
@@ -283,8 +284,7 @@ def _refuse_a_re_merge_that_drops_a_rolled_back_target(
         return
     reverts = git_out(runner, repo_root, ["log", "--format=%s", f"HEAD..{merge_ref}"])
     if any(
-        line.startswith(f'Revert "{_ROLLBACK_SUBJECT_PREFIX}')
-        for line in reverts.splitlines()
+        line.startswith(ROLLBACK_REVERT_SUBJECT_PREFIX) for line in reverts.splitlines()
     ):
         return
     raise ApplyPreconditionError(

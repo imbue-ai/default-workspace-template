@@ -142,7 +142,13 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from update_apply import apply_update, confirm_last, recover, rollback_last
+from update_apply import (
+    ROLLBACK_REVERT_SUBJECT_PREFIX,
+    apply_update,
+    confirm_last,
+    recover,
+    rollback_last,
+)
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
@@ -301,7 +307,6 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 
 
 UPDATE_SELF_MERGE_SUBJECT = "update-self: merge upstream template"
-ROLLBACK_REVERT_SUBJECT = 'Revert "Roll back update apply'
 
 
 class NoUpdateMergeError(Exception):
@@ -335,7 +340,7 @@ def _latest_commit_with_subject(
 
 def _is_rollback_revert(commit: str, repo_root: Path) -> bool:
     subject = _git(["log", "-1", "--format=%s", commit], repo_root)
-    return subject.startswith(ROLLBACK_REVERT_SUBJECT)
+    return subject.startswith(ROLLBACK_REVERT_SUBJECT_PREFIX)
 
 
 def _first_attempt_first_parent(merge: str, repo_root: Path) -> str:
@@ -394,7 +399,7 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
         )
     first_parent = parents[0]
     same_target_revert = _latest_commit_with_subject(
-        ROLLBACK_REVERT_SUBJECT, f"{merge}..HEAD", repo_root
+        ROLLBACK_REVERT_SUBJECT_PREFIX, f"{merge}..HEAD", repo_root
     )
     if same_target_revert is not None:
         local_fork = _first_attempt_first_parent(merge, repo_root)
