@@ -51,9 +51,13 @@ the chain. Key and cert persist across unshare for a fast re-share; a daily
 check renews the cert when it is within 30 days of expiry. The cookie signing
 secret does not persist: unsharing deletes `data/.secrets/share_gateway_signing_key`,
 so every session -- the owner's included -- stops verifying the moment the
-share ends, and the next share mints a fresh secret. A secret an unshare left
-behind while the runner was down is discarded when the runner next starts
-without share materials, before any new share could reuse it.
+share ends, and the next share mints a fresh secret. The secret file also
+records the SHA-256 of the relay token it was minted under, and the runner
+reuses a stored secret only under that same token. Every share carries a new
+relay token, so a secret an unshare left behind while the runner was down
+never signs the next share: it is discarded when the runner next starts
+without share materials, and replaced at stack start when the runner comes
+back to find the next share's materials already in place.
 
 ## The session
 

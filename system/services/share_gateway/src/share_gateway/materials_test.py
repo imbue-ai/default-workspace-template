@@ -48,12 +48,35 @@ def test_read_share_materials_handles_missing_file(tmp_path: Path) -> None:
     assert materials.relay_token == "tok-123"
 
 
-def test_signing_secret_is_created_once_and_reused(tmp_path: Path) -> None:
+def test_signing_secret_is_created_once_and_reused_under_the_same_relay_token(tmp_path: Path) -> None:
     secret_path = tmp_path / "signing_key"
-    first = load_or_create_signing_secret(secret_path)
-    second = load_or_create_signing_secret(secret_path)
+    first = load_or_create_signing_secret(secret_path, "tok-123")
+    second = load_or_create_signing_secret(secret_path, "tok-123")
     assert first == second
     assert len(first) > 32
+    assert (secret_path.stat().st_mode & 0o777) == 0o600
+    # The file binds the secret to its share by a digest, never by the token itself.
+    assert "tok-123" not in secret_path.read_text()
+
+
+def test_signing_secret_minted_under_one_relay_token_is_replaced_under_another(tmp_path: Path) -> None:
+    # An unshare and re-share the runner was down for leaves the earlier share's secret on disk with
+    # materials present; the new share's relay token must not pick it up, or the old cookies would open it.
+    secret_path = tmp_path / "signing_key"
+    earlier_share = load_or_create_signing_secret(secret_path, "tok-123")
+
+    later_share = load_or_create_signing_secret(secret_path, "tok-456")
+
+    assert later_share != earlier_share
+    assert load_or_create_signing_secret(secret_path, "tok-456") == later_share
+    assert load_or_create_signing_secret(secret_path, "tok-123") != earlier_share
+
+
+def test_signing_secret_file_without_a_relay_token_binding_is_replaced(tmp_path: Path) -> None:
+    secret_path = tmp_path / "signing_key"
+    secret_path.write_text("a-bare-secret-from-an-earlier-gateway")
+
+    assert load_or_create_signing_secret(secret_path, "tok-123") != "a-bare-secret-from-an-earlier-gateway"
     assert (secret_path.stat().st_mode & 0o777) == 0o600
 
 
@@ -61,12 +84,12 @@ def test_discarding_the_signing_secret_makes_the_next_share_mint_a_different_one
     # Unshare deletes the secret so every session it signed stops verifying;
     # the re-share must not resurrect it.
     secret_path = tmp_path / "signing_key"
-    before_unshare = load_or_create_signing_secret(secret_path)
+    before_unshare = load_or_create_signing_secret(secret_path, "tok-123")
 
     assert discard_signing_secret(secret_path) is True
 
     assert not secret_path.exists()
-    assert load_or_create_signing_secret(secret_path) != before_unshare
+    assert load_or_create_signing_secret(secret_path, "tok-123") != before_unshare
     # Discarding when nothing was ever minted is a no-op, not an error, and says so (the runner
     # logs a removal only when there was one).
     assert discard_signing_secret(tmp_path / "never-minted") is False
