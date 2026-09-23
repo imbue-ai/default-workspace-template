@@ -14,9 +14,12 @@ import type { OutgoingMessage } from "../models/OutgoingMessages";
 import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
 
 // Composes the user rail's shared recipes: the dimming rides the row, the dashed
-// not-yet-real border rides the bubble. mb-5 is the committed user row's spacing, so
-// consecutive not-yet-real bubbles stand apart and the real turn replaces one without a reflow.
-const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} mb-5 outgoing-message outgoing-message--sending opacity-60`;
+// not-yet-real border rides the bubble.
+const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} outgoing-message outgoing-message--sending opacity-60`;
+
+// The committed user row's spacing, so consecutive not-yet-real bubbles stand apart and the
+// real turn replaces one without a reflow.
+const STANDALONE_ROW_SPACING_CLASS = "mb-5";
 
 const OUTGOING_BUBBLE_CLASS = `${USER_BUBBLE_CLASS} border border-dashed`;
 
@@ -24,6 +27,9 @@ export interface NotYetRealBubble {
   key: string;
   /** The user's text, verbatim. */
   content: string;
+  /** True inside a group whose own gap spaces its bubbles (the queued group), so the row
+   *  carries no bottom margin of its own. */
+  isGroupSpaced?: boolean;
   /** Marker classes added to the row, for a caller whose bubbles a test or a style picks out. */
   extraRowClass?: string;
 }
@@ -32,8 +38,13 @@ export interface NotYetRealBubble {
  *  message renders through here (optimistic, held by a switch, re-sent by a tap), so they look
  *  the same and the handoff between them is invisible. */
 export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
-  const rowClass =
-    bubble.extraRowClass === undefined ? OUTGOING_ROW_CLASS : `${OUTGOING_ROW_CLASS} ${bubble.extraRowClass}`;
+  const rowClass = [
+    OUTGOING_ROW_CLASS,
+    bubble.isGroupSpaced === true ? null : STANDALONE_ROW_SPACING_CLASS,
+    bubble.extraRowClass ?? null,
+  ]
+    .filter((part) => part !== null)
+    .join(" ");
   return m("div", { class: rowClass, key: bubble.key }, [
     m("div", { class: OUTGOING_BUBBLE_CLASS }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
