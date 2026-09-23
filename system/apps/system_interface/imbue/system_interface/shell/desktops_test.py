@@ -31,7 +31,6 @@ from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
@@ -194,22 +193,19 @@ def test_a_desktops_file_carrying_the_retired_sharing_key_still_reads(tmp_path: 
 
 def test_a_users_desktop_is_named_after_them_and_made_unique() -> None:
     home = default_desktop(())
-    alice = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com", display_name="Alice")
-    assert desktop_name_for_user(alice, [home]) == "Alice"
-    nameless = RequestIdentity(owner=False, user_id="user-bob", email="bob.smith@example.com")
-    assert desktop_name_for_user(nameless, [home]) == "bob.smith"
-    unusable = RequestIdentity(owner=False, user_id="user-x", email="!!!@example.com", display_name="   ")
-    assert desktop_name_for_user(unusable, [home]) == FALLBACK_USER_DESKTOP_NAME
+    assert desktop_name_for_user("Alice", "alice@example.com", [home]) == "Alice"
+    assert desktop_name_for_user(None, "bob.smith@example.com", [home]) == "bob.smith"
+    assert desktop_name_for_user("   ", "!!!@example.com", [home]) == FALLBACK_USER_DESKTOP_NAME
+    assert desktop_name_for_user(None, None, [home]) == FALLBACK_USER_DESKTOP_NAME
     taken = [
         home,
         home.model_copy_update(
             to_update(home.field_ref().id, DesktopId("alice")), to_update(home.field_ref().name, "alice")
         ),
     ]
-    assert desktop_name_for_user(alice, taken) == "Alice 2"
+    assert desktop_name_for_user("Alice", "alice@example.com", taken) == "Alice 2"
     # The name is unique by id as well as by name: "Home" is taken however it is spelled.
-    homely = RequestIdentity(owner=False, user_id="user-h", email="h@example.com", display_name="home!")
-    assert desktop_name_for_user(homely, [home]) == "home! 2"
+    assert desktop_name_for_user("home!", "h@example.com", [home]) == "home! 2"
 
 
 def test_the_next_glyph_is_the_first_unused_then_cycles() -> None:

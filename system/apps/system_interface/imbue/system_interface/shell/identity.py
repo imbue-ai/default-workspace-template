@@ -16,10 +16,11 @@ IDENTITY_HEADER: Final[str] = "X-Imbue-Identity"
 
 
 class RequestIdentity(FrozenModel):
-    """The requester a proxy vouched for: the owner flag always, the account record when the workspace is shared."""
+    """The requester a proxy vouched for: the owner flag always, the account (its id and email) when the workspace is
+    shared. What to call the account and what it looks like is its profile (``profiles.py``), not the header's."""
 
     # The header is cross-version wire data from the proxies; a field this build does not
-    # know must never make it unreadable.
+    # know -- or no longer reads, like the display name older proxies stamp -- must never make it unreadable.
     model_config = ConfigDict(extra="ignore")
 
     owner: bool = Field(description="Whether the requester is the workspace's owner")
@@ -27,8 +28,6 @@ class RequestIdentity(FrozenModel):
     email: str | None = Field(
         default=None, description="The account's verified email, present exactly when user_id is"
     )
-    display_name: str | None = Field(default=None, description="The account's display name, when it has one")
-    avatar_url: str | None = Field(default=None, description="The account's avatar URL, when it has one")
 
 
 ANONYMOUS_OWNER: Final[RequestIdentity] = RequestIdentity(owner=True)

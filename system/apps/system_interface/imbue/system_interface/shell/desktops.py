@@ -41,7 +41,6 @@ from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.primitives import UserId
@@ -154,12 +153,12 @@ def _sluggable(name: str) -> bool:
 
 
 @pure
-def desktop_name_for_user(identity: RequestIdentity, existing: Sequence[Desktop]) -> str:
-    """What a visiting user's desktop is called: their display name, else the local part of their email, else a
-    fallback, made unique among the existing desktops."""
+def desktop_name_for_user(display_name: str | None, email: str | None, existing: Sequence[Desktop]) -> str:
+    """What a visiting user's desktop is called: their profile's display name, else the local part of their email,
+    else a fallback, made unique among the existing desktops."""
     candidates = [
-        (identity.display_name or "").strip(),
-        (identity.email or "").split("@")[0].strip(),
+        (display_name or "").strip(),
+        (email or "").split("@")[0].strip(),
         FALLBACK_USER_DESKTOP_NAME,
     ]
     base = next(candidate for candidate in candidates if candidate and _sluggable(candidate))

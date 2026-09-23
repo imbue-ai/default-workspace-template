@@ -1781,11 +1781,12 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
 
 
 def _visiting_client(
-    page: Page, e2e_server: E2EServer, user_id: str, display_name: str, desktop_id: str
+    page: Page, e2e_server: E2EServer, user_id: str, email_local_part: str, desktop_id: str
 ) -> contextlib.AbstractContextManager[Page]:
     """A second client whose every request carries a visitor's identity, landed on the visitor's own desktop
-    rather than on Home (the shell makes one for a first-time visitor)."""
-    visitor = RequestIdentity(owner=False, user_id=user_id, email=f"{user_id}@example.com", display_name=display_name)
+    rather than on Home (the shell makes one for a first-time visitor, named after their email here: the e2e
+    shell can reach no connector for a profile)."""
+    visitor = RequestIdentity(owner=False, user_id=user_id, email=f"{email_local_part}@example.com")
     return _second_client(page, e2e_server, desktop_id, extra_http_headers=identity_headers(visitor))
 
 
@@ -1806,10 +1807,10 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
         error_message="Home's window never settled (its page never reported its location)",
     )
 
-    with _visiting_client(page, e2e_server, "user-alice", "Alice", "alice") as visitor:
+    with _visiting_client(page, e2e_server, "user-alice", "alice", "alice") as visitor:
         desktops = _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]
         (alice,) = [desktop for desktop in desktops if desktop["id"] == "alice"]
-        assert alice["name"] == "Alice"
+        assert alice["name"] == "alice"
         (copied,) = alice["windows"]
         assert copied["id"] != home_window and copied["app"] == _STUB_APP_NAME
         # The copy is hers to arrange: it starts minimized in her taskbar, and Home's window is untouched.
@@ -1818,7 +1819,7 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
         expect(page.locator('[data-desktop-switch="alice"]')).to_be_visible(timeout=15000)
         expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
 
-        with _visiting_client(page, e2e_server, "user-alice", "Alice", "alice"):
+        with _visiting_client(page, e2e_server, "user-alice", "alice", "alice"):
             pass
         assert [desktop["id"] for desktop in _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]] == [
             _HOME_DESKTOP_ID,
@@ -1827,7 +1828,7 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
 
         _post_json(f"{e2e_server.base_url}/api/desktops/alice/delete", {})
         visitor.reload()
-        expect(visitor.locator('[data-replaced-desktop-notice="Alice"]')).to_be_visible(timeout=15000)
+        expect(visitor.locator('[data-replaced-desktop-notice="alice"]')).to_be_visible(timeout=15000)
         expect(visitor.locator('[data-desktop-id="alice"]')).to_be_visible()
         visitor.locator(".replaced-desktop-dismiss").click()
         expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)

@@ -10,12 +10,11 @@ import { applyPresence, resetPresenceForTesting } from "../model/Presence";
 import { presentUserRecord } from "../testing/records";
 import { PresenceStrip, presenceInitial, presenceTitle } from "./PresenceStrip";
 
-const bob = presentUserRecord("user-bob-4471", { email: "bob@example.com", display_name: "Bob", session_count: 2 });
+const bob = presentUserRecord("user-bob-4471", { email: "bob@example.com", display_name: "Bob" });
 const owner = presentUserRecord("user-owner-9c21", {
   email: "owner@example.com",
   avatar_url: "https://accounts.example.com/users/user-owner-9c21/avatar/9a7b",
   owner: true,
-  session_count: 2,
 });
 
 function render(): HTMLElement {

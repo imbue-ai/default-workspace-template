@@ -17,6 +17,7 @@ import { presentUserRecord } from "../testing/records";
 
 interface RecordedRequest {
   url: string;
+  method: string;
   body: string;
 }
 
@@ -33,7 +34,7 @@ function stubFetch(response: () => Response): RecordedRequest[] {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
-      requests.push({ url, body: String(init?.body ?? "") });
+      requests.push({ url, method: String(init?.method ?? "GET"), body: String(init?.body ?? "") });
       return response();
     }),
   );
@@ -57,19 +58,18 @@ afterEach(() => {
 });
 
 describe("startPresenceHeartbeat", () => {
-  it("heartbeats at once with a per-page session id, then every interval while visible", async () => {
+  it("posts an empty heartbeat at once, then every interval while visible", async () => {
     const requests = stubFetch(() => jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" } }));
 
     startPresenceHeartbeat();
     await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toContain("/api/presence/heartbeat");
-    const firstSessionId = (JSON.parse(requests[0].body) as { session_id: string }).session_id;
-    expect(firstSessionId.length).toBeGreaterThanOrEqual(8);
+    expect(requests[0].method).toBe("POST");
+    expect(requests[0].body).toBe("");
 
     await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
     expect(requests).toHaveLength(2);
-    expect((JSON.parse(requests[1].body) as { session_id: string }).session_id).toBe(firstSessionId);
     expect(getOwnIdentity()).toEqual({ owner: true, user_id: "u1", email: "a@b" });
   });
 
@@ -104,13 +104,13 @@ describe("startPresenceHeartbeat", () => {
     expect(getOwnIdentity()).toBeNull();
   });
 
-  it("beacons a leave carrying the same session id when the page goes away", async () => {
+  it("sends nothing when the page goes away: a stopped heartbeat is the leave", async () => {
     const requests = stubFetch(() => jsonResponse(204));
-    const beacons: { url: string; body: Blob }[] = [];
+    const beacons: string[] = [];
     vi.stubGlobal("navigator", {
       ...navigator,
-      sendBeacon: (url: string, body: Blob) => {
-        beacons.push({ url, body });
+      sendBeacon: (url: string) => {
+        beacons.push(url);
         return true;
       },
     });
@@ -118,10 +118,10 @@ describe("startPresenceHeartbeat", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(beacons).toHaveLength(1);
-    expect(beacons[0].url).toContain("/api/presence/leave");
-    expect(await beacons[0].body.text()).toBe(requests[0].body);
+    expect(beacons).toEqual([]);
+    expect(requests).toHaveLength(1);
   });
 
   it("survives a failed heartbeat and keeps going", async () => {

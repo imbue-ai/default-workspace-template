@@ -189,14 +189,14 @@ export interface WallpaperListing {
   readonly url: string;
 }
 
-/** One connected user as the shell serializes it (one entry per user, however many tabs). */
+/** One connected user as the shell serializes it (one entry per user, however many tabs): the identity record
+ * with the account's profile (name and avatar, from imbue_cloud) beside it. */
 export interface PresentUser {
   readonly user_id: string;
   readonly email: string;
   readonly display_name: string | null;
   readonly avatar_url: string | null;
   readonly owner: boolean;
-  readonly session_count: number;
   readonly first_seen: string;
   readonly last_seen: string;
 }
@@ -568,7 +568,6 @@ export function parsePresentUser(raw: unknown): PresentUser {
     display_name: asOptionalString(record.display_name, "user.display_name"),
     avatar_url: asOptionalString(record.avatar_url, "user.avatar_url"),
     owner: asBoolean(record.owner, "user.owner"),
-    session_count: asNumber(record.session_count, "user.session_count"),
     first_seen: asString(record.first_seen, "user.first_seen"),
     last_seen: asString(record.last_seen, "user.last_seen"),
   };

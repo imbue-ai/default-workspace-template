@@ -11,7 +11,8 @@ from imbue.system_interface.shell.identity import parse_identity_header
 from imbue.system_interface.shell.identity import visiting_user_id
 
 
-def test_parse_identity_header_reads_the_record_and_ignores_unknown_fields() -> None:
+def test_parse_identity_header_reads_the_record_and_ignores_fields_it_does_not_key_on() -> None:
+    # An older proxy still stamps the display name and avatar; a newer one may add fields of its own.
     header = json.dumps(
         {
             "owner": False,
@@ -23,7 +24,7 @@ def test_parse_identity_header_reads_the_record_and_ignores_unknown_fields() -> 
         }
     )
     assert parse_identity_header(header) == RequestIdentity(
-        owner=False, user_id="user-bob-4471", email="bob@example.com", display_name="Bob", avatar_url="https://a/b"
+        owner=False, user_id="user-bob-4471", email="bob@example.com"
     )
 
 
