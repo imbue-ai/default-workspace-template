@@ -137,6 +137,16 @@ export class PointerGestureSource implements GestureSource {
       return { x: event.clientX - origin.left, y: event.clientY - origin.top };
     };
 
+    const deltaFrom = (press: PixelPoint, point: PixelPoint): PixelPoint => ({
+      x: point.x - press.x,
+      y: point.y - press.y,
+    });
+
+    /** End a press that had become a drag, at ``point``; a press that never did ends silently. */
+    const endDrag = (held: PendingPress, point: PixelPoint): void => {
+      if (held.isDragging) listener.onEnd(held.binding, point, deltaFrom(held.press, point));
+    };
+
     const clearLongPress = (): void => {
       if (pending?.longPressTimer != null) clearTimeout(pending.longPressTimer);
       if (pending !== null) pending.longPressTimer = null;
@@ -200,14 +210,11 @@ export class PointerGestureSource implements GestureSource {
       if (event.buttons === 0) {
         const held = pending;
         finish();
-        if (held.isDragging) {
-          const dropped = held.lastPoint;
-          listener.onEnd(held.binding, dropped, { x: dropped.x - held.press.x, y: dropped.y - held.press.y });
-        }
+        endDrag(held, held.lastPoint);
         return;
       }
       const point = pointOf(event);
-      const delta = { x: point.x - pending.press.x, y: point.y - pending.press.y };
+      const delta = deltaFrom(pending.press, point);
       if (!pending.isDragging) {
         if (Math.hypot(delta.x, delta.y) < listener.thresholdPx()) return;
         if (!listener.isDraggable(pending.binding)) {
@@ -236,8 +243,7 @@ export class PointerGestureSource implements GestureSource {
       const held = pending;
       const point = pointOf(event);
       finish();
-      if (held.isDragging)
-        listener.onEnd(held.binding, point, { x: point.x - held.press.x, y: point.y - held.press.y });
+      endDrag(held, point);
     };
 
     const onPointerCancel = (event: PointerEvent): void => {
