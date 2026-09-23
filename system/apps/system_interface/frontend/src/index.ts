@@ -77,8 +77,9 @@ function bootstrap(): void {
   }
   const started = desktopStore.start(takeDeepLinkFromLocation());
   // Announced once the page can act on what the embedder held, not merely once a handler is
-  // registered: a focus-chat ask needs the desktops ``start`` reads and the apps the socket
-  // delivers, and the embedder sends it the moment this announcement lands.
+  // registered: a focus-chat ask needs the desktops and the apps. ``start`` reads both from the
+  // inventory, but one whose inventory read failed returns without them, and the apps then land
+  // with the socket's first ``apps_updated``; the embedder sends the ask the moment this lands.
   void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
 }
 
