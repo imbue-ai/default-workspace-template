@@ -1,8 +1,9 @@
 /**
  * The TypeScript mirrors of the shell's records (desktop-interface contracts.md sections 3 to
- * 5, and the pinned-taskbar-entries plan): what ``GET /api/desktops``, the placements routes
- * (a client's stored window paths included), the client list with each client's entries, the
- * ``apps_updated`` push with each app's pin, the avatar catalog of ``GET /api/avatars``, and the
+ * 5, and the pinned-taskbar-entries plan): what ``GET /api/inventory`` (the desktops, the apps
+ * with each one's pin, and the clients with each one's entries), the placements routes (a
+ * client's stored window paths included), the client list, the ``apps_updated`` and
+ * ``desktops_updated`` pushes, the avatar catalog of ``GET /api/avatars``, and the
  * ``avatar_status``, ``avatar_selection_changed``, ``client_entries_changed``, and
  * ``presence_updated`` pushes carry, spelled as the wire spells them (``snake_case``), and the
  * parsers that read a wire document into them. A document of the wrong shape is refused with
@@ -189,13 +190,22 @@ export interface WallpaperListing {
   readonly url: string;
 }
 
+/** What a shell page reads once it has arrived (contracts.md section 5.5): every desktop, every registered app,
+ *  and every known client, in one answer, so the page knows the apps before it draws a shortcut. The document's
+ *  ``is_preview`` and each client's ``shown`` are an agent's reading of it and are not kept here. */
+export interface Inventory {
+  readonly desktops: readonly Desktop[];
+  readonly apps: readonly AppRecord[];
+  readonly clients: readonly ClientRecord[];
+}
+
 /** One connected user as the shell serializes it (one entry per user, however many tabs): the identity record
- * with the account's profile (name and avatar, from imbue_cloud) beside it. */
+ * with the account's profile (name and profile picture, from imbue_cloud) beside it. */
 export interface PresentUser {
   readonly user_id: string;
   readonly email: string;
   readonly display_name: string | null;
-  readonly avatar_url: string | null;
+  readonly profile_picture_url: string | null;
   readonly owner: boolean;
   readonly first_seen: string;
   readonly last_seen: string;
@@ -542,6 +552,15 @@ export function parseClientArrival(raw: unknown): ClientArrival {
   };
 }
 
+export function parseInventory(raw: unknown): Inventory {
+  const record = asObject(raw, "inventory");
+  return {
+    desktops: parseDesktops(record.desktops),
+    apps: parseAppRecords(record.apps),
+    clients: parseClientRecords(record.clients),
+  };
+}
+
 export function parseWallpaperListings(raw: unknown): WallpaperListing[] {
   return asArray(raw, "wallpapers").map(parseWallpaperListing);
 }
@@ -566,7 +585,7 @@ export function parsePresentUser(raw: unknown): PresentUser {
     user_id: asString(record.user_id, "user.user_id"),
     email: asString(record.email, "user.email"),
     display_name: asOptionalString(record.display_name, "user.display_name"),
-    avatar_url: asOptionalString(record.avatar_url, "user.avatar_url"),
+    profile_picture_url: asOptionalString(record.profile_picture_url, "user.profile_picture_url"),
     owner: asBoolean(record.owner, "user.owner"),
     first_seen: asString(record.first_seen, "user.first_seen"),
     last_seen: asString(record.last_seen, "user.last_seen"),

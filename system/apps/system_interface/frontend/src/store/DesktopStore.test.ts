@@ -3,6 +3,7 @@ import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
+import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, settle } from "../testing/fakeShell";
 import {
   appRecord,
@@ -47,10 +48,10 @@ function makeStore(redraw: () => void = () => undefined): DesktopStore {
   return store;
 }
 
+/** A started store; the apps come from the inventory (``api.apps``), no socket message needed. */
 async function startedStore(redraw: () => void = () => undefined): Promise<DesktopStore> {
   const store = makeStore(redraw);
   await store.start(NO_LINK);
-  socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
   return store;
 }
 
@@ -60,6 +61,7 @@ beforeEach(() => {
   socket = new FakeDesktopSocket();
   notices = [];
   reloads = 0;
+  api.apps = [appRecord("docs"), appRecord("notes")];
   api.desktops = [
     desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b")] }),
     desktopRecord("work"),
@@ -73,19 +75,59 @@ afterEach(() => {
 });
 
 describe("bootstrap", () => {
-  it("arrives first, lands on the desktop the shell answers, reports it, and fetches its layout", async () => {
+  it("arrives first, reads the inventory, lands on the desktop the shell answers, reports it, and fetches its layout", async () => {
     api.clients = [
       clientRecord(CLIENT, { active_desktop: "work" }),
       clientRecord("other", { active_desktop: "home" }),
     ];
     const store = await startedStore();
-    // The arrival is posted before the desktops are read (it may seed one); the avatar read is independent.
+    // The arrival is posted before the inventory is read (it may seed a desktop); the avatar read is independent.
     expect(api.calls.indexOf(`arriveClient:${CLIENT}`)).toBeGreaterThanOrEqual(0);
-    expect(api.calls.indexOf(`arriveClient:${CLIENT}`)).toBeLessThan(api.calls.indexOf("fetchDesktops"));
+    expect(api.calls.indexOf(`arriveClient:${CLIENT}`)).toBeLessThan(api.calls.indexOf("fetchInventory"));
+    expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(1);
+    expect(api.calls).not.toContain("fetchClients");
     expect(store.getState().activeDesktopId).toBe("work");
     expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
     expect(store.getState().isLayoutLoaded).toBe(true);
     expect(store.getReplacedDesktop()).toBeNull();
+  });
+
+  it("knows the apps from the inventory, so a desktop is complete with a socket that never connects", async () => {
+    const store = await startedStore();
+    // Nothing was delivered over the socket: the apps, the desktops, and the layout all came over REST.
+    expect(socket.handlers).not.toBeNull();
+    expect(store.getState().isAppsLoaded).toBe(true);
+    expect(store.getState().apps.map((app) => app.name)).toEqual(["docs", "notes"]);
+    expect(resolveLaunchRun(store.getState(), "notes", "new", "new")).toEqual({
+      kind: "open",
+      app: "notes",
+      path: "/new",
+      launch: "new",
+    });
+    await store.runLaunch("gone", "new", "focus");
+    expect(notices).toEqual(["Cannot open: gone is not registered"]);
+  });
+
+  it("is connecting, not missing apps, until the inventory answers; the socket's app list also ends the wait", async () => {
+    const answerReads = api.holdReads();
+    const store = makeStore();
+    const starting = store.start(NO_LINK);
+    await settle();
+    expect(store.getState().isAppsLoaded).toBe(false);
+    expect(resolveLaunchRun(store.getState(), "docs", "new", "focus")).toEqual({ kind: "connecting" });
+    await store.runLaunch("docs", "new", "focus");
+    expect(notices).toEqual([STILL_CONNECTING_NOTICE]);
+    let isAppsLoaded = false;
+    void store.whenAppsLoaded().then(() => {
+      isAppsLoaded = true;
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs")]);
+    await settle();
+    expect(isAppsLoaded).toBe(true);
+    expect(store.getState().isAppsLoaded).toBe(true);
+    answerReads();
+    await starting;
+    expect(store.getState().apps.map((app) => app.name)).toEqual(["docs", "notes"]);
   });
 
   it("lands a first-time user on the desktop the shell seeded for them, and notices a replaced one until dismissed", async () => {
@@ -122,19 +164,15 @@ describe("bootstrap", () => {
     expect(store.getState().activeDesktopId).toBe("work");
   });
 
-  it("a deep link's desktop wins, and its open and launch wait for the apps to arrive over the socket", async () => {
+  it("a deep link's desktop wins, and its open and launch run against the inventory's apps", async () => {
     api.clients = [clientRecord(CLIENT, { active_desktop: "work" })];
     const store = makeStore();
-    const started = store.start({
+    await store.start({
       desktopId: "home",
       open: { app: "docs", path: "/a" },
       launch: { app: "notes", launch: "new" },
     });
-    await settle();
     expect(store.getState().activeDesktopId).toBe("home");
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
-    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
-    await started;
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([
       "openWindow:home:docs:/a:focus:-",
       "openWindow:home:notes:/new:new:new",
@@ -169,12 +207,13 @@ describe("bootstrap", () => {
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
 
-  it("tells the user when the desktops cannot be read, instead of failing silently", async () => {
+  it("tells the user when the inventory cannot be read, instead of failing silently", async () => {
     api.refusal = "the shell is restarting";
     const store = makeStore();
     await store.start(NO_LINK);
-    expect(notices).toEqual(["Could not read the desktops: the shell is restarting"]);
+    expect(notices).toEqual(["Could not read the desktops and apps: the shell is restarting"]);
     expect(store.getState().activeDesktopId).toBeNull();
+    expect(store.getState().isAppsLoaded).toBe(false);
   });
 
   it("chooses the first desktop when nothing names one", () => {

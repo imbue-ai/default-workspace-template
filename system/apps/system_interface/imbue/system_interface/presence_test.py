@@ -189,17 +189,17 @@ def test_an_unreadable_user_file_is_skipped_and_replaced_on_the_next_heartbeat(t
 def test_present_user_wire_json_carries_the_profile_beside_the_record(tmp_path: Path) -> None:
     store = _store(tmp_path)
     (user,) = store.heartbeat(_BOB, _T0).users
-    profile = UserProfile(user_id="user-bob-4471", display_name="Bob", avatar_url="https://a/bob.png")
+    profile = UserProfile(user_id="user-bob-4471", display_name="Bob", profile_picture_url="https://a/bob.png")
 
     assert present_user_wire_json(user, profile) == {
         "user_id": "user-bob-4471",
         "email": "bob@example.com",
         "display_name": "Bob",
-        "avatar_url": "https://a/bob.png",
+        "profile_picture_url": "https://a/bob.png",
         "owner": False,
         "first_seen": "2026-09-19T10:00:00.000000000Z",
         "last_seen": "2026-09-19T10:00:00.000000000Z",
     }
     without_profile = present_user_wire_json(user, None)
-    assert without_profile["display_name"] is None and without_profile["avatar_url"] is None
+    assert without_profile["display_name"] is None and without_profile["profile_picture_url"] is None
     assert "session_count" not in without_profile

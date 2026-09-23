@@ -139,8 +139,8 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 
 ### 3.10 Users and their desktops
 
-The shell learns who is asking from the `X-Imbue-Identity` header every request carries (the share identity spec): an `owner` flag, and a `user_id` with an `email`, `display_name`, and `avatar_url` when the workspace is shared and the requester is signed in.
-A page's first act is to post its arrival (`POST /api/clients/<client_id>/arrive`), and the answer is the desktop the client lands on.
+The shell learns who is asking from the `X-Imbue-Identity` header every request carries (the share identity spec): an `owner` flag, and a `user_id` with an `email` when the workspace is shared and the requester is signed in; what to call them and their profile picture is the account's profile, fetched from imbue_cloud (contracts.md section 5.1).
+A page's first act is to post its arrival (`POST /api/clients/<client_id>/arrive`), and the answer is the desktop the client lands on; it then reads the inventory (`GET /api/inventory`: the desktops, the apps, and the clients in one answer), so it knows every app before it draws a shortcut, and the socket carries the changes from then on.
 The owner, and any request without a `user_id`, land as before: the client's stored desktop, else the first.
 A **visiting user** (`owner` false with a `user_id`) landing on someone else's desktop would open and close that person's windows, so on their first arrival the shell makes them a desktop: named after them (display name, else the email's local part, else `Guest`, made unique), with the next free glyph and its colour, seeded from the first desktop (its shortcuts, its wallpaper, and a new window at the path of each of its settled windows, so they see what is open without touching the originals).
 The shell remembers it in `users.json` and stamps the client's record with the `user_id`; every later client of that user lands on that desktop, and a returning client keeps the desktop it was on (one that last arrived as someone else, or anonymously, is not returning: it lands on the user's desktop).
@@ -238,7 +238,7 @@ Left to right: the launcher field; one entry per window of the active desktop in
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
 A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
-The tray's widgets are Presence (one avatar per connected user, drawn only when someone is recorded; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
+The tray's widgets are Presence (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
 ### 4.11 The launcher

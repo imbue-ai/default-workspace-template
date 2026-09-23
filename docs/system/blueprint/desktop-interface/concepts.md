@@ -120,7 +120,7 @@ It is a menu, one per client, closed by a choice, a click outside, or Escape, an
 Opening something from it opens a window on the active desktop; the "Start something" intents and the template shelves the New Tab page showed are the Getting Started app's (launcher-and-getting-started plan section 3.6).
 
 The system tray holds the tray widgets, each a self-contained component with one popover.
-V1 ships two: **Presence** (one avatar per connected user, drawn only when someone is recorded; the share identity spec) and **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
+V1 ships two: **Presence** (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
 
 ### 2.9 The word "dock"
 

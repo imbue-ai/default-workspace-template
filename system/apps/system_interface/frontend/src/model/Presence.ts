@@ -5,9 +5,10 @@
  * is visible, once immediately when it becomes visible, and nothing when it goes away: the shell
  * counts a user as gone once their heartbeats stop. The proxy in front of the shell stamps the
  * request's identity, so the page sends nothing about who it is; the heartbeat's answer is the
- * requester's own identity record (or 204 when the workspace carries none), which is what the
- * account affordances render. The connected set itself arrives as `presence_updated` over the
- * shell's WebSocket, one entry per user, each with the name and avatar imbue_cloud holds for them.
+ * requester's own identity record (or 204 when the workspace carries none), which is how the
+ * Presence widget tells the viewer's own entry from the rest. The connected set itself arrives as
+ * `presence_updated` over the shell's WebSocket, one entry per user, each with the name and
+ * profile picture imbue_cloud holds for them.
  */
 
 import m from "mithril";
@@ -39,20 +40,6 @@ export function getOwnIdentity(): OwnIdentity | null {
 /** Apply a `presence_updated` push: the whole connected set, replacing the last one. */
 export function applyPresence(users: PresentUser[]): void {
   presentUsers = users;
-}
-
-/** Whether the shell is reached over a share (any host that is not a local forward origin). */
-export function isSharedHost(host: string): boolean {
-  const hostname = host.replace(/:\d+$/, "").toLowerCase();
-  return !(hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1");
-}
-
-/** The identity refresh the gateway serves at every shared origin; null on a local forward, where there is nothing to refresh. */
-export function identityRefreshUrl(
-  location: Pick<Location, "host" | "origin" | "href"> = window.location,
-): string | null {
-  if (!isSharedHost(location.host)) return null;
-  return `${location.origin}/_auth/refresh?next=${encodeURIComponent(location.href)}`;
 }
 
 async function sendHeartbeat(): Promise<void> {

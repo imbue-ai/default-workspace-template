@@ -16,7 +16,7 @@ from imbue.system_interface.shell.primitives import UserId
 
 _T0 = datetime(2026, 9, 19, 10, 0, 0, tzinfo=timezone.utc)
 _BOB = UserId("user-bob-4471")
-_BOB_WIRE = {"user_id": "user-bob-4471", "display_name": "Bob", "avatar_url": "https://a/bob.png"}
+_BOB_WIRE = {"user_id": "user-bob-4471", "display_name": "Bob", "profile_picture_url": "https://a/bob.png"}
 
 
 class _Connector:
@@ -75,7 +75,11 @@ def test_resolve_fetches_the_profile_from_the_broker_and_caches_it(tmp_path: Pat
     first = resolver.resolve(_BOB, _T0)
     second = resolver.resolve(_BOB, _T0 + PROFILE_CACHE_TTL - timedelta(seconds=1))
 
-    assert first == second == UserProfile(user_id="user-bob-4471", display_name="Bob", avatar_url="https://a/bob.png")
+    assert (
+        first
+        == second
+        == UserProfile(user_id="user-bob-4471", display_name="Bob", profile_picture_url="https://a/bob.png")
+    )
     (request,) = connector.requests
     assert str(request.url) == "https://broker.example.test/users/user-bob-4471/profile"
     cached = json.loads((tmp_path / "profiles" / "user-bob-4471.json").read_text())
@@ -127,7 +131,9 @@ def test_a_nameless_profile_is_a_profile_with_no_name(tmp_path: Path) -> None:
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={"user_id": "user-bob-4471"})
     resolver = _resolver(tmp_path, connector)
 
-    assert resolver.resolve(_BOB, _T0) == UserProfile(user_id="user-bob-4471", display_name=None, avatar_url=None)
+    assert resolver.resolve(_BOB, _T0) == UserProfile(
+        user_id="user-bob-4471", display_name=None, profile_picture_url=None
+    )
 
 
 def test_nothing_is_fetched_while_the_workspace_is_not_shared(tmp_path: Path) -> None:

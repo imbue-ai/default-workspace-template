@@ -8,8 +8,6 @@ import {
   applyPresence,
   getOwnIdentity,
   getPresentUsers,
-  identityRefreshUrl,
-  isSharedHost,
   resetPresenceForTesting,
   startPresenceHeartbeat,
 } from "./Presence";
@@ -144,32 +142,5 @@ describe("applyPresence", () => {
     expect(getPresentUsers().map((entry) => entry.user_id)).toEqual(["user-bob-4471", "user-owner-9c21"]);
     applyPresence([]);
     expect(getPresentUsers()).toEqual([]);
-  });
-});
-
-describe("isSharedHost and identityRefreshUrl", () => {
-  it("treats every local forward origin as not shared", () => {
-    expect(isSharedHost("system_interface-abc.agent-0123.localhost:8421")).toBe(false);
-    expect(isSharedHost("localhost:8000")).toBe(false);
-    expect(isSharedHost("127.0.0.1:8000")).toBe(false);
-    expect(isSharedHost("system_interface-abc.0123abcd.us1.imbueminds.com")).toBe(true);
-  });
-
-  it("links the refresh on the page's own origin with the page as next, and nowhere locally", () => {
-    const shared = {
-      host: "system_interface-abc.0123abcd.us1.imbueminds.com",
-      origin: "https://system_interface-abc.0123abcd.us1.imbueminds.com",
-      href: "https://system_interface-abc.0123abcd.us1.imbueminds.com/?tab=2",
-    };
-    expect(identityRefreshUrl(shared)).toBe(
-      "https://system_interface-abc.0123abcd.us1.imbueminds.com/_auth/refresh?next=" + encodeURIComponent(shared.href),
-    );
-    expect(
-      identityRefreshUrl({
-        host: "agent-0123.localhost:8421",
-        origin: "https://agent-0123.localhost:8421",
-        href: "https://agent-0123.localhost:8421/",
-      }),
-    ).toBeNull();
   });
 });
