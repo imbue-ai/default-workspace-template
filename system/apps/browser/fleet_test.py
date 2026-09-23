@@ -155,15 +155,15 @@ def test_open_viewer_window_warns_cleanly_when_it_cant_show_a_window(monkeypatch
     assert printed == ["browser riley-jones is ready. To watch it live, open it from the launcher (Browser -> riley-jones)."]
 
 
-def test_cmd_new_opens_the_viewer_window_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    # "Open a new browser" should visibly open its viewer window (by the returned name), not wait
-    # for the first command. The daemon returns the chosen name as `name`.
-    opened: list[str] = []
+def test_cmd_new_opens_the_viewer_window_by_name_minimized(monkeypatch: pytest.MonkeyPatch) -> None:
+    # "Open a new browser" opens its viewer window (by the returned name) right away rather than
+    # waiting for the first command, but minimized, so it does not land over the user's work.
+    calls: list[tuple] = []
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"name": "alex-smith"}))
-    monkeypatch.setattr(fleet, "_open_viewer_window", lambda name, is_minimized: opened.append(name))
+    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     args = fleet._build_parser().parse_args(["new"])
     assert fleet.cmd_new(args) == fleet._EXIT_OK
-    assert opened == ["alex-smith"]
+    assert calls == [("open", "browser", "--path", "/?session=alex-smith", "--minimized")]
 
 
 def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPatch) -> None:
