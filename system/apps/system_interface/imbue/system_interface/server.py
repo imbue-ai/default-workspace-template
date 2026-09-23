@@ -3,6 +3,7 @@ import json
 import queue
 import re
 import shlex
+from collections.abc import Sequence
 from typing import Any
 from typing import Final
 
@@ -28,13 +29,12 @@ from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
 from imbue.system_interface.documents import inject_meta_tag
 from imbue.system_interface.presence import PresenceOutcome
-from imbue.system_interface.presence import PresenceSessionId
-from imbue.system_interface.presence import present_user_wire_json
+from imbue.system_interface.presence import PresentUser
+from imbue.system_interface.presence import present_users_wire_json
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.request_helpers import error_response
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
-from imbue.system_interface.request_helpers import parse_json_object_body
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
@@ -431,68 +431,39 @@ API_PREFIX: Final[str] = "api/"
 
 PRESENCE_PATH: Final[str] = "/api/presence"
 PRESENCE_HEARTBEAT_PATH: Final[str] = "/api/presence/heartbeat"
-PRESENCE_LEAVE_PATH: Final[str] = "/api/presence/leave"
+
+
+def _present_users_wire_json(users: Sequence[PresentUser]) -> list[dict[str, Any]]:
+    return present_users_wire_json(users, get_state().profiles, utc_now())
 
 
 def _presence_endpoint() -> Response:
     """The connected users right now (one entry per user), for backends and tests that prefer HTTP to the files."""
     users = get_state().presence.connected_users(utc_now())
-    return json_response({"users": [present_user_wire_json(user) for user in users]})
-
-
-def _parse_presence_session_id() -> PresenceSessionId | Response:
-    body = parse_json_object_body()
-    if isinstance(body, Response):
-        return body
-    raw_session_id = body.get("session_id")
-    if not isinstance(raw_session_id, str):
-        return error_response("session_id must be a string", 400)
-    try:
-        return PresenceSessionId(raw_session_id)
-    except InvalidShellValueError as e:
-        return error_response(str(e), 400)
+    return json_response({"users": _present_users_wire_json(users)})
 
 
 def _broadcast_presence_if_changed(outcome: PresenceOutcome) -> None:
     if outcome.is_membership_changed:
-        _shell().broadcaster.broadcast_presence_updated([present_user_wire_json(user) for user in outcome.users])
+        _shell().broadcaster.broadcast_presence_updated(_present_users_wire_json(outcome.users))
 
 
 def _presence_heartbeat_endpoint() -> Response:
-    """One shell tab's heartbeat: record the requester's presence and answer their own identity record.
+    """One shell page's heartbeat (no body): record the requester's presence and answer their own identity record.
 
     Answers 204 and records nothing when the identity carries no user id (an unshared
     workspace's owner, or a request that came through no current proxy): there is nobody
     to name, and the page then shows no account.
     """
-    session_id = _parse_presence_session_id()
-    if isinstance(session_id, Response):
-        return session_id
     identity = request_identity()
     if identity.user_id is None:
         return Response(status=204)
     try:
-        outcome = get_state().presence.heartbeat(identity, session_id, utc_now())
+        outcome = get_state().presence.heartbeat(identity, utc_now())
     except InvalidShellValueError as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)
     return json_response({"identity": identity.model_dump(exclude_none=True)})
-
-
-def _presence_leave_endpoint() -> Response:
-    """One shell tab is going away (the page's unload beacon): drop its session."""
-    session_id = _parse_presence_session_id()
-    if isinstance(session_id, Response):
-        return session_id
-    identity = request_identity()
-    if identity.user_id is None:
-        return Response(status=204)
-    try:
-        outcome = get_state().presence.leave(identity, session_id, utc_now())
-    except InvalidShellValueError as e:
-        return error_response(str(e), 400)
-    _broadcast_presence_if_changed(outcome)
-    return Response(status=204)
 
 
 def _serve_app_contract() -> Response:
@@ -536,7 +507,7 @@ def _ws_endpoint(websocket: Any) -> None:
     _run_ws_broadcast_loop(
         websocket=websocket,
         shell=state.shell,
-        initial_presence=[present_user_wire_json(user) for user in state.presence.connected_users(utc_now())],
+        initial_presence=_present_users_wire_json(state.presence.connected_users(utc_now())),
     )
 
 
@@ -698,7 +669,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
     application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
-    application.add_url_rule(PRESENCE_LEAVE_PATH, view_func=_presence_leave_endpoint, methods=["POST"])
     register_shell_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)

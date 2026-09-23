@@ -14,6 +14,10 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.presence import DEFAULT_PRESENCE_DIRECTORY
 from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
+from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
+from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
@@ -43,7 +47,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--presence-dir",
         type=Path,
         default=DEFAULT_PRESENCE_DIRECTORY,
-        help="Where the shell keeps the per-user presence files and their event log",
+        help="Where the shell keeps the per-user presence files and the profile cache",
     )
     parser.add_argument(
         "--preview",
@@ -66,12 +70,19 @@ def build_production_state(
     does not start the shell (``main`` does that once the app is assembled), so it watches
     nothing and fetches nothing by itself. Tests build a state via ``testing.build_test_state``.
     """
+    broadcaster = WebSocketBroadcaster()
+    profiles = ProfileResolver(
+        cache_directory=presence_directory / PROFILES_DIRECTORY_NAME, share_env_path=DEFAULT_SHARE_ENV_PATH
+    )
+    presence = PresenceStore(directory=presence_directory)
     return SystemInterfaceState(
         config=config,
         shell=build_shell_state(
-            state_directory=state_directory, registry_path=registry_path(), broadcaster=WebSocketBroadcaster()
+            state_directory=state_directory, registry_path=registry_path(), broadcaster=broadcaster, profiles=profiles
         ),
-        presence=PresenceStore(directory=presence_directory),
+        presence=presence,
+        presence_sweep=build_presence_sweep(presence, profiles, broadcaster),
+        profiles=profiles,
         is_preview=is_preview,
     )
 
@@ -94,9 +105,10 @@ def main() -> None:
         state = get_state()
 
     # Start the shell now that the app is assembled: the stale-client prune, the registry
-    # watch, and the liveness sweep. This is the one place it is started; ``build_application``
-    # only constructs, so tests that build an app never start it.
+    # watch, the liveness sweep, and the presence sweep. This is the one place they are started;
+    # ``build_application`` only constructs, so tests that build an app never start them.
     state.shell.start()
+    state.presence_sweep.start()
 
     # Tear down the broadcaster and the inventory on exit. ``atexit`` covers a normal return;
     # the signal handlers cover supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which

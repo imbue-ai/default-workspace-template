@@ -151,7 +151,6 @@ export function presentUserRecord(userId: string, overrides: Partial<PresentUser
     display_name: null,
     avatar_url: null,
     owner: false,
-    session_count: 1,
     first_seen: "2026-09-19T10:00:00.000000000Z",
     last_seen: "2026-09-19T10:00:00.000000000Z",
     ...overrides,

@@ -1125,7 +1125,7 @@ def test_a_malformed_op_argument_is_a_400_naming_the_argument(
 
 # The arrival (desktop plan section 3.10)
 
-_ALICE = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com", display_name="Alice")
+_ALICE = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
 _BOB = RequestIdentity(owner=False, user_id="user-bob", email="bob@example.com")
 _OWNER = RequestIdentity(owner=True, user_id="user-owner", email="owner@example.com")
 
@@ -1198,7 +1198,8 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
     arrival = _arrive(client, "c-alice-laptop", _ALICE)
     created = arrival["created_desktop"]
     assert arrival["desktop_id"] == "alice" and arrival["replaced_desktop_name"] is None
-    assert created["id"] == "alice" and created["name"] == "Alice" and created["glyph"] == 1
+    # Named after her email's local part: the shell of this test can reach no connector for her profile.
+    assert created["id"] == "alice" and created["name"] == "alice" and created["glyph"] == 1
     home = client.get("/api/desktops").get_json()["desktops"][0]
     assert created["shortcuts"] == home["shortcuts"]
     (copied,) = created["windows"]
@@ -1209,7 +1210,7 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
     record = shell.clients.get_client("c-alice-laptop")
     assert record is not None and record.user_id == "user-alice" and record.active_desktop == "alice"
     stored = shell.users.get_user(UserId("user-alice"))
-    assert stored is not None and stored.desktop_id == "alice" and stored.display_name == "Alice"
+    assert stored is not None and stored.desktop_id == "alice" and stored.display_name is None
 
     # A second client of the same user lands on the same desktop; nothing new is made.
     second = _arrive(client, "c-alice-phone", _ALICE)
@@ -1217,7 +1218,7 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
     # A returning client of hers keeps the desktop it moved to.
     _record_client(app, "c-alice-laptop", "home")
     assert _arrive(client, "c-alice-laptop", _ALICE)["desktop_id"] == "home"
-    # Another user gets their own, named after their email when they have no display name.
+    # Another user gets their own.
     bob = _arrive(client, "c-bob", _BOB)
     assert bob["desktop_id"] == "bob" and bob["created_desktop"]["glyph"] == 2
     # A browser context that last arrived as Bob, or anonymously, is no returning client of Alice's: it lands on
@@ -1247,7 +1248,7 @@ def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_repo
     assert client.post("/api/desktops/alice/delete").status_code == 200
     again = _arrive(client, "c-alice", _ALICE)
     assert again["desktop_id"] == "alice" and again["replaced_desktop_name"] == "Alice's Lab"
-    assert again["created_desktop"]["name"] == "Alice"
+    assert again["created_desktop"]["name"] == "alice"
     # A client of hers that had a record was moved along with her.
     record = _shell(app).clients.get_client("c-alice")
     assert record is not None and record.active_desktop == "alice"

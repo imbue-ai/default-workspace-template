@@ -64,9 +64,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), and the loopback-only
   op route (`/api/layout/broadcast`).
-- Presence (`/api/presence`, `/api/presence/heartbeat`,
-  `/api/presence/leave`): who is connected right now, with their identity
-  details (see "Who is here").
+- Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
+  right now, with their identity and profile (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`, and
@@ -82,7 +81,8 @@ reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
 an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
 beside the seven bundled ones (`docs/system/avatar-designs.md`). Presence lives
-beside it under `data/.state/presence/` (`--presence-dir`).
+beside it under `data/.state/presence/` (`--presence-dir`): the per-user files
+and the profile cache.
 
 ### The desktop model
 
@@ -165,39 +165,53 @@ is sent `shell:navigate` when an agent points its window elsewhere.
 Every request that reaches the shell carries the requester's identity in the
 `X-Imbue-Identity` header, stamped by whichever proxy admitted it -- the local
 `mngr forward` or the share gateway (the header contract is in
-`system/services/share_gateway/README.md`). The shell page mints a session id
-per page load and posts `/api/presence/heartbeat` with it every 30 seconds
-while the tab is visible (once immediately when it becomes visible), and
-beacons `/api/presence/leave` on `pagehide`. The page sends nothing about who
-it is; the heartbeat's answer is the requester's own identity record, which
-is what the account affordances render. A heartbeat whose identity carries no
+`system/services/share_gateway/README.md`): `owner`, and on a shared
+workspace the account's `user_id` and `email`. Nothing more: what to call an
+account and what it looks like is its profile, which the shell fetches from
+imbue_cloud (below). The shell page posts `/api/presence/heartbeat` (no body)
+every 30 seconds while the tab is visible, once immediately when it becomes
+visible, and nothing when it goes away. The page sends nothing about who it
+is; the heartbeat's answer is the requester's own identity record, which is
+what the account affordances render. A heartbeat whose identity carries no
 user id -- the owner of an unshared workspace, or a request that came through
 no current proxy -- answers 204 and records nothing: there is nobody to name.
 
-Each heartbeat upserts `data/.state/presence/users/<user_id>.json`: the
-user's latest identity snapshot (`user_id`, `email`, `display_name`,
-`avatar_url`, `owner`), the open tab sessions keyed by session id with each
-one's last heartbeat, and `first_seen` / `last_seen`. A session that misses
-three heartbeats (90 seconds) expires; a user whose last session expired or
-left is removed, and `data/.state/presence/events.jsonl` gets a `user_joined`
-or `user_left` line in the repo's event envelope (`timestamp`, `type`,
-`event_id`, `source: "presence"`, plus the record). Apps read the directory
-(a user is connected while `last_seen` is within 90 seconds) or tail the
-events. The shell sends the connected set on every WebSocket connect and
-pushes `presence_updated` -- one entry per user, however many tabs -- whenever
-someone joins or leaves, and the taskbar's Presence tray widget draws one
-avatar per user. Over a share that widget also links to the gateway's identity
-refresh, for a visitor who changed their name or avatar. A visitor granted a
-single app never loads the shell and so never appears: they are in one app,
-not in the workspace.
+Each user has one file, `data/.state/presence/users/<user_id>.json`, holding
+their identity snapshot (`user_id`, `email`, `owner`, `first_seen`), written
+on first sight and rewritten only when the email or owner flag changes; a
+heartbeat just touches the file's mtime. A user is connected while that mtime
+is within 70 seconds (two missed heartbeats plus slack), and the mtime is
+their last seen. Files are never removed: whoever is not connected is still
+the record of who was last here, and when. Apps read the directory the same
+way. The shell sends the connected set on every WebSocket connect and pushes
+`presence_updated` -- one entry per user, however many tabs -- when a
+heartbeat brings someone in and, from a sweep every 10 seconds, when
+someone's heartbeats have stopped. The taskbar's Presence tray widget draws
+one avatar per user. Over a share that widget also links to the gateway's
+identity refresh, for a visitor who changed their name or avatar. A visitor
+granted a single app never loads the shell and so never appears: they are in
+one app, not in the workspace.
+
+**Profiles.** A user's display name and avatar come from imbue_cloud, not the
+header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
+(public; `{"user_id", "display_name", "avatar_url"}`) with a 2 second bound,
+where `broker_url` is `SHARE_BROKER_URL` in `data/.secrets/share.env`, the
+file the minds desktop writes while the workspace is shared (read fresh on
+every miss; no file means no profiles). Each answer, and each failure, is
+cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
+a connector outage costs one failed fetch per user per 5 minutes and no
+request ever hangs or fails on it. The profile rides on each present user
+over the wire (`display_name`, `avatar_url`, null when there is none) and
+names a visitor's desktop on their first arrival.
 
 The same header decides where a page lands. A shell page posts its arrival
 (`POST /api/clients/<client_id>/arrive`) before it reads the desktops. The
 owner, and any request without a user id, land on the client's recorded
 desktop, else the first. A signed-in visitor would otherwise land on the
 owner's desktop and open and close the owner's windows, so on their first
-arrival the shell makes them a desktop named after them (display name, else
-the email's local part, else `Guest`, made unique), seeded from the first
+arrival the shell makes them a desktop named after them (their profile's
+display name, else the email's local part, else `Guest`, made unique; the
+profile is resolved before the arrival takes the state lock), seeded from the first
 desktop: its shortcuts, its wallpaper, and a new window at the path of each
 settled window open there (one still mid-launch is skipped). It is remembered
 in `users.json`, every later client of that user lands on it, a returning

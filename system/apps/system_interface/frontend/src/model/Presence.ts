@@ -1,13 +1,13 @@
 /**
  * Who is here: the shell's presence heartbeat and the connected users the WebSocket pushes.
  *
- * Every page load mints a session id and heartbeats `/api/presence/heartbeat` every
- * `HEARTBEAT_INTERVAL_MS` while the tab is visible (once immediately when it becomes
- * visible), and beacons `/api/presence/leave` on `pagehide`. The proxy in front of the shell
- * stamps the request's identity, so the page sends nothing about who it is; the heartbeat's
- * answer is the requester's own identity record (or 204 when the workspace carries none), which
- * is what the account affordances render. The connected set itself arrives as
- * `presence_updated` over the shell's WebSocket, one entry per user.
+ * The page posts `/api/presence/heartbeat` (no body) every `HEARTBEAT_INTERVAL_MS` while the tab
+ * is visible, once immediately when it becomes visible, and nothing when it goes away: the shell
+ * counts a user as gone once their heartbeats stop. The proxy in front of the shell stamps the
+ * request's identity, so the page sends nothing about who it is; the heartbeat's answer is the
+ * requester's own identity record (or 204 when the workspace carries none), which is what the
+ * account affordances render. The connected set itself arrives as `presence_updated` over the
+ * shell's WebSocket, one entry per user, each with the name and avatar imbue_cloud holds for them.
  */
 
 import m from "mithril";
@@ -16,18 +16,15 @@ import type { PresentUser } from "./records";
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 
-/** The requester's own identity, as the heartbeat answers it. */
+/** The requester's own identity, as the heartbeat answers it: who they are, not what they are called. */
 export interface OwnIdentity {
   owner: boolean;
   user_id: string;
   email: string;
-  display_name?: string;
-  avatar_url?: string;
 }
 
 let presentUsers: PresentUser[] = [];
 let ownIdentity: OwnIdentity | null = null;
-let sessionId: string | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let isStarted = false;
 
@@ -42,21 +39,6 @@ export function getOwnIdentity(): OwnIdentity | null {
 /** Apply a `presence_updated` push: the whole connected set, replacing the last one. */
 export function applyPresence(users: PresentUser[]): void {
   presentUsers = users;
-}
-
-function mintSessionId(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-function getSessionId(): string {
-  if (sessionId === null) sessionId = mintSessionId();
-  return sessionId;
-}
-
-function sessionBody(): string {
-  return JSON.stringify({ session_id: getSessionId() });
 }
 
 /** Whether the shell is reached over a share (any host that is not a local forward origin). */
@@ -76,12 +58,7 @@ export function identityRefreshUrl(
 async function sendHeartbeat(): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(apiUrl("/api/presence/heartbeat"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: sessionBody(),
-      keepalive: true,
-    });
+    response = await fetch(apiUrl("/api/presence/heartbeat"), { method: "POST", keepalive: true });
   } catch (e) {
     console.warn("[si-presence] heartbeat failed", e);
     return;
@@ -97,11 +74,6 @@ async function sendHeartbeat(): Promise<void> {
   const body = (await response.json()) as { identity?: OwnIdentity };
   ownIdentity = body.identity ?? null;
   m.redraw();
-}
-
-function sendLeave(): void {
-  const body = new Blob([sessionBody()], { type: "application/json" });
-  navigator.sendBeacon(apiUrl("/api/presence/leave"), body);
 }
 
 function startTimer(): void {
@@ -131,7 +103,6 @@ export function startPresenceHeartbeat(): void {
   if (isStarted) return;
   isStarted = true;
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  window.addEventListener("pagehide", sendLeave);
   handleVisibilityChange();
 }
 
@@ -139,11 +110,9 @@ export function startPresenceHeartbeat(): void {
 export function resetPresenceForTesting(): void {
   if (isStarted) {
     document.removeEventListener("visibilitychange", handleVisibilityChange);
-    window.removeEventListener("pagehide", sendLeave);
   }
   stopTimer();
   isStarted = false;
-  sessionId = null;
   ownIdentity = null;
   presentUsers = [];
 }

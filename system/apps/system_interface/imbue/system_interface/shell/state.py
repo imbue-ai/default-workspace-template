@@ -23,6 +23,8 @@ from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTO
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
+from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -120,6 +122,9 @@ class ShellState(MutableModel):
     )
     clients: ClientStore = Field(frozen=True, description="clients.json")
     users: UserStore = Field(frozen=True, description="users.json: the desktop made for each signed-in visitor")
+    profiles: ProfileResolver = Field(
+        frozen=True, description="Each account's display name and avatar, from imbue_cloud through the on-disk cache"
+    )
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     avatar_catalog: AvatarCatalogStore = Field(
@@ -474,6 +479,11 @@ class ShellState(MutableModel):
         clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
         seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
         while a returning client of theirs keeps the desktop it was on. None while the workspace has no desktop."""
+        now = datetime.now(timezone.utc)
+        user_id = visiting_user_id(identity)
+        # The profile (what the desktop made for a visitor is named after) is resolved before the lock: it may be a
+        # fetch, bounded but slow, and nobody else's arrival should wait on it.
+        profile = self.profiles.resolve(user_id, now) if user_id is not None else None
         # The whole read-decide-write runs under the state lock (re-entrant, so the stores' own takes nest): two
         # arrivals of one new user at once (a browser restoring its tabs) must not both seed a desktop for them.
         with STATE_FILES_LOCK:
@@ -482,10 +492,8 @@ class ShellState(MutableModel):
             shared_landing = resolve_active_desktop(record, desktops)
             if shared_landing is None:
                 return None
-            now = datetime.now(timezone.utc)
-            user_id = visiting_user_id(identity)
             outcome = (
-                self._land_visiting_user(user_id, identity, record, desktops, now)
+                self._land_visiting_user(user_id, identity, profile, record, desktops, now)
                 if user_id is not None
                 else ClientArrivalOutcome(desktop_id=shared_landing, created_desktop=None, replaced_desktop_name=None)
             )
@@ -503,6 +511,7 @@ class ShellState(MutableModel):
         self,
         user_id: UserId,
         identity: RequestIdentity,
+        profile: UserProfile | None,
         record: ClientRecord | None,
         desktops: Sequence[Desktop],
         now: datetime,
@@ -519,7 +528,7 @@ class ShellState(MutableModel):
             kept = desktop_kept_by_returning_client(record, user_id, desktop_by_id.keys())
             landing = kept if kept is not None else own_desktop.id
         else:
-            created = self._create_desktop_for_user(identity, desktops, now)
+            created = self._create_desktop_for_user(identity, profile, desktops, now)
             own_desktop = created
             landing = created.id
             replaced_desktop_name = known.desktop_name if known is not None else None
@@ -531,7 +540,7 @@ class ShellState(MutableModel):
                 desktop_id=own_desktop.id,
                 desktop_name=own_desktop.name,
                 email=identity.email,
-                display_name=identity.display_name,
+                display_name=profile.display_name if profile is not None else None,
                 last_seen=now,
             )
         )
@@ -540,11 +549,12 @@ class ShellState(MutableModel):
         )
 
     def _create_desktop_for_user(
-        self, identity: RequestIdentity, desktops: Sequence[Desktop], now: datetime
+        self, identity: RequestIdentity, profile: UserProfile | None, desktops: Sequence[Desktop], now: datetime
     ) -> Desktop:
-        """A desktop named after the user, seeded from the first desktop (its shortcuts, wallpaper, and settled
-        windows as new windows), with the next free glyph and that glyph's colour."""
-        name = desktop_name_for_user(identity, desktops)
+        """A desktop named after the user (their profile's display name, else their email's local part), seeded from
+        the first desktop (its shortcuts, wallpaper, and settled windows as new windows), with the next free glyph and
+        that glyph's colour."""
+        name = desktop_name_for_user(profile.display_name if profile is not None else None, identity.email, desktops)
         glyph = next_glyph_index([desktop.glyph for desktop in desktops])
         source = desktops[0]
         seeded = desktop_seeded_from(
@@ -608,11 +618,13 @@ def build_shell_state(
     avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
     agent_events_path: Path | None = None,
     repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
+    profiles: ProfileResolver | None = None,
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests, and
     ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
     environment names; ``repo_root`` (the workspace the update notice's record and script live under) is the
-    served tree by default."""
+    served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
+    that can reach no connector, so a shell built without one names visitors by email."""
     return ShellState(
         state_directory=state_directory,
         inventory=inventory
@@ -624,6 +636,11 @@ def build_shell_state(
         wallpaper_files_directory=wallpaper_files_directory,
         clients=ClientStore(state_directory=state_directory),
         users=UserStore(state_directory=state_directory),
+        profiles=profiles
+        if profiles is not None
+        else ProfileResolver(
+            cache_directory=state_directory / "profiles", share_env_path=state_directory / "share.env"
+        ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=avatar_catalog_directory),

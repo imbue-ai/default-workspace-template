@@ -185,7 +185,6 @@ const PRESENT_USER_WIRE = {
   display_name: null,
   avatar_url: "https://accounts.example.com/users/user-owner-9c21/avatar/9a7b",
   owner: true,
-  session_count: 2,
   first_seen: "2026-09-19T10:00:00.000000000Z",
   last_seen: "2026-09-19T10:00:30.000000000Z",
 };
