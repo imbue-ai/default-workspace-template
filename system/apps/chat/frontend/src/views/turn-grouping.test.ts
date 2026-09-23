@@ -723,6 +723,29 @@ describe("carryover", () => {
     expect(stepItems(sections[1].items)[0].is_carryover).toBe(true);
     expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
   });
+
+  // Two messages sent back to back reach the agent together; the open step shows once, under the
+  // second, not also as an empty node under the first.
+  it("carries a step past back-to-back user messages without an empty node between them", () => {
+    const events = [
+      userMsg("t0", "first", "u1"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t5", "also check X", "u2"),
+      userMsg("t6", "and Y", "u3"),
+      workMsg("t7", "Edit", "w2"),
+      result("t7", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u1", "u2", "u3"]);
+    expect(sections[1].items).toEqual([]);
+    const carried = stepItems(sections[2].items);
+    expect(carried.map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(carried[0].is_carryover).toBe(true);
+    expect(carried[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
 });
 
 describe("pending roster", () => {
