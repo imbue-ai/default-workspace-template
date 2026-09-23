@@ -225,8 +225,8 @@ describe("PointerGestureSource", () => {
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70);
     pointer("pointermove", title, 150, 70);
-    // The release landed outside the window; the pointer hovers back over the shell well past where it
-    // let go, and the drag settles where it was dropped rather than back where it started.
+    // The release landed outside the window; the pointer hovers back over the shell well past where
+    // it let go.
     pointer("pointermove", title, 190, 70, { buttons: 0 });
     expect(events).toEqual([
       "begin:move(win-1):140,50",
@@ -238,13 +238,13 @@ describe("PointerGestureSource", () => {
   it("a press on a handle makes the pages inert at once, and gives them back however it ends", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
-    // A press that is only a click: the pages are inert for its length alone.
+    // A press that is only a click.
     pointer("pointerdown", title, 110, 70);
     expect(presses).toEqual(["press:move(win-1)"]);
     expect(events).toEqual([]);
     pointer("pointerup", title, 111, 70);
     expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
-    // A press that becomes a drag: still one press, released when the drag ends.
+    // A press that becomes a drag.
     presses = [];
     pointer("pointerdown", title, 200, 70);
     pointer("pointermove", title, 240, 70);
@@ -267,8 +267,8 @@ describe("PointerGestureSource", () => {
     const edge = root.querySelector("#edge") as Element;
     pointer("pointerdown", edge, 500, 500);
     pointer("pointermove", edge, 560, 540);
-    // Dragging an edge runs the pointer out to the viewport's rim, where a release is the one most
-    // easily missed; the window keeps the size it was dragged to.
+    // An edge drag runs the pointer out to the rim of the viewport, where a release is most easily
+    // missed.
     pointer("pointermove", edge, 600, 560, { buttons: 0 });
     expect(events).toEqual([
       "begin:resize(win-1,se):550,520",
