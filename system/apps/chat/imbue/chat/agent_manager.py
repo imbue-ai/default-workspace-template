@@ -876,9 +876,8 @@ class AgentManager:
     # from the transcript events the watcher parses. A non-empty set is the chat's
     # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
-    # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up (it
-    # was stopped, or its harness had not finished starting). A non-empty set is the snapshot's
-    # ``is_connecting``.
+    # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up. A
+    # non-empty set is the snapshot's ``is_connecting``.
     _connecting_message_ids_by_agent: dict[str, set[str]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and

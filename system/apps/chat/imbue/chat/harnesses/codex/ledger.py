@@ -297,7 +297,7 @@ class CodexMessageLedger(MutableModel):
         client.add_notification_handler(ledger.handle_notification)
         return ledger
 
-    # -- send -------------------------------------------------------------------
+    # Send
 
     def send(self, text: str, client_id: str | None = None) -> str:
         """Accept ``text`` for send: mint a ``client_id``, ``submit`` it, and record the entry.
@@ -348,7 +348,7 @@ class CodexMessageLedger(MutableModel):
         self.next_send_seq = seq + 1
         return seq
 
-    # -- notification handling --------------------------------------------------
+    # Notification handling
 
     def handle_notification(self, method: str, params: Any) -> None:
         """Reduce one app-server notification into the ledger. Registered on the client.
@@ -472,7 +472,7 @@ class CodexMessageLedger(MutableModel):
             settings.get("serviceTier") == _FAST_SERVICE_TIER,
         )
 
-    # -- reconcile / sweep ------------------------------------------------------
+    # Reconcile / sweep
 
     def _reconcile(self, turn: dict[str, Any]) -> None:
         """Settle every owned entry bound to ``turn`` -- delivery = COMMIT, else Returned (§2.4).
@@ -624,7 +624,7 @@ class CodexMessageLedger(MutableModel):
         combined commit, or Return if its own resend fails)."""
         self._settle_live_to_returned(include_resend=False)
 
-    # -- shoulder-tap / interrupt (Contract B) ----------------------------------
+    # Shoulder-tap / interrupt (Contract B)
 
     def is_tap_available(self) -> bool:
         """Whether a shoulder tap is offered: nothing Sending AND the queue is non-empty (Contract B).
@@ -805,7 +805,7 @@ class CodexMessageLedger(MutableModel):
         self._flush_user_turns()
         return ShoulderTapResult(status="tapped")
 
-    # -- reads ------------------------------------------------------------------
+    # Reads
 
     def queued_snapshot(self) -> list[dict[str, Any]]:
         """The wire snapshot of the on-screen chip group, in send order (feeds ``update_queued_messages``).
@@ -894,7 +894,7 @@ class CodexMessageLedger(MutableModel):
         entry = self.entries.get(client_id)
         return entry.state if entry is not None else None
 
-    # -- change-gated callbacks -------------------------------------------------
+    # Change-gated callbacks
 
     def _queue_user_turn(self, client_id: str | None, epoch_ms: int | None, content: str) -> None:
         """Record a committed user-turn to broadcast after the queue snapshot (A3b), deduped.

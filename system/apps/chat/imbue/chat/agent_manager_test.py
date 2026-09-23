@@ -2984,9 +2984,7 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.matched.id == "gpt-5.6-terra"
 
 
-# =============================================================================
 # The shared model-state poller (the bounded replacement for per-agent watchers)
-# =============================================================================
 
 
 def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_changes(

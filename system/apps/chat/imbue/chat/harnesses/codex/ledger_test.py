@@ -178,9 +178,7 @@ def _push_turn_completed(
     client.poll_notifications()
 
 
-# =============================================================================
 # Send transitions
-# =============================================================================
 
 
 def test_send_when_idle_stays_sending_until_commit_then_delivered() -> None:
@@ -261,9 +259,7 @@ def test_send_keeps_a_delivery_observed_mid_submit_when_the_submit_then_fails() 
     assert len(sink.user_turns) == 1
 
 
-# =============================================================================
 # Reconcile
-# =============================================================================
 
 
 def test_reconcile_delivers_from_full_items_view_without_item_completed() -> None:
@@ -345,9 +341,7 @@ def test_reconcile_uncertainty_guard_returns_when_read_absent() -> None:
     assert ledger.state_of(cid) == MessageState.RETURNED
 
 
-# =============================================================================
 # Idempotency / foreign
-# =============================================================================
 
 
 def test_duplicate_turn_completed_is_a_noop() -> None:
@@ -393,9 +387,7 @@ def test_foreign_client_id_never_touches_our_chips() -> None:
     assert [chip["content"] for chip in ledger.queued_snapshot()] == ["second"]
 
 
-# =============================================================================
 # A3b: the chip is removed before the turn is shown
-# =============================================================================
 
 
 def test_a3b_queue_removal_emitted_on_commit() -> None:
@@ -541,9 +533,7 @@ def test_reconcile_only_delivery_still_emits_the_user_turn() -> None:
     assert [event["content"] for event in sink.user_turns] == ["hello"]
 
 
-# =============================================================================
 # EPHEMERAL queue
-# =============================================================================
 
 
 def test_idle_status_sweeps_the_queue_to_returned() -> None:
@@ -627,9 +617,7 @@ def test_fresh_session_starts_empty_with_no_revival() -> None:
     assert ledger_b.entries == {}
 
 
-# =============================================================================
 # Activity: RUNNING until turn/completed (A6)
-# =============================================================================
 
 
 def test_activity_running_until_turn_completed() -> None:
@@ -680,9 +668,7 @@ def test_callbacks_fire_only_on_change() -> None:
     assert sink.queue_calls == queue_before
 
 
-# =============================================================================
 # Shoulder-tap availability + interrupt (Contract B)
-# =============================================================================
 
 
 def _sent_methods(transport: ScriptedTransport) -> list[str]:
@@ -869,9 +855,7 @@ def test_second_interrupt_does_not_re_return_already_returned() -> None:
     assert ledger.reconcile_returned() == "second"
 
 
-# =============================================================================
 # Shoulder-tap: deliver the parked queue EARLY (interrupt + combined resend, Fix 3)
-# =============================================================================
 
 
 def _last_turn_start_client_id(transport: ScriptedTransport) -> str:
@@ -999,9 +983,7 @@ def test_shoulder_tap_returns_the_queue_to_composer_when_the_resend_fails() -> N
     assert ledger.interrupt() == ""
 
 
-# =============================================================================
 # Interrupt reconciles ALL live entries, incl. an unbound in-flight Sending (Fix 4)
-# =============================================================================
 
 
 def test_interrupt_returns_queued_and_unbound_inflight_sending_together() -> None:
@@ -1062,9 +1044,7 @@ def test_late_submit_after_interrupt_reconciles_to_returned() -> None:
     assert ledger.is_sending() is False
 
 
-# =============================================================================
 # Model-bar mirror (the codex writer that feeds the uniform read path)
-# =============================================================================
 
 
 def _push_settings_updated(
@@ -1150,9 +1130,7 @@ def test_settings_updated_without_a_model_writes_nothing(tmp_path: Path) -> None
     assert not state_path.exists()
 
 
-# =============================================================================
 # Conservation storm
-# =============================================================================
 
 
 def test_defaults_without_injection_mint_and_timestamp() -> None:

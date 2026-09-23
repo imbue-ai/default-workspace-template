@@ -62,7 +62,7 @@ class CodexHarnessSession(AgentHarnessSession):
             return None
         return connection.ledger
 
-    # -- liveness ---------------------------------------------------------------------------
+    # Liveness
 
     def ensure_live(self) -> None:
         """Ensure a live app-server connection + ledger (idempotent, self-healing).
@@ -135,7 +135,7 @@ class CodexHarnessSession(AgentHarnessSession):
         if connection is not None:
             connection.stop()
 
-    # -- messages ---------------------------------------------------------------------------
+    # Messages
 
     def send(self, text: str, message_id: str) -> SendOutcome:
         """Send through the live ledger (contract A2: the ledger is the sole authority).
@@ -177,7 +177,7 @@ class CodexHarnessSession(AgentHarnessSession):
         # (see ``interrupt_to_composer``), so there is no separate in-flight block to fold.
         return ""
 
-    # -- turn control -----------------------------------------------------------------------
+    # Turn control
 
     def is_tap_available(self, *, has_queued: bool) -> bool:
         """The ledger's own view: queue non-empty AND nothing Sending -- which also greys the
@@ -230,7 +230,7 @@ class CodexHarnessSession(AgentHarnessSession):
         settle_activity()
         return block
 
-    # -- model options ----------------------------------------------------------------------
+    # Model options
 
     def switch_options(self) -> tuple[ModelOption, ...]:
         """The ONE reconciled per-agent option set (D2) -- what the picker offered, the chip

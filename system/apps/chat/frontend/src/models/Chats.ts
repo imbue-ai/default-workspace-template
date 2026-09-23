@@ -36,8 +36,8 @@ export interface ActiveAgent {
   // Backend-computed shoulder-tap availability: true iff something is queued AND no send is in
   // flight.
   shoulder_tap_available: boolean;
-  // A send is in flight and waiting for the agent to come up (stopped, or its harness still
-  // starting): the Connecting sub-state of Sending, shown beside the model bar.
+  // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
+  // Sending, shown beside the model bar.
   is_connecting: boolean;
 }
 

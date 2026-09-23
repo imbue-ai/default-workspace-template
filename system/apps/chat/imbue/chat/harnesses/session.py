@@ -147,7 +147,7 @@ class AgentHarnessSession(ABC):
         """The harness this session was built for (the manager heals a mismatched cache)."""
         return self._deps.harness
 
-    # -- liveness ---------------------------------------------------------------------------
+    # Liveness
 
     def ensure_live(self) -> None:
         """Bring up whatever live backend the harness needs (blocking OK). No-op default:
@@ -166,7 +166,7 @@ class AgentHarnessSession(ABC):
     def close(self) -> None:
         """Terminal teardown (the manager stopped tracking the agent). No-op default."""
 
-    # -- messages ---------------------------------------------------------------------------
+    # Messages
 
     @abstractmethod
     def send(self, text: str, message_id: str) -> SendOutcome:
@@ -180,7 +180,7 @@ class AgentHarnessSession(ABC):
         """The still-in-flight (Sending) messages as one concatenated block ('' = none)."""
         return ""
 
-    # -- turn control -----------------------------------------------------------------------
+    # Turn control
 
     def is_tap_available(self, *, has_queued: bool) -> bool:
         """Whether the shoulder-tap button is offered (contract Shoulder-tap): something is
@@ -208,7 +208,7 @@ class AgentHarnessSession(ABC):
     ) -> str:
         """Interrupt the running turn and return the queued block to the composer."""
 
-    # -- model options ----------------------------------------------------------------------
+    # Model options
 
     def switch_options(self) -> tuple[ModelOption, ...]:
         """The option set the switch endpoint validates against; static catalog by default."""
