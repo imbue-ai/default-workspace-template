@@ -51,9 +51,7 @@ create route, so the chat is what a launcher-started chat would be: the app mint
 binds it to the workspace's default account and harness, names it (``--name``,
 else the next free "Chat N"), and sends the message as its first one. ``--label``
 adds a label to the chat's agent (``auto_open=true`` has the workspace surface its
-window). Every create waves the claude version check, so a workspace whose claude no
-longer matches its pin can still make the update chat that repairs it.
-The script waits for the chat app to finish the create and exits 0 with one
+window). The script waits for the chat app to finish the create and exits 0 with one
 JSON line on stdout, ``{"chat_id", "name", "display_name"}``, or 1 with the
 create's own failure on stderr. The backoff is a plain ``mngr create --template
 chat`` with the same name, labels, and message, taken on the same terms as the
@@ -106,11 +104,6 @@ CREATE_CHAT_PATH = "/api/chats/create"
 # The create route's field that asks it to answer once the create has finished; a route
 # from before it rejects the field by name.
 WAIT_FIELD = "should_wait"
-
-# Mirrors ``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING`` in the chat app's ``agent_manager.py``,
-# the setting the create route applies for ``is_installation_check_skipped``; the backoff
-# create applies it itself.
-SKIP_CLAUDE_INSTALLATION_CHECK_SETTING = "agent_types.claude.check_installation=false"
 
 CONNECT_TIMEOUT_SECONDS = 3.0
 # How long a 503 (chat app up, not ready) is retried before it is a failure. The
@@ -343,7 +336,6 @@ def create_request_body(request: CreateRequest) -> dict[str, object]:
         "name": request.name,
         "message": request.message,
         "labels": dict(request.labels),
-        "is_installation_check_skipped": True,
         WAIT_FIELD: True,
     }
 
@@ -479,7 +471,6 @@ def create_through_mngr(request: CreateRequest) -> int:
     argv += ["--template", "chat", "--no-connect", "--label", "user_created=true"]
     for key, value in request.labels.items():
         argv += ["--label", f"{key}={value}"]
-    argv += ["-S", SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
     completed = _run_mngr(
         argv, request.message or None, ["--format", "jsonl"], capture_stdout=True
     )

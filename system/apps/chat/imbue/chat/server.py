@@ -1281,7 +1281,6 @@ def _run_create_chat() -> CreatedChat | Response:
             chat_id=create_request.chat_id,
             message=create_request.message,
             labels=create_request.labels,
-            is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
         )
     except AgentNameConflictError as e:
