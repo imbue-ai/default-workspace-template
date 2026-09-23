@@ -333,6 +333,32 @@ def _latest_commit_with_subject(
     return None
 
 
+def _is_rollback_revert(commit: str, repo_root: Path) -> bool:
+    subject = _git(["log", "-1", "--format=%s", commit], repo_root)
+    return subject.startswith(ROLLBACK_REVERT_SUBJECT)
+
+
+def _first_attempt_first_parent(merge: str, repo_root: Path) -> str:
+    """The first parent of the first merge in ``merge``'s chain of retries.
+
+    A merge whose first parent reverts a rollback was a retry on top of an
+    earlier landed-and-rolled-back merge; the chain ends at a merge made on the
+    workspace's own line, whose first parent carries none of those releases.
+    """
+    first_parent = _commit_sha(f"{merge}^1", repo_root)
+    while _is_rollback_revert(first_parent, repo_root):
+        earlier = _latest_commit_with_subject(
+            UPDATE_SELF_MERGE_SUBJECT, f"{first_parent}^", repo_root
+        )
+        if earlier is None:
+            raise NoUpdateMergeError(
+                f"{first_parent} reverts a rollback, but no earlier "
+                f"'{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
+            )
+        first_parent = _commit_sha(f"{earlier}^1", repo_root)
+    return first_parent
+
+
 def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
     """The two commit ranges the worker reads each app's footprint over.
 
@@ -349,7 +375,10 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
     same target the revert leaves ``git merge`` nothing to do, so the merge found
     is the landed attempt's own; the revert is then the whole update, and the
     local range runs to the commit it sits on, which carries every local commit
-    since that attempt branched.
+    since that attempt branched. That commit runs the tree from before every
+    rolled-back attempt, so its fork point is taken from the first attempt in
+    the chain rather than from the landed one, which may itself have been a
+    moved-target retry on top of an earlier release.
     """
     target_sha = _commit_sha(target, repo_root)
     merge = _latest_commit_with_subject(UPDATE_SELF_MERGE_SUBJECT, "HEAD", repo_root)
@@ -364,27 +393,22 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
             f"merge {target}; an earlier update's merge carries the same subject"
         )
     first_parent = parents[0]
-    local_base = _git(["merge-base", first_parent, target_sha], repo_root)
     same_target_revert = _latest_commit_with_subject(
         ROLLBACK_REVERT_SUBJECT, f"{merge}..HEAD", repo_root
     )
     if same_target_revert is not None:
-        before_revert = _commit_sha(f"{same_target_revert}^", repo_root)
-        local_ref, update_base, update_ref = (
-            before_revert,
-            before_revert,
-            same_target_revert,
-        )
+        local_fork = _first_attempt_first_parent(merge, repo_root)
+        local_ref = update_base = _commit_sha(f"{same_target_revert}^", repo_root)
+        update_ref = same_target_revert
     else:
-        first_parent_subject = _git(
-            ["log", "-1", "--format=%s", first_parent], repo_root
-        )
+        local_fork = local_ref = first_parent
         update_base = (
             _commit_sha(f"{first_parent}^", repo_root)
-            if first_parent_subject.startswith(ROLLBACK_REVERT_SUBJECT)
+            if _is_rollback_revert(first_parent, repo_root)
             else first_parent
         )
-        local_ref, update_ref = first_parent, merge
+        update_ref = merge
+    local_base = _git(["merge-base", local_fork, target_sha], repo_root)
     return {
         "merge": merge,
         "local_base": local_base,

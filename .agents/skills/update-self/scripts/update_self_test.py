@@ -907,11 +907,14 @@ class _UpdateHistory:
         )
         return self.git("rev-parse", "HEAD")
 
-    def roll_back(self, merge: str) -> str:
-        """The apply's forward revert of a landed merge, under its own subject."""
-        self.git("revert", "-m", "1", "--no-commit", merge)
+    def roll_back(self, restore_to: str) -> str:
+        """The apply's forward revert of a landing: the pre-apply tree, committed."""
+        self.git("read-tree", "-u", "--reset", restore_to)
         self.git(
-            "commit", "-q", "-m", f"Roll back update apply (restore to {merge[:9]})"
+            "commit",
+            "-q",
+            "-m",
+            f"Roll back update apply (restore to {restore_to[:12]})",
         )
         return self.git("rev-parse", "HEAD")
 
@@ -970,8 +973,9 @@ def test_footprint_ranges_on_a_retry_whose_target_moved(tmp_path, capsys) -> Non
     # is still only the workspace's own file.
     history = _update_history(tmp_path)
     history.release("v1", "upstream_v1.txt")
-    history.commit_file("system/apps/mine/app.py", "local work")
-    rollback = history.roll_back(history.merge_update("v1"))
+    local = history.commit_file("system/apps/mine/app.py", "local work")
+    history.merge_update("v1")
+    rollback = history.roll_back(local)
     history.release("v2", "upstream_v2.txt")
     history.git("revert", "--no-edit", rollback)
     history.merge_update("v2")
@@ -994,8 +998,9 @@ def test_footprint_ranges_on_a_retry_of_the_same_target(tmp_path, capsys) -> Non
     # a local commit made after the rollback counts as the workspace's own.
     history = _update_history(tmp_path)
     history.release("v1", "upstream_v1.txt")
-    history.commit_file("system/apps/mine/app.py", "local work")
-    rollback = history.roll_back(history.merge_update("v1"))
+    local = history.commit_file("system/apps/mine/app.py", "local work")
+    history.merge_update("v1")
+    rollback = history.roll_back(local)
     history.commit_file("system/apps/later/app.py", "local work after the rollback")
     history.git("revert", "--no-edit", rollback)
     revert = history.git("rev-parse", "HEAD")
@@ -1009,6 +1014,35 @@ def test_footprint_ranges_on_a_retry_of_the_same_target(tmp_path, capsys) -> Non
     ]
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
         "upstream_v1.txt"
+    ]
+
+
+def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
+    tmp_path, capsys
+) -> None:
+    # v1 landed and was rolled back, the retry to v2 landed and was rolled back
+    # too, and this pass retries v2. The landed v2 merge sits on the revert of
+    # the v1 rollback, so its ancestry carries v1, but the live tree was put
+    # back to the workspace's own tree from before both attempts: v1 is update,
+    # not the workspace's own change.
+    history = _update_history(tmp_path)
+    history.release("v1", "upstream_v1.txt")
+    local = history.commit_file("system/apps/mine/app.py", "local work")
+    history.merge_update("v1")
+    first_rollback = history.roll_back(local)
+    history.release("v2", "upstream_v2.txt")
+    history.git("revert", "--no-edit", first_rollback)
+    history.merge_update("v2")
+    history.git("revert", "--no-edit", history.roll_back(first_rollback))
+
+    ranges = history.ranges("v2", capsys)
+
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "upstream_v1.txt",
+        "upstream_v2.txt",
     ]
 
 
