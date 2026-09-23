@@ -81,8 +81,10 @@
   renders inline as ordinary chat at its position in the turn — never dropped.
 - Turns with no steps at all (chitchat, one-shots) render exactly as today's
   plain chat — no empty timeline, no forced ceremony.
-- Non-genuine user messages (skill expansions, `/welcome`, stop-hook feedback)
-  never split a turn; they are hidden or shown as inline chips.
+- Skill expansions and `/welcome` never split a turn; they are hidden. A system
+  chip or notice (stop-hook feedback, a browser-fleet nudge, a finished
+  background task) is not a turn the user took, but it shows where it arrived
+  and the timeline breaks there (see below).
 - Existing chat history renders correctly: historical transcripts still contain
   the tk lifecycle lines, so the timeline reconstructs from them.
 
@@ -117,7 +119,11 @@
   of ungrouped prose in the section, rendered below the timeline. It is not a
   separately computed concept — it falls out of the ejection rule plus
   "prose with no step open is ungrouped."
-- Chips render at their chronological position but are not reply boundaries.
+- A system chip or notice breaks the timeline the way a permission verdict does:
+  the section closes, any open step carries over, and the chip heads the next
+  section. What the agent said before it stays above it (as that section's
+  reply), and the work it resumes renders below it. A chip landing inside an
+  open handoff node stays in the handoff's turn instead.
 - This removes the three-way (leading / inter-step interjection / trailing)
   boundary computation and the chip-boundary interactions.
 - **The `claude_tk_close_reoutput_nudge.sh` hook is removed**, not kept. Its
@@ -141,8 +147,9 @@
   who sends a small clarification mid-task does not force the agent to restart or
   redeclare its steps; the work continues under the same step.
 - Carryover is transcript-native: a step carries over iff it is still on the
-  walk's open-stack when a user-message boundary is crossed. No timestamps, no
-  hook coordination, and no auto-close are involved.
+  walk's open-stack when a user-message boundary is crossed (a system chip or
+  notice counts as one). No timestamps, no hook coordination, and no auto-close
+  are involved.
 - This makes the design *simpler*, not just more capable: because steps carry
   over on their own, there is **no auto-close/redeclare mechanism** — no
   stop-hook auto-close, no runtime record file, no reminder rewrite. The existing
