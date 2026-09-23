@@ -235,7 +235,7 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
-  it("a press on a handle makes the pages inert at once, and gives them back however it ends", () => {
+  it("a press on a handle makes the pages inert at once, and gives them back on a click and on a drag", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
     // A press that is only a click.
@@ -326,6 +326,7 @@ describe("PointerGestureSource", () => {
       "move:resize(win-1,se):510,510:20,30",
       "cancel:resize(win-1,se)",
     ]);
+    expect(presses).toEqual(["press:resize(win-1,se)", "release:resize(win-1,se)"]);
   });
 
   it("a touch held still is a long press whose release's click is swallowed; one that moves is a drag", () => {
@@ -338,7 +339,11 @@ describe("PointerGestureSource", () => {
       pointer("pointerdown", shortcut, 50, 60, { pointerType: "touch" });
       vi.advanceTimersByTime(600);
       expect(events).toEqual(["long:shortcut(docs:new):50,60"]);
+      // The press is spent on the menu, so the pages come back with the menu rather than with the
+      // release, and the release finds nothing left to give back.
+      expect(presses).toEqual(["press:shortcut(docs:new)", "release:shortcut(docs:new)"]);
       pointer("pointerup", shortcut, 50, 60, { pointerType: "touch" });
+      expect(presses).toEqual(["press:shortcut(docs:new)", "release:shortcut(docs:new)"]);
       shortcut.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(clicks).toEqual([]);
 
