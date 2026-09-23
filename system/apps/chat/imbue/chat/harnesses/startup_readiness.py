@@ -36,9 +36,10 @@ def is_harness_starting_up(
 ) -> bool:
     """Whether the harness's current process has launched and not yet written its ready marker.
 
-    Always False for a harness that writes no marker: nothing says it is still starting.
+    Always False for a harness that writes no marker, or for an agent whose state dir is not on
+    this host: nothing here says it is still starting.
     """
-    if marker is None:
+    if marker is None or not state_dir.is_dir():
         return False
     ready_at = _read_mtime(state_dir / marker.filename)
     if ready_at is None:
