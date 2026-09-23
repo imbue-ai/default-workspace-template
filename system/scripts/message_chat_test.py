@@ -383,7 +383,6 @@ def test_a_create_asks_the_chat_app_to_wait_and_prints_the_chat_it_made(
         "name": "assist-1a2b3c",
         "message": "/assist it broke",
         "labels": {"auto_open": "true", "assist": "true"},
-        "is_installation_check_skipped": True,
         "should_wait": True,
     }
     # The one stdout line is the chat's identity, for a caller that stamps it somewhere.
@@ -407,7 +406,6 @@ def test_a_create_with_no_message_on_a_terminal_sends_an_empty_first_message(
     assert rc == message_chat.EXIT_DELIVERED
     [(_, body)] = fake_chat_app.posted
     assert body["message"] == "" and body["name"] == "" and body["labels"] == {}
-    assert body["is_installation_check_skipped"] is True
 
 
 @pytest.mark.parametrize(
@@ -504,10 +502,7 @@ def test_an_unreachable_chat_app_hands_the_create_to_mngr_with_the_same_terms(
         if token == "--label"
     ]
     assert labels == ["user_created=true", "auto_open=true"]
-    assert (
-        call["argv"][call["argv"].index("-S") + 1]
-        == message_chat.SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
-    )
+    assert "-S" not in call["argv"]
     assert call["text"] == "/update-self"
     assert call["argv"][-2:] == ["--format", "jsonl"]
     assert_mngr_argv_valid(["mngr", *call["argv"]])
@@ -522,14 +517,14 @@ def test_an_unreachable_chat_app_hands_the_create_to_mngr_with_the_same_terms(
 def test_a_chat_app_from_before_the_create_fields_hands_the_create_to_mngr(
     fake_chat_app: Any, fake_mngr: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The route existed before its `should_wait`, `labels`, and waiver fields, and refuses unknown
+    """The route existed before its `should_wait` and `labels` fields, and refuses unknown
     fields by name: the chat app running through an update is one from before them, so its 400 is
     the backoff's case rather than a final refusal."""
     fake_chat_app.answers = [
         (
             400,
             {
-                "detail": "3 validation errors for CreateChatRequest\nlabels\n  Extra inputs are not permitted\n"
+                "detail": "2 validation errors for CreateChatRequest\nlabels\n  Extra inputs are not permitted\n"
                 "should_wait\n  Extra inputs are not permitted\n"
             },
         )

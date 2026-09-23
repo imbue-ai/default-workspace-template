@@ -27,7 +27,6 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
-from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -899,7 +898,6 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "account_id": signed_in.id,
         "message": "",
         "labels": {},
-        "is_installation_check_skipped": False,
         "phase": "creating",
         "error": None,
         "is_seeded": False,
@@ -910,8 +908,8 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
 def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """An update chat whose create failed on the claude pin is retried from the page with the same
-    waiver and labels, or the retry fails the same way; the record carries them like the message."""
+    """A chat whose create failed is retried from the page with the labels it was minted with
+    (``auto_open``, say); the record carries them like the message."""
     (signed_in,) = read_index().accounts
     seed_failed_chat(
         agent_manager,
@@ -920,7 +918,6 @@ def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
         account_id=signed_in.id,
         message="/update-self",
         labels={"auto_open": "true"},
-        is_installation_check_skipped=True,
     )
     q = broadcaster.register()
 
@@ -932,7 +929,6 @@ def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
     pushed = json.loads(raw)
     assert pushed["phase"] == "creating"
     assert pushed["labels"] == {"auto_open": "true"}
-    assert pushed["is_installation_check_skipped"] is True
     assert pushed["message"] == "/update-self"
 
 
@@ -944,13 +940,11 @@ def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentMan
     assert agent_manager.get_provisional_chats() == []
 
 
-def test_create_chat_refuses_labels_and_the_waiver_beside_a_minted_id(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_labels_beside_a_minted_id(agent_manager: AgentManager) -> None:
     (signed_in,) = read_index().accounts
     seed_failed_chat(agent_manager, ChatId("failed-3"), "Chat 1", account_id=signed_in.id)
     with pytest.raises(AgentCreationError, match="relabel"):
         agent_manager.create_chat("", chat_id="failed-3", labels={"auto_open": "true"})
-    with pytest.raises(AgentCreationError, match="relabel"):
-        agent_manager.create_chat("", chat_id="failed-3", is_installation_check_skipped=True)
 
 
 def test_a_waited_create_reports_the_failure_the_record_holds(
@@ -1630,17 +1624,13 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
     assert not any("fastMode" in token for token in argv)
 
 
-def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver() -> None:
+def test_chat_create_argv_carries_a_callers_labels() -> None:
     """A create from outside the workspace (the Minds app's assist and update chats, through
-    ``message_chat.py --create``) rides its labels and the claude version-check waiver on the
-    same argv the app's own creates use."""
-    argv = _chat_create_argv(
-        extra_labels=["auto_open=true", "assist=true"], settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
-    )
+    ``message_chat.py --create``) rides its labels on the same argv the app's own creates use."""
+    argv = _chat_create_argv(extra_labels=["auto_open=true", "assist=true"])
     assert_mngr_argv_valid(argv)
     labels = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--label"]
     assert labels[-2:] == ["auto_open=true", "assist=true"]
-    assert argv[argv.index("-S") + 1] == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
