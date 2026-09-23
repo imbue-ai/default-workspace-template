@@ -110,6 +110,37 @@ describe("buildConversationRows", () => {
     expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
   });
 
+  // A notice the agent was woken by sits between what it said before and what it did after.
+  it("renders a notice between the turn it ended and the work it woke the agent for", () => {
+    const notice: UserMessageEvent = {
+      ...userMsg("t5", "<task-notification>\n<status>completed</status>\n</task-notification>", "n1"),
+      display: "notice",
+      display_label: "Background task completed",
+      display_body: 'Background command "Wait for the worker" completed',
+    };
+    const plain = buildConversationRows(
+      "agent-1",
+      [userMsg("t1", "hello"), assistantText("t2", "on it", "end_turn"), notice, assistantText("t6", "it finished")],
+      true,
+    );
+    expect(plain.map((r) => r.key)).toEqual(["u-t1", "a-t2", "n1", "a-t6"]);
+
+    const withStep = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "do the thing"),
+        tkMsg("t2", "tk start cod-step-aaa", "c1"),
+        result("c1", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Look into it"),
+        assistantText("t3", "running in the background", "end_turn"),
+        notice,
+        tkMsg("t6", 'tk close cod-step-aaa "looked into it"', "c2"),
+        result("c2", "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Look into it"),
+      ],
+      true,
+    );
+    expect(withStep.map((r) => r.key)).toEqual(["u-t1", "progress-section-u-t1", "n1", "progress-section-n1"]);
+  });
+
   // A chat that moved to another agent shows the seam as its own row, the handoff node keyed by
   // the switch event, between the two agents' turns.
   it("renders an agent switch as a handoff node row between the agents' turns", () => {

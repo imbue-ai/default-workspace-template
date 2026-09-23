@@ -30,7 +30,7 @@
  *      task notification are all the SAME display (a collapsed system chip) and
  *      so are all `UserMessageKind.SystemChip`, differing only by their chip label.
  *   2. `KIND_SPEC` records, per kind, exactly how it renders: which rail, whether
- *      it opens a new turn, and a prose description of the net visual. Read it to
+ *      it is a turn of its own, and a prose description of the net visual. Read it to
  *      answer "what will my message look like?" without tracing render code.
  *
  * ---------------------------------------------------------------------------
@@ -110,10 +110,11 @@ export interface KindSpec {
   /** Which rail / channel the message (or its relocated content) appears on. */
   rail: Rail;
   /**
-   * Whether this message OPENS A NEW TURN SECTION (a boundary) or folds into the
-   * current one. Independent of `rail` and of appearance: a `SystemChip` is on
-   * the user rail yet is NOT a boundary (it tucks into the running turn as a
-   * chip), exactly like a Stop hook.
+   * Whether this message is a turn of the conversation (a boundary) rather than
+   * something injected into the agent's running work. Independent of `rail` and of
+   * appearance: a `SystemChip` is on the user rail yet is NOT a boundary -- it is
+   * not a turn the user took -- although the progress timeline still breaks at it
+   * (see turn-grouping), so the work the agent resumes renders below it.
    */
   boundary: boolean;
   /** Exact, human-readable description of the net visual -- the contract. */
@@ -133,8 +134,10 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     rail: Rail.User,
     boundary: false,
     netVisual:
-      "Right-aligned COLLAPSED chip ('▸ <label>') tucked INTO the current " +
-      "turn -- it does NOT start a new turn. Click to expand the raw body. Same " +
+      "Right-aligned COLLAPSED chip ('▸ <label>') at the point it arrived. It is " +
+      "not a turn of its own, but the timeline breaks at it: what the agent said " +
+      "before stays above it, and the work it resumes (any open step carried " +
+      "over) renders below it. Click to expand the raw body. Same " +
       "chrome as Stop-hook feedback (`.message-system-collapsed` wrapping a " +
       "`.tool-call-block`). The chip label distinguishes the source " +
       "(e.g. 'Stop hook feedback', 'Browser fleet', 'Background task').",
@@ -172,7 +175,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     rail: Rail.Assistant,
     boundary: false,
     netVisual:
-      "A left-aligned single line tucked INTO the current turn: a tick, the lead " +
+      "A left-aligned single line at the point it arrived, breaking the timeline " +
+      "like a SystemChip: a tick, the lead " +
       "in medium weight ('Background task completed:'), then the summary in plain " +
       "secondary text. Nothing to expand -- the summary is the whole of it.",
   },

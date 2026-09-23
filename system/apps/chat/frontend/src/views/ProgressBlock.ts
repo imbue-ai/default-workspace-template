@@ -224,9 +224,9 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             expansionKey: `handoff:${blockKeyPrefix}:${item.node.key}`,
           });
         }
-        // A stop-hook chip woven into the timeline at the point the hook
-        // fired; the opaque pure-white chat background masks the thread
-        // behind it. z-[2]: design-system-exception, as above.
+        // A chip that landed inside an open handoff, after its node; the
+        // opaque pure-white chat background masks the thread behind it.
+        // z-[2]: design-system-exception, as above.
         return m(
           "div",
           { class: "pv-stophook relative z-[2] mt-1.5 mb-3.5 bg-chat", key: `chip-${item.event.event_id}` },

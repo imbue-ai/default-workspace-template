@@ -74,9 +74,9 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
 // all derive from the single classification above.
 
 /**
- * True for a user_message that is NOT a genuine human turn and so must not be
- * treated as a turn boundary -- folding one of these into the running turn keeps
- * a single logical turn from being split into several visible ones.
+ * True for a user_message that is NOT a turn of the conversation: it never counts
+ * as a turn the user took. The progress timeline still breaks at a system chip or
+ * notice (see turn-grouping); the other non-boundary kinds render no row at all.
  */
 export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolean {
   // Derived from the KIND_SPEC registry (its `boundary` column) so the boundary
