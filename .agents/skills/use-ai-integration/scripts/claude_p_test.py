@@ -26,14 +26,11 @@ sys.modules[_spec.name] = claude_p
 _spec.loader.exec_module(claude_p)
 
 
-def test_build_argv_completion_disables_tools_and_sets_system() -> None:
-    argv = claude_p._build_argv(
+def test_completion_argv_disables_tools_and_sets_system() -> None:
+    argv = claude_p._completion_argv(
         "classify this",
         model="claude-haiku-4-5",
         system="You are a classifier.",
-        append_system=None,
-        tools="",
-        permission_mode=None,
     )
     assert argv[:3] == ["claude", "-p", "classify this"]
     assert (
@@ -46,13 +43,19 @@ def test_build_argv_completion_disables_tools_and_sets_system() -> None:
     assert "--permission-mode" not in argv
 
 
-def test_build_argv_task_keeps_tools_and_sets_permission_mode() -> None:
-    argv = claude_p._build_argv(
+def test_completion_argv_does_not_persist_its_session() -> None:
+    """Each completion runs from a throwaway cwd, so a persisted session would leave one
+    ``projects/<cwd>`` directory per call behind in the account's projects tree."""
+    argv = claude_p._completion_argv("classify this", model="claude-haiku-4-5", system="You are a classifier.")
+    assert "--no-session-persistence" in argv
+
+
+def test_task_argv_keeps_tools_and_sets_permission_mode() -> None:
+    argv = claude_p._task_argv(
         "do work",
         model="claude-haiku-4-5",
         system=None,
         append_system="Only touch data/.",
-        tools=None,
         permission_mode="bypassPermissions",
     )
     # tools=None leaves the flag off entirely, inheriting the default tool set.
@@ -60,6 +63,8 @@ def test_build_argv_task_keeps_tools_and_sets_permission_mode() -> None:
     assert argv[argv.index("--append-system-prompt") + 1] == "Only touch data/."
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert "--system-prompt" not in argv
+    # A task runs in the repo and its session is resumable like any other.
+    assert "--no-session-persistence" not in argv
 
 
 def _success_payload(**overrides: object) -> dict[str, object]:
