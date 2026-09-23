@@ -2365,7 +2365,6 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
             name="assist-1a2b3c",
             message="/assist it broke",
             labels={"auto_open": "true"},
-            is_installation_check_skipped=True,
         )
     )
 
