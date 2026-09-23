@@ -1502,9 +1502,9 @@ def test_watcher_handles_missing_session_file(tmp_path: Path) -> None:
 def test_a_session_missing_everywhere_is_scanned_for_on_a_backoff_not_on_every_refresh(
     tmp_path: Path, loguru_records: list[str]
 ) -> None:
-    """A history can name a session whose file never lands (a production workspace had
-    two). Each refresh used to walk the whole projects tree for it -- every wake of every
-    chat's watcher, forever -- so twenty back-to-back refreshes now scan once."""
+    """A history can name a session whose file never lands, and every watcher wake
+    refreshes, so the project dirs are scanned for it on a backoff: twenty back-to-back
+    refreshes scan once."""
     agent_state_dir = tmp_path / "agent_state"
     agent_state_dir.mkdir()
     claude_config_dir = tmp_path / "claude_config"
