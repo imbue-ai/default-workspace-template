@@ -185,6 +185,13 @@ def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: s
     return values
 
 
+def is_chat_connecting(manager: AgentManager, chat_id: str) -> bool:
+    """The ``is_connecting`` the chat's current snapshot reports; the chat must have one."""
+    snapshot = manager.get_chat_snapshot(chat_id)
+    assert snapshot is not None
+    return snapshot.active_agent.is_connecting
+
+
 def seed_agent_state(
     manager: AgentManager,
     agent_id: str,
