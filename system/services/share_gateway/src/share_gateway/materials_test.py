@@ -81,12 +81,12 @@ def test_signing_secret_minted_under_one_relay_token_is_replaced_under_another(t
 @pytest.mark.parametrize(
     "stored_text",
     [
-        "a-bare-secret-from-an-earlier-gateway",
-        '["a-bare-secret-from-an-earlier-gateway"]',
-        json.dumps({"relay_token_sha256": _TOK_123_DIGEST}),
-        json.dumps({"secret": "", "relay_token_sha256": _TOK_123_DIGEST}),
-        json.dumps({"secret": 12345, "relay_token_sha256": _TOK_123_DIGEST}),
-        '{"secret": "a-bare-secret-from-an-earlier-gateway"}',
+        pytest.param("a-bare-secret-from-an-earlier-gateway", id="not-json"),
+        pytest.param('["a-bare-secret-from-an-earlier-gateway"]', id="json-list"),
+        pytest.param(json.dumps({"relay_token_sha256": _TOK_123_DIGEST}), id="no-secret"),
+        pytest.param(json.dumps({"secret": "", "relay_token_sha256": _TOK_123_DIGEST}), id="empty-secret"),
+        pytest.param(json.dumps({"secret": 12345, "relay_token_sha256": _TOK_123_DIGEST}), id="non-string-secret"),
+        pytest.param('{"secret": "a-bare-secret-from-an-earlier-gateway"}', id="unbound-secret"),
     ],
 )
 def test_malformed_signing_secret_file_is_replaced_and_rebound(tmp_path: Path, stored_text: str) -> None:
