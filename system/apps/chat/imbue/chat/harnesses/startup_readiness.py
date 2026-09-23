@@ -7,6 +7,7 @@ marker file in the agent's state dir; this module reads that marker.
 
 from pathlib import Path
 
+from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -27,7 +28,8 @@ class StartupReadyMarker(FrozenModel):
 def _read_mtime(path: Path) -> float | None:
     try:
         return path.stat().st_mtime
-    except OSError:
+    except OSError as e:
+        logger.debug("No readable marker at {}: {}", path, e)
         return None
 
 
