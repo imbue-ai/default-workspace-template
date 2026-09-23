@@ -93,7 +93,8 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // harness's parser off the shared detector table): how this message renders.
   // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
   // sentinel tags) never reach the wire -- the decision does.
-  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "status" | "notice" | "prompt_with_context";
+  display?:
+    "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "status" | "notice" | "prompt_with_context";
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
 
   display_label?: string;
