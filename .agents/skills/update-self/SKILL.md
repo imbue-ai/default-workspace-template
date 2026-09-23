@@ -532,9 +532,9 @@ broke and had to be worked around). For each, either
 
 - submit it -- `submit-upstream-changes` when you have a fix to template code
   you can stand behind, otherwise the report POST in
-  `.agents/skills/assist/SKILL.md` step 6 (which pops a modal for the user to
-  review and send). An mngr defect always goes in the report: its fix is its
-  own mngr PR, not a template one -- or
+  `.agents/shared/references/report-built-in-issues.md` (which pops a modal
+  for the user to review and send). An mngr defect always goes in the report:
+  its fix is its own mngr PR, not a template one -- or
 - name it in the results message as an explicit recommendation, with the
   submission offered.
 
