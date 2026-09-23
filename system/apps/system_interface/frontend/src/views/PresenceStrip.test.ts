@@ -2,11 +2,11 @@
 import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import m from "mithril";
 
-import { applyPresence, resetPresenceForTesting, startPresenceHeartbeat } from "../model/Presence";
+import { applyPresence, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { presentUserRecord } from "../testing/records";
 import { PresenceStrip, orderedForStrip, presenceInitial, presenceTitle } from "./PresenceStrip";
 
@@ -26,27 +26,14 @@ function pictures(root: HTMLElement): Element[] {
   return Array.from(root.querySelectorAll("[data-presence-user]"));
 }
 
-/** Make the heartbeat answer that this page is ``userId``, as the shell's heartbeat would. */
-async function signInAs(userId: string): Promise<void> {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ identity: { owner: false, user_id: userId, email: `${userId}@example.com` } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    ),
-  );
-  Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-  startPresenceHeartbeat();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+/** Make this page ``userId``'s, as the heartbeat's answer would. */
+function signInAs(userId: string): void {
+  setOwnIdentityForTesting({ owner: false, user_id: userId, email: `${userId}@example.com` });
 }
 
 afterEach(() => {
   unmountViews();
   resetPresenceForTesting();
-  vi.unstubAllGlobals();
 });
 
 describe("presenceInitial and presenceTitle", () => {
@@ -96,8 +83,8 @@ describe("PresenceStrip", () => {
     ]);
   });
 
-  it("puts the viewer's own entry last, ringed, and says so on hover", async () => {
-    await signInAs("user-bob-4471");
+  it("puts the viewer's own entry last, ringed, and says so on hover", () => {
+    signInAs("user-bob-4471");
     applyPresence([bob, owner, carol]);
     const root = render();
     const drawn = pictures(root);

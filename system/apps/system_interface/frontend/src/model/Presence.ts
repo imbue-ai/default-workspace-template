@@ -93,6 +93,11 @@ export function startPresenceHeartbeat(): void {
   handleVisibilityChange();
 }
 
+/** Make the page's own identity what a heartbeat would have answered, without one. Test-only. */
+export function setOwnIdentityForTesting(identity: OwnIdentity | null): void {
+  ownIdentity = identity;
+}
+
 /** Stop heartbeating and forget everything, so the next start binds to the current `window`. Test-only. */
 export function resetPresenceForTesting(): void {
   if (isStarted) {
