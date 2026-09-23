@@ -8,4 +8,4 @@ This branch carries the share identity cleanup merged from `josh/sharing-cleanup
 
 - The workspace session cookie now lasts 30 days instead of 24 hours.
 
-- Unsharing deletes the session-cookie signing secret (`data/.secrets/share_gateway_signing_key`), so every existing session -- the owner's included -- is invalidated the moment the share ends; the next share mints a fresh secret. The TLS key and cert still persist for a fast re-share.
+- Unsharing deletes the session-cookie signing secret (`data/.secrets/share_gateway_signing_key`), so every existing session -- the owner's included -- is invalidated the moment the share ends; the next share mints a fresh secret. A secret an unshare left behind while the gateway runner was down is discarded when the runner next starts without share materials, so it never signs the next share. The TLS key and cert still persist for a fast re-share.

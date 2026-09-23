@@ -128,9 +128,13 @@ def load_or_create_signing_secret(path: Path) -> str:
     return secret
 
 
-def discard_signing_secret(path: Path) -> None:
-    """Delete the signing secret so every session it signed (the owner's included) stops verifying."""
-    path.unlink(missing_ok=True)
+def discard_signing_secret(path: Path) -> bool:
+    """Delete the signing secret so every session it signed (the owner's included) stops verifying; False when there
+    was none to delete."""
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
 
 
 _VALID_AUTH_LABEL = re.compile(r"^auth-[a-z0-9]{" + str(_AUTH_LABEL_RANDOM_LENGTH) + r"}$")
