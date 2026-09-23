@@ -1,1 +1,1 @@
-The chat progress-view spec now describes a system chip or notice as a break in the timeline (the reply before it stays above it, the resumed work renders below it) rather than an inline chip that never splits a turn.
+The chat progress-view spec now describes a system chip or notice as a break in the timeline (the reply before it stays above it, the resumed work renders below it) rather than an inline chip that never splits a turn, and says that a step still open across two back-to-back breaks shows once, under the later one.
