@@ -503,6 +503,12 @@ class ActiveAgentSnapshot(FrozenModel):
     model_choice: ModelChoice | None = Field(description="The live model/effort/fast selection, or None")
     queued_messages: tuple[QueuedMessageState, ...] = Field(description="The harness queue, in enqueue order")
     shoulder_tap_available: bool = Field(description="Whether something is queued and no send is in flight")
+    is_connecting: bool = Field(
+        description=(
+            "Whether a send is in flight and waiting for the agent to come up: it was stopped, or its "
+            "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
+        )
+    )
 
 
 class ChatSnapshot(FrozenModel):

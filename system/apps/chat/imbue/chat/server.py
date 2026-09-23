@@ -31,6 +31,7 @@ from werkzeug.exceptions import NotFound
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import latchkey_endpoints
+from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import discover_agents
@@ -461,11 +462,17 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # only as the correlation token the committed item echoes back.
     agent_manager = state.agent_manager
     session = agent_manager.get_or_create_session(agent_info)
-    outcome = session.send(text, message_id)
-    if outcome is SendOutcome.NOT_READY:
-        outcome = _revive_and_retry_send(
-            agent_info, agent_manager, session, SendMessageRequest(message=text, message_id=message_id), message_id
-        )
+    # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
+    # harness still starting -- reads as Connecting on the chat until it resolves.
+    with agent_manager.track_connecting_send(agent_info.id, message_id) as mark_connecting:
+        if is_lifecycle_dead(agent_info.state) or session.is_starting_up():
+            mark_connecting()
+        outcome = session.send(text, message_id)
+        if outcome is SendOutcome.NOT_READY:
+            mark_connecting()
+            outcome = _revive_and_retry_send(
+                agent_info, agent_manager, session, SendMessageRequest(message=text, message_id=message_id), message_id
+            )
     # A delivered send means the agent is up: mngr's own send auto-starts a stopped
     # file-harness agent (``is_start_desired``), and the observe stream would not see that
     # revival for minutes. Reflect it now, as the codex revive above does, so the UI's

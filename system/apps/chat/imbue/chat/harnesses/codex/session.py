@@ -108,6 +108,10 @@ class CodexHarnessSession(AgentHarnessSession):
         # shows the right dot immediately.
         self._deps.recompute_activity()
 
+    def is_starting_up(self) -> bool:
+        # With no live connection a send first builds one, which waits on a daemon still starting.
+        return self._live_ledger() is None
+
     def on_lifecycle_dead(self) -> None:
         """Reap the connection and the manager-side queue chips for a positively-dead daemon.
 
