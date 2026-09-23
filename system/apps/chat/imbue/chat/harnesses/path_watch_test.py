@@ -4,9 +4,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from watchdog.utils import BaseThread
-
 import pytest
+from watchdog.utils import BaseThread
 
 from imbue.chat.harnesses.path_watch import PathWatcher
 
