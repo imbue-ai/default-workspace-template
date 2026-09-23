@@ -570,7 +570,9 @@ def desktop_seeded_from(
     opened_at: datetime,
 ) -> Desktop:
     """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its settled windows' paths
-    (desktop plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's."""
+    (desktop plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A
+    pinned window comes over pinned, with its scope, so the pinned-window ensure that runs on every read finds it and
+    mints no second one."""
     settled = settled_windows(source)
     if len(window_ids) != len(settled):
         raise InvalidShellValueError(f"seeding needs {len(settled)} window id(s), got {len(window_ids)}")
