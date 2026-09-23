@@ -21,7 +21,7 @@ Usage:
 - Latchkey comes with a list of builtin supported services.
   - **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
   - **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-  - You can request to register more custom services, although the options for authenticating to custom services are limited. See "Ask for a new connection to a domain latchkey does not know" below.
+  - You can request to register more custom services, although the options for authenticating to custom services are limited. See "Ask for a new connection to a domain Latchkey does not know" below.
 - **Submit a permission request to the user** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` when `latchkey curl` fails with a Latchkey permission error. See "Interpreting Latchkey permission errors" below. One request per tool call, on its own, output untouched.
 - **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
 
@@ -72,9 +72,8 @@ Before you decide to go down this route, note that:
 - You don't need to ask for a new connection to make requests to URLs that don't
   require credentials. Latchkey is not necessary at all.
 
-- The authentication headers and login flows currently supported by Latchkey are
-  limited (see details below ). If the service needs anything else, fall back to
-  either:
+- The authentication headers and login flows currently supported by Latchkey for new (non-builtin) domains
+  are limited (see details below). If the service needs anything else, fall back to either:
 
    - Ask the user to perform some operations manually.
    - If the user really wants automated access, ask the user to type in the
@@ -164,7 +163,7 @@ that you'll continue once they do if that's something you need to wait on.
 ### Git operations on GitHub (clone / fetch / push)
 
 The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
-`git` works through latchkey too: point git at the gateway's proxy URL and
+`git` works through Latchkey too: point git at the gateway's proxy URL and
 pass the gateway's auth headers (their values are already in this
 environment).
 
