@@ -25,7 +25,7 @@
 #
 # Scope: ONLY a POST to the reserved `latchkey-self.invalid/permission-requests`
 # host and a run of `request_secret.py` -- the calls that FILE a request (policies
-# P3 and P9). Reading the queue or any other latchkey curl is untouched, and may be
+# P3 and P10). Reading the queue or any other latchkey curl is untouched, and may be
 # piped or chained freely. The secret card is read the same way, by
 # `is_secret_request_call()` / `find_secret_request()` in tool_output.py.
 #

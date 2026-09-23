@@ -156,7 +156,7 @@ def is_secret_request_call(raw_input: str) -> bool:
     """True when a tool call runs the secret request script. Detected from the tool INPUT
     alone, for the same reason as a permission request: the card must show while the
     request is pending. The script is a whole word followed by its ``--file``, the same
-    "an argument, not a mention" test the P9 checker applies."""
+    "an argument, not a mention" test the P10 checker applies."""
     script = _SECRET_REQUEST_SCRIPT_RE.search(raw_input)
     return script is not None and _SECRET_REQUEST_FILE_FLAG_RE.search(raw_input, script.end()) is not None
 

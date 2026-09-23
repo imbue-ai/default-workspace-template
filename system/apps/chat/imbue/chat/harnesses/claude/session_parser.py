@@ -17,6 +17,8 @@ from pydantic import Field
 
 from imbue.chat.harnesses.claude.error_notice import ErrorNotice
 from imbue.chat.harnesses.claude.error_notice import classify_error_notice
+from imbue.chat.harnesses.claude.tool_labels import action_note
+from imbue.chat.harnesses.claude.tool_labels import action_parts
 from imbue.chat.harnesses.claude.tool_labels import shell_command
 from imbue.chat.harnesses.claude.tool_labels import tool_labels
 from imbue.chat.harnesses.error_patterns import is_provider_fault
@@ -343,6 +345,18 @@ def _parse_assistant_message(
                 "header_label": header_label,
                 "caption_label": caption_label,
             }
+            # What the call DID, for the transcript's tool chips. The two halves ride
+            # separately because the chip sets them in different type, and a joined
+            # label could not be split back without guessing where a multi-word verb
+            # ends. The note is the agent's OWN words, which only the shell and
+            # delegation tools record -- absent elsewhere rather than inferred.
+            action_verb, action_target = action_parts(tool_name, raw_input)
+            tool_call["action_verb"] = action_verb
+            if action_target:
+                tool_call["action_target"] = action_target
+            note = action_note(tool_name, raw_input)
+            if note:
+                tool_call["action_note"] = note
             # The render decision ships with the call (a hidden tk marker, or the
             # permission card), recognised from the full input backend-side; the
             # frontend never re-derives it from the command text.

@@ -41,7 +41,7 @@ _MULTILINE_REQUEST = (
 
 
 # A secret request, exactly as the connect-external-service skill documents it: the
-# other kind of filing this gate governs (P9).
+# other kind of filing this gate governs (P10).
 _SECRET_REQUEST_PATH = (
     ".agents/skills/connect-external-service/scripts/request_secret.py"
 )

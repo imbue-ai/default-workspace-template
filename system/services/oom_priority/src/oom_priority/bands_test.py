@@ -48,6 +48,7 @@ _BUILTIN_SERVICE_ORDER = (
     "terminal",
     "terminal-pty",
     "system_interface",
+    "agent-observer",
     "chat",
     "share-gateway",
     "github-sync",
@@ -57,6 +58,7 @@ _BUILTIN_SERVICE_ORDER = (
     "xvfb",
     "browser",
     "files",
+    "getting-started",
 )
 
 

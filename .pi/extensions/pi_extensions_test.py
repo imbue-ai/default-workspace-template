@@ -233,7 +233,7 @@ def test_guards_allow_what_the_checkers_allow(tmp_path: Path, command: str) -> N
 
 
 def test_the_secrets_guard_reaches_pis_file_tools(tmp_path: Path) -> None:
-    """P8 covers a `read` of a secret file as much as a `cat`: the one checker pi runs on
+    """P9 covers a `read` of a secret file as much as a `cat`: the one checker pi runs on
     every tool call, with the pi event mapped onto the claude-shaped payload it parses."""
     payload = {"toolName": "read", "input": {"path": "data/.secrets/svc.env"}}
     result = _event_result(

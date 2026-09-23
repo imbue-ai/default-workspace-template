@@ -8,6 +8,7 @@ skill bootstrap that extracts the target ref's own copy of the flow.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -39,36 +40,49 @@ _WORKSPACE_ROOT = _SCRIPTS_DIR.parents[3]
 _MODULE_PATH = _SCRIPTS_DIR / "update_self.py"
 
 
-# pick_latest_stable_tag / resolve_target
+# resolve_target
 
 
-def test_pick_latest_stable_tag_ignores_prereleases() -> None:
-    tags = [
-        "minds-v0.3.5",
-        "minds-v0.3.7",
-        "minds-v0.3.7-rc1",
-        "minds-v0.3.6",
-    ]
-    assert update_target.pick_latest_stable_tag(tags) == "minds-v0.3.7"
+def test_resolve_target_takes_the_release_the_app_names() -> None:
+    # Not the newest tag upstream: the one this app was built against, even with
+    # newer releases sitting right beside it.
+    tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.4.0"]
+    result = update_target.resolve_target(None, tags, app_version="minds-v0.3.7")
+    assert result == update_target.ResolvedTarget("minds-v0.3.7", "tag", "minds-v0.3.7", False)
 
 
-def test_pick_latest_stable_tag_uses_semver_not_lexical_order() -> None:
-    # Lexically "0.3.9" > "0.3.10"; semantically 0.3.10 is newer.
-    tags = ["minds-v0.3.9", "minds-v0.3.10", "minds-v0.4.0"]
-    assert update_target.pick_latest_stable_tag(tags) == "minds-v0.4.0"
-    tags_no_major = ["minds-v0.3.9", "minds-v0.3.10"]
-    assert update_target.pick_latest_stable_tag(tags_no_major) == "minds-v0.3.10"
+def test_resolve_target_takes_a_prerelease_app_to_its_own_prerelease_template() -> None:
+    # An rc build is a verified pair like any other, so its workspace runs the
+    # matching rc template rather than the stable release before it.
+    tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0"]
+    result = update_target.resolve_target(None, tags, app_version="minds-v0.4.0-rc1")
+    assert result.ref == "minds-v0.4.0-rc1"
 
 
-def test_pick_latest_stable_tag_returns_none_when_all_prerelease_or_empty() -> None:
-    assert update_target.pick_latest_stable_tag([]) is None
-    assert update_target.pick_latest_stable_tag(["minds-v0.3.7-rc1", "v1.2.3"]) is None
+def test_a_missing_app_release_is_a_fault_not_a_refusal() -> None:
+    # The app names a release the template upstream does not carry: that pairing
+    # was never published as claimed, so the skill is told, and no other release
+    # is quietly substituted.
+    try:
+        update_target.resolve_target(None, ["minds-v0.3.8", "minds-v0.4.0"], app_version="minds-v0.3.9")
+    except update_target.AppVersionNotReleasedError as exc:
+        message = str(exc)
+        assert "minds-v0.3.9" in message
+        assert "no such tag" in message
+        assert not isinstance(exc, update_target.NoUpdateTargetError)
+    else:
+        raise AssertionError("expected a fault when the app's release is missing upstream")
 
 
-def test_resolve_target_defaults_to_latest_stable() -> None:
-    tags = ["minds-v0.3.6", "minds-v0.3.7", "minds-v0.3.7-rc1"]
-    result = update_target.resolve_target(None, tags)
-    assert result == update_target.ResolvedTarget("minds-v0.3.7", "tag")
+def test_an_app_naming_no_release_is_a_fault() -> None:
+    # A dev build reports its branch. There is no release to match, and which
+    # ref such a workspace should take is the skill's call, not this script's.
+    try:
+        update_target.resolve_target(None, ["minds-v0.3.9", "minds-v0.4.0"], app_version="main")
+    except update_target.AppVersionNotReleasedError as exc:
+        assert "not a release tag" in str(exc)
+    else:
+        raise AssertionError("expected a fault when the app names no release")
 
 
 def test_resolve_target_override_main_is_remote_qualified_branch() -> None:
@@ -89,89 +103,19 @@ def test_resolve_target_override_known_tag_vs_arbitrary_ref() -> None:
     assert passthrough == update_target.ResolvedTarget("abc1234", "ref")
 
 
-def test_resolve_target_raises_when_no_stable_tag_and_no_override() -> None:
-    try:
-        update_target.resolve_target(None, ["minds-v0.3.7-rc1"])
-    except ValueError as exc:
-        assert "no stable minds-v* tag" in str(exc)
-    else:
-        raise AssertionError("expected ValueError when no stable tag and no override")
-
-
-# the app-version ceiling
-
-
-def test_ceiling_caps_selection_at_the_app_version() -> None:
-    # The headline case: upstream has moved past the app driving this workspace.
-    tags = ["minds-v0.3.8", "minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
-        == "minds-v0.3.9"
-    )
-    result = update_target.resolve_target(None, tags, ceiling="minds-v0.3.9")
-    assert result.ref == "minds-v0.3.9"
-    assert result.ceiling == "minds-v0.3.9"
-    assert result.exceeds_ceiling is False
-
-
-def test_ceiling_picks_the_newest_tag_below_it_when_the_exact_tag_is_absent() -> None:
-    # The app's own tag need not exist upstream (a release whose template tag was
-    # never cut); the newest tag below it is still safe to take.
-    tags = ["minds-v0.3.8", "minds-v0.4.0"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
-        == "minds-v0.3.8"
-    )
-
-
-def test_ceiling_compares_by_semver_not_lexically() -> None:
-    tags = ["minds-v0.3.9", "minds-v0.3.10"]
-    # Lexically "0.3.10" < "0.3.9", so a lexical cap would wrongly admit 0.3.10.
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
-        == "minds-v0.3.9"
-    )
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.3.10")
-        == "minds-v0.3.10"
-    )
-
-
-def test_non_release_ceiling_imposes_no_cap() -> None:
-    # A dev app reports its branch rather than a release tag; there is no version
-    # to compare, so the flow behaves exactly as it did before the ceiling.
-    tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    assert update_target.pick_latest_stable_tag(tags, ceiling="main") == "minds-v0.4.0"
-    result = update_target.resolve_target(None, tags, ceiling="main")
-    assert result.ref == "minds-v0.4.0"
-    assert result.ceiling == "main"
-
-
-def test_resolve_target_explains_when_every_tag_is_above_the_ceiling() -> None:
-    # Distinct from "upstream has no stable tags at all": here the user's fix is
-    # to update the app, so the message has to say so.
-    try:
-        update_target.resolve_target(None, ["minds-v0.4.0"], ceiling="minds-v0.3.9")
-    except ValueError as exc:
-        assert "newer than this workspace's minds app" in str(exc)
-        assert "minds-v0.3.9" in str(exc)
-    else:
-        raise AssertionError("expected ValueError when every tag is above the ceiling")
-
-
 def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
     tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    newer = update_target.resolve_target("minds-v0.4.0", tags, ceiling="minds-v0.3.9")
+    newer = update_target.resolve_target("minds-v0.4.0", tags, app_version="minds-v0.3.9")
     assert newer.ref == "minds-v0.4.0"
     assert newer.exceeds_ceiling is True
 
 
 def test_override_at_or_below_the_ceiling_is_not_flagged() -> None:
     tags = ["minds-v0.3.6", "minds-v0.3.9"]
-    older = update_target.resolve_target("minds-v0.3.6", tags, ceiling="minds-v0.3.9")
+    older = update_target.resolve_target("minds-v0.3.6", tags, app_version="minds-v0.3.9")
     assert older.exceeds_ceiling is False
     at_ceiling = update_target.resolve_target(
-        "minds-v0.3.9", tags, ceiling="minds-v0.3.9"
+        "minds-v0.3.9", tags, app_version="minds-v0.3.9"
     )
     assert at_ceiling.exceeds_ceiling is False
 
@@ -182,13 +126,13 @@ def test_unprovable_overrides_are_flagged() -> None:
     tags = ["minds-v0.3.9"]
     assert (
         update_target.resolve_target(
-            "main", tags, ceiling="minds-v0.3.9"
+            "main", tags, app_version="minds-v0.3.9"
         ).exceeds_ceiling
         is True
     )
     assert (
         update_target.resolve_target(
-            "abc1234", tags, ceiling="minds-v0.3.9"
+            "abc1234", tags, app_version="minds-v0.3.9"
         ).exceeds_ceiling
         is True
     )
@@ -196,7 +140,7 @@ def test_unprovable_overrides_are_flagged() -> None:
     # 0.3.7-rc1 sits below the 0.3.9 ceiling -- so it is not flagged.
     assert (
         update_target.resolve_target(
-            "minds-v0.3.7-rc1", tags, ceiling="minds-v0.3.9"
+            "minds-v0.3.7-rc1", tags, app_version="minds-v0.3.9"
         ).exceeds_ceiling
         is False
     )
@@ -205,7 +149,7 @@ def test_unprovable_overrides_are_flagged() -> None:
 def test_overrides_are_never_flagged_without_a_ceiling() -> None:
     assert (
         update_target.resolve_target(
-            "main", ["minds-v0.3.9"], ceiling=None
+            "main", ["minds-v0.3.9"], app_version=None
         ).exceeds_ceiling
         is False
     )
@@ -300,7 +244,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
         assert "Update the minds app itself first" in str(exc)
     else:
@@ -319,7 +263,7 @@ def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
     else:
         raise AssertionError("expected a 404 to block rather than return no ceiling")
@@ -332,7 +276,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "could not reach the minds app" in str(exc)
         assert "connection refused" in str(exc)
     else:
@@ -348,7 +292,7 @@ def test_fetch_app_template_ref_blocks_on_an_unparseable_body(
 
     try:
         update_target.fetch_app_template_ref()
-    except update_target.CeilingUnavailableError as exc:
+    except update_target.AppVersionUnavailableError as exc:
         assert "could not be parsed" in str(exc)
     else:
         raise AssertionError("expected an unparseable body to block")
@@ -359,12 +303,10 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
 ) -> None:
     """End to end: with no ``--ceiling``, the CLI asks the app and caps on the answer.
 
-    ``latest_available`` reports the release that was held back, which is what the
-    approval message tells the user about.
-
     The workspace sits *behind* the ceiling (created from 0.3.5, app on 0.3.9), so
     the capped target is a real update and the pass proceeds -- otherwise this
-    would be asserting the already-merged refusal's territory instead.
+    would be asserting the already-merged refusal's territory instead. The output
+    carries nothing about 0.4.0, the release above the ceiling.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
@@ -390,26 +332,24 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
         "kind": "tag",
         "ceiling": "minds-v0.3.9",
         "exceeds_ceiling": False,
-        "latest_available": "minds-v0.4.0",
-        # minds-v0.4.0 was available and the ceiling is why it wasn't taken, so
-        # the approval message owes the user the "held back" line.
-        "held_back_by_ceiling": True,
     }
 
 
-def test_resolve_target_cli_refuses_when_the_app_caps_it_at_the_release_it_is_on(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize(
+    "unmerged_tags", [(), ("minds-v0.4.0",)], ids=["newest-upstream", "capped"]
+)
+def test_resolve_target_cli_refuses_when_already_on_the_ceiling_release(
+    tmp_path, monkeypatch, capsys, unmerged_tags
 ) -> None:
-    """The case the ceiling exists for, from the seat of a workspace already at it.
+    """A workspace at the ceiling hears the same refusal whether or not a newer release exists.
 
-    Created from 0.3.9, app on 0.3.9, 0.4.0 upstream. Tag selection alone resolves
-    0.3.9 -- the release the workspace *is* -- so without the refusal a whole
-    backup, worker and validation pass merges nothing. It has to name the app,
-    because updating the app is the one action that gets them 0.4.0.
+    Created from 0.3.9, app on 0.3.9: the default target is the release the
+    workspace is already on. A 0.4.0 upstream is above the ceiling, so it is
+    treated as absent.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
-        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=("minds-v0.4.0",)
+        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=unmerged_tags
     )
     _install_fake_latchkey(
         monkeypatch,
@@ -425,33 +365,12 @@ def test_resolve_target_cli_refuses_when_the_app_caps_it_at_the_release_it_is_on
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "already on minds-v0.3.9" in captured.err
-    assert "minds-v0.4.0 is available upstream but needs a newer app" in captured.err
-    assert "Traceback" not in captured.err
-
-
-def test_resolve_target_cli_refuses_when_already_on_the_newest_release(
-    tmp_path, monkeypatch, capsys
-) -> None:
-    """Nothing newer exists, so the refusal must not blame the app for it."""
-    repo = tmp_path / "repo"
-    _init_workspace_repo(repo, merged_tags=("minds-v0.3.9",), unmerged_tags=())
-    _install_fake_latchkey(
-        monkeypatch,
-        tmp_path / "bin",
-        body='{"workspace_template_ref": "minds-v0.3.9"}',
-        status="200",
-    )
-
     assert (
-        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
-        == 1
+        "error: this workspace is already on minds-v0.3.9; nothing to update"
+        in captured.err
     )
-
-    captured = capsys.readouterr()
-    assert "already on minds-v0.3.9" in captured.err
-    assert "nothing to update" in captured.err
-    assert "newer app" not in captured.err
+    assert "minds-v0.4.0" not in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
@@ -490,20 +409,6 @@ def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
     assert json.loads(capsys.readouterr().out)["ref"] == "minds-v0.3.9"
 
 
-def test_already_current_message_only_blames_the_app_when_it_is_to_blame() -> None:
-    held_back = update_target.already_current_message(
-        "minds-v0.3.9", "minds-v0.4.0", "minds-v0.3.9", True
-    )
-    assert "minds-v0.3.9" in held_back and "minds-v0.4.0" in held_back
-    assert "needs a newer app" in held_back
-
-    current = update_target.already_current_message(
-        "minds-v0.3.9", "minds-v0.3.9", "minds-v0.3.9", False
-    )
-    assert "nothing to update" in current
-    assert "newer app" not in current
-
-
 def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
     tmp_path, monkeypatch, capsys
 ) -> None:
@@ -537,7 +442,6 @@ def test_classify_path_reveal_classes() -> None:
         # it needs the same services-agent restart to take effect.
         "system/supervisord.conf.d/app-watcher.conf": update_classification.CLASS_SERVICE,
         "system/libs/bootstrap/src/bootstrap/main.py": update_classification.CLASS_SERVICE,
-        "system/vendor/mngr/libs/mngr/foo.py": update_classification.CLASS_EDITABLE_TOOL,
         "system/scripts/forward_port.py": update_classification.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_classification.CLASS_SHARED_RUNTIME,
         "system/services/oom_priority/src/oom_priority/ledger.py": update_classification.CLASS_SHARED_RUNTIME,
@@ -559,7 +463,6 @@ def test_classify_path_reveal_classes() -> None:
         # restart for system/libs/bootstrap/README.md).
         "system/libs/bootstrap/README.md": update_classification.CLASS_DOCS,
         "system/apps/system_interface/README.md": update_classification.CLASS_DOCS,
-        "system/vendor/mngr/README.md": update_classification.CLASS_DOCS,
         # Changelog entries likewise, in every project's bucket -- a release
         # ships them under runtime prefixes, so without this nearly every update
         # would restart a service (or run an impact analysis) over markdown.
@@ -588,10 +491,6 @@ def test_classify_path_project_mapping() -> None:
         == "system/apps/chat"
     )
     assert (
-        update_classification.classify_path("system/vendor/mngr/x.py").project
-        == "system/vendor/mngr"
-    )
-    assert (
         update_classification.classify_path("system/scripts/forward_port.py").project
         == "."
     )
@@ -601,9 +500,7 @@ def test_classify_path_manifest_flag() -> None:
     assert update_classification.classify_path(
         "system/apps/system_interface/pyproject.toml"
     ).is_manifest
-    assert update_classification.classify_path(
-        "system/vendor/mngr/libs/mngr/pyproject.toml"
-    ).is_manifest
+    assert update_classification.classify_path("pyproject.toml").is_manifest
     assert not update_classification.classify_path(
         "system/scripts/forward_port.py"
     ).is_manifest
@@ -637,24 +534,24 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
 def test_classify_merge_summary_fields() -> None:
     upstream_changed = [
         "system/apps/system_interface/src/App.tsx",  # merged
-        "system/vendor/mngr/libs/mngr/foo.py",  # merged
+        "system/apps/chat/imbue/chat/server.py",  # merged
         "system/scripts/forward_port.py",  # pulled in
     ]
     local_changed = [
         "system/apps/system_interface/src/App.tsx",
-        "system/vendor/mngr/libs/mngr/foo.py",
+        "system/apps/chat/imbue/chat/server.py",
     ]
     result = update_classification.classify_merge(upstream_changed, local_changed)
     assert result.reveal_classes_merged == [
-        update_classification.CLASS_EDITABLE_TOOL,
+        update_classification.CLASS_SHARED_RUNTIME,
         update_classification.CLASS_SYSTEM_INTERFACE,
     ]
     assert result.reveal_classes_pulled_in == [
         update_classification.CLASS_SHARED_RUNTIME
     ]
     assert result.projects_to_validate == [
+        "system/apps/chat",
         "system/apps/system_interface",
-        "system/vendor/mngr",
     ]
 
 
@@ -792,14 +689,14 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
     # the flag plumbing rather than that refusal.
     _init_workspace_repo(tmp_path, merged_tags=(), unmerged_tags=("minds-v0.1.0",))
 
-    # ``--ceiling main`` pins a non-release ceiling (i.e. no cap), so this test
-    # stays about the ``--repo-root`` plumbing and never reaches for the app.
+    # ``--ceiling`` names the tag in the tmp repo, so this test stays about the
+    # ``--repo-root`` plumbing and never reaches for the app.
     for argv in (
         [
             "resolve-target",
             "--local-tags",
             "--ceiling",
-            "main",
+            "minds-v0.1.0",
             "--repo-root",
             str(tmp_path),
         ],
@@ -809,7 +706,7 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
             "resolve-target",
             "--local-tags",
             "--ceiling",
-            "main",
+            "minds-v0.1.0",
         ],
     ):
         assert update_self.main(argv) == 0, argv
@@ -823,8 +720,8 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # bucket, not only the legacy top-level ``changelog/``. The command must
     # surface entries from every bucket -- else the update-self "what's new"
     # digest silently drops everything on the current (bucketed) convention --
-    # while ignoring the vendored subtree's separate changelog system and files
-    # that only happen to sit next to a changelog dir.
+    # while ignoring system/vendor's separate changelog system and files that
+    # only happen to sit next to a changelog dir.
     def _git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
 
@@ -844,14 +741,13 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
 
-    # Target commit: newly-added entries across every bucket, a vendored-subtree
+    # Target commit: newly-added entries across every bucket, a system/vendor
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
     _write("system/changelog/my-branch.md")
     _write("system/apps/browser/changelog/my-branch.md")
     _write("system/apps/system_interface/changelog/my-branch.md")
     _write("system/services/gamma/changelog/my-branch.md")
-    _write("system/vendor/mngr/libs/mngr/changelog/upstream-entry.md")
     _write("system/apps/browser/src/browser/session.py", "print('bye')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "target")
@@ -1136,114 +1032,7 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
 
 
-# is_held_back_by_ceiling
-
-
-def test_held_back_is_true_only_when_the_ceiling_chose_the_lower_target() -> None:
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.3.9",
-            latest_available="minds-v0.4.0",
-            ceiling="minds-v0.3.9",
-            has_override=False,
-        )
-        is True
-    )
-    # Already on the newest release: nothing was held back.
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.4.0",
-            latest_available="minds-v0.4.0",
-            ceiling="minds-v0.4.0",
-            has_override=False,
-        )
-        is False
-    )
-
-
-def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -> None:
-    """The bug this flag exists to prevent: blaming the app for the user's choice.
-
-    `--override minds-v0.3.6` under a `minds-v0.3.9` ceiling leaves `ref` below
-    `latest_available`, so an eyeball comparison would tell the user their Mind
-    app held the update back when they picked the older tag themselves.
-    """
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.3.6",
-            latest_available="minds-v0.4.0",
-            ceiling="minds-v0.3.9",
-            has_override=True,
-        )
-        is False
-    )
-
-
-def test_held_back_is_false_when_the_app_imposes_no_cap() -> None:
-    """A dev app caps nothing, so a gap can never be the ceiling's doing.
-
-    A dev build reports a *branch*, not nothing, so `ceiling="main"` -- and not
-    `None` -- is the shape the CLI actually produces here. It reaches `False` by a
-    different route than a `None` ceiling does: the branch parses to no version, so
-    the selection was never bounded. Both routes are asserted.
-    """
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.4.0",
-            latest_available="minds-v0.4.0",
-            ceiling="main",
-            has_override=False,
-        )
-        is False
-    )
-    # No ceiling supplied at all -- only a direct caller does this.
-    assert (
-        update_target.is_held_back_by_ceiling(
-            resolved_ref="minds-v0.4.0",
-            latest_available="minds-v0.4.0",
-            ceiling=None,
-            has_override=False,
-        )
-        is False
-    )
-
-
 # a prerelease ceiling
-
-
-def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
-    """An app on a release candidate is a real app and must still cap its workspaces.
-
-    Parsing the ceiling as "not a stable tag, therefore no ceiling" would let a
-    workspace on an rc app update arbitrarily far past it.
-    """
-    tags = ["minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
-    # Semver: 0.4.0-rc1 precedes 0.4.0, so 0.4.0 itself is above this ceiling.
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc1")
-        == "minds-v0.3.9"
-    )
-    result = update_target.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
-    assert result.ref == "minds-v0.3.9"
-    assert result.ceiling == "minds-v0.4.0-rc1"
-
-
-def test_a_prerelease_ceiling_still_admits_its_own_earlier_releases() -> None:
-    tags = ["minds-v0.3.9", "minds-v0.4.0"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.1-rc1")
-        == "minds-v0.4.0"
-    )
-
-
-def test_capping_by_a_prerelease_does_not_make_prereleases_selectable() -> None:
-    # The ceiling widening to prereleases must not widen *candidate* selection:
-    # the default target is still only ever a stable release.
-    tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0-rc2"]
-    assert (
-        update_target.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc2")
-        == "minds-v0.3.9"
-    )
 
 
 def test_parse_version_orders_prereleases_semver_style() -> None:
@@ -1407,6 +1196,17 @@ def _installed_stamp(repo_root: Path) -> str | None:
     return update_apply._read_bundle_stamp(repo_root / update_layout.STATIC_DIR)
 
 
+_MNGR_GIT = "https://github.com/imbue-ai/mngr"
+_MNGR_REV = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _mngr_requirement(package: str, subdirectory: str) -> str:
+    """The ``--with`` requirement a plugin resolves to at the apply repo's pin."""
+    return f"{package} @ git+{_MNGR_GIT}@{_MNGR_REV}#subdirectory={subdirectory}"
+
+
+_MNGR_BASE = _mngr_requirement("imbue-mngr", "libs/mngr")
+
 # The Python apps a workspace tree carries, as the apply discovers them
 # (``read_app_tools``): the shell (critical) and the browser daemon (not).
 _APP_FIXTURES = (
@@ -1434,6 +1234,11 @@ def _make_apply_repo(tmp_path: Path) -> Path:
     (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
     (repo_root / update_layout.FRONTEND_DIR / "package.json").write_text("{}")
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
+    # The workspace's mngr pin, as build_workspace.sh and the refresh both read it.
+    (repo_root / update_layout.PYPROJECT_PATH).write_text(
+        "[tool.uv.sources]\n"
+        f'imbue-mngr = {{ git = "{_MNGR_GIT}", rev = "{_MNGR_REV}", subdirectory = "libs/mngr" }}\n'
+    )
     for package, tool_name, executable, is_critical in _APP_FIXTURES:
         _write_app(repo_root, package, tool_name, executable, is_critical)
     return repo_root
@@ -1691,8 +1496,33 @@ class _Clock:
         return self.value
 
 
+# Every supervised program a fixture tree can run, so the canned status answers
+# whatever set the verdict asks about.
+_FIXTURE_PROGRAMS = (
+    "system_interface",
+    "chat",
+    "terminal",
+    "terminal-pty",
+    "files",
+    "browser",
+)
+
+
+def _supervisor_status(
+    pid: int, programs: Sequence[str] = _FIXTURE_PROGRAMS
+) -> _Result:
+    """A ``supervisorctl status`` answer: every program settled on ``pid``."""
+    return _Result(
+        stdout="".join(
+            f"{program}   RUNNING   pid {pid}, uptime 0:00:05\n" for program in programs
+        )
+    )
+
+
 def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner = _RecordingRunner(repo_root=repo_root)
+    # A live stack that has settled: the same pid on every status call.
+    runner.respond(("supervisorctl", "status"), _supervisor_status(4242))
     # Clean for the precondition check. The rollback's own "is anything staged
     # to commit" question is the index diff, and by then the restore has
     # staged the reverted paths.
@@ -1851,7 +1681,7 @@ _PROVISION = ("bash", update_layout.PROVISIONER_SCRIPT)
 
 _FRONTEND_DIFF = "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
 _BACKEND_DIFF = "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
-_VENDORED_DIFF = "M\tsystem/vendor/mngr/libs/mngr/imbue/mngr/api/list.py\n"
+_CHAT_FRONTEND_DIFF = "M\tsystem/apps/chat/frontend/src/views/Thread.ts\n"
 _SETTINGS_DIFF = "M\t.mngr/settings.toml\n"
 _APT_SNAPSHOT_DIFF = "M\t.mngr/apt-snapshot-timestamp\n"
 _BACKEND_MANIFEST_DIFF = "M\tsystem/apps/system_interface/pyproject.toml\n"
@@ -1978,10 +1808,9 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/files/assets/index.js", set()),
         ("system/apps/files/app.toml", set()),
         # A shared backend manifest is part of every app tool's closure: the
-        # vendored packages an app depends on editable, and the plugin table
-        # that assigns plugins to its tool.
+        # pinned mngr packages an app depends on, and the plugin table that
+        # assigns plugins to its tool.
         ("system/apps/system_interface/pyproject.toml", _EVERY_APP_TOOL),
-        ("system/vendor/mngr/libs/mngr/pyproject.toml", _EVERY_APP_TOOL),
         (update_layout.PLUGIN_MANIFEST_PATH, _EVERY_APP_TOOL),
         ("uv.lock", _EVERY_APP_TOOL),
     ],
@@ -2027,10 +1856,6 @@ def test_plan_apply_keys_the_provisioner_run_on_what_it_reads() -> None:
         "system/apps/system_interface/pyproject.toml",
         "pyproject.toml",
         "uv.lock",
-        # The vendored mngr is an editable install the backend imports, so its
-        # workspace root and each of its libraries move the same closure.
-        "system/vendor/mngr/pyproject.toml",
-        "system/vendor/mngr/libs/mngr/pyproject.toml",
         # Not a Python manifest, but it is what the refresh unions into each
         # tool's reinstall, so it decides which packages the tool environments
         # carry. A release that only re-assigns an existing plugin to another
@@ -2044,13 +1869,21 @@ def test_plan_apply_counts_every_backend_manifest(path: str) -> None:
     assert _plan([path]).backend_manifest
 
 
+def test_plan_apply_rebuilds_the_frontends_when_the_mngr_pin_moves() -> None:
+    # The bundles compile in the embed contract and the service icons fetched from the
+    # pinned commit, so a release whose only change is the pin still re-emits them.
+    plan = _plan([update_layout.PYPROJECT_PATH, "uv.lock"])
+
+    assert plan.frontend_src and plan.backend_manifest
+
+
 @pytest.mark.parametrize(
     "path",
     [
         # Not a manifest: a source file nested where one would be.
-        "system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py",
-        # A pyproject one level deeper than a vendored library's own root.
-        "system/vendor/mngr/libs/mngr/imbue/pyproject.toml",
+        "system/apps/system_interface/imbue/system_interface/server.py",
+        # A pyproject that is not one of the roots the environment resolves from.
+        "system/apps/system_interface/imbue/pyproject.toml",
     ],
 )
 def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> None:
@@ -2068,10 +1901,12 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/system_interface/frontend/vite.config.ts",
         "system/apps/system_interface/frontend/tsconfig.json",
         "system/apps/system_interface/frontend/public/logo.svg",
-        # The chat app's frontend and the library both compile into a bundle; so does
-        # the tooling every build reads.
+        # The chat's and the Getting Started app's frontends and the library all compile into a
+        # bundle; so does the tooling every build reads.
         "system/apps/chat/frontend/src/index.ts",
         "system/apps/chat/frontend/chat.html",
+        "system/apps/getting_started/frontend/src/index.ts",
+        "system/apps/getting_started/frontend/index.html",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2087,6 +1922,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/package.json",
         "system/package-lock.json",
         "system/apps/chat/frontend/package.json",
+        "system/apps/getting_started/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )
@@ -2221,23 +2057,6 @@ def test_apply_skips_the_chat_preflight_for_a_tree_without_a_chat_program(
     assert spawner.spawns == [[update_layout.TOOL_NAME]]
 
 
-def test_apply_vendored_source_change_restarts_without_building(
-    apply_repo: Path,
-) -> None:
-    # The geebspace lesson: vendored-mngr source is imported in-process by the
-    # live system interface, so "picked up live" was never true -- it restarts.
-    runner = _apply_runner(_VENDORED_DIFF, apply_repo)
-    spawner = _FakeSpawner()
-
-    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
-
-    assert code == 0
-    assert runner.ran(*_RESTART)
-    assert spawner.spawns  # pre-flighted before the restart
-    assert not runner.ran("npm", "run", "build")
-    assert not runner.ran("uv", "tool", "install")  # source-only: no env refresh
-
-
 def test_apply_apt_snapshot_change_provisions_before_any_restart(
     apply_repo: Path,
 ) -> None:
@@ -2267,8 +2086,8 @@ def test_apply_settings_change_restarts_without_a_provisioner_run(
 
 
 def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) -> None:
-    # A backend manifest moves every environment's closure: the vendored mngr
-    # tool, the root venv, and each app's own tool (the vendored packages and
+    # A backend manifest moves every environment's closure: the mngr tool,
+    # the root venv, and each app's own tool (the pinned mngr packages and
     # the plugin table are part of what those resolve).
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
 
@@ -2276,13 +2095,41 @@ def test_apply_backend_manifest_refreshes_every_environment(apply_repo: Path) ->
 
     assert code == 0
     installs = runner.argvs_starting("uv", "tool", "install")
-    assert [argv[4] for argv in installs] == [
-        update_layout.MNGR_DIR,
+    assert [argv[3] for argv in installs] == [
+        _MNGR_BASE,
+        "-e",
+        "-e",
+    ]
+    assert [argv[4] for argv in installs[1:]] == [
         "system/apps/browser",
         update_layout.SYSTEM_INTERFACE_DIR,
     ]
     assert runner.ran("uv", "sync", "--all-packages", "--frozen")
     assert runner.ran(*_RESTART)
+
+
+def test_apply_fetches_the_mngr_assets_the_pin_carries(apply_repo: Path) -> None:
+    # A worker's bundle means no frontend build runs, and the prebuild hook is the only
+    # other caller: without this the fetched tree (and the style-guide symlink into it)
+    # is whatever the last build left.
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("#!/usr/bin/env bash\n")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert runner.ran("bash", str(script))
+
+
+def test_apply_skips_the_asset_fetch_in_a_tree_that_has_no_such_script(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert not runner.argvs_starting("bash")
 
 
 def test_apply_backend_source_change_reinstalls_only_the_apps_own_tool(
@@ -2727,9 +2574,9 @@ def test_a_stale_chat_bundle_rejects_the_worker_pair(
 def test_a_build_that_writes_only_the_shell_bundle_is_a_failure(
     apply_repo: Path, capsys
 ) -> None:
-    # One build emits both bundles; a build that died after the shell's exits 0 with
-    # index.html in place and no chat page, and the index check must catch the
-    # second bundle as it does the first.
+    # One build emits every bundle; a build that died after the shell's exits 0 with
+    # index.html in place and no chat page, and the index check must catch each
+    # later bundle as it does the first.
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.unwritten_bundle_apps = frozenset({"chat"})
 
@@ -3055,6 +2902,7 @@ def _write_openable_app(
     *,
     is_critical: bool = True,
     is_internal: bool = False,
+    program: str | None = None,
 ) -> None:
     """Give the tree an app the user can open (a manifest alone: the tool list reads
     only apps with a pyproject, the probes only the manifests)."""
@@ -3063,6 +2911,7 @@ def _write_openable_app(
     (app_dir / update_layout.MANIFEST_FILENAME).write_text(
         f'name = "{name}"\ndisplay_name = "{name}"\n'
         f"critical = {str(is_critical).lower()}\ninternal = {str(is_internal).lower()}\n"
+        + (f'program = "{program}"\n' if program is not None else "")
     )
 
 
@@ -3153,12 +3002,32 @@ def test_an_unhealthy_critical_app_after_the_restart_rolls_back(
     assert code == 2
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
     assert (
-        "the chat app did not become healthy after restart "
-        f"({_health_url(_CHAT_ROW_URL)} answered HTTP 503)"
+        "the workspace did not settle into a healthy state after restart "
+        f"(the chat app's health at {_health_url(_CHAT_ROW_URL)} answered HTTP 503)"
     ) in capsys.readouterr().err
 
 
-def test_the_health_probe_follows_the_registry_as_the_app_re_registers(
+def _settle_app(
+    http: _FakeHttp,
+    repo_root: Path,
+    app_name: str,
+    attempts: int,
+) -> str | None:
+    """``wait_settled`` over one app's health route alone: a healthy shell, no pid check."""
+    return update_probes.wait_settled(
+        http,
+        repo_root,
+        _RecordingRunner(repo_root=repo_root),
+        _no_sleep,
+        shell_url=f"{_LIVE_BASE}{update_probes.HEALTH_PATH}",
+        programs=["chat"],
+        app_names=[app_name],
+        require_stable_pid=False,
+        attempts=attempts,
+    )
+
+
+def test_the_instances_probe_follows_the_registry_as_the_app_re_registers(
     apply_repo: Path,
 ) -> None:
     """Right after the restart the chat's row still names the shell's own port (the
@@ -3178,11 +3047,7 @@ def test_the_health_probe_follows_the_registry_as_the_app_re_registers(
     http = _FakeHttp(_all_healthy, page_responder)
     (app_name,) = update_probes.read_critical_apps(apply_repo)
 
-    failure = update_probes.wait_app_healthy(
-        http, apply_repo, app_name, 10, 0.0, _no_sleep
-    )
-
-    assert failure is None
+    assert _settle_app(http, apply_repo, app_name, attempts=10) is None
     assert http.page_urls[:3] == [_health_url(_LIVE_BASE)] * 3
     assert http.page_urls[3] == _health_url(_CHAT_ROW_URL)
 
@@ -3195,9 +3060,7 @@ def test_a_health_probe_that_never_finds_the_app_says_what_it_last_saw(
     http = _FakeHttp(_all_healthy, _shell_catch_all_page)
 
     # No registry at all: the app never registered.
-    failure = update_probes.wait_app_healthy(
-        http, apply_repo, app_name, 3, 0.0, _no_sleep
-    )
+    failure = _settle_app(http, apply_repo, app_name, attempts=3)
     assert (
         failure
         == f"the app registry at {update_layout.APPS_REGISTRY_PATH} never listed 'chat'"
@@ -3209,9 +3072,7 @@ def test_a_health_probe_that_never_finds_the_app_says_what_it_last_saw(
     # registration that never happened.
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     (apply_repo / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
-    failure = update_probes.wait_app_healthy(
-        http, apply_repo, app_name, 2, 0.0, _no_sleep
-    )
+    failure = _settle_app(http, apply_repo, app_name, attempts=2)
     assert failure is not None
     assert failure.startswith(
         f"the app registry at {update_layout.APPS_REGISTRY_PATH} could not be read "
@@ -3221,21 +3082,20 @@ def test_a_health_probe_that_never_finds_the_app_says_what_it_last_saw(
 
     # A row that stays on the shell's port: the catch-all's HTML is named as such.
     _write_registry(apply_repo, {"chat": _LIVE_BASE})
-    failure = update_probes.wait_app_healthy(
-        http, apply_repo, app_name, 2, 0.0, _no_sleep
-    )
+    failure = _settle_app(http, apply_repo, app_name, attempts=2)
     assert failure is not None
     assert failure.startswith(
-        f"{_health_url(_LIVE_BASE)} answered 200 but as 'text/html'"
+        f"the chat app's health at {_health_url(_LIVE_BASE)} "
+        "answered 200 but as 'text/html'"
     )
 
     # A server that does not answer at all.
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     silent = _FakeHttp(_all_healthy, lambda url: None)
-    failure = update_probes.wait_app_healthy(
-        silent, apply_repo, app_name, 2, 0.0, _no_sleep
+    failure = _settle_app(silent, apply_repo, app_name, attempts=2)
+    assert failure == (
+        f"the chat app's health at {_health_url(_CHAT_ROW_URL)} did not answer"
     )
-    assert failure == f"{_health_url(_CHAT_ROW_URL)} did not answer"
 
 
 def test_read_critical_apps_reads_only_critical_apps_the_user_can_open(
@@ -3259,13 +3119,42 @@ def test_read_critical_apps_reads_only_critical_apps_the_user_can_open(
     assert update_probes.read_critical_apps(tmp_path / "elsewhere") == ()
 
 
+def test_read_critical_programs_holds_every_critical_program_once_the_sidecars_included(
+    tmp_path: Path,
+) -> None:
+    # The pty sidecar is internal, so no health probe asks it anything, but it restarts with the
+    # terminal and its pid is part of what "settled" means; two rows of one program are one program.
+    repo_root = _make_apply_repo(tmp_path)
+    _write_openable_app(repo_root, "terminal")
+    _write_openable_app(repo_root, "chat")
+    _write_openable_app(repo_root, "files", is_critical=False)
+    _write_openable_app(
+        repo_root, "terminal_pty", is_internal=True, program="terminal-pty"
+    )
+    _write_openable_app(repo_root, "chat_helper", is_internal=True, program="chat")
+
+    assert update_probes.read_critical_programs(repo_root) == (
+        "chat",
+        "system_interface",
+        "terminal",
+        "terminal-pty",
+    )
+    assert update_probes.read_critical_programs(tmp_path / "elsewhere") == ()
+
+
 def test_the_health_probe_url_follows_the_registry_row(tmp_path: Path) -> None:
     # An app with no row is not reachable yet, and a corrupt or absent registry reads
     # the same way; a row's trailing slash does not double up.
     assert update_probes.health_probe_url(tmp_path, "chat") is None
-    _write_registry(tmp_path, {"terminal": _TERMINAL_ROW_URL, "chat": _CHAT_ROW_URL + "/"})
-    assert update_probes.health_probe_url(tmp_path, "terminal") == _health_url(_TERMINAL_ROW_URL)
-    assert update_probes.health_probe_url(tmp_path, "chat") == _health_url(_CHAT_ROW_URL)
+    _write_registry(
+        tmp_path, {"terminal": _TERMINAL_ROW_URL, "chat": _CHAT_ROW_URL + "/"}
+    )
+    assert update_probes.health_probe_url(tmp_path, "terminal") == _health_url(
+        _TERMINAL_ROW_URL
+    )
+    assert update_probes.health_probe_url(tmp_path, "chat") == _health_url(
+        _CHAT_ROW_URL
+    )
     (tmp_path / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
     assert update_probes.health_probe_url(tmp_path, "chat") is None
 
@@ -4701,32 +4590,33 @@ def test_the_refresh_preserves_a_tools_registered_plugins(apply_repo: Path) -> N
     # A bare --reinstall rebuilds a tool from its base package alone. For the
     # mngr tool the extras ARE its plugins, so dropping them leaves a CLI that
     # cannot parse its own plugin config -- an update that breaks the workspace
-    # in a new way while reporting success.
+    # in a new way while reporting success. uv records a git plugin in the
+    # receipt in its query form; the refresh hands it back in PEP 508 form.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    receipt_git = f"{_MNGR_GIT}?subdirectory=libs%2F{{sub}}&rev={_MNGR_REV}"
     _with_receipt(
         update_layout.MNGR_TOOL_NAME,
-        """
+        f"""
         [tool]
         requirements = [
-            { name = "imbue-mngr", editable = "/repo/system/vendor/mngr/libs/mngr" },
-            { name = "imbue-mngr-claude", editable = "/repo/system/vendor/mngr/libs/mngr_claude" },
-            { name = "imbue-mngr-wait", editable = "/repo/system/vendor/mngr/libs/mngr_wait" },
+            {{ name = "imbue-mngr", git = "{receipt_git.format(sub="mngr")}" }},
+            {{ name = "imbue-mngr-claude", git = "{receipt_git.format(sub="mngr_claude")}" }},
+            {{ name = "imbue-mngr-wait", git = "{receipt_git.format(sub="mngr_wait")}" }},
         ]
         """,
     )
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
-        "--with-editable",
-        "/repo/system/vendor/mngr/libs/mngr_claude",
-        "--with-editable",
-        "/repo/system/vendor/mngr/libs/mngr_wait",
+        _MNGR_BASE,
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
         "--reinstall",
     ]
 
@@ -4737,15 +4627,17 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) ->
     # its agent type needs, and a reinstall from the receipt alone leaves an
     # mngr that rejects its own config at the restart -- so the merged tree's
     # manifest is unioned in, for every tool, without repeating what the
-    # receipt already has.
+    # receipt already has -- and, since the release moved the pin, the
+    # manifest's commit replaces the receipt's stale one for a plugin both name.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    stale_rev = "f" * 40
     _with_receipt(
         update_layout.MNGR_TOOL_NAME,
         f"""
         [tool]
         requirements = [
-            {{ name = "imbue-mngr", editable = "{apply_repo}/system/vendor/mngr/libs/mngr" }},
-            {{ name = "imbue-mngr-claude", editable = "{apply_repo}/system/vendor/mngr/libs/mngr_claude" }},
+            {{ name = "imbue-mngr", git = "{_MNGR_GIT}?subdirectory=libs%2Fmngr&rev={stale_rev}" }},
+            {{ name = "imbue-mngr-claude", git = "{_MNGR_GIT}?subdirectory=libs%2Fmngr_claude&rev={stale_rev}" }},
         ]
         """,
     )
@@ -4754,33 +4646,35 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) ->
     manifest.write_text(
         """
         [[plugins]]
-        path = "system/vendor/mngr/libs/mngr_claude"
+        package = "imbue-mngr-claude"
+        subdirectory = "libs/mngr_claude"
         tools = ["mngr", "system_interface"]
 
         [[plugins]]
-        path = "system/vendor/mngr/libs/mngr_opencode"
+        package = "imbue-mngr-opencode"
+        subdirectory = "libs/mngr_opencode"
         tools = ["mngr", "system_interface"]
 
         [[plugins]]
-        path = "system/vendor/mngr/libs/mngr_wait"
+        package = "imbue-mngr-wait"
+        subdirectory = "libs/mngr_wait"
         tools = ["mngr"]
         """
     )
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_opencode",
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_wait",
+        _MNGR_BASE,
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-opencode", "libs/mngr_opencode"),
+        "--with",
+        _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
         "--reinstall",
     ]
     assert _install_argv(runner, update_layout.SYSTEM_INTERFACE_DIR) == [
@@ -4789,18 +4683,75 @@ def test_the_refresh_registers_the_merged_trees_new_plugins(apply_repo: Path) ->
         "install",
         "-e",
         update_layout.SYSTEM_INTERFACE_DIR,
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_claude",
-        "--with-editable",
-        f"{apply_repo}/system/vendor/mngr/libs/mngr_opencode",
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-opencode", "libs/mngr_opencode"),
         "--reinstall",
     ]
 
 
-def test_the_refresh_repins_the_base_to_the_in_tree_source(apply_repo: Path) -> None:
-    # A receipt that has lost its editable marker must not make us re-resolve
-    # the base from the index -- that would silently swap the workspace's own
-    # vendored code for a published release.
+def test_a_workspace_that_vendored_mngr_is_refreshed_from_the_pin(
+    apply_repo: Path,
+) -> None:
+    # A workspace built before mngr was pinned was installed editable from the
+    # tree at system/vendor/mngr, which the merge onto the pin deletes. Its
+    # receipt still names those paths; the refresh takes every plugin from the
+    # manifest at the pin and carries none of the deleted paths along.
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    gone = apply_repo / "system" / "vendor" / "mngr"
+    # The merge deletes the tracked tree, but each project's gitignored __pycache__ keeps
+    # its directory on disk: what makes an editable installable is its pyproject.toml.
+    for plugin in ("libs/mngr", "libs/mngr_claude", "libs/mngr_wait"):
+        (gone / plugin / "imbue" / "__pycache__").mkdir(parents=True)
+    _with_receipt(
+        update_layout.MNGR_TOOL_NAME,
+        f"""
+        [tool]
+        requirements = [
+            {{ name = "imbue-mngr", editable = "{gone / "libs/mngr"}" }},
+            {{ name = "imbue-mngr-claude", editable = "{gone / "libs/mngr_claude"}" }},
+            {{ name = "imbue-mngr-wait", editable = "{gone / "libs/mngr_wait"}" }},
+        ]
+        """,
+    )
+    manifest = apply_repo / update_layout.PLUGIN_MANIFEST_PATH
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        """
+        [[plugins]]
+        package = "imbue-mngr-claude"
+        subdirectory = "libs/mngr_claude"
+        tools = ["mngr"]
+
+        [[plugins]]
+        package = "imbue-mngr-wait"
+        subdirectory = "libs/mngr_wait"
+        tools = ["mngr"]
+        """
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert _install_argv(runner, _MNGR_BASE) == [
+        "uv",
+        "tool",
+        "install",
+        _MNGR_BASE,
+        "--with",
+        _mngr_requirement("imbue-mngr-claude", "libs/mngr_claude"),
+        "--with",
+        _mngr_requirement("imbue-mngr-wait", "libs/mngr_wait"),
+        "--reinstall",
+    ]
+
+
+def test_the_refresh_repins_the_base_to_the_in_tree_source(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A receipt that has lost its git source must not make us re-resolve the
+    # base from the index -- that would silently swap the pinned commit for a
+    # published release.
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
     _with_receipt(
         update_layout.MNGR_TOOL_NAME,
@@ -4809,12 +4760,11 @@ def test_the_refresh_repins_the_base_to_the_in_tree_source(apply_repo: Path) -> 
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
+        _MNGR_BASE,
         "--reinstall",
     ]
 
@@ -4844,12 +4794,12 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
     envs = {
-        argv[4]: env
+        (argv[4] if argv[3] == "-e" else argv[3]): env
         for argv, env in zip(runner.calls, runner.envs)
-        if argv[:4] == ["uv", "tool", "install", "-e"] and env is not None
+        if argv[:3] == ["uv", "tool", "install"] and env is not None
     }
-    assert envs[update_layout.MNGR_DIR]["UV_TOOL_DIR"] == str(tools)
-    assert envs[update_layout.MNGR_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
+    assert envs[_MNGR_BASE]["UV_TOOL_DIR"] == str(tools)
+    assert envs[_MNGR_BASE]["UV_TOOL_BIN_DIR"] == str(bin_dir)
     # A tool that is not on PATH at all has no installation to target: it is
     # installed beside the mngr tool, whose bin directory the program lines
     # resolve through (uv's default under $HOME is on nobody's PATH, so a tool
@@ -5147,12 +5097,11 @@ def test_the_refresh_reports_a_receipt_it_cannot_read(apply_repo: Path, capsys) 
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
-    assert _install_argv(runner, update_layout.MNGR_DIR) == [
+    assert _install_argv(runner, _MNGR_BASE) == [
         "uv",
         "tool",
         "install",
-        "-e",
-        update_layout.MNGR_DIR,
+        _MNGR_BASE,
         "--reinstall",
     ]
     reported = capsys.readouterr().err
@@ -5254,14 +5203,13 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     )
 
     assert {record.name for record in snapshots} == {
-        "bundle",
-        "chat_bundle",
+        *(bundle.snapshot_name for bundle in update_layout.FRONTEND_BUNDLES),
         "node_modules",
         "venv",
     }
     # Destroy the originals, as the failed forward steps would.
-    shutil.rmtree(repo_root / update_layout.STATIC_DIR)
-    shutil.rmtree(repo_root / update_layout.CHAT_STATIC_DIR)
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        shutil.rmtree(repo_root / bundle.static_dir)
     (repo_root / ".venv" / "marker.txt").write_text("wrecked")
     shutil.rmtree(repo_root / update_layout.NPM_ROOT_DIR / "node_modules")
 
@@ -5589,7 +5537,7 @@ def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
     pinned_env.mkdir(parents=True)
     (pinned_env / "marker.txt").write_text("pre-apply")
     runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)  # no tools on PATH
-    mngr_install = ["uv", "tool", "install", "-e", update_layout.MNGR_DIR]
+    mngr_install = ["uv", "tool", "install", _MNGR_BASE]
 
     def rebuild_from_scratch(argv: list[str]) -> None:
         if argv[: len(mngr_install)] == mngr_install:
@@ -6627,17 +6575,29 @@ def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:
     assert calls == 3
 
 
-def test_try_open_chat_tab_opens_the_chats_window_through_the_desktops_open(tmp_path: Path) -> None:
+def test_try_open_chat_tab_opens_the_chats_window_through_the_desktops_open(
+    tmp_path: Path,
+) -> None:
     """The one contract the flow has with layout.py's grammar: the chat app at its chat's page, run from the repo root."""
     runner = _RecordingRunner()
 
     assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is True
 
     assert runner.calls == [
-        [sys.executable, "system/scripts/layout.py", "open", "chat", "--path", "/?chat=chat-9"]
+        [
+            sys.executable,
+            "system/scripts/layout.py",
+            "open",
+            "chat",
+            "--path",
+            "/?chat=chat-9",
+        ]
     ]
     assert runner.cwds == [str(tmp_path)]
-    runner.respond((sys.executable, "system/scripts/layout.py"), _Result(returncode=1, stderr="no client"))
+    runner.respond(
+        (sys.executable, "system/scripts/layout.py"),
+        _Result(returncode=1, stderr="no client"),
+    )
     assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is False
 
 
@@ -6984,3 +6944,756 @@ def test_a_worker_bundle_flag_must_name_a_known_app_and_a_path(value: str) -> No
 def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
     with pytest.raises(SystemExit, match="names chat twice"):
         update_self._parse_worker_bundles(["chat=/w/chat", "chat=/w/other"])
+
+
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        # rollback-last reverts the kept point as a merge, which a fast-forward never lands.
+        pytest.param(
+            ["--ff-only", "--keep-rollback-point"],
+            "cannot be combined with --ff-only",
+            id="fast-forward-cannot-keep-a-rollback-point",
+        ),
+        # The worker's ``update-self:`` merge is read along the first-parent line, and an
+        # ordinary merge puts it on a second parent, so the landing would read as the
+        # previous update's.
+        pytest.param(
+            ["--target-ref", "minds-v0.0.2"],
+            "must fast-forward",
+            id="update-self-landing-must-fast-forward",
+        ),
+        # Refused as the rollback point's problem, not --ff-only's: dropping --ff-only is
+        # the one wrong fix.
+        pytest.param(
+            ["--ff-only", "--target-ref", "minds-v0.0.2", "--keep-rollback-point"],
+            "with --ff-only and without --keep-rollback-point",
+            id="update-self-landing-cannot-keep-a-rollback-point",
+        ),
+    ],
+)
+def test_apply_refuses_a_flag_combination_it_cannot_honor(
+    apply_repo: Path, flags: list[str], message: str
+) -> None:
+    with pytest.raises(SystemExit, match=message):
+        update_self.main(
+            ["apply", "--merge-ref", "HEAD", *flags, "--repo-root", str(apply_repo)]
+        )
+    assert update_apply_contract.read_marker(apply_repo) is None
+    assert _rollback_point(apply_repo) is None
+
+
+def _rollback_point(repo_root: Path) -> "update_apply_contract.LastGoodRecord | None":
+    return update_apply_contract.read_last_good(repo_root)
+
+
+def _apply_keeping_the_rollback_point(runner: _RecordingRunner, repo_root: Path) -> int:
+    return update_apply.apply_update(
+        _MERGE_REF,
+        repo_root,
+        ff_only=False,
+        worker_bundles=None,
+        target_ref=None,
+        runner=runner,
+        http=_FakeHttp(_all_healthy),
+        spawner=_FakeSpawner(),
+        sleeper=_no_sleep,
+        base_url=_LIVE_BASE,
+        now=_Clock(),
+        today=_TODAY,
+        is_pid_live=lambda pid: False,
+        expend=_tagging_expend,
+        sweep_homes=(),
+        keep_rollback_point=True,
+    )
+
+
+def test_an_apply_keeps_its_rollback_point_only_when_asked(apply_repo: Path) -> None:
+    """The careful flow's apply leaves its copies and a record naming what it touched;
+    an ordinary apply leaves neither, as before."""
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.rollback_to == _ROLLBACK
+    assert (
+        record.merge_sha == _ROLLBACK
+    )  # the fixture's HEAD answers the same sha before and after
+    assert record.apps == ["system_interface"]
+    assert record.programs == ["system_interface"]
+    assert record.needs_system_services_restart is False
+    assert {snapshot.name for snapshot in record.snapshots} == {
+        bundle.snapshot_name for bundle in update_layout.FRONTEND_BUNDLES
+    }
+    assert _snapshot_copy(apply_repo, "bundle").exists()
+    assert not _marker_exists(apply_repo)
+
+    plain = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    assert _apply(plain, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+    # The next apply, kept or not, replaces the point: the old record and copies are gone.
+    assert _rollback_point(apply_repo) is None
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
+
+
+def test_the_record_names_every_critical_app_the_apply_touched(
+    apply_repo: Path,
+) -> None:
+    """A shared-library change rebuilds every bundle, so each critical bundle owner is touched;
+    a change under one app's directory touches that app; a non-critical app never counts."""
+    _write_openable_app(apply_repo, "chat")
+    _write_openable_app(apply_repo, "terminal")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL, "terminal": _TERMINAL_ROW_URL})
+    runner = _apply_runner(
+        "M\tsystem/libs/workspace_ui/src/origin.ts\nM\tsystem/apps/terminal/src/terminal_app/main.py\n"
+        "M\tsystem/apps/browser/src/browser/session.py\n",
+        apply_repo,
+    )
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface", "terminal"]
+    assert record.programs == ["chat", "system_interface", "terminal"]
+
+
+def test_the_record_names_every_critical_app_whose_tool_the_apply_reinstalled(
+    apply_repo: Path,
+) -> None:
+    """A shared backend manifest moves every app tool's closure, so the apply reinstalls
+    (and copies aside) each critical app's tool environment: a rollback that restores
+    those copies has to restart those apps too, so the record names them, not the shell
+    alone."""
+    _write_app(apply_repo, "chat", "chat", "chat-app", True)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface"]
+    assert record.programs == ["chat", "system_interface"]
+
+
+@pytest.mark.parametrize(
+    ("diff", "needs_restart"),
+    [
+        (_FRONTEND_DIFF, False),
+        ("M\tsystem/scripts/bootstrap.sh\n", True),
+        ("M\tsystem/libs/bootstrap/src/bootstrap/main.py\n", True),
+        ("M\tsystem/Dockerfile\n", True),
+        (_PROVISIONER_DIFF, True),
+    ],
+)
+def test_a_diff_that_reaches_the_workspaces_own_setup_needs_the_services_agent_restarted(
+    apply_repo: Path, diff: str, needs_restart: bool
+) -> None:
+    runner = _apply_runner(diff, apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.needs_system_services_restart is needs_restart
+
+
+def _rollback_runner(repo_root: Path) -> _RecordingRunner:
+    runner = _RecordingRunner(repo_root=repo_root)
+    runner.respond(("git", "status", "--porcelain"), _Result(stdout=""))
+    runner.respond(("git", "diff", "--cached", "--quiet"), _Result(returncode=1))
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout=_CHAT_FRONTEND_DIFF.split("\t")[1]),
+    )
+    runner.respond(("supervisorctl", "status"), _supervisor_status(5151))
+    return runner
+
+
+def _rollback(
+    runner: _RecordingRunner, repo_root: Path, http: _FakeHttp | None = None
+) -> int:
+    return update_apply.rollback_last(
+        repo_root,
+        runner=runner,
+        http=http if http is not None else _FakeHttp(_all_healthy),
+        sleeper=_no_sleep,
+        base_url=_LIVE_BASE,
+        now=_Clock(),
+        is_pid_live=lambda pid: False,
+    )
+
+
+def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_programs(
+    apply_repo: Path,
+) -> None:
+    """A rollback from the notice is the apply's forward revert plus the copies put back,
+    restarting only what the apply touched -- never the services agent."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    # A chat frontend change: one ``npm run build`` rebuilds every bundle, so the
+    # shell is touched as a bundle owner even though none of its files changed.
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.programs == ["chat", "system_interface"]
+    # The apply's copies are the bundles; scribble on the live one so the restore is visible.
+    live_index = apply_repo / update_layout.CHAT_FRONTEND_BUILD_INDEX
+    kept_index = _snapshot_copy(apply_repo, "chat_bundle") / "chat.html"
+    kept_text = kept_index.read_text()
+    live_index.write_text("<!doctype html>the update's build")
+    runner = _rollback_runner(apply_repo)
+    http = _FakeHttp(_all_healthy)
+
+    code = _rollback(runner, apply_repo, http)
+
+    assert code == 0
+    assert runner.ran("git", "revert", "-m", "1", "--no-commit", record.merge_sha)
+    commit = next(call for call in runner.calls if call[:2] == ["git", "commit"])
+    assert commit[-1].startswith(update_apply._ROLLBACK_SUBJECT_PREFIX)
+    assert runner.argvs_starting("supervisorctl", "restart") == [
+        ["supervisorctl", "restart", "chat", "system_interface"]
+    ]
+    assert not runner.ran(*_RESTART)
+    assert live_index.read_text() == kept_text
+    assert _health_url(_CHAT_ROW_URL) in http.page_urls
+    assert _refreshed_the_view(runner, apply_repo)
+    settled = _rollback_point(apply_repo)
+    assert settled is not None
+    assert settled.outcome == "Rolled back to the previous version."
+    assert settled.progress is None
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
+    # A second rollback of a settled point is refused; confirming closes it.
+    assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+
+
+@pytest.mark.parametrize(
+    "diff",
+    [_CHAT_FRONTEND_DIFF, _CHAT_FRONTEND_DIFF + "M\tsystem/scripts/bootstrap.sh\n"],
+)
+def test_a_failed_snapshot_restore_keeps_recovery_copies_even_when_health_would_pass(
+    apply_repo: Path, diff: str
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(_apply_runner(diff, apply_repo), apply_repo)
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    failed_copy = record.snapshots[0]
+    # A real filesystem failure: the destination stopped being a directory.
+    # The kept copy is intact and still available for manual repair.
+    shutil.rmtree(failed_copy.source)
+    Path(failed_copy.source).write_text("obstructed recovery destination")
+    runner = _rollback_runner(apply_repo)
+
+    assert _rollback(runner, apply_repo, _FakeHttp(_all_healthy)) == 3
+
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.outcome is not None
+    assert f"could not restore: {failed_copy.name}" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert settled.progress is None
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert not runner.ran("supervisorctl", "restart")
+    assert not runner.ran(*_RESTART)
+    assert not _refreshed_the_view(runner, apply_repo)
+    assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+
+
+def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_the_command(
+    apply_repo: Path,
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner("M\tsystem/scripts/bootstrap.sh\n", apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+
+    code = _rollback(runner, apply_repo)
+
+    assert code == 0
+    assert runner.ran("git", "revert")
+    assert not runner.ran("supervisorctl", "restart")
+    assert not runner.ran(*_RESTART)
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert (
+        record.outcome is not None
+        and update_apply.SERVICES_RESTART_COMMAND in record.outcome
+    )
+
+
+def test_a_rollback_whose_workspace_does_not_settle_records_an_emergency(
+    apply_repo: Path,
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_BACKEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+
+    code = _rollback(runner, apply_repo, _FakeHttp(lambda url: 503))
+
+    assert code == 3
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.outcome is not None
+    assert "did not come back healthy" in record.outcome
+
+
+@pytest.mark.parametrize(
+    "supervisord_path",
+    [
+        update_layout.SUPERVISORD_CONF,
+        f"{update_layout.SUPERVISORD_DROPIN_DIR}chat.conf",
+    ],
+)
+def test_rolling_back_reloads_the_supervisord_table_when_the_update_changed_it(
+    apply_repo: Path, supervisord_path: str
+) -> None:
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_BACKEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(
+            stdout=f"{supervisord_path}\nsystem/apps/system_interface/imbue/system_interface/server.py\n"
+        ),
+    )
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.ran("supervisorctl", "reread")
+    assert runner.ran("supervisorctl", "update")
+
+
+def test_a_rollback_that_dies_partway_settles_the_notice_and_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """A record left mid-rollback is one the shell refuses every verb on, so a rollback
+    that fails in a way nobody predicted has to settle it on the way out.
+
+    The copies stay: the tree is half-restored at that point, and they are what an agent
+    finishes the job by hand from.
+    """
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "commit"),
+        subprocess.CalledProcessError(1, ["git", "commit"], stderr="index locked"),
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _rollback(runner, apply_repo)
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.progress is None, "the notice would refuse both verbs forever"
+    assert record.outcome is not None and "stopped partway through" in record.outcome
+    assert "CalledProcessError" in record.outcome
+    assert record.snapshots and all(
+        Path(snapshot.copy).exists() for snapshot in record.snapshots
+    )
+
+
+def test_a_rollback_whose_revert_conflicts_aborts_it_and_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """Work committed since the update can make the forward revert conflict. Nothing has
+    changed at that point, so the revert is aborted and the record settled with git's
+    reason; the copies stay, since the agent the outcome sends the user to finishes the
+    revert by hand and restores the previous version from them."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "revert", "-m"),
+        _Result(returncode=1, stderr="CONFLICT (content): Merge conflict in chat.html"),
+    )
+
+    assert _rollback(runner, apply_repo) == 1
+
+    assert runner.ran("git", "revert", "--abort")
+    assert not runner.ran("git", "commit")
+    assert not runner.ran("supervisorctl", "restart")
+    assert not _refreshed_the_view(runner, apply_repo)
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.progress is None
+    assert settled.outcome is not None
+    assert "could not be reverted" in settled.outcome
+    assert "Merge conflict in chat.html" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    # Settled, the point is refused a second rollback; Close drops the record and leaves the copies.
+    assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
+@pytest.mark.parametrize("is_other_rollback_running", [True, False])
+def test_a_second_rollback_refuses_without_touching_the_record_or_the_copies(
+    apply_repo: Path, is_other_rollback_running: bool
+) -> None:
+    """A rollback-last run by hand can land beside the one the shell launched; and a
+    rollback killed outright leaves its progress behind unsettled. Either way another
+    run must refuse before it reverts anything: it would settle the record over the
+    first run's, or revert the revert the first run (or an agent) already committed."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    if not is_other_rollback_running:
+        record.progress = update_apply._ROLLBACK_PROGRESS_RESTORING
+        update_apply_contract.write_last_good(record, apply_repo)
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+    runner = _rollback_runner(apply_repo)
+    lock_path = update_apply_contract.rollback_lock_path(apply_repo)
+
+    with open(lock_path, "w") as lock_file:
+        if is_other_rollback_running:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = _rollback(runner, apply_repo)
+
+    assert code == 1
+    assert not runner.ran("git", "revert")
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
+def test_confirm_refuses_while_a_rollback_holds_the_lock(apply_repo: Path) -> None:
+    """A confirm landing after a just-launched rollback read the record, but before it wrote
+    its progress, would discard the copies that rollback is about to restore from."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+
+    with open(update_apply_contract.rollback_lock_path(apply_repo), "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = update_apply.confirm_last(apply_repo)
+
+    assert code == 1
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply.confirm_last(apply_repo) == 0
+    assert _rollback_point(apply_repo) is None
+
+
+def test_closing_the_notice_of_a_failed_rollback_keeps_the_copies_it_kept(
+    apply_repo: Path,
+) -> None:
+    """A rollback that could not restore health settles the notice with an outcome saying the
+    copies are still kept for an agent, and the emergency record names where. The one verb
+    the settled notice offers is Close, which runs confirm-last: it closes the record and
+    leaves the copies exactly where that outcome points."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    assert (
+        _rollback(_rollback_runner(apply_repo), apply_repo, _FakeHttp(lambda url: 503))
+        == 3
+    )
+
+    assert update_apply.confirm_last(apply_repo) == 0
+
+    assert _rollback_point(apply_repo) is None
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+
+
+def test_an_apply_refuses_to_replace_a_point_a_rollback_is_restoring_from(
+    apply_repo: Path,
+) -> None:
+    """A fresh apply replaces the kept point by discarding its copies, which a running
+    rollback-last is restoring from; it refuses rather than pulling them out from under it."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    record_text = update_apply_contract.last_good_path(apply_repo).read_text()
+
+    with open(update_apply_contract.rollback_lock_path(apply_repo), "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = _apply(
+            _apply_runner(_FRONTEND_DIFF, apply_repo),
+            _FakeHttp(_all_healthy),
+            _FakeSpawner(),
+            apply_repo,
+        )
+
+    assert code == 1
+    assert not _marker_exists(apply_repo)
+    assert update_apply_contract.last_good_path(apply_repo).read_text() == record_text
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+
+
+def test_rollback_and_confirm_without_a_kept_point_change_nothing(
+    apply_repo: Path,
+) -> None:
+    runner = _rollback_runner(apply_repo)
+    assert _rollback(runner, apply_repo) == 1
+    assert not runner.ran("git", "revert")
+    assert update_apply.confirm_last(apply_repo) == 0
+
+
+def test_a_settled_verdict_needs_a_streak_on_unchanging_pids_across_every_program(
+    apply_repo: Path,
+) -> None:
+    """The verdict resets on a pid change and passes only once every program held its pid
+    through the streak; a program supervisord does not report RUNNING never settles."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    apps = update_probes.read_critical_apps(apply_repo)
+    programs = ["system_interface", "chat"]
+
+    def settle(status_answers: list[_Result], attempts: int) -> str | None:
+        runner = _RecordingRunner(repo_root=apply_repo)
+        runner.respond(("supervisorctl", "status"), status_answers)
+        return update_probes.wait_settled(
+            _FakeHttp(_all_healthy),
+            apply_repo,
+            runner,
+            _no_sleep,
+            shell_url=f"{_LIVE_BASE}{update_probes.HEALTH_PATH}",
+            programs=programs,
+            app_names=apps,
+            require_stable_pid=True,
+            attempts=attempts,
+        )
+
+    assert (
+        settle([_supervisor_status(1)], attempts=update_probes.SETTLED_HEALTHY_PROBES)
+        is None
+    )
+
+    # The chat turning over on the second probe restarts the streak: three more are needed.
+    # (The canned list is consumed as it is answered, so each call gets a fresh one.)
+    def turning() -> list[_Result]:
+        mixed = (
+            _supervisor_status(1, ["system_interface"]).stdout
+            + _supervisor_status(2, ["chat"]).stdout
+        )
+        return [_supervisor_status(1), _Result(stdout=mixed), _supervisor_status(2)]
+
+    assert settle(turning(), attempts=update_probes.SETTLED_HEALTHY_PROBES + 2) is None
+    assert (
+        settle(turning(), attempts=update_probes.SETTLED_HEALTHY_PROBES + 1) is not None
+    )
+    # A program that is not RUNNING is named.
+    finding = settle([_supervisor_status(1, ["system_interface"])], attempts=2)
+    assert finding is not None and "chat" in finding
+
+
+def test_a_green_verdict_requires_the_service_to_stop_turning_over(
+    apply_repo: Path,
+) -> None:
+    """A single 200 can land in the gap between two restarts of a settling stack.
+
+    The apply once printed "confirmed healthy" on exactly that, and seconds later
+    the live UI did not answer and supervisord had a new pid. The verdict arms the
+    automatic rollback, so it has to describe settled state.
+    """
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    # A different pid on every status call for the apply's entire budget, so no
+    # run of consecutive probes ever shares one. The canned list's last entry
+    # repeats once exhausted, which is the stack finally settling -- so the
+    # rollback that follows can confirm the UI and this stays an ordinary exit 2.
+    runner.respond(
+        ("supervisorctl", "status"),
+        [
+            _supervisor_status(7000 + offset)
+            for offset in range(update_probes.HEALTH_ATTEMPTS + 1)
+        ],
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2, "a stack that is still restarting is not a healthy apply"
+    assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
+
+
+def test_a_settled_verdict_tolerates_a_pid_that_settles_partway_through(
+    apply_repo: Path,
+) -> None:
+    """The confirmation restarts on a pid change rather than failing on one: a restart
+    landing mid-confirmation is exactly the normal case this budget exists for."""
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    runner.respond(
+        ("supervisorctl", "status"),
+        [_supervisor_status(7001), _supervisor_status(7002)],
+    )
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+
+
+def test_main_routes_rollback_last_and_confirm_last(apply_repo: Path) -> None:
+    assert update_self.main(["confirm-last", "--repo-root", str(apply_repo)]) == 0
+    assert update_self.main(["rollback-last", "--repo-root", str(apply_repo)]) == 1
+
+
+@pytest.mark.parametrize("diff", [_CHAT_FRONTEND_DIFF, _FRONTEND_DIFF])
+def test_a_frontend_apply_keeps_both_bundle_owners_in_its_rollback(
+    apply_repo: Path,
+    diff: str,
+) -> None:
+    """Either frontend edit replaces every bundle. Include both critical owners even when a
+    source stamp is unchanged, and restart both when their copies are restored."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    # The pre-apply bundle carries the stamp the emulated build will write again.
+    _write_bundle(apply_repo, stamp="same-source")
+    runner = _apply_runner(diff, apply_repo)
+    runner.build_stamp = "same-source"
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface"]
+    assert record.programs == ["chat", "system_interface"]
+    rollback_runner = _rollback_runner(apply_repo)
+    assert _rollback(rollback_runner, apply_repo) == 0
+    assert rollback_runner.argvs_starting("supervisorctl", "restart") == [
+        ["supervisorctl", "restart", "chat", "system_interface"]
+    ]
+
+
+def test_a_merge_that_changed_nothing_keeps_no_rollback_point(apply_repo: Path) -> None:
+    """``rollback_to`` is HEAD for such a merge, so a kept point would offer to revert
+    whatever merge HEAD already was."""
+    runner = _apply_runner("", apply_repo)
+
+    assert _apply_keeping_the_rollback_point(runner, apply_repo) == 0
+
+    assert _rollback_point(apply_repo) is None
+    assert not _snapshot_copy(apply_repo, "bundle").parent.exists()
+
+
+def test_a_rollback_with_no_program_to_restart_skips_the_restart(
+    apply_repo: Path,
+) -> None:
+    """A supervisord drop-in alone touches no program's code or bundle; supervisorctl
+    refuses a bare ``restart``, and there is nothing to hold a pid steady for."""
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner("M\tsystem/supervisord.conf.d/chat.conf\n", apply_repo),
+            apply_repo,
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.programs == [] and record.apps == []
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout="system/supervisord.conf.d/chat.conf\n"),
+    )
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.ran("supervisorctl", "reread")
+    assert not runner.ran("supervisorctl", "restart")
+    settled = _rollback_point(apply_repo)
+    assert (
+        settled is not None
+        and settled.outcome == "Rolled back to the previous version."
+    )
+
+
+def _unbuilt_health_page(url: str) -> update_runtime.FetchedPage | None:
+    """The chat's health route as it answers over a missing bundle: 200, and its own word that it
+    serves the placeholder. Every other page is the built app's."""
+    if url.endswith(update_probes.HEALTH_PATH) and url.startswith(_CHAT_ROW_URL):
+        return update_runtime.FetchedPage(
+            status=200,
+            body='{"status": "ok", "is_frontend_built": false}',
+            headers={"content-type": "application/json"},
+        )
+    return _built_app_page(url)
+
+
+def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """The health route answers over a missing bundle, so a restored copy that restored no
+    page would otherwise read as a rollback that worked, and the copies would be discarded
+    on that word. The app's own health route says whether its page is there."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    record = _rollback_point(apply_repo)
+    assert record is not None and record.snapshots
+    runner = _rollback_runner(apply_repo)
+
+    code = _rollback(
+        runner,
+        apply_repo,
+        _FakeHttp(_all_healthy, page_responder=_unbuilt_health_page),
+    )
+
+    assert code == 3
+    assert update_apply_contract.emergency_path(apply_repo).exists()
+    settled = _rollback_point(apply_repo)
+    assert settled is not None and settled.outcome is not None
+    assert "is_frontend_built: false" in settled.outcome
+    assert "copies are still kept" in settled.outcome
+    assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
+    assert not _refreshed_the_view(runner, apply_repo)

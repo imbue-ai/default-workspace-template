@@ -40,8 +40,9 @@ If you are reading this in the workspace being *left* ("I'd like to move to a ne
 workspace"), you do exactly two things and stop:
 
 1. Create the fresh workspace via the `minds-api` skill (`POST
-   /api/v1/workspaces` with the template `git_url`, then poll
-   `operations/create/<op>` until `DONE`). Leave every `backup_*` field unset.
+   /api/v1/workspaces` with the template `git_url` and a `branch` read from
+   `GET /api/v1/app/version`, then poll `operations/create/<op>` until `DONE`).
+   Leave every `backup_*` field unset.
 2. Tell the user plainly: the new workspace is ready, open it, and ask its agent
    to bring everything over from this one. Name this workspace so they can say
    which.

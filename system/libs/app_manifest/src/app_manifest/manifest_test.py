@@ -10,10 +10,13 @@ from app_manifest.manifest import (
     EntryMode,
     LocationScope,
     PinStyle,
+    PreviewSpec,
     ShortcutMode,
     load_manifest,
     manifest_icon_path,
+    scaffold_preview_spec,
 )
+from app_manifest.primitives import AppName
 from app_manifest.testing import APP_ICON_MARKUP
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
@@ -35,6 +38,7 @@ def _full_manifest_data() -> dict[str, object]:
                 "label": "New File Viewer",
                 "path": "/",
                 "params": [{"name": "path", "label": "Path", "required": False}],
+                "text_param": "path",
             }
         ],
         "launcher_rank": 20,
@@ -56,6 +60,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.default_shortcut.launch == "new"
     assert [(launch_path.id, launch_path.path) for launch_path in manifest.launch_paths] == [("new", "/")]
     assert manifest.launch_paths[0].params[0].name == "path"
+    assert manifest.launch_paths[0].text_param == "path"
     assert manifest.launcher_rank == 20
     assert manifest.pin is not None
     assert manifest.pin.path == "/"
@@ -99,6 +104,18 @@ def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict
 def test_window_closed_path_follows_the_launch_path_rule() -> None:
     with pytest.raises(ValidationError, match="no query string"):
         AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})
+
+
+def test_text_param_must_name_a_declared_param_and_defaults_to_none() -> None:
+    data = _full_manifest_data()
+    launch_path = dict(data["launch_paths"][0])  # type: ignore[index]
+    del launch_path["text_param"]
+    assert AppManifest.model_validate({**data, "launch_paths": [launch_path]}).launch_paths[0].text_param is None
+
+    with pytest.raises(ValidationError, match="text_param 'message' is not one of the launch path's params"):
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": "message"}]})
+    with pytest.raises(ValidationError, match="at least 1 character"):
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": ""}]})
 
 
 def test_duplicate_launch_path_ids_are_rejected() -> None:
@@ -413,6 +430,96 @@ def test_load_manifest_reports_invalid_toml_and_invalid_values(tmp_path: Path) -
 def test_load_manifest_reports_a_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ManifestLoadError, match="cannot read"):
         load_manifest(tmp_path / "nope.toml")
+
+
+def _manifest_with_preview(preview: dict[str, object]) -> AppManifest:
+    return AppManifest.model_validate(
+        {
+            "name": "news-feed",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "preview": preview,
+        }
+    )
+
+
+def test_a_manifest_without_a_preview_table_previews_by_the_scaffold_convention() -> (
+    None
+):
+    # The scaffold binds <PACKAGE_UPPER>_PORT/_HOST and reads <PACKAGE_UPPER>_DATA_DIR, with the
+    # package name being the app name with hyphens as underscores.
+    manifest = AppManifest.model_validate(
+        {"name": "news-feed", "display_name": "News", "icon": "icon.svg"}
+    )
+
+    assert manifest.preview == scaffold_preview_spec(AppName("news-feed"))
+    assert manifest.preview.env == {
+        "NEWS_FEED_PORT": "{port:main}",
+        "NEWS_FEED_HOST": "{host}",
+        "NEWS_FEED_DATA_DIR": "{copy:data}",
+    }
+    assert manifest.preview.copies == {"data": "data/.apps/news-feed"}
+    assert manifest.preview.command == ()
+    assert manifest.preview.ports == ("main",)
+    assert manifest.preview.health_path == "/health"
+    assert manifest.preview.open_path == "/"
+
+
+def test_an_explicit_preview_table_says_what_it_needs_and_nothing_else() -> None:
+    manifest = _manifest_with_preview(
+        {
+            "ports": ["main", "sidecar"],
+            "command": [
+                "news-server",
+                "--events-url",
+                "http://127.0.0.1:{port:sidecar}",
+            ],
+            "env": {
+                "NEWS_PORT": "{port:main}",
+                "NEWS_STORE": "{copy:store}/records.json",
+            },
+            "copies": {"store": "data/.apps/news-feed"},
+            "health_path": "/api/health",
+            "open_path": "/{key}",
+            "open_path_takes_key": True,
+        }
+    )
+
+    assert manifest.preview.ports == ("main", "sidecar")
+    assert manifest.preview.command[0] == "news-server"
+    assert manifest.preview.copies == {"store": "data/.apps/news-feed"}
+    assert manifest.preview.open_path_takes_key is True
+
+
+@pytest.mark.parametrize(
+    ("preview", "problem"),
+    [
+        ({"env": {"NEWS_PORT": "{port:sidecar}"}}, "port 'sidecar'"),
+        ({"args": ["--store", "{copy:store}"]}, "copy 'store'"),
+        ({"command": ["news-server", "{worktree}"]}, "unknown placeholder"),
+        ({"env": {"X": "{host:main}"}}, "takes no name"),
+        ({"ports": ["sidecar"]}, "must include 'main'"),
+        ({"ports": ["main", "main"]}, "unique"),
+        ({"copies": {"data": "/etc"}}, "repo-relative"),
+        ({"copies": {"data": "../outside"}}, "repo-relative"),
+        ({"open_path": "/{key}"}, "open_path_takes_key"),
+        ({"open_path": "/", "open_path_takes_key": True}, "open_path_takes_key"),
+        ({"open_path": "/{port:main}"}, "may carry only"),
+        ({"health_path": "health"}, "start with '/'"),
+    ],
+)
+def test_a_preview_table_that_cannot_be_resolved_is_rejected(
+    preview: dict[str, object], problem: str
+) -> None:
+    with pytest.raises(ValidationError, match=problem):
+        _manifest_with_preview(preview)
+
+
+def test_the_scaffold_preview_spec_validates_its_own_placeholders() -> None:
+    # The convention is itself a table, so it obeys the rules every table does.
+    spec = scaffold_preview_spec(AppName("news"))
+
+    assert PreviewSpec.model_validate(spec.model_dump()) == spec
 
 
 # references and scope

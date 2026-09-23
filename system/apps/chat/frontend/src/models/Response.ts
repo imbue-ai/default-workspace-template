@@ -34,6 +34,17 @@ export interface ToolCall {
   // only for events parsed before the labels existed.
   header_label?: string;
   caption_label?: string;
+  // What the call DID, for the transcript's tool chips -- past tense, and in two
+  // halves because the chip sets them in different type: `action_verb` is prose
+  // ("ran", "read"), `action_target` is the machine's own text (a path, a pattern,
+  // a command) and may be absent when the call acted on nothing nameable.
+  action_verb?: string;
+  action_target?: string;
+  // The agent's OWN words for why it made this call, present only where the tool
+  // records them (claude's shell and delegation tools ask for a description; no
+  // other tool takes one). Never inferred, so an absent note means the chip says
+  // what the call did instead of why.
+  action_note?: string;
   // For Agent tool calls: the description and subagent_type from the tool input, present
   // as soon as the call appears so the rich card can render before the subagent session is
   // linked. subagent_metadata (with the session_id for the click-through) is filled in once
@@ -83,7 +94,8 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // harness's parser off the shared detector table): how this message renders.
   // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
   // sentinel tags) never reach the wire -- the decision does.
-  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "secret_resolution" | "status";
+  display?:
+    "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "secret_resolution" | "status" | "notice";
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
 
   display_label?: string;

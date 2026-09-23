@@ -1,4 +1,4 @@
-"""Tests for the secret-file guard (policy P8).
+"""Tests for the secret-file guard (policy P9).
 
 A corpus of shell commands and file-tool payloads with the verdict each must get,
 driven through the real wrapper so the prefilter and the checker are both exercised.

@@ -9,7 +9,16 @@
 
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
-import { DRAFT_PARAM, launchPathOf, launchPathWithParams } from "../model/launch";
+import {
+  DRAFT_PARAM,
+  NO_TEXT_APP_REASON,
+  chatPath,
+  freeTextRowsOf,
+  launchPathOf,
+  launchPathWithParams,
+  launchRowKindOf,
+  textPathOf,
+} from "../model/launch";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -22,6 +31,7 @@ import type {
   FloatingPosition,
   GridCell,
   IfPresent,
+  LaunchPath,
   Layout,
   PinStyle,
   Placement,
@@ -33,6 +43,8 @@ import type {
 } from "../model/records";
 import { isSameWindowPaths } from "../model/records";
 import { SaveIdMinter } from "../model/saveIds";
+import { isPreviewShell } from "../model/PreviewShell";
+import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
 import {
   MAXIMIZED_FRAME,
@@ -54,6 +66,7 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  chatApp,
   draftTargetOf,
   effectiveWindow,
   effectiveWindowTitle,
@@ -62,9 +75,11 @@ import {
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
+  openableApps,
   pinnedWindowOf,
   reduceDesktopState,
   renderedState,
+  windowShowingChat,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState } from "../reducers/desktopState";
 import { cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
@@ -270,9 +285,10 @@ export class DesktopStore {
     return gridDimensions(this.backdrop, this.metrics);
   }
 
-  /** Whether the workspace can stop and start the app (supervised, not critical, not inside a critical program). */
+  /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
+   *  not from a preview shell, whose stop and start would reach the live workspace's supervisord. */
   canStopApp(app: AppRecord): boolean {
-    return isAppStoppable(this.state, app);
+    return !isPreviewShell() && isAppStoppable(this.state, app);
   }
 
   /** The rectangle a placement renders at, in backdrop pixels (the compact override and the fit applied). */
@@ -321,6 +337,13 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
   }
 
+  /** Resolves once the app list has landed. It arrives only over the socket, so ``start`` resolving
+   *  does not imply it: a caller that needs the apps (which app holds chats, which window is pinned)
+   *  waits on this too. */
+  whenAppsLoaded(): Promise<void> {
+    return this.appsLoaded;
+  }
+
   /** Read this client's record, pick the desktop (a deep link's first), connect, fetch the layout, and
    *  honour the deep link's open or launch. */
   async start(deepLink: DeepLink): Promise<void> {
@@ -336,6 +359,8 @@ export class DesktopStore {
         this.avatarSelectionPushes += 1;
         this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null });
       },
+      onUpdateNoticeChanged: (wire) =>
+        this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
     });
     void this.loadAvatarSelection();
@@ -512,6 +537,27 @@ export class DesktopStore {
     const path = launchPathWithParams(target.launchPath, { [DRAFT_PARAM]: text });
     const isTaken = await this.navigateOwnWindow(target.window.id, path);
     this.restoreWindow(target.window.id);
+    return isTaken;
+  }
+
+  /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window already showing it is
+   *  switched to and raised, wherever it is; otherwise this client's view of the chat app's pinned
+   *  window is pointed at the chat, as a draft is, so the chat lands where this viewer reads chats;
+   *  with no pinned window to take it, the chat opens in a window of its own. False when nothing
+   *  showed it -- this machine has no app that holds chats, or the shell refused the ask. */
+  async focusChat(chatId: string): Promise<boolean> {
+    const shown = windowShowingChat(this.state, chatId);
+    if (shown !== null) {
+      if (shown.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(shown.desktop.id);
+      this.restoreWindow(shown.window.id);
+      return true;
+    }
+    const app = chatApp(this.state);
+    if (app === null) return false;
+    const pinned = pinnedWindowOf(this.state, app.name);
+    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), null, "focus")) !== null;
+    const isTaken = await this.navigateOwnWindow(pinned.id, chatPath(chatId));
+    this.restoreWindow(pinned.id);
     return isTaken;
   }
 
@@ -744,15 +790,64 @@ export class DesktopStore {
     return this.runLaunch(shortcut.target.app, shortcut.target.launch, shortcut.mode);
   }
 
-  /** Run a launch path with params (a seeded prompt): always opens a new window. */
-  async openLaunchPath(app: string, launch: string, params: Readonly<Record<string, string>>): Promise<void> {
-    const record = appByName(this.state, app);
-    const launchPath = record === undefined ? null : launchPathOf(record, launch);
-    if (record === undefined || launchPath === null) {
-      this.deps.notify(`Cannot open: ${app} has no launch path ${launch}`);
-      return;
+  /** The app and launch path a launcher row names, or null (told to the user) when the app declares no such path. */
+  private launchOf(appName: string, launchId: string): { app: AppRecord; launchPath: LaunchPath } | null {
+    const app = appByName(this.state, appName);
+    const launchPath = app === undefined ? null : launchPathOf(app, launchId);
+    if (app === undefined || launchPath === null) {
+      this.deps.notify(`Cannot open: ${appName} has no launch path ${launchId}`);
+      return null;
     }
-    await this.openWindowAt(record.name, launchPathWithParams(launchPath, params), launchPath.id, "new");
+    return { app, launchPath };
+  }
+
+  /** Run a launch-path row (launcher plan section 3.3): a launch path at its app's pin path raises the pinned window
+   *  on the active desktop and opens nothing; every other opens a new window at the path. */
+  async runLaunchRow(appName: string, launchId: string): Promise<void> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return;
+    if (launchRowKindOf(found.app, found.launchPath) === "focus") {
+      const pinned = pinnedWindowOf(this.state, found.app.name);
+      if (pinned !== null) {
+        this.restoreWindow(pinned.id);
+        return;
+      }
+    }
+    await this.openWindowAt(found.app.name, found.launchPath.path, found.launchPath.id, "new");
+  }
+
+  /** Run a free-text row with ``text`` (launcher plan section 3.2), pinned-first: when the app has an independent
+   *  pinned window on the active desktop, this client's view of it is pointed at the launch path with the text
+   *  (the write an agent's navigate makes, which moves this client's page alone) and the window is restored and
+   *  raised; otherwise a new window opens at that path. A linked pinned window is never navigated to a launch
+   *  path, since every client would run it. False when the text cannot go (over the path bound) or the shell
+   *  refused, each told to the user. */
+  async runFreeText(appName: string, launchId: string, text: string): Promise<boolean> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return false;
+    const target = textPathOf(found.launchPath, text);
+    if (target.kind === "disabled") {
+      this.deps.notify(target.reason);
+      return false;
+    }
+    const pinned = pinnedWindowOf(this.state, found.app.name);
+    if (pinned !== null && pinned.scope === "independent") {
+      const isTaken = await this.navigateOwnWindow(pinned.id, target.path);
+      this.restoreWindow(pinned.id);
+      return isTaken;
+    }
+    return (await this.openWindowAt(found.app.name, target.path, found.launchPath.id, "new")) !== null;
+  }
+
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
+   *  with no free-text row on the machine the user is told. */
+  async startWithText(text: string): Promise<boolean> {
+    const [primary] = freeTextRowsOf(openableApps(this.state));
+    if (primary === undefined) {
+      this.deps.notify(NO_TEXT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse hook: HARD-BLOCK a tool call that reads or writes a file under
-# data/.secrets/ directly (policy P8 in
+# data/.secrets/ directly (policy P9 in
 # system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md).
 #
 # A secret file holds a value the user gave the chat app through a secret card so

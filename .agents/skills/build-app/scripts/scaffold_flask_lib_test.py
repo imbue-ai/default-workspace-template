@@ -12,6 +12,7 @@ new app a port another program already holds.
 
 from __future__ import annotations
 
+import configparser
 import subprocess
 import sys
 from pathlib import Path
@@ -105,6 +106,27 @@ def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess
         capture_output=True,
         text=True,
     )
+
+
+def test_a_scaffolded_app_gives_up_instead_of_crash_looping(tmp_path: Path) -> None:
+    """A broken app must reach FATAL, not restart at full speed forever.
+
+    An app that keeps dying is restarted by supervisord, and each start
+    re-registers it, so an unbounded retry policy turns one broken app into a
+    permanent restart-and-re-register loop nobody is told about (measured on a
+    real workspace: 46,939 restarts in a day). Asserted as the property --
+    a finite retry count, and a startsecs long enough that a fast death counts
+    as a failed start -- rather than as the exact numbers.
+    """
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
+
+    assert _scaffold(root, "news").returncode == 0
+
+    parser = configparser.ConfigParser()
+    parser.read_string((root / "system/supervisord.conf.d/news.conf").read_text())
+    program = parser["program:news"]
+    assert int(program["startretries"]) <= 20
+    assert float(program["startsecs"]) >= 10
 
 
 def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
@@ -336,3 +358,34 @@ def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
         '&& python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
         in wrapped.read_text()
     )
+
+
+def test_the_runner_does_not_use_reloader() -> None:
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+    )
+    assert "use_reloader=False" in source
+
+
+def test_main_parser_supports_start_flag() -> None:
+    # Check that --start is accepted by the parser
+    # We can invoke scaffold_flask_lib with --help or inspect the parser in main
+    # Or test by creating an ArgumentParser with the same arguments
+    import inspect
+
+    main_src = inspect.getsource(scaffold_flask_lib.main)
+    assert '"--start"' in main_src
+
+
+def test_the_runner_module_evaluates_its_environment_reads(tmp_path: Path) -> None:
+    """The runner reads its port and data dir from the environment at import; a
+    runner whose imports do not cover that read crashes before serving anything."""
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+    )
+    namespace: dict[str, object] = {"__name__": "inbox_status.runner"}
+
+    exec(compile(source, str(tmp_path / "runner.py"), "exec"), namespace)
+
+    assert namespace["PORT"] == 8081
+    assert namespace["DATA_DIR"] == Path("data/.apps/inbox-status")

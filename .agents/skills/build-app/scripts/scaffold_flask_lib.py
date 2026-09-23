@@ -39,8 +39,11 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 import argparse
 import importlib.util
 import re
+import socket
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
 from typing import Iterable
 
@@ -201,18 +204,29 @@ def _apps_toml_ports(apps_toml: Path) -> set[int]:
     return ports
 
 
+def _is_port_bound(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
         repo_root / "system/supervisord.conf"
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
+    # Reserve known internal ports that may not have supervisor entries
+    in_use.add(8083)  # browser CDP proxy
     if requested is not None:
-        if requested in in_use:
+        if requested in in_use or _is_port_bound(requested):
             sys.exit(
                 f"error: --port {requested} is already in use by another app or service"
             )
         return requested
     port = LOWEST_AUTO_PORT
-    while port in in_use:
+    while port in in_use or _is_port_bound(port):
         port += 1
     return port
 
@@ -282,6 +296,7 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
+import os
 from pathlib import Path
 
 from flask import Flask, Response
@@ -464,7 +479,9 @@ def _write_lib(
         _lib_pyproject(name, package, description, extras)
     )
     (lib_dir / "app.toml").write_text(
-        _MANIFEST_TEMPLATE.format(name=name, display_name=display_name)
+        _MANIFEST_TEMPLATE.format(
+            name=name, display_name=display_name, package_upper=package.upper()
+        )
     )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
@@ -478,22 +495,39 @@ def _write_lib(
 # ``priority = "user"`` is what puts a user-built app in the user band the
 # ``oom_tag_service.py user`` prefix below also names. No launch paths: the
 # shell offers ``open`` at the app's root. No ``default_shortcut``: an app
-# pins itself to a desktop's backdrop only when the user asks.
+# pins itself to a desktop's backdrop only when the user asks. The ``[preview]``
+# table is the library's default for the name spelled out, so an edit to the
+# runner's env names has the table to keep in step beside it.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
 priority = "user"
 program = "{name}"
+
+# How update-app boots a throwaway preview of this app: on a free port, over a
+# scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).
+[preview]
+env = {{{package_upper}_PORT = "{{port:main}}", {package_upper}_HOST = "{{host}}", {package_upper}_DATA_DIR = "{{copy:data}}"}}
+copies = {{data = "data/.apps/{name}"}}
 """
 
+# ``startsecs``/``startretries`` bound a crash loop, and are why a user app's
+# block differs from a built-in service's (which retries forever, by design: the
+# workspace is unusable without them). An app that dies before it has been up
+# ``startsecs`` counts as a failed start, so supervisord backs off and gives up
+# in FATAL after ``startretries`` instead of restarting it at full speed for as
+# long as the workspace lives. Without this a broken app restarts a few times a
+# second forever, and every restart re-registers it (measured on a real
+# workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
 command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {entry_point}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
-startretries=1000000
+startsecs=30
+startretries=5
 stopasgroup=true
 killasgroup=true
 stdout_logfile=/var/log/supervisor/{name}-stdout.log
@@ -607,6 +641,35 @@ def _run_uv_sync(repo_root: Path) -> None:
     _run_checked(["uv", "sync", "--all-packages"], repo_root, "uv sync --all-packages")
 
 
+def _start_and_wait(
+    repo_root: Path, name: str, port: int, timeout: float = 10.0
+) -> None:
+    # Reload supervisord to pick up the new program block
+    _run_checked(["supervisorctl", "reread"], repo_root, "supervisorctl reread")
+    _run_checked(["supervisorctl", "update"], repo_root, "supervisorctl update")
+
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.time() + timeout
+    last_err = None
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "scaffold-check"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return
+        except Exception as e:
+            last_err = e
+            time.sleep(0.05)
+
+    status_res = subprocess.run(
+        ["supervisorctl", "status", name], cwd=repo_root, capture_output=True, text=True
+    )
+    sys.exit(
+        f"error: service {name} failed to become healthy at {url} within {timeout}s (last error: {last_err})\n"
+        f"status: {status_res.stdout.strip()}"
+    )
+
+
 def _find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
@@ -620,7 +683,7 @@ def _find_repo_root(start: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
     parser.add_argument(
@@ -657,6 +720,11 @@ def main() -> None:
         action="store_true",
         help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
     )
+    parser.add_argument(
+        "--start",
+        action="store_true",
+        help="register with supervisord (reread + update) and wait for health endpoint",
+    )
     args = parser.parse_args()
 
     _validate_name(args.name)
@@ -691,13 +759,21 @@ def main() -> None:
         _install_app_tool(repo_root, package)
         _run_uv_sync(repo_root)
 
+    if args.start:
+        _start_and_wait(repo_root, args.name, port)
+
+    start_msg = (
+        f"Service `{args.name}` started and healthy on http://127.0.0.1:{port}/.\n"
+        if args.start
+        else ""
+    )
     print(
-        f"Created lib at {lib_dir.relative_to(repo_root)} "
+        f"{start_msg}Created lib at {lib_dir.relative_to(repo_root)} "
         f"(app `{args.name}` on port {port}, registered in "
         f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."
+        f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 

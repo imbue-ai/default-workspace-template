@@ -17,8 +17,9 @@ timeless; everything here is a snapshot.
 | P5 substantive work under a step | live | **partial** | live | **partial** |
 | P6 `tk start`/`close` stands alone | live | **partial** | live | live |
 | P7 open steps are reconciled | live | live | live | **live (turn-start only)** |
-| P8 secret file read only by the wrapper | live | live | live | **partial** |
-| P9 secret request stands alone | live | **partial** | live | **partial** |
+| P8 a finished chat turn notifies | prose-only | prose-only | prose-only | prose-only |
+| P9 secret file read only by the wrapper | live | live | live | **partial** |
+| P10 secret request stands alone | live | **partial** | live | **partial** |
 
 No harness is fully `n/a` any more, and five rows are `partial` for reasons that are
 structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1.
@@ -42,15 +43,23 @@ structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1
 - **codex P5 — partial.** Its read-only skip list is keyed on claude tool names, none of which
   codex ever sends (measured: `Bash`, `apply_patch`, `update_plan`). The command-shaped
   read-only allowlist now covers the shell half; `apply_patch` is correctly nudge-worthy.
-- **agy P8 -- partial.** The shell half is live through the shim; the file-tool half is not,
+- **agy P9 -- partial.** The shell half is live through the shim; the file-tool half is not,
   for the same reason as P5: agy's own file tools never reach a shell and no agy hook carries
   tool identity.
-- **codex and agy P9 -- partial**, exactly as P3: the same checker, the same per-call counting
+- **codex and agy P10 -- partial**, exactly as P3: the same checker, the same per-call counting
   limit under codex code mode, and the same shim path on agy.
 - **P7's stop half is decorative on EVERY harness, claude included.**
   `agent_open_tickets_stop_nudge.sh` says so itself ("mainly for orchestrator log / human
   visibility") and exits 0 unconditionally; on codex a sentinel written at Stop appears in no
   transcript item. The half that reaches the model is the turn-start reminder.
+- **P8 is prose-only on every harness, claude included.** A Stop hook reaches the model only
+  by exiting 2, and claude delivers that by refusing the stop and injecting the hook's text as a
+  user message, which the chat renders as a "Stop hook feedback" chip followed by a second
+  assistant reply -- on every turn, since the ask was unconditional (found in the minds-v0.7.0
+  staging rehearsal, 2026-09-22). `stop_hook_active` keeps that from looping but cannot hide the
+  extra turn, so the claude hook was removed rather than wired on codex. pi's `agent_settled`
+  and agy's `Stop` give stderr and nothing else, so they never could carry it. The rule lives in
+  `AGENTS.md` and the `notify-user` skill, which every harness reads.
 
 ## Delivery channels, per harness
 
@@ -132,8 +141,8 @@ already sets. `MNGR_AGY_SHIM_OFF=1` disables it without a redeploy.
 **#5 is n/a on agy, not merely unwired.** Its skip list is keyed on claude TOOL NAMES; under
 the shim every call is `Bash`, so it would nudge agy's read-only shell work while never seeing
 agy's own edit tool -- wrong in both directions. That discipline lives in `AGENTS.md`.
-**#7 and #8 are n/a**: agy has no `UserPromptSubmit`, and its stderr goes to a tmux pane
-nobody reads -- the same conclusion pi reached for #8.
+**Both halves of P7 are n/a**: agy has no `UserPromptSubmit`, and its stderr goes to a tmux
+pane nobody reads -- the same conclusion pi reached for the stop half.
 **#3 is live, with a correction to an earlier claim.** This section previously said agy "sets
 `WaitMsBeforeAsync` on every `run_command` and runs the child synchronously, so there is no
 agent-controllable background flag". That is wrong. `WaitMsBeforeAsync` is a **required
@@ -256,14 +265,17 @@ When a rule changes, update every harness that carries it:
 - **Safety 1–2** (`agent_block_pipe_tail_head.sh`, `agent_prevent_commit_rewrite.sh`): the
   scripts (shared by claude **and** codex) and `commandBlockReason()` in mngr's
   `mngr_pi_lifecycle.ts` (pi) — these hold for any pi agent, so mngr still carries them.
-- **Workflow 5, 7–8** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
+- **Workflow 5 and 7** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
   `agent_open_tickets_stop_nudge.sh`): the scripts (claude **and** codex) and the matching
   handler in **this repo's** `.pi/extensions/tk_workflow.ts` (pi). The step discipline is
   this repo's, not mngr's — mngr's lifecycle extension no longer carries any of it.
-- **Safety 3 and 9** (`agent_latchkey_request_check.py`) and **workflow 6**
+- **Workflow 8** (finish notification): no script on any harness. The rule is in `AGENTS.md`
+  and the `notify-user` skill, which every harness reads (see P8 above for why the claude Stop
+  hook was removed).
+- **Safety 3 and 10** (`agent_latchkey_request_check.py`) and **workflow 6**
   (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
   their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
-- **Safety 8** (`agent_secrets_guard_check.py`): one checker reached by claude and codex through
+- **Safety 9** (`agent_secrets_guard_check.py`): one checker reached by claude and codex through
   `agent_secrets_guard.sh`, by agy through the shim, and by pi as a `payload` checker in
   `policy_guards.ts` -- the one guard pi runs on every tool call rather than on bash alone,
   because the rule covers its file tools too.

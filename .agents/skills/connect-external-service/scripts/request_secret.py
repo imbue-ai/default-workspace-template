@@ -15,7 +15,7 @@ passes through this script or the transcript.
 
 Prints the filed request as JSON (``request_id``, ``file``, ``variables``,
 ``existing_variables``, ``overwrites``, ...) -- the chat builds the card from that
-echo, which is why the call must stand alone (policy P9). End the turn after it
+echo, which is why the call must stand alone (policy P10). End the turn after it
 prints; the resolution arrives as a message.
 
 Exits 1 with a plain message when the chat app cannot be reached or refuses the

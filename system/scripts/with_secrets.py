@@ -9,7 +9,7 @@ This is the one sanctioned way a stored secret reaches a process: an agent's own
 command, an ``.mcp.json`` server command, a supervisord program, or a scheduled
 job names the env file here instead of reading it, so the value never appears in
 a tool call, a config file, or a transcript. The PreToolUse guard
-(``agent_secrets_guard.sh``, policy P8 in
+(``agent_secrets_guard.sh``, policy P9 in
 ``system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md``)
 allows a shell command to mention ``data/.secrets`` only through this script.
 

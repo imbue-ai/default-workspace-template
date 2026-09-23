@@ -5,7 +5,7 @@ Takes the hook payload (``{"tool_name": ..., "tool_input": {...}}``) on stdin,
 as agent_secrets_guard.sh hands it over. Exits 0 to allow; exits 2 with a
 guiding stderr message to BLOCK. See the wrapper for the why.
 
-Two halves, one rule (policy P8): a value stored under ``data/.secrets/`` may
+Two halves, one rule (policy P9): a value stored under ``data/.secrets/`` may
 reach a process only through ``with_secrets.py``.
 
 * A **shell** command (claude's and codex's ``Bash``, pi's ``bash``, the

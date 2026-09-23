@@ -84,6 +84,7 @@ import { isFiledSecretRequest, parseSecretRequest } from "./secret-card";
 import {
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
+  isNoticeUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
@@ -163,7 +164,7 @@ export type TimelineItem =
       /** The user's note on a declined secret request, by request id (shared like the verdicts). */
       secretNotesByRequestId: ReadonlyMap<string, string>;
     }
-  /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
+  /** A non-boundary user message shown inline: a stop-hook chip, a background-task notice. */
   | { kind: "chip"; event: UserMessageEvent }
   /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
    *  request in the window, at the switch itself, when its prompt reached it). */
@@ -645,7 +646,7 @@ export function buildSections(
         // which is which; nothing is re-derived here. A chip goes into the skeleton
         // so it both renders at its chronological spot and marks the turn end that
         // ends a step's stint (see collectEjectedProse).
-        if (isSystemChipUserMessage(e)) {
+        if (isSystemChipUserMessage(e) || isNoticeUserMessage(e)) {
           if (current === null) current = ensureSection(null, "section-pre");
           current.entries.push({ kind: "chip", event: e });
         }

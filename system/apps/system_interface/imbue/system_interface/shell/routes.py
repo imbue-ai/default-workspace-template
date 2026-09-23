@@ -2,6 +2,7 @@
 report, an app's stop and start, the clients and the inventory, and the agent-facing op route."""
 
 import json
+from typing import Final
 from typing import assert_never
 
 from app_manifest.manifest import PinStyle
@@ -36,6 +37,8 @@ from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.errors import UnknownAppError
+from imbue.system_interface.shell.errors import UpdateNoticeCommandError
+from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.layout_ops import CONTEXT_OP
@@ -48,9 +51,11 @@ from imbue.system_interface.shell.liveness import supervisor_socket_path
 from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
+from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
 from imbue.system_interface.shell.route_helpers import HTTP_CONFLICT
+from imbue.system_interface.shell.route_helpers import HTTP_FORBIDDEN
 from imbue.system_interface.shell.route_helpers import HTTP_INTERNAL_ERROR
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
@@ -71,8 +76,17 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             | WallpaperNotFoundError()
         ):
             return detail_response(str(error), HTTP_NOT_FOUND)
-        case DesktopConflictError() | LastDesktopError() | StalePlacementsSaveError() | PinnedWindowError():
+        case (
+            DesktopConflictError()
+            | LastDesktopError()
+            | StalePlacementsSaveError()
+            | PinnedWindowError()
+            | UpdateNoticeRefusedError()
+        ):
             return detail_response(str(error), HTTP_CONFLICT)
+        case UpdateNoticeCommandError():
+            logger.opt(exception=error).error("An update-notice verb failed")
+            return detail_response(str(error), HTTP_INTERNAL_ERROR)
         case InvalidShellValueError() | AppLifecycleRefusedError() | LayoutOpError() | DesktopValueError():
             return detail_response(str(error), HTTP_BAD_REQUEST)
         case NoTargetClientError():
@@ -84,6 +98,20 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
 
 def _shell() -> ShellState:
     return get_state().shell
+
+
+# What a preview shell answers to a verb whose effect lands outside its own copy of the state: an
+# app's stop and start reach supervisord, and the update notice's verbs act on the live apply's
+# rollback point. Everything else a preview offers (opening, placing, and closing windows, a
+# refresh, the interface reload, the avatar) edits the preview's own state or reaches only the
+# preview's own windows, so it stays live for the person judging the change.
+PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
+
+
+def _refuse_if_preview() -> ResponseReturnValue | None:
+    if get_state().is_preview:
+        return detail_response(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN)
+    return None
 
 
 def _entry_or_raise(name: str) -> AppInventoryEntry:
@@ -116,6 +144,9 @@ def client_activity_route() -> ResponseReturnValue:
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     shell = _shell()
     entry = _entry_or_raise(name)
     program = entry.row.program or ""
@@ -204,6 +235,35 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
     return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
+# The update notice: the rollback point the update-app careful flow's apply kept
+
+
+def pending_update() -> ResponseReturnValue:
+    """The kept rollback point of the last careful-flow apply, or ``null`` when there is none."""
+    notice = _shell().update_notice.current()
+    return jsonify(notice.wire_json() if notice is not None else None)
+
+
+def confirm_pending_update() -> ResponseReturnValue:
+    """ "Everything seems good", or Close on a settled notice: drop the record, and the kept copies with it when no
+    rollback ran (a failed rollback's copies stay for an agent). Refused in a preview, which owns no live state."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
+    _shell().update_notice.confirm()
+    return "", HTTP_NO_CONTENT
+
+
+def rollback_pending_update() -> ResponseReturnValue:
+    """ "Roll back": start the rollback detached and answer once it is under way, with its first progress in the
+    record; the rest of its progress and its outcome follow on the socket."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
+    _shell().update_notice.launch_rollback()
+    return detail_response("The rollback has started.", HTTP_ACCEPTED)
+
+
 # Section 8: the agent-facing op route
 
 
@@ -245,6 +305,24 @@ def register_shell_routes(application: Flask) -> None:
         view_func=client_activity_route,
         methods=["POST"],
         endpoint="client_activity_route",
+    )
+    application.add_url_rule(
+        "/api/updates/pending",
+        view_func=pending_update,
+        methods=["GET"],
+        endpoint="pending_update",
+    )
+    application.add_url_rule(
+        "/api/updates/pending/confirm",
+        view_func=confirm_pending_update,
+        methods=["POST"],
+        endpoint="confirm_pending_update",
+    )
+    application.add_url_rule(
+        "/api/updates/pending/rollback",
+        view_func=rollback_pending_update,
+        methods=["POST"],
+        endpoint="rollback_pending_update",
     )
     application.add_url_rule(
         "/api/apps/<name>/stop",

@@ -16,6 +16,21 @@ mode = "new"
 
 [[launch_paths]]
 id = "new"
-label = "New Terminal"
+label = "Terminal"
 path = "/new"
 params = [{name = "workdir", label = "Working directory", required = false}]
+
+# A terminal preview serves the wrapper pages on a free port, unregistered, over a copy of
+# the terminal's store and a scratch state directory; the sessions it creates are real tmux
+# sessions. Its pages frame the pty the registry names, so a preview boots --with terminal-pty
+# and reads the registry copy that points that row at the pty's preview.
+[preview]
+command = [
+    "terminal-app", "--no-register",
+    "--app-url", "http://127.0.0.1:{port:main}",
+    "--store", "{copy:store}/instances.json",
+    "--state-dir", "{scratch}/state",
+]
+env = {MINDS_APPS_FILE = "{registry}"}
+copies = {store = "data/.apps/terminal"}
+health_path = "/api/health"

@@ -7,7 +7,7 @@ passed by agent_latchkey_request_standalone.sh, which reads them out of the
 hook payload). Exits 0 to allow; exits 2 with a guiding stderr message to BLOCK.
 See the wrapper for the why.
 
-Two kinds of filing are held to the same rule (policies P3 and P9): a POST to the
+Two kinds of filing are held to the same rule (policies P3 and P10): a POST to the
 reserved permission-requests host, and a run of the connect-external-service
 skill's ``request_secret.py``. Both are rendered by the chat as a card built from
 the object the call echoes, so both must be the whole tool call.
