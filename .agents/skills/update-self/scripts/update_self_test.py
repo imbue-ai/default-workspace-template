@@ -2064,10 +2064,12 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/system_interface/frontend/vite.config.ts",
         "system/apps/system_interface/frontend/tsconfig.json",
         "system/apps/system_interface/frontend/public/logo.svg",
-        # The chat app's frontend and the library both compile into a bundle; so does
-        # the tooling every build reads.
+        # The chat's and the Getting Started app's frontends and the library all compile into a
+        # bundle; so does the tooling every build reads.
         "system/apps/chat/frontend/src/index.ts",
         "system/apps/chat/frontend/chat.html",
+        "system/apps/getting_started/frontend/src/index.ts",
+        "system/apps/getting_started/frontend/index.html",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2083,6 +2085,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/package.json",
         "system/package-lock.json",
         "system/apps/chat/frontend/package.json",
+        "system/apps/getting_started/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )
@@ -2734,9 +2737,9 @@ def test_a_stale_chat_bundle_rejects_the_worker_pair(
 def test_a_build_that_writes_only_the_shell_bundle_is_a_failure(
     apply_repo: Path, capsys
 ) -> None:
-    # One build emits both bundles; a build that died after the shell's exits 0 with
-    # index.html in place and no chat page, and the index check must catch the
-    # second bundle as it does the first.
+    # One build emits every bundle; a build that died after the shell's exits 0 with
+    # index.html in place and no chat page, and the index check must catch each
+    # later bundle as it does the first.
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
     runner.unwritten_bundle_apps = frozenset({"chat"})
 
@@ -5363,14 +5366,13 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     )
 
     assert {record.name for record in snapshots} == {
-        "bundle",
-        "chat_bundle",
+        *(bundle.snapshot_name for bundle in update_layout.FRONTEND_BUNDLES),
         "node_modules",
         "venv",
     }
     # Destroy the originals, as the failed forward steps would.
-    shutil.rmtree(repo_root / update_layout.STATIC_DIR)
-    shutil.rmtree(repo_root / update_layout.CHAT_STATIC_DIR)
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        shutil.rmtree(repo_root / bundle.static_dir)
     (repo_root / ".venv" / "marker.txt").write_text("wrecked")
     shutil.rmtree(repo_root / update_layout.NPM_ROOT_DIR / "node_modules")
 
@@ -7107,25 +7109,41 @@ def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
         update_self._parse_worker_bundles(["chat=/w/chat", "chat=/w/other"])
 
 
-def test_a_fast_forward_apply_cannot_keep_a_rollback_point(apply_repo: Path) -> None:
-    """rollback-last reverts the kept point as a merge, which a fast-forward never lands."""
-    with pytest.raises(SystemExit, match="cannot be combined with --ff-only"):
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        # rollback-last reverts the kept point as a merge, which a fast-forward never lands.
+        pytest.param(
+            ["--ff-only", "--keep-rollback-point"],
+            "cannot be combined with --ff-only",
+            id="fast-forward-cannot-keep-a-rollback-point",
+        ),
+        # The worker's ``update-self:`` merge is read along the first-parent line, and an
+        # ordinary merge puts it on a second parent, so the landing would read as the
+        # previous update's.
+        pytest.param(
+            ["--target-ref", "minds-v0.0.2"],
+            "must fast-forward",
+            id="update-self-landing-must-fast-forward",
+        ),
+        # Refused as the rollback point's problem, not --ff-only's: dropping --ff-only is
+        # the one wrong fix.
+        pytest.param(
+            ["--ff-only", "--target-ref", "minds-v0.0.2", "--keep-rollback-point"],
+            "with --ff-only and without --keep-rollback-point",
+            id="update-self-landing-cannot-keep-a-rollback-point",
+        ),
+    ],
+)
+def test_apply_refuses_a_flag_combination_it_cannot_honor(
+    apply_repo: Path, flags: list[str], message: str
+) -> None:
+    with pytest.raises(SystemExit, match=message):
         update_self.main(
-            [
-                "apply",
-                "--merge-ref",
-                "HEAD",
-                "--ff-only",
-                "--keep-rollback-point",
-                "--repo-root",
-                str(apply_repo),
-            ]
+            ["apply", "--merge-ref", "HEAD", *flags, "--repo-root", str(apply_repo)]
         )
     assert update_apply_contract.read_marker(apply_repo) is None
     assert _rollback_point(apply_repo) is None
-
-
-# --- the kept rollback point and the notice ----------------------------------
 
 
 def _rollback_point(repo_root: Path) -> "update_apply_contract.LastGoodRecord | None":
@@ -7169,7 +7187,9 @@ def test_an_apply_keeps_its_rollback_point_only_when_asked(apply_repo: Path) -> 
     assert record.apps == ["system_interface"]
     assert record.programs == ["system_interface"]
     assert record.needs_system_services_restart is False
-    assert {snapshot.name for snapshot in record.snapshots} == {"bundle", "chat_bundle"}
+    assert {snapshot.name for snapshot in record.snapshots} == {
+        bundle.snapshot_name for bundle in update_layout.FRONTEND_BUNDLES
+    }
     assert _snapshot_copy(apply_repo, "bundle").exists()
     assert not _marker_exists(apply_repo)
 
@@ -7183,7 +7203,7 @@ def test_an_apply_keeps_its_rollback_point_only_when_asked(apply_repo: Path) -> 
 def test_the_record_names_every_critical_app_the_apply_touched(
     apply_repo: Path,
 ) -> None:
-    """A shared-library change rebuilds both bundles, so both bundle owners are touched;
+    """A shared-library change rebuilds every bundle, so each critical bundle owner is touched;
     a change under one app's directory touches that app; a non-critical app never counts."""
     _write_openable_app(apply_repo, "chat")
     _write_openable_app(apply_repo, "terminal")
@@ -7275,7 +7295,7 @@ def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_prog
     restarting only what the apply touched -- never the services agent."""
     _write_openable_app(apply_repo, "chat")
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
-    # A chat frontend change: one ``npm run build`` rebuilds both bundles, so the
+    # A chat frontend change: one ``npm run build`` rebuilds every bundle, so the
     # shell is touched as a bundle owner even though none of its files changed.
     assert (
         _apply_keeping_the_rollback_point(
@@ -7727,15 +7747,12 @@ def test_main_routes_rollback_last_and_confirm_last(apply_repo: Path) -> None:
     assert update_self.main(["rollback-last", "--repo-root", str(apply_repo)]) == 1
 
 
-# --- what the kept point names, and what a rollback checks -------------------
-
-
 @pytest.mark.parametrize("diff", [_CHAT_FRONTEND_DIFF, _FRONTEND_DIFF])
 def test_a_frontend_apply_keeps_both_bundle_owners_in_its_rollback(
     apply_repo: Path,
     diff: str,
 ) -> None:
-    """Either frontend edit replaces both bundles. Include both apps even when a
+    """Either frontend edit replaces every bundle. Include both critical owners even when a
     source stamp is unchanged, and restart both when their copies are restored."""
     _write_openable_app(apply_repo, "chat")
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})

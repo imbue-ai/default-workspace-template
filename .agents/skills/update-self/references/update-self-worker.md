@@ -324,11 +324,11 @@ in your report.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
-  system && npm ci && npm run build`: one npm workspace emits the shell's bundle
-  and the chat app's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those two bundles
+  system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
+  the chat app's, and the Getting Started app's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those three bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a pair) -- name both locations in your report.
+  installed only as a set) -- name all three locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -421,9 +421,10 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    both (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`
-    and `<your work_dir>/system/apps/chat/imbue/chat/static`); omit when you did
-    not build.
+    all three (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    `<your work_dir>/system/apps/chat/imbue/chat/static`, and
+    `<your work_dir>/system/apps/getting_started/src/getting_started/static`); omit
+    when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file; or, when the 4a rule skipped it,
     the footprint evidence (`has_local_footprint: false` and the `local_only`

@@ -20,8 +20,10 @@ The models behind a workspace app's two descriptions:
 
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
   cross-field rule of the contract is a validator), `LaunchPath`
-  (`id`, `label`, `path`, `params`; `open` is reserved for the root launch path
-  the shell synthesizes for an app that declares none), `DefaultShortcut`
+  (`id`, `label`, `path`, `params`, and an optional `text_param` naming the one
+  of its params the desktop's launcher fills with typed text; `open` is reserved
+  for the root launch path the shell synthesizes for an app that declares none),
+  `DefaultShortcut`
   (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
   a throwaway instance boots, with named free ports, a scratch copy of the
@@ -69,7 +71,7 @@ The models behind a workspace app's two descriptions:
   lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
   raises `ScopeComputationError` rather than reporting an empty diff.
 - `app_manifest.primitives`: the validated string types (`AppName`,
-  `DisplayName`, `LaunchPathId`, `LaunchPathValue` (rooted with one
+  `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape),
   `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a

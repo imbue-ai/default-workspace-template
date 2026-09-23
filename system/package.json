@@ -6,7 +6,8 @@
   "workspaces": [
     "libs/workspace_ui",
     "apps/system_interface/frontend",
-    "apps/chat/frontend"
+    "apps/chat/frontend",
+    "apps/getting_started/frontend"
   ],
   "scripts": {
     "prebuild": "bash scripts/fetch_mngr_assets.sh",

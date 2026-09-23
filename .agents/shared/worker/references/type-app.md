@@ -79,11 +79,12 @@ terminal (`system/apps/terminal`), and any app whose `app.toml` says
 worktree, previewed it to the user, and handed you the branch at approval.
 What differs for you:
 
-- **Build both bundles at the npm workspace root** (`cd system && npm ci && npm
-  run build`), never one frontend alone: the shell's and the chat's bundles are
-  built from the shared `system/libs/workspace_ui/` library, and the apply
-  installs the bundles you built. Report both `static/` paths in your `done`
-  body, so the lead can pass them to the apply.
+- **Build every bundle at the npm workspace root** (`cd system && npm ci && npm
+  run build`), never one frontend alone: the shell's, the chat's, and the
+  Getting Started app's bundles are built from the shared
+  `system/libs/workspace_ui/` library, and the apply installs the bundles you
+  built only when it is given all three. Report each `static/` path in your
+  `done` body, so the lead can pass them to the apply.
 - **Never drive `networkidle`** against a shell or chat instance in Playwright:
   both hold sockets open for as long as they run, so the wait never returns.
   Wait for the element you are about to read instead.
