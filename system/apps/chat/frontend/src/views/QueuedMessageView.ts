@@ -85,9 +85,13 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  renders identically to the optimistic outgoing bubble (see OutgoingMessageView), so a
  *  re-sent message stays continuously visible through the resend rather than blinking out
  *  (contract A1a); the backend drives the transition to the committed turn. */
-function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
+function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode {
   if (queued.is_sending === true) {
-    return renderNotYetRealBubble({ key: `queued-${queued.queued_id}`, content: queued.content });
+    return renderNotYetRealBubble({
+      key: `queued-${queued.queued_id}`,
+      content: queued.content,
+      isGroupSpaced: isInGroup,
+    });
   }
   // opacity-85: the not-yet-sent muting; no bottom margin (the group's own gap
   // is the rhythm between queued bubbles).
@@ -119,7 +123,7 @@ export function renderQueuedMessages(chatId: string): m.Vnode[] {
   // as not-yet-real sends. Bare bubbles, no group wrapper: identical markup to the optimistic
   // ones they replace, so the handoff is invisible rather than a reflow.
   if (queued.every((message) => message.is_sending === true)) {
-    return queued.map((message) => renderQueuedBubble(message));
+    return queued.map((message) => renderQueuedBubble(message, false));
   }
   // The button's enabled state = the backend's availability flag, AND-ed with the local
   // double-fire guard. The frontend computes nothing about availability itself: if the
@@ -176,7 +180,7 @@ export function renderQueuedMessages(chatId: string): m.Vnode[] {
   return [
     m("div", { class: "queued-group mb-5 flex flex-col items-stretch gap-2", key: "queued-group" }, [
       header,
-      ...queued.map((message) => renderQueuedBubble(message)),
+      ...queued.map((message) => renderQueuedBubble(message, true)),
     ]),
   ];
 }

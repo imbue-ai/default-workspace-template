@@ -205,6 +205,8 @@ describe("renderQueuedMessages", () => {
     expect(renderedText(rendered)).toContain("beep");
     expect(findByClass(rendered, "outgoing-message--sending")).toBeDefined();
     expect(renderedText(rendered)).not.toContain("Sending");
+    // Bare, it stands apart like the optimistic bubble it replaces.
+    expect(String(findByClass(rendered, "outgoing-message--sending")?.attrs?.className)).toContain("mb-5");
   });
 
   it("still shows the chrome when only some entries are sending", () => {
@@ -215,5 +217,7 @@ describe("renderQueuedMessages", () => {
     expect(findByClass(rendered, "queued-header")).toBeDefined();
     expect(findByClass(rendered, "queued-action--flush")).toBeDefined();
     expect(renderedText(rendered)).toContain("Queued messages");
+    // Inside the group the group's own gap spaces the bubbles, the sending one included.
+    expect(String(findByClass(rendered, "outgoing-message--sending")?.attrs?.className)).not.toContain("mb-5");
   });
 });
