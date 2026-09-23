@@ -3,10 +3,9 @@
  *
  * Connecting is a sub-state of Sending (contract A1): the message already shows as the faded
  * outgoing bubble, and this says where the wait is. The backend reports it on the chat's snapshot
- * (``active_agent.is_connecting``: the agent was stopped, or its harness had not finished
- * starting). A chat still being created has no snapshot yet, and a message sent to it waits for
- * the create, so that wait reads the same way. A switching chat is left to the handoff's own
- * progress text.
+ * (``active_agent.is_connecting``). A chat still being created has no snapshot yet, and a message
+ * sent to it waits for the create, so that wait reads the same way. A switching chat is left to
+ * the handoff's own progress text.
  */
 
 import m from "mithril";
