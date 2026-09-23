@@ -2,30 +2,31 @@
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
-from flask import Flask
-from flask import jsonify
-from flask import request
 
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
-from imbue.chat.auto_open import DisconnectedShell
-from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.auto_open import is_auto_open_labeled
-from imbue.chat.auto_open import navigate_pinned_op_body
-from imbue.chat.auto_open import open_chat_op_body
-from imbue.chat.auto_open import restore_pinned_op_body
 from imbue.chat.primitives import ChatId
+from imbue.chat.shell_client import ShellAnswerMalformedError
+from imbue.chat.shell_client import ShellOpError
+from imbue.chat.shell_client import ShellUnreachableError
+from imbue.chat.shell_client import ShowRequest
 from imbue.chat.testing import RecordingShell
-from imbue.chat.testing import serve_app
 
 _LABELED = {"assist": "true"}
 
 
 def _reactor(shell: RecordingShell, ledger: AutoOpenLedger | None = None) -> AutoOpenReactor:
     return AutoOpenReactor(ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell)
+
+
+def _shown(chat_id: str, client_id: str) -> ShowRequest:
+    """The show the reactor owes a chat for one client: the chat root on the chat, with no other path counting as
+    showing it and no window to repoint, so the shell raises a window already there, else takes the pinned window,
+    else opens one."""
+    return ShowRequest(path=f"/?chat={chat_id}", showing=(), repoint=(), client_id=client_id)
 
 
 def test_only_the_two_auto_open_labels_ask_for_a_window() -> None:
@@ -43,7 +44,7 @@ def test_a_labeled_chat_is_opened_once_in_every_connected_client_and_recorded() 
     reactor.flush()
     reactor.flush()
 
-    assert shell.opens == [("chat-1", "c1"), ("chat-1", "c2")]
+    assert shell.shows == [_shown("chat-1", "c1"), _shown("chat-1", "c2")]
     assert reactor.ledger.is_delivered(ChatId("chat-1"))
     assert reactor.pending_chat_ids() == set()
 
@@ -55,7 +56,7 @@ def test_an_unlabeled_chat_is_ignored() -> None:
     reactor.note_appeared(ChatId("chat-1"), {"user_created": "true"})
     reactor.flush()
 
-    assert shell.opens == []
+    assert shell.shows == []
     assert not reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
@@ -66,17 +67,17 @@ def test_with_no_client_the_open_is_held_until_one_arrives() -> None:
     reactor.note_appeared(ChatId("chat-1"), _LABELED)
 
     reactor.flush()
-    assert shell.opens == []
+    assert shell.shows == []
     assert reactor.pending_chat_ids() == {ChatId("chat-1")}
     assert not reactor.ledger.is_delivered(ChatId("chat-1"))
 
     shell.client_ids = ["c1"]
     reactor.flush()
-    assert shell.opens == [("chat-1", "c1")]
+    assert shell.shows == [_shown("chat-1", "c1")]
     assert reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
-def test_a_refused_open_keeps_the_chat_pending() -> None:
+def test_a_refused_show_keeps_the_chat_pending() -> None:
     shell = RecordingShell(client_ids=["c1"], refused_client_ids=["c1"])
     reactor = _reactor(shell)
     reactor.note_appeared(ChatId("chat-1"), _LABELED)
@@ -85,6 +86,40 @@ def test_a_refused_open_keeps_the_chat_pending() -> None:
 
     assert reactor.pending_chat_ids() == {ChatId("chat-1")}
     assert not reactor.ledger.is_delivered(ChatId("chat-1"))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ShellUnreachableError("the shell is restarting"), ShellAnswerMalformedError("the shell answered []")],
+    ids=["unreachable", "malformed"],
+)
+def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_flush_retries_it(
+    error: ShellOpError,
+) -> None:
+    shell = RecordingShell(client_ids=["c1"], error=error)
+    reactor = _reactor(shell)
+    reactor.note_appeared(ChatId("chat-1"), _LABELED)
+
+    reactor.flush()
+    assert reactor.pending_chat_ids() == {ChatId("chat-1")}
+    assert not reactor.ledger.is_delivered(ChatId("chat-1"))
+
+    shell.error = None
+    reactor.flush()
+    assert shell.shows == [_shown("chat-1", "c1"), _shown("chat-1", "c1")]
+    assert reactor.ledger.is_delivered(ChatId("chat-1"))
+
+
+def test_one_client_that_is_shown_the_chat_delivers_it_though_another_refused() -> None:
+    shell = RecordingShell(client_ids=["c1", "c2"], refused_client_ids=["c1"])
+    reactor = _reactor(shell)
+    reactor.note_appeared(ChatId("chat-1"), _LABELED)
+
+    reactor.flush()
+
+    assert shell.shows == [_shown("chat-1", "c1"), _shown("chat-1", "c2")]
+    assert reactor.ledger.is_delivered(ChatId("chat-1"))
+    assert reactor.pending_chat_ids() == set()
 
 
 def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
@@ -99,7 +134,7 @@ def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
     second.note_appeared(ChatId("chat-1"), _LABELED)
     second.flush()
 
-    assert shell.opens == []
+    assert shell.shows == []
 
 
 def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name() -> None:
@@ -118,7 +153,7 @@ def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name(
     assert not ledger.is_delivered(ChatId("plain"))
     shell.client_ids = ["c1"]
     reactor.flush()
-    assert shell.opens == [("waiting", "c1")]
+    assert shell.shows == [_shown("waiting", "c1")]
 
 
 def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_popping_every_window(
@@ -136,14 +171,14 @@ def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_poppin
     )
     reactor.flush()
 
-    assert shell.opens == []
+    assert shell.shows == []
     assert path.exists()
 
     next_boot = _reactor(shell, AutoOpenLedger(path=path))
     next_boot.seed_at_startup({ChatId("old-1"): _LABELED, ChatId("old-2"): _LABELED, ChatId("since"): _LABELED})
     next_boot.flush()
 
-    assert shell.opens == [("since", "c1")]
+    assert shell.shows == [_shown("since", "c1")]
 
 
 def test_a_fresh_workspace_adopting_nothing_still_leaves_a_ledger_behind(tmp_path: Path) -> None:
@@ -184,87 +219,3 @@ def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
     assert not ledger.is_delivered(ChatId("chat-1"))
     assert not ledger.is_history_known
     assert any("wrong shape" in record for record in loguru_records)
-
-
-def test_the_ops_name_the_pinned_window_for_the_chat_and_the_open_fallback_names_the_app() -> None:
-    """The desktop op route (desktop-interface contracts.md section 8): the pinned window is navigated to the chat
-    and restored under this app's requester; the fallback ``open`` names the app by name and a path, never the
-    tabbed shell's address form."""
-    assert navigate_pinned_op_body(ChatId("agent-1"), "c1") == {
-        "op": "navigate",
-        "args": {"window": "pinned", "path": "/?chat=agent-1", "client": "c1"},
-        "requester": {"app": "chat", "marker": ""},
-    }
-    assert restore_pinned_op_body("c1") == {
-        "op": "restore",
-        "args": {"window": "pinned", "client": "c1"},
-        "requester": {"app": "chat", "marker": ""},
-    }
-    assert open_chat_op_body(ChatId("agent-1"), "c1") == {
-        "op": "open",
-        "args": {"app": "chat", "path": "/?chat=agent-1", "client": "c1"},
-        "requester": None,
-    }
-
-
-def test_the_shell_client_navigates_and_restores_the_pinned_window_and_falls_back_to_an_open() -> None:
-    """A 2xx to the navigate shows the chat (the restore follows, its answer not consulted); a 404 for ``pinned``
-    means no pinned window on that desktop, so a root window is opened instead; a refusal (a 412 with no client,
-    say) is not a delivery."""
-    posted: list[Any] = []
-    application = Flask("stub-shell")
-
-    def _broadcast() -> Any:
-        body = request.get_json()
-        posted.append(body)
-        client_id = body["args"]["client"]
-        if client_id == "nobody":
-            return jsonify({"detail": "no client"}), 412
-        if client_id == "unpinned" and body["args"].get("window") == "pinned":
-            return jsonify({"detail": "no pinned window"}), 404
-        return jsonify({"ok": True})
-
-    application.add_url_rule("/api/layout/broadcast", view_func=_broadcast, methods=["POST"], endpoint="broadcast")
-    with serve_app(application) as served:
-        client = ShellLayoutClient(shell_url=served.http_url)
-        assert client.open_chat(ChatId("agent-1"), "c1") is True
-        assert client.open_chat(ChatId("agent-1"), "unpinned") is True
-        assert client.open_chat(ChatId("agent-1"), "nobody") is False
-
-    assert posted == [
-        navigate_pinned_op_body(ChatId("agent-1"), "c1"),
-        restore_pinned_op_body("c1"),
-        navigate_pinned_op_body(ChatId("agent-1"), "unpinned"),
-        open_chat_op_body(ChatId("agent-1"), "unpinned"),
-        navigate_pinned_op_body(ChatId("agent-1"), "nobody"),
-    ]
-
-
-def test_the_disconnected_shell_reaches_nobody() -> None:
-    shell = DisconnectedShell()
-    assert shell.connected_client_ids() == []
-    assert shell.open_chat(ChatId("chat-1"), "c1") is False
-
-
-@pytest.mark.parametrize(
-    ("body", "expected"),
-    (
-        ({"clients": [{"id": "c1", "is_connected": True}, {"id": "c2", "is_connected": False}]}, ["c1"]),
-        ({"clients": []}, []),
-        ({}, []),
-        ({"clients": {"c1": True}}, []),
-        ({"clients": "c1"}, []),
-        ([{"id": "c1", "is_connected": True}], []),
-        ({"clients": [{"is_connected": True}, "c2"]}, []),
-    ),
-    ids=("the-contract", "nobody", "no-key", "a-map", "a-string", "a-bare-list", "entries-without-an-id"),
-)
-def test_a_client_list_of_the_wrong_shape_reads_as_nobody_rather_than_killing_the_flush_thread(
-    body: Any, expected: list[str]
-) -> None:
-    """The flush thread's own catch does not cover a KeyError or TypeError from reading this, so an
-    answer the shell should never give would end the thread and silently stop surfacing every window."""
-    application = Flask("stub-shell")
-    application.add_url_rule("/api/clients", view_func=lambda: jsonify(body), endpoint="clients")
-    with serve_app(application) as served:
-        assert ShellLayoutClient(shell_url=served.http_url).connected_client_ids() == expected

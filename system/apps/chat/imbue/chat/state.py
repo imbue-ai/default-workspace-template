@@ -22,6 +22,7 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.shell_client import ShellLayoutInterface
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -69,6 +70,10 @@ class ChatAppState(MutableModel):
     auth_flows: AuthFlowService
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
+    shell: ShellLayoutInterface = Field(
+        description="The shell's layout, for the routes that put a window on a client's screen; the auto-open "
+        "reactor is handed the same one"
+    )
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not

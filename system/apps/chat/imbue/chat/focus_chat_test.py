@@ -1,33 +1,26 @@
-"""``POST /api/focus-chat``: the chat app turns the Mind app's ask to show a chat into one ``show`` op on the shell, over
-a real loopback server standing in for the shell."""
+"""``POST /api/focus-chat``: the chat app turns the Mind app's ask to show a chat into one ``show`` of its injected
+shell, and answers with what the shell did."""
 
-import json
 from typing import Any
 
 import pytest
 
 from imbue.chat.server import create_application
-from imbue.chat.testing import RecordingLayoutOpShell
+from imbue.chat.shell_client import ShellAnswerMalformedError
+from imbue.chat.shell_client import ShellOpError
+from imbue.chat.shell_client import ShellRefusedOpError
+from imbue.chat.shell_client import ShellUnreachableError
+from imbue.chat.shell_client import ShowAnswer
+from imbue.chat.shell_client import ShowRequest
+from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import build_test_state
-from imbue.chat.testing import serve_app
-from imbue.system_interface.testing import find_free_port
 
 _CHAT_ID = "agent-5f0c2e"
-_SHOWN_ANSWER = {"ok": True, "shown": "navigated", "window_id": "win-0123456789abcdef", "desktop_id": "home"}
 
 
-def _focus_chat(body: dict[str, Any], is_secondary: bool = False) -> Any:
-    client = create_application(build_test_state(is_secondary=is_secondary)).test_client()
+def _focus_chat(shell: RecordingShell, body: dict[str, Any], is_secondary: bool = False) -> Any:
+    client = create_application(build_test_state(is_secondary=is_secondary, shell=shell)).test_client()
     return client.post("/api/focus-chat", json=body)
-
-
-def _focus_chat_against(
-    monkeypatch: pytest.MonkeyPatch, shell: RecordingLayoutOpShell, body: dict[str, Any], is_secondary: bool = False
-) -> Any:
-    """Post ``body`` to ``/api/focus-chat`` with ``shell`` served as the shell the chat app reaches."""
-    with serve_app(shell.application) as served:
-        monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", served.http_url)
-        return _focus_chat(body, is_secondary=is_secondary)
 
 
 def _forwarded(chat_id: str = _CHAT_ID) -> dict[str, str]:
@@ -35,81 +28,51 @@ def _forwarded(chat_id: str = _CHAT_ID) -> dict[str, str]:
     return {"type": "minds:focus-chat", "client_id": "client-1", "chatId": chat_id}
 
 
-def test_a_focus_chat_asks_the_shell_to_show_the_chat_root_on_the_chat_counting_the_chats_own_page(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    shell = RecordingLayoutOpShell(200, json.dumps(_SHOWN_ANSWER))
+def test_a_focus_chat_shows_the_chat_root_on_the_chat_counting_its_own_page_and_moving_a_chat_root_window() -> None:
+    shell = RecordingShell(answer=ShowAnswer(shown="navigated", window_id="win-0123456789abcdef"))
 
-    answered = _focus_chat_against(monkeypatch, shell, _forwarded())
+    answered = _focus_chat(shell, _forwarded())
 
     assert answered.status_code == 200
     assert answered.get_json() == {"shown": "navigated", "window_id": "win-0123456789abcdef"}
-    assert shell.received == [
-        {
-            "op": "show",
-            "args": {
-                "app": "chat",
-                "path": f"/?chat={_CHAT_ID}",
-                "showing": [f"/{_CHAT_ID}"],
-                "client": "client-1",
-            },
-            "requester": {"app": "chat", "marker": ""},
-        }
+    assert shell.shows == [
+        ShowRequest(path=f"/?chat={_CHAT_ID}", showing=(f"/{_CHAT_ID}",), repoint=("/",), client_id="client-1")
     ]
 
 
 @pytest.mark.parametrize("chat_id", ["", "not-a-chat", "agent-1/../x", "agent-1?x=1", "agent-1.agent-2.sess-3"])
-def test_a_focus_chat_for_something_that_is_not_a_chat_id_is_a_400_and_asks_the_shell_nothing(
-    monkeypatch: pytest.MonkeyPatch, chat_id: str
-) -> None:
-    shell = RecordingLayoutOpShell(200, json.dumps(_SHOWN_ANSWER))
+def test_a_focus_chat_for_something_that_is_not_a_chat_id_is_a_400_and_asks_the_shell_nothing(chat_id: str) -> None:
+    shell = RecordingShell()
 
-    answered = _focus_chat_against(monkeypatch, shell, _forwarded(chat_id))
+    answered = _focus_chat(shell, _forwarded(chat_id))
 
     assert answered.status_code == 400
-    assert shell.received == []
+    assert shell.shows == []
 
 
-def test_a_shell_that_refuses_the_show_is_a_502_quoting_the_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
-    shell = RecordingLayoutOpShell(404, json.dumps({"detail": "No client 'client-1'"}))
+def test_a_secondary_chat_refuses_to_open_a_window() -> None:
+    shell = RecordingShell()
 
-    answered = _focus_chat_against(monkeypatch, shell, _forwarded())
-
-    assert answered.status_code == 502
-    assert "404" in answered.get_json()["detail"] and "No client" in answered.get_json()["detail"]
-    assert len(shell.received) == 1
-
-
-def test_a_shell_that_cannot_be_reached_is_a_502(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", f"http://127.0.0.1:{find_free_port()}")
-
-    answered = _focus_chat(_forwarded())
-
-    assert answered.status_code == 502
-    assert "Could not reach the shell" in answered.get_json()["detail"]
-
-
-def test_a_secondary_chat_refuses_to_open_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
-    shell = RecordingLayoutOpShell(200, json.dumps(_SHOWN_ANSWER))
-
-    answered = _focus_chat_against(monkeypatch, shell, _forwarded(), is_secondary=True)
+    answered = _focus_chat(shell, _forwarded(), is_secondary=True)
 
     assert answered.status_code == 403
-    assert shell.received == []
+    assert shell.shows == []
 
 
-def test_a_shown_the_chat_app_does_not_know_is_passed_through(monkeypatch: pytest.MonkeyPatch) -> None:
-    shell = RecordingLayoutOpShell(200, json.dumps({**_SHOWN_ANSWER, "shown": "tiled"}))
+@pytest.mark.parametrize(
+    "error",
+    [
+        ShellUnreachableError("Could not reach the shell at http://127.0.0.1:1/api/layout/broadcast"),
+        ShellRefusedOpError("The shell refused the show (404): No client 'client-1'"),
+        ShellAnswerMalformedError("The shell answered the show with something else: []"),
+    ],
+    ids=["unreachable", "refused", "malformed"],
+)
+def test_a_show_the_shell_did_not_carry_out_is_a_502_saying_why(error: ShellOpError) -> None:
+    shell = RecordingShell(error=error)
 
-    answered = _focus_chat_against(monkeypatch, shell, _forwarded())
-
-    assert answered.status_code == 200
-    assert answered.get_json() == {"shown": "tiled", "window_id": "win-0123456789abcdef"}
-
-
-@pytest.mark.parametrize("body", ["not json", "[]"])
-def test_a_2xx_from_the_shell_that_is_not_an_object_is_a_502(monkeypatch: pytest.MonkeyPatch, body: str) -> None:
-    answered = _focus_chat_against(monkeypatch, RecordingLayoutOpShell(200, body), _forwarded())
+    answered = _focus_chat(shell, _forwarded())
 
     assert answered.status_code == 502
-    assert "not an object" in answered.get_json()["detail"]
+    assert answered.get_json() == {"detail": str(error)}
+    assert len(shell.shows) == 1
