@@ -5,6 +5,7 @@
  * frame), the client-state report, and the reconnect after a close.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { presentUserRecord } from "../testing/records";
 import { WireShapeError } from "../model/records";
 import { ShellSocket } from "./socket";
 import type { SocketHandlers } from "./socket";
@@ -67,6 +68,7 @@ beforeEach(() => {
     onAvatarSelectionChanged: vi.fn(),
     onUpdateNoticeChanged: vi.fn(),
     onLayoutOp: vi.fn(),
+    onPresenceUpdated: vi.fn(),
     onConnected: vi.fn(),
   };
   socket = new ShellSocket("client-1");
@@ -107,8 +109,11 @@ describe("ShellSocket", () => {
       clientId: "client-1",
       entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
     });
+    const bob = presentUserRecord("user-bob-4471", { display_name: "Bob" });
+    current().receive({ type: "presence_updated", users: [bob] });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onDesktopsUpdated).toHaveBeenCalledWith([]);
+    expect(handlers.onPresenceUpdated).toHaveBeenCalledWith([bob]);
     expect(handlers.onPlacementsUpdated).toHaveBeenCalledWith({
       desktopId: "home",
       clientId: "client-1",
