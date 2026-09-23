@@ -12,11 +12,12 @@
  * it. The first switch in a workspace also raises a short notice explaining what happened and
  * where the mode lives, recorded on the settings so it shows once.
  *
- * A turn is counted exactly as the transcript view counts one, by reusing the boundary rule the
- * timeline groups on, so "5 turns" means five exchanges the user can see. Permission verdicts
- * are excluded on top of that (the app talking to itself), and so are the turns of a seeded
- * chat's seed segment: the Mind app wrote those before any agent ran, so they bought no fast
- * turns.
+ * A turn is a message the user sent, read off the message-kind registry's boundary rule, so
+ * "5 turns" means five exchanges the user can see. The timeline also breaks at system chips,
+ * notices and permission verdicts, but none of those is a turn the user took: the registry leaves
+ * chips and notices out, and verdicts are excluded on top of that (the app talking to itself). So
+ * are the turns of a seeded chat's seed segment: the Mind app wrote those before any agent ran, so
+ * they bought no fast turns.
  */
 
 import m from "mithril";
