@@ -8,14 +8,16 @@ import type { DesktopApi } from "../store/DesktopStore";
 import type { PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import type {
+  AppRecord,
   AvatarCatalog,
+  ClientArrival,
   ClientRecord,
   Desktop,
   DesktopShortcut,
   EntryPresentation,
   GridCell,
+  Inventory,
   Layout,
-  SharingMode,
   StoredWindowPath,
   Wallpaper,
   WindowRecord,
@@ -29,7 +31,15 @@ export const PINNED_WINDOW_FRAME = { x: 0.46, y: 0.05, width: 0.5, height: 0.9 }
 
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
+  /** The apps the inventory answers; the socket's ``apps_updated`` is delivered by hand. */
+  apps: AppRecord[] = [];
   clients: ClientRecord[] = [];
+  /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
+   *  the desktops as the shell would), and the name of the one it replaced. */
+  arrival: Pick<ClientArrival, "created_desktop" | "replaced_desktop_name"> = {
+    created_desktop: null,
+    replaced_desktop_name: null,
+  };
   /** ``<desktop>/<client>`` -> the stored placements and their stamp. */
   readonly layouts = new Map<string, Pick<Layout, "updated_at" | "placements">>();
   /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
@@ -37,8 +47,8 @@ export class FakeDesktopApi implements DesktopApi {
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
-  /** While set, the client records, a layout, and the catalog answer only once this settles: a test holds
-   *  those reads open. */
+  /** While set, the inventory, the client records, a layout, and the catalog answer only once this settles: a
+   *  test holds those reads open. */
   readGate: Promise<void> | null = null;
 
   /** Hold the reads open until the answered function is called. */
@@ -108,10 +118,11 @@ export class FakeDesktopApi implements DesktopApi {
     return this.layoutOf(desktopId, clientId);
   }
 
-  async fetchDesktops(): Promise<Desktop[]> {
-    this.calls.push("fetchDesktops");
+  async fetchInventory(): Promise<Inventory> {
+    this.calls.push("fetchInventory");
     this.refuse();
-    return [...this.desktops];
+    if (this.readGate !== null) await this.readGate;
+    return { desktops: [...this.desktops], apps: [...this.apps], clients: [...this.clients] };
   }
 
   async createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
@@ -122,7 +133,6 @@ export class FakeDesktopApi implements DesktopApi {
       name,
       color,
       glyph,
-      sharing: "shared",
       wallpaper: null,
       shortcuts: [],
       windows: [],
@@ -131,16 +141,10 @@ export class FakeDesktopApi implements DesktopApi {
     return created;
   }
 
-  async updateDesktopSettings(
-    desktopId: string,
-    name: string,
-    color: string,
-    glyph: number,
-    sharing: SharingMode,
-  ): Promise<Desktop> {
+  async updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop> {
     this.calls.push(`updateDesktopSettings:${desktopId}:${name}`);
     this.refuse();
-    return this.replace({ ...this.desktop(desktopId), name, color, glyph, sharing });
+    return this.replace({ ...this.desktop(desktopId), name, color, glyph });
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
@@ -296,6 +300,21 @@ export class FakeDesktopApi implements DesktopApi {
     }
     return this.writeLayout(desktopId, request.clientId, { updated_at: null, placements: request.placements })
       .updated_at;
+  }
+
+  async arriveClient(clientId: string): Promise<ClientArrival> {
+    this.calls.push(`arriveClient:${clientId}`);
+    this.refuse();
+    const created = this.arrival.created_desktop;
+    if (created !== null && !this.desktops.some((desktop) => desktop.id === created.id)) {
+      this.desktops = [...this.desktops, created];
+    }
+    const recorded = this.clients.find((client) => client.id === clientId)?.active_desktop ?? null;
+    return {
+      desktop_id: created?.id ?? recorded ?? this.desktops[0]?.id ?? null,
+      created_desktop: created,
+      replaced_desktop_name: this.arrival.replaced_desktop_name,
+    };
   }
 
   async fetchClients(): Promise<ClientRecord[]> {
