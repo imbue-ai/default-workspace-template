@@ -618,36 +618,6 @@ def test_callback_ignores_profile_claims_from_an_older_broker(tmp_path: Path) ->
     assert _identity_header(verified) == {"owner": False, "user_id": _BOB_USER_ID, "email": "bob@example.com"}
 
 
-def test_refresh_re_runs_the_handoff_with_confirmation_and_a_workspace_next(tmp_path: Path) -> None:
-    harness = _make_harness(tmp_path)
-
-    resp = harness.client.get(f"/_auth/refresh?next=https://{_WEB_HOST}/panel?tab=2")
-
-    assert resp.status_code == 302
-    location = resp.headers["Location"]
-    assert location.startswith(f"{_BROKER_URL}/share/authorize?")
-    query = parse_qs(urlsplit(location).query)
-    assert query["machine_domain"] == [_DOMAIN]
-    assert query["next"] == [f"https://{_WEB_HOST}/panel?tab=2"]
-    assert query["callback_origin"] == [_AUTH_ORIGIN]
-    assert query["confirmed"] == ["1"]
-    # The nonce it minted is the one the callback will consume -- an ordinary
-    # login, not the retry of a failed one.
-    pending = harness.pending_logins.consume(query["state"][0])
-    assert pending is not None
-    assert pending.is_retry is False
-
-
-def test_refresh_drops_a_foreign_next(tmp_path: Path) -> None:
-    harness = _make_harness(tmp_path)
-
-    resp = harness.client.get("/_auth/refresh?next=https://evil.example.com/")
-
-    assert resp.status_code == 302
-    query = parse_qs(urlsplit(resp.headers["Location"]).query, keep_blank_values=True)
-    assert query["next"] == [""]
-
-
 def test_callback_owner_is_admitted_without_a_grant(tmp_path: Path) -> None:
     # The owner never appears in the grants file, but the broker vouches for
     # ownership by user id, so an owner handoff is admitted regardless.

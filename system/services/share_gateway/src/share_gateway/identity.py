@@ -5,8 +5,9 @@ session only exists for a signed-in visitor or owner -- the account's user id
 and verified email. The gateway renders it as the single ``X-Imbue-Identity``
 header caddy copies onto every request the services see (the same header the
 local forward stamps, so a service reads request identity identically on either
-path). Profile data (display name, avatar) is not part of the record: it lives
-in the connector, and a service that needs it looks it up by ``user_id``.
+path). Profile data (display name, profile picture) is not part of the
+record: it lives in the connector, and a service that needs it looks it up by
+``user_id``.
 """
 
 import json

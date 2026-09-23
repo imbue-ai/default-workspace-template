@@ -177,10 +177,6 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     # run first; test_caddy_adapt_runs_the_identity_strip_before_forward_auth
     # proves the resulting handler order against the real binary.
     assert "order request_header before forward_auth" in rendered
-    forward_auth_directive = "forward_auth 127.0.0.1:8791"
-    # The refresh route is served at every origin, ahead of the auth-gated handle.
-    assert "handle /_auth/refresh {" in rendered
-    assert rendered.index("handle /_auth/refresh {") < rendered.index(forward_auth_directive)
     assert "rewrite * /_auth/loading" in rendered
     assert "auto_https off" in rendered
     # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so

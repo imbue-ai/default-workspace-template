@@ -1,4 +1,6 @@
-This branch carries the share identity cleanup merged from `josh/sharing-cleanup` (`X-Imbue-Identity`, user-id grants, the identity refresh route); that branch's own entry (`mngr-sharing-cleanup.md`) describes the changes in full. No gateway changes are needed for the shared-desktop work.
+This branch carries the share identity cleanup merged from `josh/sharing-cleanup` (`X-Imbue-Identity`, user-id grants); that branch's own entry (`mngr-sharing-cleanup.md`) describes the changes in full.
+
+- Removed the identity refresh route (`GET /_auth/refresh?next=<url>`) and its Caddyfile handle. With profiles read on demand from the connector, the route had no remaining purpose beyond a manual re-login; a visitor whose account record changed simply signs in again when their session ends.
 
 - Fixed the Caddyfile so caddy really strips a client-supplied `X-Imbue-Identity` header *before* `forward_auth` injects the verified one. Caddy's built-in directive order runs `forward_auth` ahead of `request_header`, so the strip was deleting the value the gateway had just injected and no backend ever saw an identity over a share; the rendered global options now carry `order request_header before forward_auth`, and a test runs the real `caddy adapt` (when the binary is on PATH) to prove the handler order.
 

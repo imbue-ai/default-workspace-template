@@ -6,11 +6,11 @@ the workspace and never leaves it, so a relay or connector compromise cannot
 mint sessions; unsharing deletes it, which invalidates every session at once.
 
 The payload is the requester's identity record -- ``user_id`` and ``email`` --
-plus the ``owner`` flag. Nothing else: profile data (display name, avatar)
-lives in the connector and is fetched by whoever renders it, so the record only
-changes when the user re-runs the handoff (sign-in, or the ``/_auth/refresh``
-route). A cookie minted before the record carried a user id is treated as no
-session at all; profile claims an older gateway wrote are ignored.
+plus the ``owner`` flag. Nothing else: profile data (display name, profile
+picture) lives in the connector and is fetched by whoever renders it, so the
+record only changes when the user signs in again. A cookie minted before the
+record carried a user id is treated as no session at all; profile claims an
+older gateway wrote are ignored.
 
 The same value is set twice, under two names, because no single cookie works
 in both places a visitor reaches a shared workspace from:

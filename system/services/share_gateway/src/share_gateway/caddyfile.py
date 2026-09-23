@@ -180,15 +180,6 @@ https://*.{workspace_domain}:{https_port} {{
         }}
     }}
 
-    # The identity refresh re-runs the broker handoff for whoever is asking.
-    # Routed at every workspace origin (like /_health) so the shell can link to
-    # it on its own origin without knowing the auth label; it needs no session
-    # (the broker resolves the visitor's own accounts session) and the callback
-    # still lands on the auth origin.
-    handle /_auth/refresh {{
-        reverse_proxy {gateway_backend}
-    }}
-
     handle {{
         # The gateway's identity header is trustworthy only because a client can
         # never smuggle its own copy past the auth step: strip any inbound

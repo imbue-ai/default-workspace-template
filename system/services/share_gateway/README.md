@@ -26,9 +26,8 @@ three things running:
    without a session are redirected to the accounts broker and come back to
    `/_auth/callback`, which verifies the broker's 60-second RS256 handoff
    token (JWKS, audience, nonce, single-use jti) and sets the
-   workspace-domain session cookie (30 days). `/_auth/refresh` re-runs that
-   handoff on demand (see "Refreshing your identity"). What a failed callback
-   shows is described under "Login outcomes".
+   workspace-domain session cookie (30 days). What a failed callback shows is
+   described under "Login outcomes".
 2. **caddy** (`127.0.0.1:8443`): terminates the share's real TLS with the
    cert/key under `data/.secrets/share_tls/` and routes by Host -- the bare
    workspace domain to `system_interface`, `<service>.<domain>` to that
@@ -64,11 +63,11 @@ back to find the next share's materials already in place.
 The session cookie carries the visitor's identity record -- `user_id` and
 `email` (verified) -- plus the `owner` flag, copied from the broker's handoff
 token at login, and lasts 30 days. Nothing else is in it: profile data
-(display name, avatar) lives in the connector and is fetched on demand by
-whatever renders it, so the gateway plays no part in profiles. A cookie minted
-before the record carried a user id opens no session: an HTML navigation is
-silently bounced through the broker again, and a fetch answers 401 until the
-tab next navigates. Profile claims a cookie from an older gateway carries are
+(display name, profile picture) lives in the connector and is fetched on
+demand by whatever renders it, so the gateway plays no part in profiles. A
+cookie minted before the record carried a user id opens no session: an HTML
+navigation is silently bounced through the broker again, and a fetch answers
+401 until the tab next navigates. Profile claims a cookie from an older gateway carries are
 ignored.
 
 ## Login outcomes
@@ -167,9 +166,9 @@ X-Imbue-Identity: {"owner":false,"user_id":"…","email":"…"}
 - `owner` is always present.
 - `user_id` and `email` are always present over a share (a session only
   exists for a signed-in account, and a visitor's email is always verified).
-- Nothing else. Profile data (display name, avatar) is not in the header: it
-  lives in the connector, and a consumer that renders it looks it up by
-  `user_id`.
+- Nothing else. Profile data (display name, profile picture) is not in the
+  header: it lives in the connector, and a consumer that renders it looks it up
+  by `user_id`.
 
 This is the same header the local `mngr forward` path stamps, so a service
 codes against it identically whether reached over the relay or locally. On
@@ -182,15 +181,3 @@ it as `{"owner":true}`, never as a visitor.
 
 Services key behavior on `user_id`; `email` is for display beside whatever
 profile they fetch, never a substitute identity.
-
-## Refreshing your identity
-
-The record in a session is as fresh as its handoff. A user whose account
-record changed (a new verified email, say) makes their own requests carry it
-before the session expires by navigating to `/_auth/refresh?next=<url>` --
-served at every origin of the share (the shell links to it on its own origin)
--- which mints a pending login and sends the browser through the broker
-exactly as a first visit does, with the "Continue as ..." step already
-confirmed. The callback re-sets the cookie from the fresh token and lands on
-`next` (which must be one of this workspace's own origins; anything else falls
-back to the shell).
