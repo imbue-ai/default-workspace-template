@@ -518,8 +518,8 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
             agent_id=agent_info.id,
             agent_state_dir=agent_info.agent_state_dir,
             claude_config_dir=agent_info.claude_config_dir,
-            on_events=on_events,
             work_dir=agent_info.work_dir,
+            on_events=on_events,
         )
 
     def __init__(
@@ -527,8 +527,8 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         agent_id: str,
         agent_state_dir: Path,
         claude_config_dir: Path,
+        work_dir: str | None,
         on_events: Callable[[str, list[dict[str, Any]]], None],
-        work_dir: str | None = None,
     ) -> None:
         self._init_store_watcher(agent_id, on_events)
         self._init_claude_state(agent_state_dir, claude_config_dir, work_dir)
