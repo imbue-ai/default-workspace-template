@@ -1097,6 +1097,31 @@ describe("system chips and notices break the timeline", () => {
     expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["followup"]);
   });
 
+  // Two background tasks finishing together deliver two notices back to back. The open step shows
+  // once below them, not also as an empty node between them.
+  it("carries an open step past back-to-back notices without an empty node between them", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "Waiting on both.", "wrapup"),
+      notice("t4", "n1"),
+      notice("t5", "n2"),
+      workMsg("t6", "Bash", "w2"),
+      result("t6", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "n1", "n2"]);
+    expect(sections[1].items).toEqual([]);
+    const live = stepItems(sections[2].items);
+    expect(live).toHaveLength(1);
+    expect(live[0].ticket_id).toBe("s1");
+    expect(live[0].is_frontier).toBe(true);
+    expect(live[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
   // The retiring agent's summary turn is one handoff node that takes all of its work, so a chip
   // landing inside it stays in that turn rather than cutting the node off from its switch.
   it("leaves a chip that lands inside an open handoff in the handoff's turn", () => {

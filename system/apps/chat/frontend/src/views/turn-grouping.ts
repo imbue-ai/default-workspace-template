@@ -584,7 +584,7 @@ export function buildSections(
         lastSwitched = null;
         const requestId = resolutionRequestIdOf(e);
         if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
-        carryover = current === null ? [] : openStepsAtEnd(current);
+        carryover = closeSection(current);
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
@@ -598,7 +598,7 @@ export function buildSections(
         // The agent resumes after a chip, so it breaks the timeline like a permission verdict
         // (see the module docstring): the section closes, carrying any open step over, and the
         // chip heads the next one.
-        carryover = current === null ? [] : openStepsAtEnd(current);
+        carryover = closeSection(current);
         current = ensureSection(e, `section-${e.event_id}`);
         continue;
       }
@@ -611,7 +611,7 @@ export function buildSections(
       // Real user turn: close the prior section (carrying open steps) and open
       // a new one.
       lastSwitched = null;
-      carryover = current === null ? [] : openStepsAtEnd(current);
+      carryover = closeSection(current);
       current = ensureSection(e, `section-${e.event_id}`);
       continue;
     }
@@ -737,6 +737,26 @@ function routeMessage(section: SectionBuilder, e: AssistantMessageEvent, step_id
  *  first-appearance order -- the carryover set. */
 function openStepsAtEnd(section: SectionBuilder): string[] {
   return section.step_order.filter((id) => section.steps.get(id)!.status === "active");
+}
+
+/** Close a section at a turn boundary, returning the steps to carry over. A section that ends
+ *  before the agent did anything in it (two breaks back to back) drops its carried-over nodes,
+ *  since the next section re-opens them: otherwise each would show twice, once empty. */
+function closeSection(section: SectionBuilder | null): string[] {
+  if (section === null) return [];
+  const carried = openStepsAtEnd(section);
+  const isUntouched = section.entries.every((entry) => {
+    if (entry.kind !== "step") return false;
+    const node = section.steps.get(entry.id)!;
+    return node.is_carryover && node.status === "active" && node.events.length === 0;
+  });
+  if (isUntouched) {
+    section.entries = [];
+    section.steps.clear();
+    section.step_order = [];
+    section.current_step_id = null;
+  }
+  return carried;
 }
 
 /** Collect each step's closing remarks: the prose it spoke after its last work
