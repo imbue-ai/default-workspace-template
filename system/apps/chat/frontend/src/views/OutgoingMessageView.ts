@@ -14,8 +14,9 @@ import type { OutgoingMessage } from "../models/OutgoingMessages";
 import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
 
 // Composes the user rail's shared recipes: the dimming rides the row, the dashed
-// not-yet-real border rides the bubble.
-const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} outgoing-message outgoing-message--sending opacity-60`;
+// not-yet-real border rides the bubble. mb-5 is the committed user row's spacing, so
+// consecutive not-yet-real bubbles stand apart and the real turn replaces one without a reflow.
+const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} mb-5 outgoing-message outgoing-message--sending opacity-60`;
 
 const OUTGOING_BUBBLE_CLASS = `${USER_BUBBLE_CLASS} border border-dashed`;
 
