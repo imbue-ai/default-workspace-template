@@ -7,10 +7,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.claude.session_files import claude_project_dir_name
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
 
@@ -1399,25 +1401,34 @@ def test_late_found_session_is_inserted_in_history_order(tmp_path: Path) -> None
     agent_state_dir = tmp_path / "agent_state"
     agent_state_dir.mkdir()
     claude_config_dir = tmp_path / "claude_config"
-    projects_dir = claude_config_dir / "projects"
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+    project_dir = claude_config_dir / "projects" / claude_project_dir_name(str(work_dir))
+    project_dir.mkdir(parents=True)
     (agent_state_dir / "claude_session_id_history").write_text("session-1\nsession-2\n")
     # Only the newer session's file is on disk at first discovery.
-    _write_session_file(projects_dir, "session-2", [_user_event(5)])
+    session_2_file = project_dir / "session-2.jsonl"
+    session_2_file.write_text(json.dumps(_user_event(5)) + "\n")
 
-    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher = ClaudeSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        work_dir=str(work_dir),
+        on_events=lambda _aid, _evts: None,
+    )
     watcher.get_all_events()
     assert watcher._main_session_ids == ["session-2"]
 
     # The latest session's ledger feeds the queue tracker while session-1's file
     # is still missing.
-    session_2_file = projects_dir / "hash123" / "session-2.jsonl"
     with open(session_2_file, "ab") as f:
         f.write((json.dumps(_queue_enqueue_record("parked in the live session", "session-2")) + "\n").encode("utf-8"))
     watcher._emit_cycle()
     assert _queued_contents(watcher) == ["parked in the live session"]
 
     # The older session's file lands late; it must register at its history position.
-    _write_session_file(projects_dir, "session-1", [_user_event(0)])
+    (project_dir / "session-1.jsonl").write_text(json.dumps(_user_event(0)) + "\n")
     watcher.get_all_events()
 
     assert watcher._main_session_ids == ["session-1", "session-2"]
@@ -1465,6 +1476,59 @@ def test_watcher_handles_missing_session_file(tmp_path: Path) -> None:
 
     result = watcher.get_all_events()
     assert len(result) == 0
+
+
+def test_a_session_missing_everywhere_is_scanned_for_on_a_backoff_not_on_every_refresh(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """A history can name a session whose file never lands (a production workspace had
+    two). Each refresh used to walk the whole projects tree for it -- every wake of every
+    chat's watcher, forever -- so twenty back-to-back refreshes now scan once."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    for index in range(3):
+        project_dir = claude_config_dir / "projects" / f"-another-project-{index}"
+        project_dir.mkdir(parents=True)
+        (project_dir / f"{uuid4().hex}.jsonl").write_text(json.dumps(_user_event(index)) + "\n")
+    missing_session_id = uuid4().hex
+    (agent_state_dir / "claude_session_id_history").write_text(f"{missing_session_id}\n")
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    for _ in range(20):
+        assert watcher.get_all_events() == []
+
+    scans = [record for record in loguru_records if f"Session file not found for {missing_session_id}" in record]
+    assert len(scans) == 1
+
+
+def test_a_session_filed_under_the_work_dir_is_found_as_soon_as_it_lands_while_its_scan_is_backed_off(
+    tmp_path: Path,
+) -> None:
+    """The backoff must not delay the ordinary case: a just-started session whose file is
+    written a moment after its id reaches the history, under the project dir claude names
+    for the work dir."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+    session_id = uuid4().hex
+    (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
+    watcher = ClaudeSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        work_dir=str(work_dir),
+        on_events=lambda _aid, _evts: None,
+    )
+    assert watcher.get_all_events() == []
+
+    project_dir = claude_config_dir / "projects" / claude_project_dir_name(str(work_dir))
+    project_dir.mkdir(parents=True)
+    (project_dir / f"{session_id}.jsonl").write_text(json.dumps(_user_event(7)) + "\n")
+
+    assert [event["event_id"] for event in watcher.get_all_events()] == ["uuid-7-user"]
 
 
 # --- Bounded tail/backfill/offset paging over the resident store ---

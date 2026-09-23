@@ -10,6 +10,7 @@ agent is what keeps a rebind a continuation rather than a new conversation.
 """
 
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Final
@@ -24,6 +25,8 @@ logger = _loguru_logger
 # Where mngr's SessionStart hook lists every session the agent has run, first mention first.
 SESSION_ID_HISTORY_FILENAME: Final = "claude_session_id_history"
 PROJECTS_DIRNAME: Final = "projects"
+
+_PROJECT_DIR_NAME_UNSAFE_CHARACTER: Final = re.compile(r"[^A-Za-z0-9]")
 
 
 def claude_session_ids(agent_state_dir: Path, agent_id: str) -> tuple[str, ...]:
@@ -79,10 +82,83 @@ def move_claude_sessions(session_ids: tuple[str, ...], source_config_dir: Path, 
     return moved
 
 
-def find_session_file(projects_dir: Path, session_id: str) -> Path | None:
-    """The session's main file under a config dir's ``projects/`` tree, wherever claude filed it, or None."""
+def claude_project_dir_name(work_dir: str) -> str:
+    """The directory under ``projects/`` that claude files a session run from ``work_dir`` in."""
+    return _PROJECT_DIR_NAME_UNSAFE_CHARACTER.sub("-", work_dir)
+
+
+def expected_session_file(projects_dir: Path, session_id: str, work_dir: str) -> Path | None:
+    """The session's main file where claude files it for a session run from ``work_dir``, or None.
+
+    Both spellings of the work dir are tried: claude names the directory for the cwd it
+    saw, which is the resolved path when the work dir is reached through a symlink.
+    """
     target_name = f"{session_id}.jsonl"
-    for root, _dirs, files in os.walk(str(projects_dir)):
-        if target_name in files:
-            return Path(root) / target_name
+    for spelling in dict.fromkeys((work_dir, os.path.realpath(work_dir))):
+        candidate = projects_dir / claude_project_dir_name(spelling) / target_name
+        if candidate.is_file():
+            return candidate
     return None
+
+
+def find_session_file(projects_dir: Path, session_id: str) -> Path | None:
+    """The session's main file under a config dir's ``projects/`` tree, wherever claude filed it, or None.
+
+    Only the project dirs directly under ``projects/`` are looked in: a main session file
+    always sits there, and the trees below them hold subagent files, which are named
+    differently.
+    """
+    target_name = f"{session_id}.jsonl"
+    try:
+        entries = os.scandir(projects_dir)
+    except FileNotFoundError:
+        return None
+    with entries:
+        for entry in entries:
+            if entry.is_dir():
+                candidate = Path(entry.path) / target_name
+                if candidate.is_file():
+                    return candidate
+    return None
+
+
+class MissingSessionScanSchedule:
+    """When a session whose file has not been found may be scanned for again.
+
+    A scan is due at once the first time an id is looked for; each miss then puts the
+    next one off by a delay that doubles from ``first_delay_seconds`` up to
+    ``max_delay_seconds``. Callers pass the current monotonic time in.
+    """
+
+    _first_delay_seconds: float
+    _max_delay_seconds: float
+    _next_scan_at_by_session: dict[str, float]
+    _last_delay_by_session: dict[str, float]
+
+    @classmethod
+    def build(cls, first_delay_seconds: float, max_delay_seconds: float) -> "MissingSessionScanSchedule":
+        schedule = cls.__new__(cls)
+        schedule._first_delay_seconds = first_delay_seconds
+        schedule._max_delay_seconds = max_delay_seconds
+        schedule._next_scan_at_by_session = {}
+        schedule._last_delay_by_session = {}
+        return schedule
+
+    def is_scan_due(self, session_id: str, now: float) -> bool:
+        return now >= self._next_scan_at_by_session.get(session_id, now)
+
+    def record_miss(self, session_id: str, now: float) -> float:
+        """Put the next scan for ``session_id`` off, and return by how long."""
+        previous_delay = self._last_delay_by_session.get(session_id)
+        delay = (
+            self._first_delay_seconds
+            if previous_delay is None
+            else min(previous_delay * 2, self._max_delay_seconds)
+        )
+        self._last_delay_by_session[session_id] = delay
+        self._next_scan_at_by_session[session_id] = now + delay
+        return delay
+
+    def forget(self, session_id: str) -> None:
+        self._next_scan_at_by_session.pop(session_id, None)
+        self._last_delay_by_session.pop(session_id, None)
