@@ -371,7 +371,6 @@ def test_a_create_asks_the_chat_app_to_wait_and_prints_the_chat_it_made(
         "auto_open=true",
         "--label",
         "assist=true",
-        "--skip-installation-check",
         "-m",
         "/assist it broke",
     )
@@ -408,7 +407,7 @@ def test_a_create_with_no_message_on_a_terminal_sends_an_empty_first_message(
     assert rc == message_chat.EXIT_DELIVERED
     [(_, body)] = fake_chat_app.posted
     assert body["message"] == "" and body["name"] == "" and body["labels"] == {}
-    assert body["is_installation_check_skipped"] is False
+    assert body["is_installation_check_skipped"] is True
 
 
 @pytest.mark.parametrize(
@@ -490,7 +489,6 @@ def test_an_unreachable_chat_app_hands_the_create_to_mngr_with_the_same_terms(
         "update-self-1a2b3c",
         "--label",
         "auto_open=true",
-        "--skip-installation-check",
         "-m",
         "/update-self",
     )
