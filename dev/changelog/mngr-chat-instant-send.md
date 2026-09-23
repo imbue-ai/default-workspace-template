@@ -1,1 +1,0 @@
-The chat-agent-split plan now describes the messages a switching chat holds as the faded, uncaptioned bubble of any send, matching the chat app, which no longer captions a not-yet-delivered message "Sending…".
