@@ -323,17 +323,16 @@ def _latest_commit_with_subject(
     found = _git(
         [
             "log",
-            "--format=%H",
+            "--format=%H %s",
             "--fixed-strings",
             f"--grep={subject_prefix}",
             revision_range,
         ],
         repo_root,
     )
-    for sha in _list_names(found):
-        if _git(["log", "-1", "--format=%s", sha], repo_root).startswith(
-            subject_prefix
-        ):
+    for line in _list_names(found):
+        sha, _, subject = line.partition(" ")
+        if subject.startswith(subject_prefix):
             return sha
     return None
 
@@ -392,7 +391,7 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
             f"no '{UPDATE_SELF_MERGE_SUBJECT}' commit on this branch"
         )
     parents = _git(["log", "-1", "--format=%P", merge], repo_root).split()
-    if len(parents) != 2 or _commit_sha(parents[1], repo_root) != target_sha:
+    if len(parents) != 2 or parents[1] != target_sha:
         raise NoUpdateMergeError(
             f"the latest '{UPDATE_SELF_MERGE_SUBJECT}' commit ({merge}) does not "
             f"merge {target}; an earlier update's merge carries the same subject"
