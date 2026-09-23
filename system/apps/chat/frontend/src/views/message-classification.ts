@@ -84,8 +84,8 @@ export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolea
   return !KIND_SPEC[classifyUserMessage(event).kind].boundary;
 }
 
-/** True when the message folds into the current turn as a collapsed chip (rather
- *  than being dropped): the SystemChip kinds. */
+/** True when the message shows as a collapsed chip (rather than being dropped):
+ *  the SystemChip kinds. */
 export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
 }
