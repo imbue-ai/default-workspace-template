@@ -1,33 +1,46 @@
 # system/apps/
 
-Apps: everything you can open as a tab in the workspace. Each app is a folder
+Apps: everything you can open as a window on the workspace's desktop. Each app is a folder
 here -- the built-in ones ship with the template, and apps your mind builds for
 you land here too (see the build-app skill). The top-level `apps` symlink
 points at this folder.
 
 Built-in apps:
 
-- `system_interface/` - The special one: the workspace UI itself. It hosts the
-  tabs the other apps render in, so it is an app that also serves as the
-  workspace chrome. Do not use it as a template for new apps.
+- `system_interface/` - The special one: the workspace UI itself, the desktop
+  the other apps' pages render in as windows, so it is an app that also serves
+  as the workspace chrome. Do not use it as a template for new apps.
 - `chat/` - The chat app: the agent harness UI, one page per chat, rendered
-  inside a tab's iframe at its own origin. The `chat` package (`chat-app`)
-  runs `mngr observe` over the workspace's agents, serves the chat pages,
-  their API, and the instances API on port 8010, and owns the provider
-  accounts. Its frontend and the shell's are two builds of one npm workspace
-  (`system/package.json`) sharing the `system/libs/workspace_ui` library.
-- `terminal/` - The terminal tab (ttyd over the web), including its named
-  persistent sessions; a Python package (`terminal-app`) that runs ttyd and
-  serves the instances API over the workspace's tmux sessions.
-- `files/` - The file viewer tab: the `files-app` package, the instances
-  library's sidecar around dufs over `data/`.
-- `browser/` - The live browser tab: a fleet of Chromium browsers streamed to
-  the UI, whose daemon (`browser-service`) also serves the instances API over
-  the fleet.
+  inside a window's iframe at its own origin. The `chat` package (`chat-app`)
+  follows the workspace's agent observer (the `agent-observer` program, one
+  `mngr observe` per workspace), serves the chat pages and their API on port
+  8010, and owns the provider accounts. Its frontend, the shell's, and the
+  Getting Started app's are builds of one npm workspace (`system/package.json`)
+  sharing the `system/libs/workspace_ui` library.
+- `getting_started/` - The Getting Started page: the "Start something" intents
+  and the "Start from a template" shelves (the published template catalog it
+  fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`, see `catalog/README.md`),
+  each starting a chat with a seeded text through the shell's
+  `shell:start-with-text`. It opens its own window once per workspace, on the
+  first desktop for the first client that connects, and remembers having done
+  so under `data/.state/getting-started/`. Served on port 8030 by the
+  `getting-started` package.
+- `terminal/` - The terminal (ttyd over the web), including its named
+  persistent sessions; a Python package with two entry points: `terminal-app`
+  serves the wrapper pages (each frames one session's ttyd page) over the
+  workspace's tmux sessions, and `terminal-pty` runs ttyd itself on its own
+  internal origin.
+- `terminal_pty/` - Only the manifest of that ttyd origin (`terminal-pty`,
+  internal); the program that registers it is the `terminal-pty` entry point of
+  `terminal/`.
+- `files/` - The file viewer: dufs over `data/`, run from its program line with
+  a vendored, patched frontend.
+- `browser/` - The live browser: a fleet of Chromium browsers streamed to the
+  UI by its daemon (`browser-service`).
 
 Every app describes itself in an `app.toml` manifest beside its code: its
-registered name, the display name users see, its icon, whether it serves
-instances, its memory-shedding `priority`, whether it is `critical`, and the
+registered name, the display name users see, its icon, the launch paths the
+desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
 in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest

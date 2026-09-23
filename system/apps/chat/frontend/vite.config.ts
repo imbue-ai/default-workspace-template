@@ -24,12 +24,13 @@ export default defineConfig({
   resolve: {
     alias: {
       // The minds embed contract -- the single sanctioned postMessage channel
-      // between this UI and the embedding minds chrome -- is consumed from the
-      // vendored mngr tree so both sides always ship from one source of truth.
+      // between this UI and the embedding minds chrome -- is fetched from the
+      // mngr commit pyproject.toml pins (system/scripts/fetch_mngr_assets.sh, run
+      // by the npm workspace root's prebuild) so both sides always ship from one source.
       // Types come from the library's src/embed-contract.d.ts; keep the two in sync.
       "@minds/embed-contract": path.resolve(
         __dirname,
-        "../../../vendor/mngr/apps/minds/imbue/minds/desktop_client/static/embed_contract.js",
+        "../../../vendor/mngr-assets/apps/minds/imbue/minds/desktop_client/static/embed_contract.js",
       ),
     },
   },
@@ -37,16 +38,17 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "../imbue/chat/static"),
     emptyOutDir: true,
     rollupOptions: {
-      // The chat document, which the chat app serves at /<agent-id>.
+      // The chat document, which the chat app serves at /<agent-id>, and the chat root (the
+      // chat list beside an inner chat frame), served at / and /new.
       input: {
         chat: path.resolve(__dirname, "chat.html"),
+        root: path.resolve(__dirname, "root.html"),
       },
     },
   },
   server: {
     proxy: {
       "/api": { target: "http://localhost:8010", ws: true },
-      "/_instances": { target: "http://localhost:8010" },
     },
   },
 });

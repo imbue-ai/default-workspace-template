@@ -1,1 +1,0 @@
-Relocked the workspace `uv.lock` and the public-mirror overlay lock (`mirror/overlay/uv.lock`) for the minds package's new dependencies on the claude, codex, pi-coding, opencode, antigravity, and modal mngr plugins.
