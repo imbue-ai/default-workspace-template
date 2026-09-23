@@ -154,10 +154,12 @@ def test_a_seeded_conversation_too_long_to_carry_points_at_the_file_instead(tmp_
     the seed file -- the same choice a handoff makes with an oversized summary."""
     turns = (SeedTurn(role=SeedRole.ASSISTANT, text="x" * (INLINE_SEED_MAX_BYTES + 1)),)
 
-    launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "1")
+    chat_dir = _seeded_chat_dir(tmp_path, turns)
+
+    launch = seed_context_message(chat_dir, "1")
 
     assert turns[0].text not in launch
-    assert str(_seeded_chat_dir(tmp_path, turns) / SEED_FILENAME) in launch
+    assert str(chat_dir / SEED_FILENAME) in launch
     assert classify_user_message(launch) is not None
 
 
