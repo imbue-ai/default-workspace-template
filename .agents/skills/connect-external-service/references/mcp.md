@@ -82,8 +82,9 @@ for; do not write a config for a harness the user does not run.
 A server that signs in through OAuth opens a consent page and listens on a
 `localhost` callback. That callback must resolve inside this workspace, so the
 browser has to run here too: start one with the `agentic-browser-fleet` skill,
-navigate to the consent URL the server prints, and `handoff` the browser so the
-user completes the sign-in themselves. Say what you are doing: "Example needs
+navigate to the consent URL the server prints, then `handoff` the browser and
+show its window (the skill's handoff section) so the user completes the sign-in
+themselves. Say what you are doing: "Example needs
 you to sign in once; I've opened a browser you can take over."
 
 ## What to tell the user
