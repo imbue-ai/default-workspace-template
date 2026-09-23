@@ -252,7 +252,8 @@ command = "sleep infinity"
 # approval_policy="never"). The codex binary is baked into the image
 # (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- never
 # install at provision -- while `version` is still checked against the baked binary and
-# a mismatch only warns (see agent_types.claude.version).
+# a mismatch only warns (see agent_types.claude.version). A pinned codex also skips mngr's
+# provision-time codex update check: the version moves only with CODEX_VERSION.
 #
 # NO model or effort is pinned, deliberately -- and claude is now the only agent type that
 # pins one. A codex slug is not a property of the workspace, it is a property of the ACCOUNT:
