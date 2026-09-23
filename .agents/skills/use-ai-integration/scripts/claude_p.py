@@ -464,6 +464,10 @@ def claude_p_task(
     """
     env = _child_env(strip_mngr_agent_vars)
     argv = _task_argv(
-        prompt, system=system, append_system=append_system, model=model, permission_mode=permission_mode
+        prompt,
+        system=system,
+        append_system=append_system,
+        model=model,
+        permission_mode=permission_mode,
     )
     return _run_blocking(argv, env=env, cwd=None)

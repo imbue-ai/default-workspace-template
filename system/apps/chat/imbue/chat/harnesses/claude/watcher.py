@@ -48,9 +48,9 @@ from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.queue_tracker import ClaudeQueueTracker
+from imbue.chat.harnesses.claude.session_files import MissingSessionScanSchedule
 from imbue.chat.harnesses.claude.session_files import PROJECTS_DIRNAME
 from imbue.chat.harnesses.claude.session_files import SESSION_ID_HISTORY_FILENAME
-from imbue.chat.harnesses.claude.session_files import MissingSessionScanSchedule
 from imbue.chat.harnesses.claude.session_files import expected_session_file
 from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_parser import QueueSignal

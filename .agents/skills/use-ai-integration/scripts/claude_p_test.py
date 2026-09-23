@@ -46,7 +46,9 @@ def test_completion_argv_disables_tools_and_sets_system() -> None:
 def test_completion_argv_does_not_persist_its_session() -> None:
     """Each completion runs from a throwaway cwd, so a persisted session would leave one
     ``projects/<cwd>`` directory per call behind in the account's projects tree."""
-    argv = claude_p._completion_argv("classify this", model="claude-haiku-4-5", system="You are a classifier.")
+    argv = claude_p._completion_argv(
+        "classify this", model="claude-haiku-4-5", system="You are a classifier."
+    )
     assert "--no-session-persistence" in argv
 
 
