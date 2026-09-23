@@ -919,7 +919,8 @@ class _UpdateHistory:
         return self.git("rev-parse", "HEAD")
 
     def changed(self, base: str, ref: str) -> list[str]:
-        return sorted(_list_lines(self.git("diff", "--name-only", f"{base}...{ref}")))
+        diff = self.git("diff", "--name-only", f"{base}...{ref}")
+        return sorted(update_self._list_names(diff))
 
     def ranges(self, target: str, capsys) -> dict[str, str]:
         code = update_self.main(
@@ -927,10 +928,6 @@ class _UpdateHistory:
         )
         assert code == 0, capsys.readouterr().err
         return json.loads(capsys.readouterr().out)
-
-
-def _list_lines(output: str) -> list[str]:
-    return [line for line in output.splitlines() if line]
 
 
 def _update_history(root: Path) -> _UpdateHistory:
