@@ -57,7 +57,7 @@ def test_path_watcher_derives_on_start_and_keeps_running(tmp_path: Path) -> None
         fired.set()
 
     # Watch a not-yet-created file, exercising the parent-dir watch path.
-    watcher = PathWatcher.build((tmp_path / "settings.json",), on_change)
+    watcher = PathWatcher.build((tmp_path / "settings.json",), on_change, min_cycle_interval_seconds=0.0)
     watcher.start()
     try:
         assert fired.wait(timeout=5.0)
@@ -83,7 +83,7 @@ def test_path_watcher_stop_releases_an_observer_the_loop_thread_creates_late(tmp
     """
     before = _live_watchdog_threads()
     watched_dir = _StopGatedDirPath(tmp_path)
-    watcher = PathWatcher.build((watched_dir,), lambda: None)
+    watcher = PathWatcher.build((watched_dir,), lambda: None, min_cycle_interval_seconds=0.0)
     # Hold the loop thread short of observer creation until a stop is requested.
     watched_dir.open_gate_when(watcher._stop_event)
 
@@ -95,7 +95,7 @@ def test_path_watcher_stop_releases_an_observer_the_loop_thread_creates_late(tmp
 
 
 def test_path_watcher_stop_is_idempotent(tmp_path: Path) -> None:
-    watcher = PathWatcher.build((tmp_path,), lambda: None)
+    watcher = PathWatcher.build((tmp_path,), lambda: None, min_cycle_interval_seconds=0.0)
     watcher.start()
     watcher.stop()
     watcher.stop()

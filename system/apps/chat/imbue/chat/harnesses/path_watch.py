@@ -58,7 +58,7 @@ class PathWatcher:
 
     @classmethod
     def build(
-        cls, paths: tuple[Path, ...], on_change: Callable[[], None], min_cycle_interval_seconds: float = 0.0
+        cls, paths: tuple[Path, ...], on_change: Callable[[], None], min_cycle_interval_seconds: float
     ) -> "PathWatcher":
         """``min_cycle_interval_seconds`` batches wakes: a wake that comes sooner than that
         after the previous ``on_change`` started waits out the rest of it, so a burst of
