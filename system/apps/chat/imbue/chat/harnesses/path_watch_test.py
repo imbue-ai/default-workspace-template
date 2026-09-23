@@ -2,6 +2,7 @@
 
 import threading
 import time
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -135,7 +136,7 @@ def test_a_stream_of_wakes_is_batched_into_one_refresh_per_minimum_interval(tmp_
     # 0.6s of wakes at one refresh per 0.2s, plus the initial derive and slack for the
     # last refresh landing just after the burst.
     assert 2 <= len(cycles) <= 6
-    gaps = [later - earlier for earlier, later in zip(cycles, cycles[1:])]
+    gaps = [later - earlier for earlier, later in pairwise(cycles)]
     assert min(gaps) >= interval * 0.9
 
 

@@ -144,9 +144,7 @@ class MissingSessionScanSchedule:
         """Put the next scan for ``session_id`` off, and return by how long."""
         previous_delay = self._last_delay_by_session.get(session_id)
         delay = (
-            self._first_delay_seconds
-            if previous_delay is None
-            else min(previous_delay * 2, self._max_delay_seconds)
+            self._first_delay_seconds if previous_delay is None else min(previous_delay * 2, self._max_delay_seconds)
         )
         self._last_delay_by_session[session_id] = delay
         self._next_scan_at_by_session[session_id] = now + delay
