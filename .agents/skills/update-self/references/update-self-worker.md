@@ -252,14 +252,15 @@ command).
    `system/supervisord.conf.d/` program (and what its `command` invokes), every
    app or service under `system/services/` and `system/apps/`, every
    workspace-added skill under `.agents/skills/`, and any cron or scheduled
-   runners. Start from the Step 4 scope files: they already name every
-   manifest app with local content and, through `references`, the skills,
-   scripts and docs each claims -- the part of this list that is declared
-   rather than discovered.
+   runners. When Step 4 wrote scope files, start from them: they already name
+   every manifest app with local content and, through `references`, the
+   skills, scripts and docs each claims -- the part of this list that is
+   declared rather than discovered.
 2. **Search for dependents of each changed file**: its path, basename, and
    importable module name; follow each service's code into the shared scripts
-   and libs it calls; check skills' `SKILL.md` and scripts. For a manifest app
-   the search over its `[[references]]` is already done: its `.update.json`
+   and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
+   app's `app.toml` claims in `[[references]]`. For a manifest app with a
+   Step 4 scope file that last search is already done: its `.update.json`
    lists the update's changes inside its footprint, references included, and
    a hit there is an impacted consumer. If the update adds reference- or
    dependency-declaration machinery, write the declarations it expects.
