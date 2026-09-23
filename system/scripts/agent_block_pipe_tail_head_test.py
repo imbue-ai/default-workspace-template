@@ -29,6 +29,7 @@ def _run(command: str) -> int:
         "ls; cat out.txt | head",
         "echo $(cat f | head -1)",
         "cd /tmp && { cat out.txt | tail -20; }",
+        "cd /tmp\ncat out.txt | tail -20",
     ],
 )
 def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
@@ -45,6 +46,9 @@ def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
         "pytest | (cat | tail -20)",
         "pytest | { cat | tail -20; }",
         "pytest > >(cat | tail -20)",
+        # A trailing pipe or backslash continues the pipeline onto the next line.
+        "pytest |\ncat | tail -20",
+        "pytest | \\\ncat | tail -20",
         # One exempt pipe does not excuse another in the same command.
         "cat f | head; pytest | tail -5",
         "cat f && pytest | tail -5",

@@ -27,6 +27,10 @@ if [[ -z "$command" ]]; then
     exit 0
 fi
 
+# A line ending in `\` or a pipe continues the same command, so join it to the next line
+# before the exemption below reads each line start as the start of a pipeline.
+command=$(printf '%s\n' "$command" | sed -E -e ':a' -e '$!{/(\\|\|&?[[:blank:]]*)$/{N;s/\\\n//;s/(\|&?[[:blank:]]*)\n/\1 /;ba' -e '}' -e '}')
+
 # `cat FILE... | head` is exempt: the file already holds the full output and can be re-read.
 # Only a `cat` that starts its pipeline counts -- in `cmd | cat | head` it is reading cmd's output.
 # So the `&`, `(` or `{` before it must not itself follow a pipe (`cmd |& cat`, `cmd | (cat`, `cmd > >(cat`).
