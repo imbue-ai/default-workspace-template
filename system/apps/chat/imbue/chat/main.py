@@ -237,7 +237,7 @@ def main() -> None:
     same observer and tracks the same agents, but withholds the writes a second instance
     must not make (the account reconcile, the memory scores, the registration, the
     automatic compaction, the switches, the window auto-opening, the client-activity
-    reports to the shell).
+    reports to the shell, the answers to secret cards).
     """
     args = _parse_args(None)
     config = load_config()

@@ -56,6 +56,20 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
     return json_response(ErrorResponse(detail=detail).model_dump(), status_code=status_code)
 
 
+def _refusal_on_a_secondary_chat() -> Response | None:
+    """A 409 when this app is a secondary chat (a preview), which answers no secret card.
+
+    A secondary runs from an editing worktree over a scratch copy of the requests, so a
+    submit would write the file into the worktree's data/.secrets and tell the live agent a
+    file it cannot read was stored.
+    """
+    if not get_state().is_secondary:
+        return None
+    return _error_response(
+        "This is a preview of the chat, which cannot answer secret requests; answer it in the live chat.", 409
+    )
+
+
 def _request_response(request: SecretRequest, is_notice_delivered: bool | None) -> Response:
     body = {**request.model_dump(mode="json"), "env_path": request.env_path}
     if is_notice_delivered is not None:
@@ -129,6 +143,9 @@ def get_request(request_id: str) -> Response:
 
 
 def submit(request_id: str) -> Response:
+    refusal = _refusal_on_a_secondary_chat()
+    if refusal is not None:
+        return refusal
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
@@ -151,6 +168,9 @@ def submit(request_id: str) -> Response:
 
 
 def decline(request_id: str) -> Response:
+    refusal = _refusal_on_a_secondary_chat()
+    if refusal is not None:
+        return refusal
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload

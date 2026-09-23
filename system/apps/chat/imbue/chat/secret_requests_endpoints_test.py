@@ -12,6 +12,7 @@ from imbue.chat import secret_requests_endpoints
 from imbue.chat.mock_secret_request_bridge_test import RecordingSecretRequestBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.state import attach_state
+from imbue.chat.state import state_of
 from imbue.chat.testing import build_test_state
 
 _CHAT = "agent-00000000000000000000000000000001"
@@ -93,6 +94,24 @@ def test_a_decline_carries_the_note_into_the_chat(tmp_path: Path) -> None:
         "use the other account"
     )
     assert not (tmp_path / "data" / ".secrets" / "svc.env").exists()
+
+
+def test_a_preview_chat_answers_no_secret_card(tmp_path: Path) -> None:
+    """A secondary chat runs from an editing worktree, so its answer would land in the wrong
+    data/.secrets while the live agent is told it was stored."""
+    bridge = RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT}))
+    client, _ = _client(tmp_path, bridge)
+    filed = _file(client)
+    state_of(client.application).is_secondary = True
+
+    submitted = client.post(f"/api/secret-requests/{filed['request_id']}/submit", json={"values": {"SVC_TOKEN": "v"}})
+    declined = client.post(f"/api/secret-requests/{filed['request_id']}/decline", json={})
+
+    assert submitted.status_code == 409
+    assert declined.status_code == 409
+    assert not (tmp_path / "data" / ".secrets" / "svc.env").exists()
+    assert bridge.delivered == []
+    assert client.get(f"/api/secret-requests/{filed['request_id']}").get_json()["status"] == "pending"
 
 
 def test_the_file_is_kept_when_the_chat_cannot_take_the_notice(tmp_path: Path) -> None:
