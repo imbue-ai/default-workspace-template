@@ -54,6 +54,17 @@ def _make_watcher(
     )
 
 
+def _make_work_dir_watcher(agent_state_dir: Path, claude_config_dir: Path, work_dir: Path) -> ClaudeSessionWatcher:
+    """A watcher that knows its agent's work dir, so it looks for sessions where claude files them for it."""
+    return ClaudeSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        work_dir=str(work_dir),
+        on_events=lambda _aid, _evts: None,
+    )
+
+
 def _write_session_file(projects_dir: Path, session_id: str, events: list[dict[str, Any]]) -> Path:
     session_dir = projects_dir / "hash123"
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -1429,13 +1440,7 @@ def test_late_found_session_is_inserted_in_history_order(tmp_path: Path) -> None
     session_2_file = project_dir / "session-2.jsonl"
     session_2_file.write_text(json.dumps(_user_event(5)) + "\n")
 
-    watcher = ClaudeSessionWatcher(
-        agent_id="test-agent",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-        work_dir=str(work_dir),
-        on_events=lambda _aid, _evts: None,
-    )
+    watcher = _make_work_dir_watcher(agent_state_dir, claude_config_dir, work_dir)
     watcher.get_all_events()
     assert watcher._main_session_ids == ["session-2"]
 
@@ -1536,13 +1541,7 @@ def test_a_session_filed_under_the_work_dir_is_found_as_soon_as_it_lands_while_i
     work_dir.mkdir()
     session_id = uuid4().hex
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
-    watcher = ClaudeSessionWatcher(
-        agent_id="test-agent",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-        work_dir=str(work_dir),
-        on_events=lambda _aid, _evts: None,
-    )
+    watcher = _make_work_dir_watcher(agent_state_dir, claude_config_dir, work_dir)
     assert watcher.get_all_events() == []
 
     project_dir = claude_config_dir / "projects" / encode_claude_project_dir_name(work_dir)
