@@ -1,0 +1,1 @@
+Agents may now pipe `cat FILE...` into `head` or `tail` (e.g. `cat notes.md | head -120`). The `agent_block_pipe_tail_head.sh` guard used to block this like any other pipe into `head`/`tail`, even though the file still holds the full output. A pipe into `head`/`tail` from any other command, including `cmd | cat | head`, is still blocked.
