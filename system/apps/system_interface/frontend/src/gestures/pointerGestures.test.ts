@@ -277,7 +277,7 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
-  it("a touch press released over a live page does not block the next finger's press", () => {
+  it("a touch press whose release the root never saw does not block the next finger's press", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70, { pointerId: 7, pointerType: "touch" });
