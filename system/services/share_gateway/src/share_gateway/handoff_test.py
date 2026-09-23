@@ -56,11 +56,12 @@ def test_valid_token_returns_the_identity_record_and_not_owner_by_default() -> N
     assert result == RequesterIdentity(user_id="u1", email="a@b.co", is_owner=False)
 
 
-def test_valid_token_carries_the_optional_profile_claims() -> None:
+def test_profile_claims_from_an_older_broker_are_ignored() -> None:
     token = _token(display_name="Ada", avatar_url="https://accounts.example.com/users/u1/avatar/9a7b")
     result = verify_handoff_token(token, "n1", _DOMAIN, _cache(), SingleUseJtiRegistry())
-    assert result.display_name == "Ada"
-    assert result.avatar_url == "https://accounts.example.com/users/u1/avatar/9a7b"
+    assert result == RequesterIdentity(user_id="u1", email="a@b.co", is_owner=False)
+    assert "display_name" not in vars(result)
+    assert "avatar_url" not in vars(result)
 
 
 def test_token_without_a_subject_is_rejected() -> None:
@@ -94,8 +95,15 @@ def test_forged_signature_is_rejected() -> None:
     other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     now = datetime.now(timezone.utc)
     forged = jwt.encode(
-        {"sub": "u1", "email": "a@b.co", "aud": _DOMAIN, "jti": "j9", "nonce": "n1",
-         "iat": now, "exp": now + timedelta(seconds=60)},
+        {
+            "sub": "u1",
+            "email": "a@b.co",
+            "aud": _DOMAIN,
+            "jti": "j9",
+            "nonce": "n1",
+            "iat": now,
+            "exp": now + timedelta(seconds=60),
+        },
         other_key,
         algorithm="RS256",
         headers={"kid": _KID},

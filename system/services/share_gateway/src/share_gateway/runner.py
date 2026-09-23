@@ -9,8 +9,9 @@ multi-relay design tunnels to every relay of the region). The assignment is
 fetched from the connector with the relay token and re-polled, so server-side
 fleet changes converge without touching the workspace; the last good answer is
 cached on disk so restarts work with the connector down. When the materials
-disappear (unshare) the children stop and the tunnels drop; key, cert, and the
-cookie signing secret stay on disk for a fast re-share.
+disappear (unshare) the children stop, the tunnels drop, and the cookie signing
+secret is deleted so every session -- the owner's included -- is invalidated;
+key and cert stay on disk for a fast re-share, which mints a fresh secret.
 
 Same watch idiom as the other material-gated services: inotify when available,
 10-second mtime polling as the fallback.
@@ -43,6 +44,7 @@ from share_gateway.frpc_config import render_frpc_toml
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.materials import ShareMaterials
+from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
@@ -200,9 +202,7 @@ def _start_frpc_for_relay(stack: ShareStack, relay_id: str) -> None:
     config_path = materials_module.frpc_config_path(relay_id)
     config_path.write_text(config_text)
     stack.frpc_config_text_by_relay_id[relay_id] = config_text
-    stack.frpc_process_by_relay_id[relay_id] = _start_child(
-        ["frpc", "-c", str(config_path)], f"frpc[{relay_id}]"
-    )
+    stack.frpc_process_by_relay_id[relay_id] = _start_child(["frpc", "-c", str(config_path)], f"frpc[{relay_id}]")
 
 
 def _converge_frpc_processes(stack: ShareStack) -> None:
@@ -231,9 +231,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
         _log(f"certificate provisioning failed (will retry on next change/poll): {exc}")
         return None
 
-    assignment = load_assignment(
-        materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH
-    )
+    assignment = load_assignment(materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH)
     if assignment is None:
         _log("no relay assignment available yet (will retry on next change/poll)")
         return None
@@ -375,6 +373,8 @@ def main() -> None:
         if materials is None and stack is not None:
             _log("Share materials removed; tearing the stack down")
             _stop_stack(stack)
+            discard_signing_secret(materials_module.SIGNING_SECRET_FILE)
+            _log("Discarded the session signing secret; every existing session is now invalid")
             stack = None
         elif materials is not None and stack is None:
             stack = _start_stack(materials)

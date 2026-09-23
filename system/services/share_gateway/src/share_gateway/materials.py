@@ -4,8 +4,9 @@
 caddy + frpc children) run only while it is present and parseable. It is
 written by the minds desktop app at share-enable and removed at unshare.
 ``data/.secrets/share_grants.toml`` (who may visit) lives next to it, and the
-TLS key/cert plus the session-cookie signing secret persist under
-``data/.secrets/`` so a re-share skips reprovisioning.
+TLS key/cert persist under ``data/.secrets/`` so a re-share skips
+reprovisioning. The session-cookie signing secret does not: unsharing deletes
+it, so every session dies with the share and the next share mints a new one.
 """
 
 import re
@@ -46,6 +47,7 @@ FRPC_ADMIN_PORT_BASE = 7401
 
 def frpc_config_path(relay_id: str) -> Path:
     return STATE_DIR / f"frpc-{relay_id}.toml"
+
 
 _EXPORT_LINE_PATTERN = re.compile(r"""^export\s+([A-Z0-9_]+)=["']?([^"'\n]*)["']?\s*$""", re.MULTILINE)
 
@@ -124,6 +126,11 @@ def load_or_create_signing_secret(path: Path) -> str:
     path.write_text(secret)
     path.chmod(0o600)
     return secret
+
+
+def discard_signing_secret(path: Path) -> None:
+    """Delete the signing secret so every session it signed (the owner's included) stops verifying."""
+    path.unlink(missing_ok=True)
 
 
 _VALID_AUTH_LABEL = re.compile(r"^auth-[a-z0-9]{" + str(_AUTH_LABEL_RANDOM_LENGTH) + r"}$")

@@ -117,6 +117,12 @@ def render_caddyfile(
     admin localhost:2019
     auto_https off
     https_port {https_port}
+    # Caddy's built-in directive order runs forward_auth BEFORE request_header,
+    # which would make the identity strip below delete the value forward_auth
+    # just injected. Reorder so the strip runs first (verified against the
+    # adapted JSON: the headers-delete handler precedes the forward_auth
+    # reverse_proxy in the same subroute).
+    order request_header before forward_auth
     servers {{
         # h1/h2 only: h3 is UDP, which the SNI-passthrough relay can never
         # carry, so advertising it (Alt-Svc) just makes browsers probe a
@@ -188,8 +194,10 @@ https://*.{workspace_domain}:{https_port} {{
         # never smuggle its own copy past the auth step: strip any inbound
         # X-Imbue-Identity before anything downstream sees the request, then let
         # copy_headers below inject the value the verified /_auth/verify
-        # response carries. request_header runs ahead of forward_auth in
-        # caddy's directive order, so the strip always precedes the injection.
+        # response carries. Textual position does not decide when this runs --
+        # the global ``order request_header before forward_auth`` does; without
+        # it caddy would run the strip after forward_auth and delete the
+        # injected value.
         request_header -X-Imbue-Identity
         forward_auth {gateway_backend} {{
             uri /_auth/verify

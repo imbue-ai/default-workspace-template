@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import parse_share_materials
@@ -26,9 +27,7 @@ def test_parse_share_materials_reads_all_fields() -> None:
 
 
 def test_parse_share_materials_defaults_chrome_origin_to_empty_when_absent() -> None:
-    without_chrome = "\n".join(
-        line for line in _VALID.splitlines() if "SHARE_CHROME_ORIGIN" not in line
-    )
+    without_chrome = "\n".join(line for line in _VALID.splitlines() if "SHARE_CHROME_ORIGIN" not in line)
     materials = parse_share_materials(without_chrome)
     assert materials is not None
     assert materials.chrome_origin == ""
@@ -37,7 +36,7 @@ def test_parse_share_materials_defaults_chrome_origin_to_empty_when_absent() -> 
 def test_parse_share_materials_rejects_missing_or_malformed_keys() -> None:
     assert parse_share_materials("") is None
     assert parse_share_materials("export SHARE_WORKSPACE_DOMAIN=x") is None
-    assert parse_share_materials(_VALID.replace('tok-123', "")) is None
+    assert parse_share_materials(_VALID.replace("tok-123", "")) is None
 
 
 def test_read_share_materials_handles_missing_file(tmp_path: Path) -> None:
@@ -56,6 +55,20 @@ def test_signing_secret_is_created_once_and_reused(tmp_path: Path) -> None:
     assert first == second
     assert len(first) > 32
     assert (secret_path.stat().st_mode & 0o777) == 0o600
+
+
+def test_discarding_the_signing_secret_makes_the_next_share_mint_a_different_one(tmp_path: Path) -> None:
+    # Unshare deletes the secret so every session it signed stops verifying;
+    # the re-share must not resurrect it.
+    secret_path = tmp_path / "signing_key"
+    before_unshare = load_or_create_signing_secret(secret_path)
+
+    discard_signing_secret(secret_path)
+
+    assert not secret_path.exists()
+    assert load_or_create_signing_secret(secret_path) != before_unshare
+    # Discarding when nothing was ever minted is a no-op, not an error.
+    discard_signing_secret(tmp_path / "never-minted")
 
 
 def test_auth_label_is_created_once_reused_and_well_formed(tmp_path: Path) -> None:

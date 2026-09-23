@@ -26,8 +26,9 @@ three things running:
    without a session are redirected to the accounts broker and come back to
    `/_auth/callback`, which verifies the broker's 60-second RS256 handoff
    token (JWKS, audience, nonce, single-use jti) and sets the
-   workspace-domain session cookie (24h). `/_auth/refresh` re-runs that
-   handoff on demand (see "Refreshing your identity").
+   workspace-domain session cookie (30 days). `/_auth/refresh` re-runs that
+   handoff on demand (see "Refreshing your identity"). What a failed callback
+   shows is described under "Login outcomes".
 2. **caddy** (`127.0.0.1:8443`): terminates the share's real TLS with the
    cert/key under `data/.secrets/share_tls/` and routes by Host -- the bare
    workspace domain to `system_interface`, `<service>.<domain>` to that
@@ -46,19 +47,44 @@ three things running:
 
 The TLS private key is generated in the workspace and never leaves it: the
 runner sends a CSR to the connector, which completes ACME DNS-01 and returns
-the chain. Key, cert, and the cookie signing secret persist across unshare for
-a fast re-share; a daily check renews the cert when it is within 30 days of
-expiry.
+the chain. Key and cert persist across unshare for a fast re-share; a daily
+check renews the cert when it is within 30 days of expiry. The cookie signing
+secret does not persist: unsharing deletes `data/.secrets/share_gateway_signing_key`,
+so every session -- the owner's included -- stops verifying the moment the
+share ends, and the next share mints a fresh secret.
 
 ## The session
 
-The session cookie carries the visitor's whole identity record -- `user_id`,
-`email` (verified), `display_name`, `avatar_url` -- plus the `owner` flag,
-copied from the broker's handoff token at login. It is the only per-request
-source of identity the gateway has: nothing polls the connector for profile
-data. A cookie minted before the record carried a user id opens no session:
-an HTML navigation is silently bounced through the broker again, and a fetch
-answers 401 until the tab next navigates.
+The session cookie carries the visitor's identity record -- `user_id` and
+`email` (verified) -- plus the `owner` flag, copied from the broker's handoff
+token at login, and lasts 30 days. Nothing else is in it: profile data
+(display name, avatar) lives in the connector and is fetched on demand by
+whatever renders it, so the gateway plays no part in profiles. A cookie minted
+before the record carried a user id opens no session: an HTML navigation is
+silently bounced through the broker again, and a fetch answers 401 until the
+tab next navigates. Profile claims a cookie from an older gateway carries are
+ignored.
+
+## Login outcomes
+
+The callback tells a visitor what actually happened instead of one generic
+refusal, and logs every denial (never the token) to the service's stderr:
+
+- A callback whose nonce is unknown, already used, or expired, or whose token
+  does not verify (expired, replayed, minted for another nonce) is usually a
+  reopened link or a slow redirect, so it heals itself. A visitor who already
+  holds a valid session is sent straight on to their `next` (validated as one
+  of this workspace's origins; anything else lands on the shell). Anyone else
+  is sent through the broker exactly once more, on a nonce the gateway records
+  as the retry, with the "Continue as" step already confirmed. If that retry
+  fails too, the visitor sees **"Sign-in link expired"** (403: "This sign-in
+  link was already used or has expired. Open the workspace link again.") --
+  never a redirect loop. Nonces stay single-use throughout.
+- A missing or malformed grants file is **"Sharing is misconfigured"** (503),
+  telling the visitor the owner must fix the workspace's sharing settings.
+  `/_auth/verify` answers the same way for a non-owner mid-session; the owner
+  is never grant-checked, so they still get in.
+- A verified account with no grant is **"Not shared with you"** (403).
 
 ## Grants
 
@@ -121,18 +147,23 @@ as soon as the app registers.
 
 Every request that reaches a backend carries one gateway-set header, and a
 service can trust it because caddy strips any inbound copy before
-`forward_auth` and re-injects only the verified value from `/_auth/verify`:
+`forward_auth` and re-injects only the verified value from `/_auth/verify`.
+(The strip is a `request_header` directive in the same `handle` block as
+`forward_auth`; caddy's built-in directive order would run it *after*
+`forward_auth` and delete the injected value, so the rendered Caddyfile's
+global options carry `order request_header before forward_auth`.)
 
 ```
-X-Imbue-Identity: {"owner":true,"user_id":"…","email":"…","display_name":"…","avatar_url":"…"}
-X-Imbue-Identity: {"owner":false,"user_id":"…","email":"…","display_name":"…","avatar_url":"…"}
+X-Imbue-Identity: {"owner":true,"user_id":"…","email":"…"}
+X-Imbue-Identity: {"owner":false,"user_id":"…","email":"…"}
 ```
 
 - `owner` is always present.
 - `user_id` and `email` are always present over a share (a session only
   exists for a signed-in account, and a visitor's email is always verified).
-- `display_name` and `avatar_url` are present when the account has them and
-  omitted (not null) otherwise.
+- Nothing else. Profile data (display name, avatar) is not in the header: it
+  lives in the connector, and a consumer that renders it looks it up by
+  `user_id`.
 
 This is the same header the local `mngr forward` path stamps, so a service
 codes against it identically whether reached over the relay or locally. On
@@ -143,17 +174,17 @@ else, so a service must cope with the owner's identity being unknown. A
 request with no header at all came through no current proxy; a service treats
 it as `{"owner":true}`, never as a visitor.
 
-Services key behavior on `user_id`, render `display_name` with `email` beside
-it, and never treat a display name as an identity: names are self-asserted
-and mutable.
+Services key behavior on `user_id`; `email` is for display beside whatever
+profile they fetch, never a substitute identity.
 
 ## Refreshing your identity
 
-The record in a session is as fresh as its handoff. A user who changed their
-name or avatar makes their own requests carry it before the session expires
-by navigating to `/_auth/refresh?next=<url>` -- served at every origin of the
-share (the shell links to it on its own origin) -- which mints a pending
-login and sends the browser through the broker exactly as a first visit does,
-with the "Continue as ..." step already confirmed. The callback re-sets the
-cookie from the fresh token and lands on `next` (which must be one of this
-workspace's own origins; anything else falls back to the shell).
+The record in a session is as fresh as its handoff. A user whose account
+record changed (a new verified email, say) makes their own requests carry it
+before the session expires by navigating to `/_auth/refresh?next=<url>` --
+served at every origin of the share (the shell links to it on its own origin)
+-- which mints a pending login and sends the browser through the broker
+exactly as a first visit does, with the "Continue as ..." step already
+confirmed. The callback re-sets the cookie from the fresh token and lands on
+`next` (which must be one of this workspace's own origins; anything else falls
+back to the shell).
