@@ -6946,25 +6946,41 @@ def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
         update_self._parse_worker_bundles(["chat=/w/chat", "chat=/w/other"])
 
 
-def test_a_fast_forward_apply_cannot_keep_a_rollback_point(apply_repo: Path) -> None:
-    """rollback-last reverts the kept point as a merge, which a fast-forward never lands."""
-    with pytest.raises(SystemExit, match="cannot be combined with --ff-only"):
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [
+        # rollback-last reverts the kept point as a merge, which a fast-forward never lands.
+        pytest.param(
+            ["--ff-only", "--keep-rollback-point"],
+            "cannot be combined with --ff-only",
+            id="fast-forward-cannot-keep-a-rollback-point",
+        ),
+        # The worker's ``update-self:`` merge is read along the first-parent line, and an
+        # ordinary merge puts it on a second parent, so the landing would read as the
+        # previous update's.
+        pytest.param(
+            ["--target-ref", "minds-v0.0.2"],
+            "must fast-forward",
+            id="update-self-landing-must-fast-forward",
+        ),
+        # Refused as the rollback point's problem, not --ff-only's: dropping --ff-only is
+        # the one wrong fix.
+        pytest.param(
+            ["--ff-only", "--target-ref", "minds-v0.0.2", "--keep-rollback-point"],
+            "with --ff-only and without --keep-rollback-point",
+            id="update-self-landing-cannot-keep-a-rollback-point",
+        ),
+    ],
+)
+def test_apply_refuses_a_flag_combination_it_cannot_honor(
+    apply_repo: Path, flags: list[str], message: str
+) -> None:
+    with pytest.raises(SystemExit, match=message):
         update_self.main(
-            [
-                "apply",
-                "--merge-ref",
-                "HEAD",
-                "--ff-only",
-                "--keep-rollback-point",
-                "--repo-root",
-                str(apply_repo),
-            ]
+            ["apply", "--merge-ref", "HEAD", *flags, "--repo-root", str(apply_repo)]
         )
     assert update_apply_contract.read_marker(apply_repo) is None
     assert _rollback_point(apply_repo) is None
-
-
-# --- the kept rollback point and the notice ----------------------------------
 
 
 def _rollback_point(repo_root: Path) -> "update_apply_contract.LastGoodRecord | None":
@@ -7566,9 +7582,6 @@ def test_a_settled_verdict_tolerates_a_pid_that_settles_partway_through(
 def test_main_routes_rollback_last_and_confirm_last(apply_repo: Path) -> None:
     assert update_self.main(["confirm-last", "--repo-root", str(apply_repo)]) == 0
     assert update_self.main(["rollback-last", "--repo-root", str(apply_repo)]) == 1
-
-
-# --- what the kept point names, and what a rollback checks -------------------
 
 
 @pytest.mark.parametrize("diff", [_CHAT_FRONTEND_DIFF, _FRONTEND_DIFF])
