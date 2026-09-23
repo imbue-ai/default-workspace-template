@@ -9,9 +9,7 @@ verifies the broker's handoff token and sets the workspace session cookie. A
 callback whose nonce or token no longer verifies (a reopened link, a slow
 redirect) heals itself: a visitor who already holds a session is sent on, and
 anyone else is sent through the broker once more; only a second failure shows
-the "Sign-in link expired" page. ``/_auth/refresh`` re-runs the handoff for a
-signed-in visitor whose account record changed, so their own requests carry the
-new record before the session expires.
+the "Sign-in link expired" page.
 """
 
 import json
@@ -377,20 +375,6 @@ def build_gateway_app(
         label_to_name = get_label_to_name()
         shell_label = next((label for label, name in label_to_name.items() if name == _SHELL_SERVICE_NAME), None)
         return f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
-
-    @app.get("/_auth/refresh")
-    def refresh() -> Response:
-        # Re-run the broker handoff for whoever is asking, so a user whose
-        # account record changed gets a session carrying the new record. No
-        # session is required: the broker resolves the visitor's own accounts
-        # session, and the callback re-checks the grants as on a first visit.
-        # ``confirmed=1`` skips the "Continue as" interstitial a visitor already
-        # passed once; it is a UX property only (the token still goes solely to
-        # this workspace's own auth origin).
-        requested_next = request.args.get("next", "")
-        return _redirect_to_broker(
-            requested_next if _is_workspace_url(requested_next) else "", is_confirmed=True, is_retry=False
-        )
 
     def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool) -> Response:
         nonce = pending_logins.mint(is_retry=is_retry)
