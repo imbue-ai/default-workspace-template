@@ -168,7 +168,7 @@ CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 
 # The ``-S`` that waves the claude version check for one create: the in-container mngr
 # refuses every claude create on a pin mismatch, including the update run that would fix
-# it, so the update's own create is the one that may ask for it.
+# it, so ``message_chat.py --create`` asks for it on every chat it makes from outside.
 SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
 
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
