@@ -117,7 +117,7 @@ def present_user_wire_json(user: PresentUser, profile: UserProfile | None) -> di
         "user_id": user.user_id,
         "email": user.email,
         "display_name": profile.display_name if profile is not None else None,
-        "avatar_url": profile.avatar_url if profile is not None else None,
+        "profile_picture_url": profile.profile_picture_url if profile is not None else None,
         "owner": user.owner,
         "first_seen": user.first_seen,
         "last_seen": user.last_seen,

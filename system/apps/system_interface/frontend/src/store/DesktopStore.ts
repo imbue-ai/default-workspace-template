@@ -33,6 +33,7 @@ import type {
   FloatingPosition,
   GridCell,
   IfPresent,
+  Inventory,
   LaunchPath,
   Layout,
   PinStyle,
@@ -84,7 +85,7 @@ import {
   windowShowingChat,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState } from "../reducers/desktopState";
-import { cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
+import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
   ActiveDesktopChangedEvent,
@@ -100,7 +101,8 @@ const SAVE_DEBOUNCE_MS = 300;
 
 /** The routes the store calls, injectable so the store is tested against a fake shell. */
 export interface DesktopApi {
-  fetchDesktops(): Promise<Desktop[]>;
+  /** The desktops, the apps, and the clients in one read (contracts.md section 5.5): what a page boots from. */
+  fetchInventory(): Promise<Inventory>;
   createDesktop(name: string, color: string, glyph: number): Promise<Desktop>;
   updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop>;
   setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop>;
@@ -231,7 +233,8 @@ export class DesktopStore {
   // push answers older than the push, and must not overwrite it.
   private avatarSelectionPushes = 0;
   private entryPushes = 0;
-  // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
+  // Resolved by the first app list to land: the bootstrap's inventory read, or the socket's ``apps_updated`` when
+  // the socket is quicker; a deep link's open or launch waits for it.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
 
@@ -336,15 +339,17 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
   }
 
-  /** Resolves once the app list has landed. It arrives only over the socket, so ``start`` resolving
-   *  does not imply it: a caller that needs the apps (which app holds chats, which window is pinned)
-   *  waits on this too. */
+  /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
+   *  ``apps_updated``, whichever comes first. A ``start`` that failed to read the inventory resolves without
+   *  it, so a caller that needs the apps (which app holds chats, which window is pinned) waits on this too. */
   whenAppsLoaded(): Promise<void> {
     return this.appsLoaded;
   }
 
-  /** Connect, post this client's arrival, read this client's record, land on the deep link's desktop
-   *  else the one the shell answered, fetch the layout, and honour the deep link's open or launch. */
+  /** Connect, post this client's arrival, read the inventory (the apps, the desktops, and this client's record),
+   *  land on the deep link's desktop else the one the shell answered, fetch the layout, and honour the deep
+   *  link's open or launch. The apps come with the inventory rather than waiting on the socket, so a shortcut
+   *  is never drawn for an app the page does not know yet. */
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
       onConnected: () => this.takeConnected(),
@@ -365,7 +370,7 @@ export class DesktopStore {
     });
     void this.loadAvatarSelection();
     const entryPushesBefore = this.entryPushes;
-    // The arrival comes first: it may seed a desktop for this user, which the desktops read then includes.
+    // The arrival comes first: it may seed a desktop for this user, which the inventory read then includes.
     let arrival: ClientArrival | null;
     try {
       arrival = await this.deps.api.arriveClient(this.deps.clientId);
@@ -373,29 +378,24 @@ export class DesktopStore {
       console.warn("[si] the shell could not settle where this client lands", error);
       arrival = null;
     }
-    let desktops: Desktop[];
-    let clients: ClientRecord[];
+    let inventory: Inventory;
     try {
-      [desktops, clients] = await Promise.all([
-        this.deps.api.fetchDesktops(),
-        this.deps.api.fetchClients().catch((error: unknown) => {
-          console.warn("[si] could not read the client records", error);
-          return [];
-        }),
-      ]);
+      inventory = await this.deps.api.fetchInventory();
     } catch (error) {
-      console.warn("[si] could not read the desktops", error);
-      this.deps.notify(`Could not read the desktops: ${(error as Error).message}`);
+      console.warn("[si] could not read the inventory", error);
+      this.deps.notify(`Could not read the desktops and apps: ${(error as Error).message}`);
       return;
     }
+    // The apps before the desktops, so the first draw of a desktop's shortcuts already knows every app.
+    this.takeApps(inventory.apps);
     this.desktopsRevision += 1;
-    this.dispatch({ type: "desktops_updated", desktops });
+    this.dispatch({ type: "desktops_updated", desktops: inventory.desktops });
     this.replacedDesktop = replacedDesktopOf(arrival);
-    const own = clients.find((client) => client.id === this.deps.clientId);
+    const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     this.takeFetchedEntries(own, entryPushesBefore);
     // The shell's answer says where this client lands; without one (the arrival failed), the recorded desktop.
     const landing = arrival?.desktop_id ?? own?.active_desktop ?? null;
-    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, landing);
+    const chosen = chooseInitialDesktopId(inventory.desktops, deepLink.desktopId, landing);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -442,7 +442,7 @@ export class DesktopStore {
     await this.refetchLayout();
   }
 
-  private takeApps(apps: AppRecord[]): void {
+  private takeApps(apps: readonly AppRecord[]): void {
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
   }
@@ -789,7 +789,9 @@ export class DesktopStore {
     }
   }
 
-  /** Run a shortcut in its mode: focus raises the app's most recent window and opens only when there is none. */
+  /** Run a shortcut in its mode: focus raises the app's most recent window and opens only when there is none.
+   *  Before the apps are known (the inventory has not answered) the user is told to wait rather than that
+   *  the app is missing. */
   async runLaunch(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const run = resolveLaunchRun(this.state, app, launch, mode);
     switch (run.kind) {
@@ -798,6 +800,9 @@ export class DesktopStore {
         return;
       case "open":
         await this.openWindowAt(run.app, run.path, run.launch, "new");
+        return;
+      case "connecting":
+        this.deps.notify(STILL_CONNECTING_NOTICE);
         return;
       case "unavailable":
         this.deps.notify(`Cannot open: ${run.reason}`);

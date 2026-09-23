@@ -143,13 +143,13 @@ export function placementRecord(windowId: string, overrides: Partial<Placement> 
   return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
 }
 
-/** A non-owner with one open tab, an email at example.com, and neither a display name nor an avatar. */
+/** A non-owner with one open tab, an email at example.com, and neither a display name nor a profile picture. */
 export function presentUserRecord(userId: string, overrides: Partial<PresentUser> = {}): PresentUser {
   return {
     user_id: userId,
     email: `${userId}@example.com`,
     display_name: null,
-    avatar_url: null,
+    profile_picture_url: null,
     owner: false,
     first_seen: "2026-09-19T10:00:00.000000000Z",
     last_seen: "2026-09-19T10:00:00.000000000Z",

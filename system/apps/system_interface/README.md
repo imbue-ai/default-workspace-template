@@ -151,6 +151,14 @@ app's liveness (supervisord for rows with a `program`, a TCP connect
 otherwise) on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`. That is all it knows of an app: its row (display name,
 icon, launch paths, default shortcut, launcher rank) and whether it is running.
+The page learns the apps from `GET /api/inventory` right after it arrives (one
+read for the desktops, the apps, and the clients), so it never draws a
+shortcut for an app it does not know; the socket's `apps_updated` (sent on
+every connect, and on every change) keeps the list current from then on.
+Until that first read answers, a shortcut whose app the page cannot look up
+draws faint as "Connecting to the workspace..." and running it says the page is
+still connecting; only once the apps are known is a missing app reported as
+not registered.
 
 Stop and Start of the whole app act on its supervisord program and are refused
 for critical apps; the desktop offers them on the window menu
@@ -187,28 +195,30 @@ way. The shell sends the connected set on every WebSocket connect and pushes
 `presence_updated` -- one entry per user, however many tabs -- when a
 heartbeat brings someone in and, from a sweep every 10 seconds, when
 someone's heartbeats have stopped. The taskbar's Presence tray widget draws
-one avatar per user. Over a share that widget also links to the gateway's
-identity refresh, which re-runs the sign-in so a visitor whose account record
-changed (a new verified email, say) carries it before their session expires; a
-changed name or avatar needs no refresh, it reaches the tray through the
-profile cache (below) within five minutes. A visitor granted a single app never
-loads the shell and so never appears: they are in one app, not in the
-workspace.
+one profile picture per connected user once two or more are connected (one is
+just you): everyone else first, the requester's own entry last with an accent
+ring and "(you)" on its hover text, the own entry being the one whose
+`user_id` the heartbeat's answer names. A changed name or profile picture
+reaches the tray through the profile cache (below) within five minutes. A
+visitor granted a single app never loads the shell and so never appears: they
+are in one app, not in the workspace.
 
-**Profiles.** A user's display name and avatar come from imbue_cloud, not the
-header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
-(public; `{"user_id", "display_name", "avatar_url"}`) with a 2 second bound,
+**Profiles.** A user's display name and profile picture come from imbue_cloud,
+not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
+(public; `{"user_id", "display_name", "profile_picture_url"}`) with a 2 second bound,
 where `broker_url` is `SHARE_BROKER_URL` in `data/.secrets/share.env`, the
 file the minds desktop writes while the workspace is shared (read fresh on
 every miss; no file means no profiles). Each answer, and each failure, is
 cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
 request ever hangs or fails on it. The profile rides on each present user
-over the wire (`display_name`, `avatar_url`, null when there is none) and
-names a visitor's desktop on their first arrival.
+over the wire (`display_name`, `profile_picture_url`, null when there is none)
+and names a visitor's desktop on their first arrival.
 
 The same header decides where a page lands. A shell page posts its arrival
-(`POST /api/clients/<client_id>/arrive`) before it reads the desktops. The
+(`POST /api/clients/<client_id>/arrive`) before it reads the inventory
+(`GET /api/inventory`: the desktops, the apps, and the clients in one answer,
+so the seeded desktop is in it). The
 owner, and any request without a user id, land on the client's recorded
 desktop, else the first. A signed-in visitor would otherwise land on the
 owner's desktop and open and close the owner's windows, so on their first

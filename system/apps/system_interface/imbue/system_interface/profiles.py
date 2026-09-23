@@ -1,4 +1,4 @@
-"""User profiles: the display name and avatar imbue_cloud holds for an account, fetched by user id and cached on disk.
+"""User profiles: the display name and profile picture imbue_cloud holds for an account, fetched by user id and cached on disk.
 
 The identity header a proxy stamps names the requester (``owner``, ``user_id``, ``email``) and
 nothing more; what to call them and what they look like is the account's profile, which the
@@ -51,11 +51,11 @@ _ENV_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 
 class UserProfile(FrozenModel):
-    """What imbue_cloud shows for an account: a self-chosen name and avatar, never an identity."""
+    """What imbue_cloud shows for an account: a self-chosen name and profile picture, never an identity."""
 
     user_id: str = Field(description="The account the profile belongs to")
     display_name: str | None = Field(description="The name the account chose, when it has one")
-    avatar_url: str | None = Field(description="The avatar image URL, when the account has one")
+    profile_picture_url: str | None = Field(description="The profile picture URL, when the account has one")
 
 
 class _ProfileWire(FrozenModel):
@@ -65,7 +65,7 @@ class _ProfileWire(FrozenModel):
 
     user_id: str = Field(description="The account the profile belongs to")
     display_name: str | None = Field(default=None, description="The chosen name, when there is one")
-    avatar_url: str | None = Field(default=None, description="The avatar URL, when there is one")
+    profile_picture_url: str | None = Field(default=None, description="The profile picture URL, when there is one")
 
 
 class _CachedProfile(FrozenModel):
@@ -75,7 +75,7 @@ class _CachedProfile(FrozenModel):
 
     user_id: str = Field(description="The account the entry is for")
     display_name: str | None = Field(default=None, description="The name as last fetched")
-    avatar_url: str | None = Field(default=None, description="The avatar URL as last fetched")
+    profile_picture_url: str | None = Field(default=None, description="The profile picture URL as last fetched")
     fetched_at: AwareDatetime = Field(description="When the connector was last asked")
     is_fetch_failed: bool = Field(description="Whether that ask failed (the entry then holds no profile)")
 
@@ -104,7 +104,9 @@ def read_share_broker_url(share_env_path: Path) -> str | None:
 def _profile_of(cached: _CachedProfile) -> UserProfile | None:
     if cached.is_fetch_failed:
         return None
-    return UserProfile(user_id=cached.user_id, display_name=cached.display_name, avatar_url=cached.avatar_url)
+    return UserProfile(
+        user_id=cached.user_id, display_name=cached.display_name, profile_picture_url=cached.profile_picture_url
+    )
 
 
 class ProfileResolver(MutableModel):
@@ -138,7 +140,7 @@ class ProfileResolver(MutableModel):
             _CachedProfile(
                 user_id=str(user_id),
                 display_name=fetched.display_name if fetched is not None else None,
-                avatar_url=fetched.avatar_url if fetched is not None else None,
+                profile_picture_url=fetched.profile_picture_url if fetched is not None else None,
                 fetched_at=now,
                 is_fetch_failed=fetched is None,
             )
@@ -195,4 +197,6 @@ class ProfileResolver(MutableModel):
         except ValidationError as e:
             logger.warning("Ignored an unreadable profile answer for {}: {}", user_id, e.errors()[0]["msg"])
             return None
-        return UserProfile(user_id=wire.user_id, display_name=wire.display_name, avatar_url=wire.avatar_url)
+        return UserProfile(
+            user_id=wire.user_id, display_name=wire.display_name, profile_picture_url=wire.profile_picture_url
+        )

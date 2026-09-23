@@ -9,6 +9,7 @@ import {
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
+  parseInventory,
   parseLayout,
   parsePresentUsers,
   parseWallpaperListings,
@@ -183,17 +184,19 @@ const PRESENT_USER_WIRE = {
   user_id: "user-owner-9c21",
   email: "owner@example.com",
   display_name: null,
-  avatar_url: "https://accounts.example.com/users/user-owner-9c21/avatar/9a7b",
+  profile_picture_url: "https://accounts.example.com/users/user-owner-9c21/profile-picture/9a7b",
   owner: true,
   first_seen: "2026-09-19T10:00:00.000000000Z",
   last_seen: "2026-09-19T10:00:30.000000000Z",
 };
 
 describe("parsePresentUsers", () => {
-  it("reads the contract's user objects, a missing name or avatar as null", () => {
+  it("reads the contract's user objects, a missing name or profile picture as null", () => {
     expect(parsePresentUsers([PRESENT_USER_WIRE])).toEqual([PRESENT_USER_WIRE]);
-    const { display_name: _name, avatar_url: _avatar, ...nameless } = PRESENT_USER_WIRE;
-    expect(parsePresentUsers([nameless])).toEqual([{ ...PRESENT_USER_WIRE, display_name: null, avatar_url: null }]);
+    const { display_name: _name, profile_picture_url: _picture, ...nameless } = PRESENT_USER_WIRE;
+    expect(parsePresentUsers([nameless])).toEqual([
+      { ...PRESENT_USER_WIRE, display_name: null, profile_picture_url: null },
+    ]);
     expect(parsePresentUsers([])).toEqual([]);
   });
 
@@ -201,6 +204,27 @@ describe("parsePresentUsers", () => {
     expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, email: undefined }])).toThrow(WireShapeError);
     expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, owner: "yes" }])).toThrow(WireShapeError);
     expect(() => parsePresentUsers({ users: [] })).toThrow(WireShapeError);
+  });
+});
+
+describe("parseInventory", () => {
+  it("reads the desktops, the apps, and the clients, and leaves the agent's fields aside", () => {
+    const inventory = parseInventory({
+      is_preview: false,
+      desktops: [DESKTOP_WIRE],
+      apps: [{ name: "docs", url: "http://127.0.0.1:7001" }],
+      clients: [{ id: "c1", active_desktop: "home", last_seen: "now", is_connected: true, shown: ["win-1"] }],
+    });
+    expect(inventory.desktops.map((desktop) => desktop.id)).toEqual(["home"]);
+    expect(inventory.apps.map((app) => app.name)).toEqual(["docs"]);
+    expect(inventory.clients.map((client) => client.id)).toEqual(["c1"]);
+    expect(inventory).not.toHaveProperty("is_preview");
+  });
+
+  it("refuses a document missing any of the three lists", () => {
+    expect(() => parseInventory({ desktops: [], apps: [] })).toThrow(WireShapeError);
+    expect(() => parseInventory({ desktops: [], clients: [] })).toThrow(WireShapeError);
+    expect(() => parseInventory([])).toThrow(WireShapeError);
   });
 });
 

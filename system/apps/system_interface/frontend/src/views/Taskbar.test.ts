@@ -154,8 +154,8 @@ describe("Taskbar", () => {
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
   });
 
-  it("draws the Presence widget in front of Desktops once someone is recorded", () => {
-    applyPresence([presentUserRecord("user-bob-4471")]);
+  it("draws the Presence widget in front of Desktops once two users are connected", () => {
+    applyPresence([presentUserRecord("user-bob-4471"), presentUserRecord("user-owner-9c21", { owner: true })]);
     const taskbar = render();
     const tray = taskbar.querySelector("[data-system-tray]") as HTMLElement;
     expect([...tray.children].map((widget) => widget.getAttribute("data-tray-widget"))).toEqual([
@@ -164,7 +164,7 @@ describe("Taskbar", () => {
     ]);
     expect(
       [...tray.querySelectorAll("[data-presence-user]")].map((el) => el.getAttribute("data-presence-user")),
-    ).toEqual(["user-bob-4471"]);
+    ).toEqual(["user-bob-4471", "user-owner-9c21"]);
   });
 
   it("the launcher field's Escape clears a typed query first, and keeps the key from the document", () => {

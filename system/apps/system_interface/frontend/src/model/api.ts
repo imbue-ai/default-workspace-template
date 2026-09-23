@@ -13,7 +13,7 @@ import {
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
-  parseDesktops,
+  parseInventory,
   parseLayout,
   parseWallpaperListings,
   parseWindow,
@@ -28,6 +28,7 @@ import type {
   EntryPresentation,
   GridCell,
   IfPresent,
+  Inventory,
   Layout,
   Placement,
   Wallpaper,
@@ -48,11 +49,6 @@ async function getJson(url: string): Promise<unknown> {
 
 function desktopUrl(desktopId: string, suffix: string = ""): string {
   return apiUrl(`/api/desktops/${encodeURIComponent(desktopId)}${suffix}`);
-}
-
-export async function fetchDesktops(): Promise<Desktop[]> {
-  const data = (await getJson(apiUrl("/api/desktops"))) as { desktops?: unknown };
-  return parseDesktops(data.desktops);
 }
 
 export async function createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
@@ -179,6 +175,11 @@ export async function arriveClient(clientId: string): Promise<ClientArrival> {
   return parseClientArrival(
     await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/arrive`), {}),
   );
+}
+
+/** The desktops, the apps, and the clients in one read: what a page boots from once it has arrived. */
+export async function fetchInventory(): Promise<Inventory> {
+  return parseInventory(await getJson(apiUrl("/api/inventory")));
 }
 
 export async function fetchClients(): Promise<ClientRecord[]> {

@@ -8,6 +8,7 @@ import type { DesktopApi } from "../store/DesktopStore";
 import type { PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import type {
+  AppRecord,
   AvatarCatalog,
   ClientArrival,
   ClientRecord,
@@ -15,6 +16,7 @@ import type {
   DesktopShortcut,
   EntryPresentation,
   GridCell,
+  Inventory,
   Layout,
   StoredWindowPath,
   Wallpaper,
@@ -29,6 +31,8 @@ export const PINNED_WINDOW_FRAME = { x: 0.46, y: 0.05, width: 0.5, height: 0.9 }
 
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
+  /** The apps the inventory answers; the socket's ``apps_updated`` is delivered by hand. */
+  apps: AppRecord[] = [];
   clients: ClientRecord[] = [];
   /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
    *  the desktops as the shell would), and the name of the one it replaced. */
@@ -43,8 +47,8 @@ export class FakeDesktopApi implements DesktopApi {
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
-  /** While set, the client records, a layout, and the catalog answer only once this settles: a test holds
-   *  those reads open. */
+  /** While set, the inventory, the client records, a layout, and the catalog answer only once this settles: a
+   *  test holds those reads open. */
   readGate: Promise<void> | null = null;
 
   /** Hold the reads open until the answered function is called. */
@@ -114,10 +118,11 @@ export class FakeDesktopApi implements DesktopApi {
     return this.layoutOf(desktopId, clientId);
   }
 
-  async fetchDesktops(): Promise<Desktop[]> {
-    this.calls.push("fetchDesktops");
+  async fetchInventory(): Promise<Inventory> {
+    this.calls.push("fetchInventory");
     this.refuse();
-    return [...this.desktops];
+    if (this.readGate !== null) await this.readGate;
+    return { desktops: [...this.desktops], apps: [...this.apps], clients: [...this.clients] };
   }
 
   async createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {

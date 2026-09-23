@@ -169,7 +169,9 @@ def test_a_visiting_users_desktop_is_named_after_the_profile_the_connector_answe
 
     def answer(request: httpx.Request) -> httpx.Response:
         requested_paths.append(request.url.path)
-        return httpx.Response(200, json={"user_id": "user-alice", "display_name": "Alice Q", "avatar_url": None})
+        return httpx.Response(
+            200, json={"user_id": "user-alice", "display_name": "Alice Q", "profile_picture_url": None}
+        )
 
     profiles = ProfileResolver(
         cache_directory=tmp_path / "profiles",

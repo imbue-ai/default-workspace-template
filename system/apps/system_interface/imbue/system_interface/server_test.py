@@ -480,8 +480,8 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
     assert user["user_id"] == "user-bob-4471"
     assert user["owner"] is False
     # No connector to ask, so no profile; the record itself is complete without one.
-    assert user["display_name"] is None and user["avatar_url"] is None
-    assert set(user) == {"user_id", "email", "display_name", "avatar_url", "owner", "first_seen", "last_seen"}
+    assert user["display_name"] is None and user["profile_picture_url"] is None
+    assert set(user) == {"user_id", "email", "display_name", "profile_picture_url", "owner", "first_seen", "last_seen"}
 
 
 def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(client: FlaskClient) -> None:
@@ -508,7 +508,7 @@ def test_presence_carries_each_users_profile_from_the_connector(
     def connector(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/users/user-bob-4471/profile":
             return httpx.Response(
-                200, json={"user_id": "user-bob-4471", "display_name": "Bob", "avatar_url": "https://a/b"}
+                200, json={"user_id": "user-bob-4471", "display_name": "Bob", "profile_picture_url": "https://a/b"}
             )
         return httpx.Response(404, json={"detail": "no such user"})
 
@@ -520,7 +520,9 @@ def test_presence_carries_each_users_profile_from_the_connector(
         _heartbeat(client, _OWNER_IDENTITY)
         (joined_bob, joined_owner) = drain_messages(client_queue)
         assert joined_bob["type"] == joined_owner["type"] == "presence_updated"
-        assert [(user["user_id"], user["display_name"], user["avatar_url"]) for user in joined_owner["users"]] == [
+        assert [
+            (user["user_id"], user["display_name"], user["profile_picture_url"]) for user in joined_owner["users"]
+        ] == [
             ("user-bob-4471", "Bob", "https://a/b"),
             ("user-owner-9c21", None, None),
         ]
