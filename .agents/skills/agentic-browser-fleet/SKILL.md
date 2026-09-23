@@ -1,6 +1,6 @@
 ---
 name: agentic-browser-fleet
-description: Drive a fleet of shared Chromium browsers yourself, one command at a time, from your shell. Use when the user wants you to do something on the web (log in somewhere, fill a form, click through a flow, read a page that needs interaction) rather than just fetch a URL. YOU own the browser and YOU drive it -- in this same chat, with your own reasoning.
+description: Drive a fleet of shared Chromium browsers yourself, one command at a time, from your shell. Reached from the connect-external-service skill, which decides when a browser is the way to do something on the web for the user (log in somewhere, fill a form, click through a flow, read a page that needs interaction); load that skill first rather than this one. YOU own the browser and YOU drive it -- in this same chat, with your own reasoning.
 metadata:
   author: imbue
 ---
