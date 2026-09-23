@@ -41,8 +41,8 @@ SEED_SOURCE: Final[str] = "seed"
 SEED_AGENT_NAME: Final[str] = "welcome"
 
 # How much of the seeded conversation the launch message carries inline. Past it the agent is
-# pointed at the seed file instead, the way a long handoff summary is: the message rides
-# ``mngr create --message`` on an argv, whose length the kernel bounds.
+# pointed at the seed file instead, the way a long handoff summary is, and for the same
+# delivery limits (measured at ``chat_handoffs.INLINE_SUMMARY_MAX_BYTES``).
 INLINE_SEED_MAX_BYTES: Final[int] = 64 * 1024
 
 
