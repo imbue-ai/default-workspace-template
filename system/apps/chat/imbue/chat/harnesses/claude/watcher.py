@@ -68,7 +68,7 @@ from imbue.chat.harnesses.transcript_store import split_at_last_complete_line
 logger = _loguru_logger
 
 # A session the history names but that is not where claude files it for this agent's work
-# dir is scanned for across the whole projects tree on this schedule, not on every refresh:
+# dir is scanned for in every project dir under projects/ on this schedule, not on every refresh:
 # a history can name a session whose file never lands, and every watcher wake refreshes.
 _MISSING_SESSION_FIRST_SCAN_DELAY_SECONDS: Final[float] = 1.0
 _MISSING_SESSION_MAX_SCAN_DELAY_SECONDS: Final[float] = 60.0
@@ -307,7 +307,7 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
     def _find_session_file(self, session_id: str) -> Path | None:
         """Where the session's main file is: the path claude files it under for the work dir
         (checked on every call, so a just-started session is found as soon as it lands),
-        else a scan of the whole projects tree when one is due."""
+        else a scan of every project dir under ``projects/`` when one is due."""
         projects_dir = self._claude_config_dir / PROJECTS_DIRNAME
         if self._work_dir is not None:
             expected = expected_session_file(projects_dir, session_id, self._work_dir)
