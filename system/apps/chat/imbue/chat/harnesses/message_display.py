@@ -143,8 +143,9 @@ class MessageDisplay(FrozenModel):
     display: DisplayKind
     # Chip title (CHIP) or skill name (SKILL_EXPANSION); omitted otherwise.
     display_label: str | None = None
-    # The body to display when a wrapper sentinel was stripped (a fleet nudge); omitted
-    # when the raw content is already the display body.
+    # The body to display when a wrapper sentinel was stripped (a fleet nudge), or the user's
+    # own words behind a stripped context block (PROMPT_WITH_CONTEXT); omitted when the raw
+    # content is already the display body.
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error.
     resolution: str | None = Field(default=None, pattern="^(granted|denied|error)$")
@@ -328,7 +329,7 @@ _DETECTORS = (
 
 @pure
 def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisplay | None:
-    """The render decision for one user message, or ``None`` for a genuine human turn.
+    """The render decision for one user message, or ``None`` for a genuine human turn shown as it arrived.
 
     ``None`` means the parser emits no ``display`` field and the frontend renders the
     baseline user bubble. Detectors run on the attachment-stripped text (see
