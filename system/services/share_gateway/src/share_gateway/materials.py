@@ -6,9 +6,14 @@ written by the minds desktop app at share-enable and removed at unshare.
 ``data/.secrets/share_grants.toml`` (who may visit) lives next to it, and the
 TLS key/cert persist under ``data/.secrets/`` so a re-share skips
 reprovisioning. The session-cookie signing secret does not: unsharing deletes
-it, so every session dies with the share and the next share mints a new one.
+it, so every session dies with the share, and the secret file also records the
+SHA-256 of the relay token it was minted under, so a secret that outlived an
+unshare the runner never saw is still replaced when the next share (which
+always carries a new relay token) starts.
 """
 
+import hashlib
+import json
 import re
 import secrets
 from pathlib import Path
@@ -115,15 +120,41 @@ def read_share_materials(path: Path) -> ShareMaterials | None:
     return parse_share_materials(text)
 
 
-def load_or_create_signing_secret(path: Path) -> str:
-    """The session-cookie signing secret, generated once and persisted with 0600."""
-    if path.exists():
-        existing = path.read_text().strip()
-        if existing:
-            return existing
+def _relay_token_digest(relay_token: str) -> str:
+    return hashlib.sha256(relay_token.encode()).hexdigest()
+
+
+def _read_signing_secret_bound_to(path: Path, relay_token_digest: str) -> str | None:
+    """The stored secret when the file is readable and was minted under this digest; None otherwise."""
+    try:
+        stored = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(stored, dict):
+        return None
+    secret = stored.get("secret")
+    if not isinstance(secret, str) or not secret:
+        return None
+    if stored.get("relay_token_sha256") != relay_token_digest:
+        return None
+    return secret
+
+
+def load_or_create_signing_secret(path: Path, relay_token: str) -> str:
+    """The session-cookie signing secret for the share ``relay_token`` belongs to, persisted with 0600.
+
+    The file records the SHA-256 of the relay token the secret was minted under. A stored secret is
+    reused only under that same token; every share mints a new relay token, so a secret left behind by
+    an earlier share (an unshare and re-share the runner was down for) is replaced rather than reused,
+    and the earlier share's cookies stop verifying. An unreadable or unbound file is replaced the same way.
+    """
+    relay_token_digest = _relay_token_digest(relay_token)
+    existing = _read_signing_secret_bound_to(path, relay_token_digest)
+    if existing is not None:
+        return existing
     secret = secrets.token_urlsafe(48)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(secret)
+    path.write_text(json.dumps({"secret": secret, "relay_token_sha256": relay_token_digest}))
     path.chmod(0o600)
     return secret
 

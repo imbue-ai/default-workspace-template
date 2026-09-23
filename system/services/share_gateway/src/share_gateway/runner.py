@@ -11,7 +11,10 @@ fleet changes converge without touching the workspace; the last good answer is
 cached on disk so restarts work with the connector down. When the materials
 disappear (unshare) the children stop, the tunnels drop, and the cookie signing
 secret is deleted so every session -- the owner's included -- is invalidated;
-key and cert stay on disk for a fast re-share, which mints a fresh secret.
+key and cert stay on disk for a fast re-share, which mints a fresh secret. The
+secret file also records which relay token it was minted under, so a secret
+that survived an unshare and re-share the runner was down for is replaced at
+start rather than reused (every share carries a new relay token).
 
 Same watch idiom as the other material-gated services: inotify when available,
 10-second mtime polling as the fallback.
@@ -238,7 +241,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
 
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
     stack = ShareStack(materials, auth_label, assignment)
-    signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE)
+    signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
     app = build_gateway_app(
         materials=materials,
         grants_path=materials_module.GRANTS_FILE,
