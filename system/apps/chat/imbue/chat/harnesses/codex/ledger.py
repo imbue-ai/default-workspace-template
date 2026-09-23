@@ -140,8 +140,8 @@ class LedgerEntry(MutableModel):
     ``combined_client_id`` is set on a queued entry that a shoulder-tap re-sent as part of a single
     combined ``turn/start`` (Fix 3): its own ``client_id`` no longer names the message the daemon
     commits (the combined turn carries ONE fresh id), so delivery is decided by that combined id.
-    ``resend_visible`` is True while such an entry is mid-resend (Sending): it stays a visible chip
-    rendered "Sending..." through the interrupt+resend so it never blinks out (contract A1a).
+    ``resend_visible`` is True while such an entry is mid-resend (Sending): it stays visible as the
+    faded not-yet-real bubble through the interrupt+resend so it never blinks out (contract A1a).
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -727,7 +727,7 @@ class CodexMessageLedger(MutableModel):
         visible (A1a):
 
         1. Capture the Queued messages in send order and flip each to a resend-visible **Sending**
-           state, so it stays a chip rendered "Sending..." through the whole interrupt+resend -- never
+           state, so it stays visible as the faded not-yet-real bubble through the whole interrupt+resend -- never
            removed to the composer, never blinked out. (Gated benign no-op if not available.)
         2. ``turn/interrupt`` the running turn fire-and-forget and clear it locally.
         3. Reconcile per committed id: a steer that already committed (observed via ``item/completed``)
@@ -815,8 +815,8 @@ class CodexMessageLedger(MutableModel):
         * a **Queued** chip (``is_sending=False``) -- a parked steer waiting on the running turn;
         * a **resend** chip (``is_sending=True``) -- a message a shoulder-tap is re-sending as part of
           the combined ``turn/start`` (Fix 3). It stays visible through the interrupt+resend, rendered
-          "Sending..." by the frontend, so it never blinks out (A1a); it drops only when the combined
-          turn commits (chip removal, then the turn -- A3b).
+          by the frontend as the faded not-yet-real bubble, so it never blinks out (A1a); it drops
+          only when the combined turn commits (chip removal, then the turn -- A3b).
 
         ``queued_id`` is the entry's correlation token (not an ``item.id``: codex assigns a parked
         steer no ``item.id`` until it commits -- verified live). The frontend uses it only for
