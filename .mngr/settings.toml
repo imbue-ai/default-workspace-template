@@ -493,10 +493,8 @@ ssh_bind_address = "127.0.0.1"
 # per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
 # slices run under runsc from the bake).
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
-# persist or ride a backup. It says `exec` because Docker mounts a bare
-# `--tmpfs` noexec, and a stub executable a test writes under /tmp and puts on
-# PATH is then skipped, so the real binary it stands in for runs instead.
-default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
+# persist or ride a backup.
+default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
 
 [providers.lima]
 # is_enabled=false (mirrors [providers.docker]) is load-bearing: the lima backend

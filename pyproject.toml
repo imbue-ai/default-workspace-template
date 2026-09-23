@@ -68,7 +68,7 @@ dev = [
     # tree; used by the per-feature contract tests (bootstrap's manager_test,
     # launch-task's create_worker_test).
     "mngr-cli-contract",
-    # Keeps tmp_path somewhere a stub executable can run (older workspaces mount /tmp noexec).
+    # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
 ]
 
