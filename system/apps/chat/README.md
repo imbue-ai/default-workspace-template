@@ -220,7 +220,9 @@ this app renders from a file, not a transcript any harness could read, so an
 agent handed the message alone could not tell what a reply like "1" picked out
 of the options the last seeded turn offered. The page strips that context block
 and shows the user's own words alone (`prompt_with_context` in
-`harnesses/message_display.py`). The seed survives a restart of this app because
+`harnesses/message_display.py`). A first message that is a slash command goes
+out as typed, since a harness runs a command only when the slash leads the
+message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
 Every chat that starts with no message is greeted: the `welcome` create

@@ -139,6 +139,16 @@ def test_a_chat_with_no_readable_seed_is_launched_with_the_users_message_alone(t
     assert seed_context_message(tmp_path / "nowhere", "1") == "1"
 
 
+def test_a_slash_command_first_send_is_launched_as_typed(tmp_path: Path) -> None:
+    """A harness runs a message as a command only when the slash leads it, so the context block
+    is left off rather than turning the command into prose."""
+    turns = (SeedTurn(role=SeedRole.ASSISTANT, text="### 1. Take a tour\n\n### 2. Bring a repository over"),)
+
+    launch = seed_context_message(_seeded_chat_dir(tmp_path, turns), "/deep-research honest software")
+
+    assert launch == "/deep-research honest software"
+
+
 def test_a_seeded_conversation_too_long_to_carry_points_at_the_file_instead(tmp_path: Path) -> None:
     """The message rides an argv, which is bounded, so past the inline limit the agent is sent to
     the seed file -- the same choice a handoff makes with an oversized summary."""
