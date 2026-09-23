@@ -283,6 +283,11 @@ class PresenceSweep(MutableModel):
             self._thread.join(timeout=5)
             self._thread = None
 
+    @property
+    def is_running(self) -> bool:
+        """Whether the sweep thread is alive (started and not yet stopped)."""
+        return self._thread is not None and self._thread.is_alive()
+
     def sweep_once(self, now: datetime) -> bool:
         """One pass: announce the connected set when it differs from the last announced one; answers whether it did."""
         outcome = self.store.sweep(now)
