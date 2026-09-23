@@ -18,24 +18,34 @@ explain; do not ask them to choose a mechanism.
 | # | Method | Workable when | What you say | Read |
 |---|---|---|---|---|
 | 1 | **Builtin latchkey service** | `latchkey services list` names the service, possibly under a name other than the product's (Notion is `notion-mcp`). `--viable` shows the ones already connected; `latchkey services info <name>` gives auth options and status. | "I'll use your connected Slack account." | `references/latchkey.md` |
-| 2 | **Custom latchkey service** | The API is HTTPS and takes a header credential (`Authorization: Bearer <token>` or a named header via `payload.header`), or the site has an internal API behind a cookie or minted token you can identify (`cookie-capture`, `token-capture`). A key that goes in the query string is NOT workable here; go to row 4. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Mind's credential store." | `references/latchkey.md`, "Custom services" |
-| 3 | **MCP server** | A maintained MCP server exists for the service. Prefer one authenticated by a key, or one running locally over stdio, to one with its own OAuth sign-in. | "Example ships an MCP server, so I'll wire that up; it needs an API key, which I'll ask you for." | `references/mcp.md` |
-| 4 | **Direct API** | An official SDK, CLI, or documented HTTP API takes a key the user can copy from their account settings. An API that needs an OAuth app registration is workable too, but offered as the more technical option, with row 5 the default. | "Example has an API; I'll ask you for its key and call it from here." | `references/direct-api.md` |
-| 5 | **Browser** | Always. Sign-ins, CAPTCHAs, and two-factor prompts go to the user through `handoff`. | "I'll drive a browser you can watch and take over." | the `agentic-browser-fleet` skill |
+| 2 | **Custom latchkey service, with a key** | The API is HTTPS and takes a key the user can copy from their account settings as one header (`Authorization: Bearer <token>`, or a named header via `payload.header`). A key that goes in the query string, a signature scheme, or two values that must be combined are NOT workable here. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Mind's credential store." | `references/latchkey.md`, "Custom services" |
+| 3 | **Official MCP server** | The service itself publishes an MCP server: its docs link to it, or it lives in the service's own GitHub organization. Prefer one authenticated by a key, or one running locally over stdio, to one with its own OAuth sign-in. | "Example has its own connector, so I'll set that up; it needs you to sign in to Example once." | `references/mcp.md` |
+| 4 | **Custom latchkey service, with a sign-in** | No key works (the documented API needs a registered OAuth app, or there is none), but the service's own website loads its data from endpoints its sign-in authorises: `cookie-capture` when the session cookie is the credential, `token-capture` when the page fetches a bearer token from an endpoint of its own. | "I'll ask you to sign in to Example once, in a window Mind opens on your computer; your session stays in Mind's credential store." | `references/latchkey.md`, "Signing in instead of a key" |
+| 5 | **Community MCP server** | Someone other than the service maintains an MCP server for it, it is actively maintained, and it needs no more than a key the user can copy (not an OAuth app they would have to register). Same preference order as row 3. | "There's a well-maintained connector for Example, so I'll set that up; it needs an API key, which I'll ask you for." | `references/mcp.md` |
+| 6 | **Direct API** | An official SDK, CLI, or documented HTTP API takes a key the user can copy from their account settings. An API that needs an OAuth app registration is workable too, but offered as the more technical option, with row 7 the default. | "Example has an API; I'll ask you for its key and call it from here." | `references/direct-api.md` |
+| 7 | **Browser** | Always. Sign-ins, CAPTCHAs, and two-factor prompts go to the user through `handoff`. | "I'll drive a browser you can watch and take over." | the `agentic-browser-fleet` skill |
 
 A row's test is cheap on purpose: run `latchkey services list --viable` first,
 then look at the service's docs for the shape its API takes. Do not run the
-whole table when an earlier row is plainly workable.
+whole table when an earlier row is plainly workable. The one test the docs do
+not answer is row 4's: when they rule out a key, ask what the service's own
+website calls once you are signed in, which they never mention.
+
+A row is ruled out by what its test says, not by a probe you ran without the
+credential: a `403` from a plain `curl` says nothing about the same request
+carrying the user's key or session. When a site may refuse the row's requests
+anyway (bot challenges, blocked networks), name that as the risk in your
+explanation, try the row, and move to the next one when it actually fails.
 
 ## Rules that apply to every row
 
 - **Decide, then explain.** Pick the first workable row and tell the user which
   and why in plain terms. At the one fork that is genuinely their preference
-  (registering an OAuth app for row 4 versus driving the browser for row 5),
+  (registering an OAuth app for row 6 versus driving the browser for row 7),
   default to the browser and mention the OAuth alternative in one line.
 - **A credential value never enters a command, a file you write, or your prose.**
-  Rows 1 and 2 keep the value in Mind's credential store and inject it at the
-  gateway. Rows 3 and 4 take it through the **secret card**: you run
+  Rows 1, 2 and 4 keep the value in Mind's credential store and inject it at the
+  gateway. Rows 3, 5 and 6 take a key through the **secret card**: you run
   `request_secret.py` (below), the user types the value into the card, and the
   chat app writes `data/.secrets/<name>.env`. You never see the value; you name
   the file and the variables. A program reads the file only through

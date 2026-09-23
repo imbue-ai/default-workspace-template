@@ -1,4 +1,4 @@
-# Latchkey: the user's connected accounts (rows 1 and 2)
+# Latchkey: the user's connected accounts (rows 1, 2 and 4)
 
 Latchkey is a CLI tool that automatically injects credentials into curl commands.
 Credentials are managed on the outside by the Mind app: sending a permission
@@ -47,7 +47,7 @@ request to send.
 
 | Error latchkey returned | What it means | What to send |
 | --- | --- | --- |
-| `No service matches URL: <url>` | Latchkey has no service for this domain at all | `type: "custom-service"` (row 2), if the service is workable there; else rows 3 to 5 |
+| `No service matches URL: <url>` | Latchkey has no service for this domain at all | `type: "custom-service"` (row 2 or 4), if the service is workable there; else the other rows |
 | `No credentials found for <service>.` | The service exists; it is not connected yet | `type: "predefined"` |
 | `Request not permitted by the user.` | The service exists and is connected; you lack the permission | `type: "predefined"` |
 
@@ -143,7 +143,7 @@ single account for the service), or have the user reconnect the account from the
 Permissions tab ("Add connection", then "Add another account" for that service;
 tell them to do that when more than one account is configured).
 
-## Custom services (row 2)
+## Custom services (rows 2 and 4)
 
 A **custom service** is a connection to one domain latchkey has no builtin for.
 The user approves it in the Mind app, pastes the credential into the approval
@@ -155,7 +155,10 @@ Before you decide to go down this route: you do not need a connection to make
 requests to URLs that require no credentials; latchkey is not necessary at all.
 And a custom service covers only what the gateway can inject: a request header,
 or a cookie or token captured from a browser sign-in. A key that goes in the
-query string, a signature scheme, or an OAuth client is row 4.
+query string or a signature scheme is not one of them (row 6). A documented API
+that needs a registered OAuth app is not one either, but that does not rule the
+service out: its website's own sign-in may be (row 4, "Signing in instead of a
+key" below).
 
 This asks the user to create a connection to one domain and let this machine
 use it:
@@ -183,12 +186,44 @@ value will be sent as:
 `header` cannot be `Host` or an `X-Latchkey-*` header, and cannot be combined
 with `login` (a login flow supplies its own credential shape).
 
-Alternatively, trigger a browser sign-in flow and have latchkey retrieve and
-store credentials from the browser, by adding a `login` object:
+### Signing in instead of a key (row 4)
+
+When no key works, the service's own website may still be reachable: its pages
+load their data from endpoints the user's sign-in authorises, and those
+endpoints are fair game. Add a `login` object and approving the request opens a
+sign-in window; latchkey captures the credential the site sets and the gateway
+sends it with every `latchkey curl` to the domain:
 
 ```bash
-  -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login": {"url": "https://api.example.com/login", "flow": "cookie-capture", "flow_params": {"cookieKeys": ["session"]}}}}'
+  -d '{... "payload": {"domain": "www.example.com", "scheme": "https", "login": {"url": "https://www.example.com/login", "flow": "cookie-capture", "flow_params": {"cookieKeys": ["session"]}}}}'
 ```
+
+The sign-in window is latchkey's own browser, on the user's computer, not a
+browser in this workspace. It keeps its own saved state, so the first sign-in
+to a site there is a fresh one.
+
+Pick the flow from how the site authenticates its own requests. Find the
+endpoints from public write-ups of the site's API, or by loading its pages in a
+fleet browser and listing what they fetched (`playwright-cli eval "() =>
+performance.getEntriesByType('resource').map(e => e.name)"`).
+
+- **`cookie-capture`** when the endpoints accept the session cookie alone. The
+  flow sees a cookie only when a `Set-Cookie` response header sets it during
+  sign-in; a session cookie marked `HttpOnly` always is, since a page script
+  cannot set one. Name the cookies in `cookieKeys`.
+- **`token-capture`** when the page calls the API with a bearer token it
+  fetches from an endpoint of its own (`tokenUrl`, with the token at
+  `tokenField`). The token expires and cannot be refreshed, so the user signs
+  in again now and then; say so.
+- **Neither** when every request also needs a value the page computes, such as
+  a CSRF header that must echo a cookie: row 4 is out, go on to row 5.
+
+`latchkey curl` requests are sent by the gateway, which runs on the user's
+computer for a workspace there and on the workspace's server for a cloud one.
+A plain `curl` from this workspace therefore tests neither the credential nor
+the network the gateway sends from. A site with heavy bot protection may still
+refuse the gateway's requests; name that as the risk, try the row, and move to
+the next one when `latchkey curl` actually comes back refused.
 
 `login.url`, `login.flow` and `login.flow_params` are the same as the
 `--login-url`, `--login-flow` and `--login-flow-params` flags documented in
@@ -197,8 +232,7 @@ use this API rather than the `latchkey services register` CLI directly. All thre
 are required inside `login`: a flow needs a login URL and its parameters. The
 parameters are checked against the flow's schema, so an unknown key is refused,
 and every URL in them (`url`, `cookieUrl`, `tokenUrl`) must be on `domain` or a
-subdomain of it. Every login flow has limitations: make sure the flow you request
-will actually work for the service you are registering.
+subdomain of it.
 
 ## When the gateway is unreachable
 

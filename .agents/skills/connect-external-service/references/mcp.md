@@ -1,6 +1,13 @@
-# The service's MCP server (row 3)
+# The service's MCP server (rows 3 and 5)
 
-## When this row applies
+## When these rows apply
+
+Row 3 is a server the service itself publishes: its docs link to it, or it
+lives in the service's own GitHub organization. A listing in an MCP directory or
+registry does not make a server official; anyone can list one. Row 5 is anyone
+else's server, taken only after a key (row 2) and a sign-in (row 4) are ruled
+out, and only when it is actively maintained and needs no more than a key the
+user can copy.
 
 MCP is allowed for a service latchkey has no builtin for. The workspace disables
 claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in

@@ -1,4 +1,4 @@
-# The direct API (row 4)
+# The direct API (row 6)
 
 ## What counts as an easy API
 
@@ -11,7 +11,7 @@ signatures, and anything else latchkey cannot inject belong here too.
 An API that needs an **OAuth app registration** (a client id and secret the user
 creates in a developer console) is workable, but it asks the user to do
 developer-console work. Offer it as the more technical option in one line and
-default to the browser (row 5) unless they take it.
+default to the browser (row 7) unless they take it.
 
 ## The secret request
 
