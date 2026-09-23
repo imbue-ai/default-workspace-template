@@ -399,7 +399,7 @@ type SectionEntry =
   /** A permission request, lifted out of any open step to render inline as a
    *  visible break (see hasPermissionRequest / the `permission` TimelineItem). */
   | { kind: "permission"; event: AssistantMessageEvent }
-  /** A system chip that landed inside an open handoff node. */
+  /** A system chip or notice that landed inside an open handoff node. */
   | { kind: "chip"; event: UserMessageEvent }
   /** The handoff node, at the summary request that opened it or at a switch with no request. */
   | { kind: "handoff"; node: HandoffNode }
