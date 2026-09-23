@@ -41,11 +41,10 @@ browser, starting it again if it was stopped. Browsers are addressed by name eve
 - `new` also opens the browser's window on the user's desktop, **minimized**: it waits in their
   taskbar, and they do not see it until they click it or you show it (see "Live view" below).
   That is right while you browse on your own; show it once they should watch. `handoff` shows
-  it for you.
-  **The browser lives as long as some window shows it**: when the
-  user closes its last window, the browser is stopped (its logins and tabs are kept) and your
-  next command fails -- that is the user telling you to stop, so do not `new` it straight back
-  without asking. Never close the user's window yourself.
+  it for you. **The browser lives as long as some window shows it**: when the user closes its
+  last window, the browser is stopped (its logins and tabs are kept) and your next command
+  fails -- that is the user telling you to stop, so do not `new` it straight back without
+  asking. Never close the user's window yourself.
 - `new my-browser` asks for a second, named browser; the fleet is capped and answers
   `1/1 browsers open -- close one first`. Do not do this.
 - **Browsers cannot be renamed.**
@@ -192,8 +191,9 @@ uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in
 
 `handoff` puts you at the **front** of the resume queue, hands control to the human (pinned, so
 it will not pass to another agent), and brings the browser's window up in front of them. In the
-**same turn**: tell the user exactly what to do and on which page, then **end your turn**. You are woken first when they hand
-it back -- re-`snapshot` to confirm the challenge cleared, then carry on.
+**same turn**: tell the user exactly what to do and on which page, then **end your turn**. You
+are woken first when they hand it back -- re-`snapshot` to confirm the challenge cleared, then
+carry on.
 
 ## Live view vs. your output
 
