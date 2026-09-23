@@ -867,6 +867,169 @@ def test_classify_merge_refuses_a_local_that_already_contains_the_target(
     assert [entry["path"] for entry in result["pulled_in"]] == ["upstream.txt"]
 
 
+# footprint-ranges
+
+
+@dataclass
+class _UpdateHistory:
+    """A workspace repo whose local line forked from an upstream release line."""
+
+    root: Path
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=self.root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    def commit_file(self, rel: str, message: str) -> str:
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{message}\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def release(self, tag: str, rel: str) -> None:
+        """Commit ``rel`` on the upstream line and tag it, leaving the local line checked out."""
+        self.git("checkout", "-q", "upstream-line")
+        self.commit_file(rel, tag)
+        self.git("tag", tag)
+        self.git("checkout", "-q", "main")
+
+    def merge_update(self, tag: str) -> str:
+        self.git(
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            f"update-self: merge upstream template ({tag})",
+            tag,
+        )
+        return self.git("rev-parse", "HEAD")
+
+    def roll_back(self, merge: str) -> str:
+        """The apply's forward revert of a landed merge, under its own subject."""
+        self.git("revert", "-m", "1", "--no-commit", merge)
+        self.git(
+            "commit", "-q", "-m", f"Roll back update apply (restore to {merge[:9]})"
+        )
+        return self.git("rev-parse", "HEAD")
+
+    def changed(self, base: str, ref: str) -> list[str]:
+        return sorted(_list_lines(self.git("diff", "--name-only", f"{base}...{ref}")))
+
+    def ranges(self, target: str, capsys) -> dict[str, str]:
+        code = update_self.main(
+            ["footprint-ranges", "--target", target, "--repo-root", str(self.root)]
+        )
+        assert code == 0, capsys.readouterr().err
+        return json.loads(capsys.readouterr().out)
+
+
+def _list_lines(output: str) -> list[str]:
+    return [line for line in output.splitlines() if line]
+
+
+def _update_history(root: Path) -> _UpdateHistory:
+    history = _UpdateHistory(root)
+    history.git("init", "-q", "-b", "main")
+    history.git("config", "user.email", "test@example.com")
+    history.git("config", "user.name", "test")
+    history.commit_file("shared.txt", "base")
+    history.git("branch", "upstream-line")
+    return history
+
+
+def test_footprint_ranges_hold_after_a_commit_on_top_of_the_merge(
+    tmp_path, capsys
+) -> None:
+    # The worker may commit a fix after its merge and rerun the footprint
+    # block; the ranges must still split the workspace's own change from the
+    # update's, where HEAD^1 would then name the merge itself.
+    history = _update_history(tmp_path)
+    history.release("v1", "upstream_v1.txt")
+    history.commit_file("system/apps/mine/app.py", "local work")
+    merge = history.merge_update("v1")
+    history.commit_file("system/apps/mine/app.toml", "worker fix")
+
+    ranges = history.ranges("v1", capsys)
+
+    assert ranges["merge"] == merge
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "upstream_v1.txt"
+    ]
+
+
+def test_footprint_ranges_on_a_retry_whose_target_moved(tmp_path, capsys) -> None:
+    # The worker reverts the rollback before merging the newer release, so the
+    # merge's first parent already carries v1. The live workspace runs the
+    # rolled-back tree, so the update is v1 and v2 together, and the local side
+    # is still only the workspace's own file.
+    history = _update_history(tmp_path)
+    history.release("v1", "upstream_v1.txt")
+    history.commit_file("system/apps/mine/app.py", "local work")
+    rollback = history.roll_back(history.merge_update("v1"))
+    history.release("v2", "upstream_v2.txt")
+    history.git("revert", "--no-edit", rollback)
+    history.merge_update("v2")
+
+    ranges = history.ranges("v2", capsys)
+
+    assert ranges["update_base"] == rollback
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "upstream_v1.txt",
+        "upstream_v2.txt",
+    ]
+
+
+def test_footprint_ranges_on_a_retry_of_the_same_target(tmp_path, capsys) -> None:
+    # Reverting the rollback already brings v1 back, so there is no new merge:
+    # the landed attempt's merge is the anchor, the revert is the update, and
+    # a local commit made after the rollback counts as the workspace's own.
+    history = _update_history(tmp_path)
+    history.release("v1", "upstream_v1.txt")
+    history.commit_file("system/apps/mine/app.py", "local work")
+    rollback = history.roll_back(history.merge_update("v1"))
+    history.commit_file("system/apps/later/app.py", "local work after the rollback")
+    history.git("revert", "--no-edit", rollback)
+    revert = history.git("rev-parse", "HEAD")
+
+    ranges = history.ranges("v1", capsys)
+
+    assert ranges["update_ref"] == revert
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/later/app.py",
+        "system/apps/mine/app.py",
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "upstream_v1.txt"
+    ]
+
+
+def test_footprint_ranges_refuses_an_earlier_updates_merge(tmp_path, capsys) -> None:
+    # A workspace updated before carries older merges under the same subject;
+    # without this pass's merge the ranges would silently describe that one.
+    history = _update_history(tmp_path)
+    history.release("v1", "upstream_v1.txt")
+    history.merge_update("v1")
+    history.release("v2", "upstream_v2.txt")
+
+    code = update_self.main(
+        ["footprint-ranges", "--target", "v2", "--repo-root", str(tmp_path)]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "does not merge v2" in captured.err
+    assert captured.out == ""
+
+
 # bootstrap-skill
 
 

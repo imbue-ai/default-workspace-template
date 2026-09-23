@@ -142,50 +142,35 @@ update reached it.
 
 ```bash
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
-MERGE=$(git log --format=%H --grep='^update-self: merge upstream template' -1)
-[ -n "$MERGE" ] \
-    && [ "$(git rev-parse -q --verify "$MERGE^2^{commit}")" = "$(git rev-parse "$TARGET_REF^{commit}")" ] \
-    || { echo "no update-self merge of $TARGET_REF on this branch" >&2; exit 1; }
-LOCAL_BASE=$(git merge-base "$MERGE^1" "$TARGET_REF") || exit 1
-LOCAL_REF="$MERGE^1" UPDATE_BASE="$MERGE^1" UPDATE_REF="$MERGE"
-REVERT=$(git log --format=%H --grep='^Revert "Roll back update apply' -1 "$MERGE..HEAD")
-if [ -n "$REVERT" ]; then
-    LOCAL_REF="$REVERT^" UPDATE_BASE="$REVERT^" UPDATE_REF="$REVERT"
-elif git log -1 --format=%s "$MERGE^1" | grep -q '^Revert "Roll back update apply'; then
-    UPDATE_BASE="$MERGE^1^"
-fi
-rm -rf data/.tasks/update-self/scopes
-mkdir -p data/.tasks/update-self/scopes
+SCOPES=data/.tasks/update-self/scopes
+RANGES=data/.tasks/update-self/footprint-ranges.json
+rm -rf "$SCOPES" && mkdir -p "$SCOPES"
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    footprint-ranges --target "$TARGET_REF" > "$RANGES" || exit 1
 for manifest in system/apps/*/app.toml; do
     package=$(basename "$(dirname "$manifest")")
     uv run --frozen --package app-manifest app-manifest footprint "$manifest" \
-        --diff-base "$LOCAL_BASE" --diff-ref "$LOCAL_REF" \
-        --out "data/.tasks/update-self/scopes/$package.local.json" || exit 1
+        --diff-base "$(jq -r .local_base "$RANGES")" \
+        --diff-ref "$(jq -r .local_ref "$RANGES")" \
+        --out "$SCOPES/$package.local.json" || exit 1
     uv run --frozen --package app-manifest app-manifest footprint "$manifest" \
-        --diff-base "$UPDATE_BASE" --diff-ref "$UPDATE_REF" \
-        --out "data/.tasks/update-self/scopes/$package.update.json" || exit 1
+        --diff-base "$(jq -r .update_base "$RANGES")" \
+        --diff-ref "$(jq -r .update_ref "$RANGES")" \
+        --out "$SCOPES/$package.update.json" || exit 1
 done
 ```
 
-The ranges are pinned to the merge commit rather than to `HEAD`, so a fix you
-commit on top of it, and any rerun, reads the same two sides; the block checks
-that the commit it found merged `$TARGET_REF`, since an earlier update's merge
-carries the same subject. The local range runs from the merge's fork point with
-the target to the pre-merge local commit, and the update range from that
-commit to the merge. On a retry whose target moved since the rolled-back
-attempt, that commit is Step 1's revert of the rollback, which already carries
-the landed release, so the update range starts at the commit the revert sits
-on instead (the rollback, plus anything committed after it): the tree the live
-workspace runs, against which the whole update is a change. On a retry of the
-same target the revert leaves `git merge` nothing to merge, so the block finds
-the landed attempt's own merge, and the revert is the whole update: the update
-range is the revert itself, and the local range runs from the landed attempt's
-fork point to the commit the revert sits on, which carries every local commit
-since that attempt branched -- the landed merge's first parent carries none of
-them. `--package app-manifest` installs the library from the merged tree,
-which a workspace from before the app model has none of (the root project does
-not depend on it), and `--frozen` keeps the command from re-locking the merged
-tree before 4b's environment gate has checked it.
+`footprint-ranges` names the two ranges: the local range is what the
+workspace itself changed since it forked from the target's line, and the
+update range is what the update changes in the tree the live workspace runs.
+Both are anchored on this pass's merge commit rather than on `HEAD`, so a fix
+you commit on top of it, and any rerun, reads the same two sides; the command
+shifts them for a retry after a rolled-back apply, and refuses when the latest
+merge commit it finds does not merge `$TARGET_REF` (an earlier update's merge
+carries the same subject). `--package app-manifest` installs the library from
+the merged tree, which a workspace from before the app model has none of (the
+root project does not depend on it), and `--frozen` keeps the command from
+re-locking the merged tree before 4b's environment gate has checked it.
 
 `<package>.local.json`'s `diff.inside_footprint` is the creation's own
 content: every file of its footprint in which the workspace differs from the
