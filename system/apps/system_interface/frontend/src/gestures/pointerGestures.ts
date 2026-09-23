@@ -153,8 +153,8 @@ export class PointerGestureSource implements GestureSource {
       // A new press: the last drag's click has fired by now or never will.
       suppressNextClick = false;
       if (event.button !== PRIMARY_BUTTON) return;
-      // A second pointer during a drag is ignored; a press still pending without a drag is stale (it was
-      // released over a live page, whose document took the pointerup) and this press replaces it.
+      // A second pointer during a drag is ignored; a press still pending without a drag is stale (its
+      // release is one the root never saw) and this press replaces it.
       if (pending !== null) {
         if (pending.isDragging) return;
         finish();
