@@ -253,15 +253,6 @@ describe("PointerGestureSource", () => {
     expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
   });
 
-  it("a press the listener refuses to drag gives the pages back rather than holding them", () => {
-    detach = new PointerGestureSource().attach(root, listener(false));
-    const title = root.querySelector("#title") as Element;
-    pointer("pointerdown", title, 110, 70);
-    pointer("pointermove", title, 150, 70);
-    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
-    expect(events).toEqual([]);
-  });
-
   it("a resize whose release the root never saw ends at the edge's last point", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const edge = root.querySelector("#edge") as Element;
@@ -306,12 +297,16 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
-  it("does not begin when the listener says the binding is not draggable", () => {
+  it("does not begin when the listener says the binding is not draggable, and ends the press there", () => {
     detach = new PointerGestureSource().attach(root, listener(false));
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70);
     pointer("pointermove", title, 150, 70);
+    // The refusal is an ending of its own, so the pages come back at the threshold rather than at the
+    // release, and the release finds nothing left to give back.
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
     pointer("pointerup", title, 150, 70);
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
     expect(events).toEqual([]);
   });
 
