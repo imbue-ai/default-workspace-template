@@ -30,8 +30,8 @@
  *      task notification are all the SAME display (a collapsed system chip) and
  *      so are all `UserMessageKind.SystemChip`, differing only by their chip label.
  *   2. `KIND_SPEC` records, per kind, exactly how it renders: which rail, whether
- *      it is a turn of its own, and a prose description of the net visual. Read it to
- *      answer "what will my message look like?" without tracing render code.
+ *      it is a turn of its own, and a prose description of the net visual. Read
+ *      it to answer "what will my message look like?" without tracing render code.
  *
  * ---------------------------------------------------------------------------
  * Adding a harness (Codex, etc.)
@@ -176,9 +176,9 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     boundary: false,
     netVisual:
       "A left-aligned single line at the point it arrived, breaking the timeline " +
-      "like a SystemChip: a tick, the lead " +
-      "in medium weight ('Background task completed:'), then the summary in plain " +
-      "secondary text. Nothing to expand -- the summary is the whole of it.",
+      "like a SystemChip: a tick, the lead in medium weight ('Background task " +
+      "completed:'), then the summary in plain secondary text. Nothing to expand " +
+      "-- the summary is the whole of it.",
   },
 };
 
