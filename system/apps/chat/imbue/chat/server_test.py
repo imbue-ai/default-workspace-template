@@ -789,7 +789,8 @@ def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_reviv
 
     # The first connect attempt runs before the send reports NOT_READY, so this reading is the
     # pre-send check's alone.
-    session.ensure_live = lambda: is_connecting_at_connect.append(is_chat_connecting())
+    def record_connecting_at_connect() -> None:
+        is_connecting_at_connect.append(is_chat_connecting())
 
     def fake_start(agent_name: str) -> None:
         is_connecting_at_revive.append(is_chat_connecting())
@@ -799,6 +800,7 @@ def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_reviv
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch("imbue.chat.server.start_agent", fake_start),
         patch.object(AgentManager, "get_or_create_session", return_value=session),
+        patch.object(session, "ensure_live", record_connecting_at_connect),
     ):
         response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m-1"})
 
