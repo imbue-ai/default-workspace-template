@@ -1,7 +1,0 @@
-# Fix the per-box download lock wedging workspace restores
-
-A workspace restore took the box-wide download lock and then booted the VM while still holding it; `limactl`'s hostagent and qemu inherited the lock's descriptor and kept it for the life of the VM, so every later restore on that box stalled on the lock for the full transfer timeout (100 minutes) and then failed back to `stopped`.
-
-- The restore's download script now closes the lock before `limactl start`, so a booted VM never inherits it, and bounds the lock wait (`flock -w 300`): a stuck lock fails the restore in minutes with a real `transition_error` (`box download lock unavailable after 300s`) instead of parking the workspace behind the transfer timeout. The script publishes `STAGE=waiting-for-lock` while queued, so a queued transfer is distinguishable on the box from one that never started.
-
-- Rolling back a failed restore now stops the detached transfer (its `setsid` process group, guarded by a `/proc/<pid>/cwd` check so a reused pid is never group-killed) and runs `limactl delete --force` before removing the claimed dirs, so a timed-out waiter no longer sits on the lock queue forever and a restore that failed at boot no longer leaves a ghost VM running off unlinked inodes. If the instance survives the delete (its `lima.yaml` is still there), the instance and disk dirs are kept for a later sweep and the supervisor logs a warning; the transfer dir (S3 credentials, age identity) is removed either way.

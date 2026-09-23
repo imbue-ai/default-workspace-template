@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, avatarStateRecord, desktopRecord, windowRecord } from "../testing/records";
@@ -44,7 +44,18 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     ],
     isCompact: false,
     openEntryMenuWindowId: null,
-    launcher: { query: "", isOpen: false, isCompact: false, onOpen: vi.fn(), onClose: vi.fn(), onQuery: vi.fn() },
+    launcher: {
+      query: "",
+      isOpen: false,
+      isCompact: false,
+      onOpen: vi.fn(),
+      onClose: vi.fn(),
+      onQuery: vi.fn(),
+      onMoveHighlight: vi.fn(),
+      onRunHighlight: vi.fn(),
+      onRunSecondary: vi.fn(),
+      onRise: vi.fn(),
+    },
     tray: {
       desktops: [desktopRecord("home"), desktopRecord("work")],
       activeDesktopId: "home",
@@ -146,9 +157,20 @@ describe("Taskbar", () => {
     document.addEventListener("keydown", onDocumentKeyDown);
     try {
       const taskbar = render({
-        launcher: { query: "docs", isOpen: true, isCompact: false, onOpen: vi.fn(), onClose, onQuery },
+        launcher: {
+          query: "docs",
+          isOpen: true,
+          isCompact: false,
+          onOpen: vi.fn(),
+          onClose,
+          onQuery,
+          onMoveHighlight: vi.fn(),
+          onRunHighlight: vi.fn(),
+          onRunSecondary: vi.fn(),
+          onRise: vi.fn(),
+        },
       });
-      const input = taskbar.querySelector("[data-launcher-field] input") as HTMLInputElement;
+      const input = taskbar.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       expect(onQuery).toHaveBeenCalledWith("");
       expect(onClose).not.toHaveBeenCalled();

@@ -131,10 +131,8 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
 def _find_bash_scripts_without_strict_mode() -> list[str]:
     """Find bash scripts missing 'set -euo pipefail', excluding vendored and venv code.
 
-    Walks with os.walk and prunes excluded directories in place (the vendored
-    tree, .git, virtualenvs, node_modules) rather than rglob-ing the whole
-    tree: the vendored mngr checkout alone carries a ~30k-file .venv that a
-    full recursive glob would traverse on every run.
+    Walks with os.walk and prunes excluded directories in place (system/vendor,
+    .git, virtualenvs, node_modules) rather than rglob-ing the whole tree.
     """
     violations: list[str] = []
     for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):

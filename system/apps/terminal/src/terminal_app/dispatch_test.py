@@ -12,6 +12,7 @@ from terminal_app.dispatch import (
     build_ttyd_argv,
     install_dispatch_scripts,
     install_ttyd_web_client,
+    load_ttyd_web_client,
     render_agent_script,
     render_dispatch_snippet,
     render_session_script,
@@ -176,37 +177,46 @@ def test_install_writes_executable_scripts_and_keeps_an_existing_workdir_script(
         assert script.stat().st_mode & stat.S_IXUSR
 
 
-def test_install_ttyd_web_client_decompresses_the_vendored_client(
-    tmp_path: Path,
-) -> None:
-    archive = tmp_path / "ttyd_index.html.gz"
-    archive.write_bytes(gzip.compress(b"<html>patched client</html>"))
+def test_install_ttyd_web_client_decompresses_the_patched_client(tmp_path: Path) -> None:
     destination = tmp_path / "commands" / "index.html"
     destination.parent.mkdir()
 
-    assert install_ttyd_web_client(archive, destination) is True
+    assert install_ttyd_web_client(gzip.compress(b"<html>patched client</html>"), destination) is True
     assert destination.read_bytes() == b"<html>patched client</html>"
 
 
-def test_install_ttyd_web_client_falls_back_when_the_asset_is_missing_or_broken(
-    tmp_path: Path,
-) -> None:
+def test_install_ttyd_web_client_falls_back_when_the_archive_will_not_decompress(tmp_path: Path) -> None:
     destination = tmp_path / "index.html"
     good = gzip.compress(b"<html>patched client</html>" * 100)
     broken_archives = {
-        "not-gzip.gz": b"not gzip at all",
-        "truncated.gz": good[: len(good) // 2],
-        "corrupt.gz": good[:20] + b"xx" + good[22:],
+        "not-gzip": b"not gzip at all",
+        "truncated": good[: len(good) // 2],
+        "corrupt": good[:20] + b"xx" + good[22:],
     }
 
-    assert install_ttyd_web_client(tmp_path / "absent.gz", destination) is False
-    assert not destination.exists()
-
     for name, contents in broken_archives.items():
-        broken = tmp_path / name
-        broken.write_bytes(contents)
-        assert install_ttyd_web_client(broken, destination) is False, name
+        assert install_ttyd_web_client(contents, destination) is False, name
         assert not destination.exists(), name
+
+
+def test_load_ttyd_web_client_reads_the_packaged_client_when_no_override_is_given() -> None:
+    # The terminal serves the OSC 52-capable client the imbue-mngr-ttyd package ships; a
+    # decompressible archive is what install_ttyd_web_client is then handed.
+    compressed_client = load_ttyd_web_client(None)
+
+    assert compressed_client is not None
+    assert gzip.decompress(compressed_client).startswith(b"<!DOCTYPE html>")
+
+
+def test_load_ttyd_web_client_reports_an_override_that_is_not_there(tmp_path: Path) -> None:
+    assert load_ttyd_web_client(tmp_path / "absent.gz") is None
+
+
+def test_load_ttyd_web_client_prefers_an_override_that_is_there(tmp_path: Path) -> None:
+    override = tmp_path / "ttyd_index.html.gz"
+    override.write_bytes(gzip.compress(b"<html>an operator's client</html>"))
+
+    assert load_ttyd_web_client(override) == override.read_bytes()
 
 
 def test_ttyd_argv_carries_the_port_the_client_and_the_dispatch() -> None:

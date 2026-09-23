@@ -527,7 +527,7 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
         return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
     # The shell's bundle is served by every tree the workspace ever ran, manifest or not;
-    # only the chat's depends on the restored tree carrying the chat frontend.
+    # every other bundle depends on the restored tree carrying its app's frontend.
     served = tuple(
         bundle
         for bundle in FRONTEND_BUNDLES
@@ -635,7 +635,11 @@ def _recover_running_state(
         destinations = resolve_tool_destinations(plan, runner)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(
-                repo_root, runner, keep_protected, destinations
+                repo_root,
+                runner,
+                keep_protected,
+                destinations,
+                is_mngr_source_required=False,
             )
         rebuildable_app_tools = _app_tools_to_rebuild(
             plan.app_tools, restored, repo_root
@@ -976,7 +980,7 @@ def apply_update(
         if marker.worker_bundles is not None:
             # All or nothing: the bundles are built together from one tree, and a
             # live build emits them all, so one that cannot be installed means a
-            # live build for both.
+            # live build for all of them.
             rejections = {
                 bundle.app: _worker_bundle_reject_reason(
                     marker.worker_bundles.get(bundle.app),
@@ -1387,9 +1391,10 @@ def _touched_critical_apps(
     under its directory, when the bundle it owns was rebuilt, when the apply reinstalled
     its tool environment (a shared backend manifest moves every tool's closure, so
     ``plan.app_tools`` then names every app), or, for the shell, when anything the
-    shell's process runs changed. A frontend apply replaces both bundles, so include
-    both owners even if one app's source was unchanged. An extra restart is acceptable;
-    rollback targeting does not need to compare installed and kept source stamps.
+    shell's process runs changed. A frontend apply replaces every bundle, so include
+    each critical owner even if that app's source was unchanged. An extra restart is
+    acceptable; rollback targeting does not need to compare installed and kept source
+    stamps.
     """
     paths = [path for _, path in name_status]
     apps_dir = repo_root / APPS_DIR
