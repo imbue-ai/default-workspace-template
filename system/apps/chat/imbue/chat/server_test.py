@@ -4,6 +4,7 @@ import fcntl
 import io
 import json
 import os
+from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -693,6 +694,15 @@ def _codex_session_over(ledger: "_FakeCodexLedger | None") -> CodexHarnessSessio
     return session
 
 
+def _codex_session_down_until_started(ledger: "_FakeCodexLedger") -> tuple[CodexHarnessSession, Callable[[], None]]:
+    """A codex session whose daemon is down until the returned ``bring_up`` runs (a revive's start)."""
+    session = CodexHarnessSession.__new__(CodexHarnessSession)
+    session.ensure_live = lambda: None
+    live: list[_FakeCodexLedger] = []
+    session._live_ledger = lambda: live[0] if live else None
+    return session, lambda: live.append(ledger)
+
+
 def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
     """A codex send is submitted through the live ledger (backend authority), not the mngr send."""
     agent_id = "codex-agent-1"
@@ -744,13 +754,10 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
     ledger = _FakeCodexLedger()
 
     # The daemon is down until the revive starts the agent; the retry then finds the ledger.
-    session = CodexHarnessSession.__new__(CodexHarnessSession)
-    session.ensure_live = lambda: None
-    live: list[_FakeCodexLedger] = []
-    session._live_ledger = lambda: live[0] if live else None
+    session, bring_up = _codex_session_down_until_started(ledger)
 
     def fake_start(agent_name: str) -> None:
-        live.append(ledger)
+        bring_up()
 
     with (
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
@@ -772,16 +779,13 @@ def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_reviv
     seed_agent_state(manager, agent_id, name="codex-agent", harness=HarnessType.CODEX)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     ledger = _FakeCodexLedger()
-    session = CodexHarnessSession.__new__(CodexHarnessSession)
-    session.ensure_live = lambda: None
-    live: list[_FakeCodexLedger] = []
-    session._live_ledger = lambda: live[0] if live else None
+    session, bring_up = _codex_session_down_until_started(ledger)
     is_connecting_at_revive: list[bool] = []
 
     def fake_start(agent_name: str) -> None:
         snapshot = manager.get_chat_snapshot(agent_id)
         is_connecting_at_revive.append(snapshot is not None and snapshot.active_agent.is_connecting)
-        live.append(ledger)
+        bring_up()
 
     with (
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
