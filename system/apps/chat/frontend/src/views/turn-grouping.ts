@@ -166,7 +166,8 @@ export type TimelineItem =
 export interface SectionView {
   /** The user message that opened this section -- a human turn, or a system chip
    *  or notice the agent resumed after -- or null for content that precedes the
-   *  first user message or follows a permission verdict or an agent switch. */
+   *  first user message or follows a permission verdict or an agent switch that
+   *  carries no message. */
   user_event: UserMessageEvent | null;
   key: string;
   items: TimelineItem[];
