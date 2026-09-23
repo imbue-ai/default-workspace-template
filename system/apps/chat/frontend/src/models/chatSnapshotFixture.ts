@@ -16,6 +16,7 @@ export function chatSnapshotFixture(
     labels: {},
     agent_ids: [chatId],
     handoff: null,
+    last_messaged_at: null,
     ...chatOverrides,
     active_agent: {
       agent_id: chatId,
@@ -44,6 +45,7 @@ export function handoffStateFixture(overrides: Partial<HandoffState> = {}): Hand
     target_harness: "codex",
     target_label: "Codex",
     held_sends: [{ message_id: "trigger-1", text: "Carry on in Codex" }],
+    model_pick: null,
     error: null,
     failed_step: null,
     ...overrides,
@@ -62,6 +64,7 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
     target_harness: "claude",
     target_label: "Anthropic 2 (Claude Code)",
     held_sends: [{ message_id: "trigger-1", text: "Carry on on the other account" }],
+    model_pick: null,
     error: null,
     failed_step: null,
     ...overrides,

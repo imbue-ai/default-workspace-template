@@ -8,7 +8,6 @@ directory, mirroring `main.build_production_state` without ever starting the she
 
 from __future__ import annotations
 
-import json
 import os
 import socket
 import socketserver
@@ -16,14 +15,13 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import xmlrpc.client
 from collections.abc import Iterator
-from collections.abc import Mapping
-from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
@@ -33,12 +31,12 @@ from app_manifest.registry import registry_path
 from flask import Flask
 from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.state import build_shell_state
-from imbue.system_interface.template_catalog import TemplateCatalogFetcherInterface
-from imbue.system_interface.template_catalog import build_template_catalog_store
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -166,61 +164,30 @@ def _fresh_shell_state_directory() -> Path:
     return Path(directory.name)
 
 
-class FakeTemplateCatalogFetcher(TemplateCatalogFetcherInterface):
-    """Answers each catalog URL from a table (None for one not in it) and records every fetch."""
-
-    body_by_url: dict[str, bytes] = Field(default_factory=dict, description="What each URL answers")
-    fetched_urls: list[str] = Field(default_factory=list, description="Every URL fetched, in order")
-
-    def fetch(self, url: str) -> bytes | None:
-        self.fetched_urls.append(url)
-        return self.body_by_url.get(url)
-
-
-def catalog_template_document(slug: str, **overrides: Any) -> dict[str, Any]:
-    """One template as a catalog lists it: the four required fields and a relative drawing, derived
-    from the slug, with ``overrides`` laid over them."""
-    document: dict[str, Any] = {
-        "slug": slug,
-        "title": slug.title(),
-        "description": f"What {slug} does.",
-        "repository_url": f"https://github.com/someone/{slug}",
-        "thumbnail": f"thumbnails/someone--{slug}.svg",
-    }
-    document.update(overrides)
-    return document
-
-
-def catalog_document(
-    *templates: Mapping[str, Any], shelves: Sequence[Mapping[str, Any]] = (), **overrides: Any
-) -> bytes:
-    """A format-1 catalog document as a fetcher answers it, holding ``templates`` and ``shelves``."""
-    document: dict[str, Any] = {
-        "format": 1,
-        "generated_at": "2026-09-07T00:00:00Z",
-        "templates": list(templates),
-        "shelves": list(shelves),
-    }
-    document.update(overrides)
-    return json.dumps(document).encode("utf-8")
-
-
 def build_test_state(
     *,
     config: Config | None = None,
     broadcaster: WebSocketBroadcaster | None = None,
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
-    template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
+    is_preview: bool = False,
+    repo_root: Path | None = None,
+    static_directory: Path | None = None,
+    agent_events_path: Path | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
     The shell state is built but never started, so no registry watch or inventory sweep
     runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
-    and ``broadcaster`` the fan-out the inventory and the routes share. The template catalog
-    is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
-    the network for it; with one, the store fetches the config's URL through it.
+    and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
+    the preview shell, which refuses the verbs that would reach the live workspace. ``repo_root`` is
+    where the update notice reads its record and finds the update-self script (a fresh temp
+    directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
+    package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
+    test fills itself. The avatar's catalog lives under the state directory, and its mood is read
+    from ``agent_events_path`` (a file under the state directory by default, absent until a test
+    writes it).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_config = config if config is not None else Config()
@@ -229,21 +196,66 @@ def build_test_state(
         registry_path=registry_path(),
         broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
         inventory=inventory,
+        wallpaper_files_directory=state_directory / "wallpapers",
+        avatar_catalog_directory=state_directory / "avatars",
+        agent_events_path=agent_events_path
+        if agent_events_path is not None
+        else state_directory / "agent-events.jsonl",
+        repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
     )
-    template_catalog = build_template_catalog_store(
-        catalog_url=resolved_config.system_interface_template_catalog_url
-        if template_catalog_fetcher is not None
-        else "",
-        state_directory=state_directory,
-        fetcher=template_catalog_fetcher,
+    resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
+    return SystemInterfaceState(
+        config=resolved_config,
+        shell=shell,
+        is_preview=is_preview,
+        static_directory=resolved_static_directory,
     )
-    return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
 
 
-def _find_free_port() -> int:
+# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the shell's fixed loopback port, the two
+# stand-in apps its registry holds (one declaring launch paths), and the one connected client most of its
+# tests target, on the default desktop.
+PIPELINE_PORT: Final[int] = 18766
+PIPELINE_BASE_URL: Final[str] = f"http://127.0.0.1:{PIPELINE_PORT}"
+PIPELINE_SEEDED_APP_NAME: Final[str] = "chat"
+PIPELINE_STUB_APP_NAME: Final[str] = "docs"
+PIPELINE_CLIENT_ID: Final[str] = "client-1"
+PIPELINE_DEFAULT_DESKTOP_ID: Final[str] = "home"
+
+
+class PipelineHarness(FrozenModel):
+    """What one pipeline test gets: the shell's URL, its broadcaster, and the registry file."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    base_url: str = Field(description="The shell's loopback URL")
+    broadcaster: WebSocketBroadcaster = Field(description="The shell's broadcaster, for fake clients")
+    registry_path: Path = Field(description="The registry file the shell and the script read")
+
+
+def stand_in_app() -> Flask:
+    """An app that answers every path, so the liveness probe finds it running."""
+    app = Flask("stand-in")
+    app.add_url_rule("/", view_func=lambda: "ok", endpoint="root")
+    app.add_url_rule("/<path:path>", view_func=lambda path: "ok", endpoint="page")
+    return app
+
+
+def find_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def is_server_answering(base_url: str) -> bool:
+    """Whether the shell at ``base_url`` answers HTTP at all: any response to ``/api/desktops``, an error included."""
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/desktops", timeout=0.5):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except OSError:
+        return False
 
 
 def _wait_until_serving(host: str, port: int, timeout: float = 10.0) -> None:
@@ -283,7 +295,7 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = _find_free_port()
+    port = find_free_port()
     server = make_threaded_server(host, port, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
