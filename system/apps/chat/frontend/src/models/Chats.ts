@@ -537,7 +537,15 @@ export async function applyPendingIntake(token: string, chatId: string | null = 
   return { chatId: data.chat_id, composerText: data.composer_text, firstMessage: data.first_message };
 }
 
-/** Drop a held intake unapplied (the picker was dismissed); a token already gone is fine. */
+/** Drop a held intake unapplied (the picker was dismissed); a token already gone is fine. The dismissal never
+ *  waits on this, so a failure is logged rather than thrown. */
 export async function discardPendingIntake(token: string): Promise<void> {
-  await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`), { method: "DELETE" });
+  try {
+    const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`), { method: "DELETE" });
+    if (!response.ok && response.status !== 404) {
+      console.warn(`Could not drop the pending intake ${token}: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    console.warn(`Could not drop the pending intake ${token}`, error);
+  }
 }
