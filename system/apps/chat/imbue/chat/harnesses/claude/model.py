@@ -174,7 +174,7 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
         # opus[1m] entry: claude-opus-5 prefixes claude-opus-5-5, so putting it first would
         # label every Opus 5.5 read as "Opus 5".
         ("claude-opus-5", "Opus 5", True),
-        # The two hidden models that really have fast, per the binary's fast_mode capability.
+        # Like Opus 5 above, Opus 4.8 really has fast, per the binary's fast_mode capability.
         ("claude-opus-4-8", "Opus 4.8", True),
         ("claude-opus-4-7", "Opus 4.7", False),
         ("claude-opus-4-6", "Opus 4.6", False),
