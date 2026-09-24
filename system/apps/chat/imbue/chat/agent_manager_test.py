@@ -1258,8 +1258,12 @@ def test_a_failed_create_refuses_the_messages_sent_while_it_ran(agent_manager: A
 
 
 def test_a_send_to_a_chat_that_is_not_being_created_goes_at_once(agent_manager: AgentManager) -> None:
+    delivered: list[str] = []
     with agent_manager.new_chat_send_turn(ChatId("some-chat")):
-        pass
+        delivered.append("hello")
+
+    assert delivered == ["hello"]
+    assert not agent_manager._has_waiting_new_chat_sends(ChatId("some-chat"))
 
 
 def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
