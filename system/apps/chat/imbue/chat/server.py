@@ -496,7 +496,11 @@ def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
 
 
 def _send_message_endpoint(chat_id: str) -> Response:
-    """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges."""
+    """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges.
+
+    A send to a chat still being created waits for the create and then goes to the new agent; a
+    create that fails refuses it with 409.
+    """
     agent_manager: AgentManager = get_state().agent_manager
     # Until the first agent list has been read, an unknown id says nothing about the agent, so
     # the answer is "not ready" rather than 404: an in-workspace sender backs off to `mngr
