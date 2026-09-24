@@ -182,9 +182,9 @@ def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_n
 def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
-    # A window still settling at its launch path, a path naming something no session can be called, a body of
-    # another shape, and no JSON at all: each brings a sweep and marks nothing.
-    settling = pages_client.post(
+    # A path naming no session, a path naming something no session can be called, a body of another shape, and
+    # no JSON at all: each brings a sweep and marks nothing.
+    nameless = pages_client.post(
         "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-1", "desktop_id": "home"}
     )
     odd_name = pages_client.post(
@@ -193,7 +193,7 @@ def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     odd_shape = pages_client.post("/api/window-closed", json=["/?session=terminal-1"])
     not_json = pages_client.post("/api/window-closed", data="terminal-1", content_type="text/plain")
 
-    assert [r.status_code for r in (settling, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
+    assert [r.status_code for r in (nameless, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
     assert window_closed_posts == [None, None, None, None]
 
 
