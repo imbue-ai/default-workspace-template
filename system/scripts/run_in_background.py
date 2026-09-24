@@ -29,8 +29,8 @@ to take the message). A send that fails is retried with backoff for hours, since
 chat may be mid-handoff or its agent shed for memory until its lead restarts it; only a
 chat that no longer exists ends the retries at once. The command keeps the caller's OOM
 band, so a command shed for memory is reported like any other exit; the detached process
-then moves itself down to the user-service band, below every agent, because it holds
-next to no memory and shedding it would lose the report.
+then moves itself down to the user-service band, below every agent but the workspace's
+primary, because it holds next to no memory and shedding it would lose the report.
 
 Standard library only: ``update-self`` stages this file from its target release and runs it
 in a workspace that may predate it, so the messenger is looked up in the tree the script
