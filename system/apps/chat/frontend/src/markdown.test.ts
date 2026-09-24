@@ -58,6 +58,7 @@ describe("renderMarkdown links", () => {
   it.each([
     "[the skill](.agents/skills/assist/SKILL.md)",
     "[guide](docs/guide.md:12)",
+    "[report](q4.md:12)",
     "[section](#usage)",
     "[local](file:///home/user/workspace/notes.md)",
   ])("renders %s as its label text with no link", (source) => {
