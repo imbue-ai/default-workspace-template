@@ -446,7 +446,7 @@ def main() -> int:
     kills: list[dict] = []
     failure = ""
     shed_sleepers: set[int] = set()
-    # A kill is judged against the last snapshot that still has its victim,
+    # A kill is judged against the last snapshot before its victim shrank,
     # which may be a few snapshots back by the time its ledger line is read.
     snapshots: deque[Snapshot] = deque(
         [Snapshot(time.time(), snapshot_processes())], maxlen=30
