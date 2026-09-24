@@ -3203,7 +3203,6 @@ class AgentManager:
         self._drop_drained_new_chat_send_gate(chat_id, gate)
 
     def _drop_drained_new_chat_send_gate(self, chat_id: ChatId, gate: NewChatSendGate) -> None:
-        # Tickets are only taken under the manager's lock, so a gate found drained here stays drained.
         with self._lock:
             if self._new_chat_send_gate_by_chat_id.get(chat_id) is gate and gate.is_drained():
                 del self._new_chat_send_gate_by_chat_id[chat_id]
