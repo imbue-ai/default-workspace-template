@@ -41,8 +41,9 @@ exact wording*, so an agent gets an identical explanation everywhere.
 `agent_block_pipe_tail_head.sh` -- **hard block.**
 
 The pipe truncates output the agent then reasons about as if it were complete. Redirect to a
-file and read that instead, so the full output exists and can be re-read. A pipeline that
-starts with `cat FILE...` is exempt: the file already is that full output.
+file and read that instead, so the full output exists and can be re-read. A command that
+is nothing but `cat FILE... | head` (or `tail`) is exempt: the files already are that full
+output.
 
 ### P2. A command must not rewrite git history
 `agent_prevent_commit_rewrite.sh` -- **hard block.**

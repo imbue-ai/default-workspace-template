@@ -27,14 +27,13 @@ if [[ -z "$command" ]]; then
     exit 0
 fi
 
-# A line ending in `\` or a pipe continues the same command, so join it to the next line
-# before the exemption below reads each line start as the start of a pipeline.
-command=$(printf '%s\n' "$command" | sed -E -e ':a' -e '$!{/(\\|\|&?[[:blank:]]*)$/{N;s/\\\n//;s/(\|&?[[:blank:]]*)\n/\1 /;ba' -e '}' -e '}')
-
-# `cat FILE... | head` is exempt: the file already holds the full output and can be re-read.
-# Only a `cat` that starts its pipeline counts -- in `cmd | cat | head` it is reading cmd's output.
-# So the `&`, `(` or `{` before it must not itself follow a pipe (`cmd |& cat`, `cmd | (cat`, `cmd > >(cat`).
-command=$(printf '%s\n' "$command" | sed -E 's/(^|[;`]|\|\||[^|>]&|(^|[^|>({[:space:]])[[:space:]]*[({])[[:space:]]*cat([[:space:]](>&|&>|[^|;&(){}`])*)?\|[[:space:]]*(tail|head)/\1/g')
+# A command that is nothing but `cat FILE... | head` is exempt: the files already hold the full
+# output and can be re-read. The whole command must be that one pipeline, so no `cmd | cat` or
+# compound command can hide behind it.
+cat_pipe_re='^[[:blank:]]*cat([[:blank:]]([^|;&()`]|>&|&>)*)?\|[[:blank:]]*(tail|head)([[:blank:]]([^|;&()`]|>&|&>)*)?$'
+if [[ "$command" != *$'\n'* && "$command" =~ $cat_pipe_re ]]; then
+    exit 0
+fi
 
 # Check if the command pipes through tail or head (e.g. "| tail -20", "| head -5")
 # Match: pipe followed by optional whitespace, then tail or head, optionally with args
