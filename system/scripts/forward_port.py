@@ -125,7 +125,20 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # the first label of every standalone supervisord program with a hyphen in
 # its name: an app named ``share`` would claim ``share-gateway`` as its
 # ``share-<role>`` sidecar when its footprint is computed.
-RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
+RESERVED_NAMES = frozenset(
+    {
+        "localhost",
+        "auth",
+        "share",
+        "app",
+        "owner",
+        "vm",
+        "host",
+        "env",
+        "github",
+        "agent",
+    }
+)
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
 # (icons in this repo run a few hundred bytes) while keeping apps.toml small:
@@ -413,7 +426,15 @@ def _toml_inline_table_value(value: object) -> str:
                 raise UnsupportedRegistryValueError(
                     f"the registry cannot hold a nested table entry of type {type(nested_value).__name__}: {nested_value!r}"
                 )
-        return "{" + ", ".join(f"{nested_key} = {_toml_string(nested_value)}" for nested_key, nested_value in value.items()) + "}"
+        # Quoted: a preset's name is the manifest's to choose, and a bare key allows only letters, digits, ``_``, and ``-``.
+        return (
+            "{"
+            + ", ".join(
+                f"{_toml_string(nested_key)} = {_toml_string(nested_value)}"
+                for nested_key, nested_value in value.items()
+            )
+            + "}"
+        )
     return _toml_scalar(value)
 
 
@@ -448,8 +469,9 @@ def dump_registry(apps: list[dict[str, object]]) -> str:
     """Render the registry as ``[[apps]]`` tables, one key per line, in the order given.
 
     The output is what ``tomllib`` reads back byte-for-byte equal in every
-    value (icons carry newlines and quotes; both survive the escaping). Keys are
-    bare, which every registry key is.
+    value (icons carry newlines and quotes; both survive the escaping). Row and
+    inline-table keys are bare, which every one the contract names is; a
+    preset's name, which the manifest chooses, is written quoted.
     """
     chunks: list[str] = []
     for app in apps:
@@ -572,7 +594,9 @@ def _read_manifest(
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
         entries = raw.get(key)
         if entries is not None:
-            copied_entries, entries_error = _copied_tables(entries, path, key, copy_entry)
+            copied_entries, entries_error = _copied_tables(
+                entries, path, key, copy_entry
+            )
             if copied_entries is None:
                 return {}, None, entries_error
             fields[key] = copied_entries
@@ -662,9 +686,14 @@ def _copied_launch_path(
         value = launch_path.get(key)
         if value is not None:
             if not isinstance(value, str):
-                return None, f"manifest {str(path)!r}: a launch path's {key} must be a string"
+                return (
+                    None,
+                    f"manifest {str(path)!r}: a launch path's {key} must be a string",
+                )
             copied[key] = value
-    param_names, params_error = _copied_param_names(launch_path.get("params"), path, "launch path")
+    param_names, params_error = _copied_param_names(
+        launch_path.get("params"), path, "launch path"
+    )
     if param_names is None:
         return None, params_error
     if param_names:
@@ -672,9 +701,13 @@ def _copied_launch_path(
     presets = launch_path.get("presets")
     if presets is not None:
         if not isinstance(presets, dict) or not all(
-            isinstance(name, str) and isinstance(value, str) for name, value in presets.items()
+            isinstance(name, str) and isinstance(value, str)
+            for name, value in presets.items()
         ):
-            return None, f"manifest {str(path)!r}: a launch path's presets must be a table of strings"
+            return (
+                None,
+                f"manifest {str(path)!r}: a launch path's presets must be a table of strings",
+            )
         if presets:
             copied["presets"] = dict(presets)
     return copied, None
@@ -701,7 +734,9 @@ def _copied_param_names(
 
 
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.
-_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (("launch_paths", _copied_launch_path),)
+_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
+    ("launch_paths", _copied_launch_path),
+)
 
 
 def _upsert(
