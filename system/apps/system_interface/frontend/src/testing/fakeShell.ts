@@ -421,6 +421,12 @@ export class FakeDesktopSocket implements DesktopSocket {
 }
 
 /** Resolve every promise queued so far (the store's awaits run in microtasks). */
+/** Offer ``apps`` as the shell's inventory would: to the store over the socket, and to the fake shell itself. */
+export function offerApps(api: FakeDesktopApi, socket: FakeDesktopSocket, apps: AppRecord[]): void {
+  api.apps = apps;
+  socket.deliver().onAppsUpdated(apps);
+}
+
 export async function settle(): Promise<void> {
   for (let round = 0; round < 10; round += 1) await Promise.resolve();
 }

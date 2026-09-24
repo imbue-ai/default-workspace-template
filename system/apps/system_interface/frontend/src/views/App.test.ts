@@ -9,7 +9,7 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
-import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
+import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
   desktopRecord,
@@ -256,9 +256,8 @@ describe("the avatar chooser", () => {
 
   /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
   function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
-    api.apps = [appRecord("docs"), buddy, ...apps];
+    offerApps(api, socket, [appRecord("docs"), buddy, ...apps]);
     api.postLaunchAnswer = "/?chat=agent-1";
-    socket.deliver().onAppsUpdated([appRecord("docs"), buddy, ...apps]);
     api.desktops = [
       desktopRecord("home", {
         windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],

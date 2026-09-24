@@ -25,7 +25,7 @@ import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import type { Placement } from "../model/records";
 import { activeFocusedWindowId } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
-import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
+import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
   desktopRecord,
@@ -602,8 +602,7 @@ describe("the contract", () => {
       }),
       notes,
     ];
-    api.apps = textApps;
-    socket.deliver().onAppsUpdated(textApps);
+    offerApps(api, socket, textApps);
     messageFromPage("win-1", { type: SHELL_START_WITH_TEXT, text: "hello there" });
     await settle();
     expect(api.calls).toContain(`launch:home:docs:new:{"message":"hello there"}:new`);
