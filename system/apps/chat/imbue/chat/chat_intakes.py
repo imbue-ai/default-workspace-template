@@ -35,6 +35,8 @@ INTAKE_QUERY_KEY: Final[str] = "intake"
 
 # How long a pending intake waits to be applied before it is dropped.
 PENDING_INTAKE_TTL_SECONDS: Final[float] = 15 * 60.0
+# The random bytes behind a pending intake's one-time token.
+_PENDING_INTAKE_TOKEN_BYTES: Final[int] = 16
 
 
 @pure
@@ -98,7 +100,7 @@ class PendingIntakeStore(MutableModel):
 
     def mint(self, request: IntakeRequest, chat_id: ChatId | None, needs_pick: bool) -> str:
         """Hold an intake and answer its one-time token."""
-        token = secrets.token_urlsafe(16)
+        token = secrets.token_urlsafe(_PENDING_INTAKE_TOKEN_BYTES)
         pending = PendingIntake(request=request, chat_id=chat_id, needs_pick=needs_pick, minted_at=self.clock())
         with self._lock:
             self._expire_locked()
