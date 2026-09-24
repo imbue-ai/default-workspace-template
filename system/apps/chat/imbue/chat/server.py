@@ -1266,6 +1266,17 @@ def _get_screen_capture(chat_id: str) -> Response:
     return json_response({"screen": result.stdout})
 
 
+def _created_chat_or_refusal(create: Callable[[], CreatedChat]) -> CreatedChat | Response:
+    """Run one create of a chat: the chat, else its refusal as the create route answers it (a taken name is a 409,
+    anything else the manager refused a 400 with its reason)."""
+    try:
+        return create()
+    except AgentNameConflictError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    except (AgentCreationError, OSError, ValueError) as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+
+
 def _run_create_chat() -> CreatedChat | Response:
     """Create a new chat, as an agent in the primary agent's work directory.
 
@@ -1305,7 +1316,10 @@ def _run_create_chat() -> CreatedChat | Response:
 
     try:
         create_request = CreateChatRequest.model_validate(request_fields)
-        created = agent_manager.create_chat(
+    except ValueError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    created = _created_chat_or_refusal(
+        lambda: agent_manager.create_chat(
             create_request.name,
             # A client asks for no templates: the manager adds `welcome` and `fast` itself,
             # from the message and the workspace's fast-mode limit (``launch_role_templates``).
@@ -1318,11 +1332,9 @@ def _run_create_chat() -> CreatedChat | Response:
             is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
         )
-    except AgentNameConflictError as e:
-        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return json_response(error.model_dump(), status_code=400)
+    )
+    if isinstance(created, Response):
+        return created
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1488,25 +1500,42 @@ def _intake_chat() -> Response:
     if isinstance(resolved, Response):
         return resolved
     if resolved.needs_pick:
+        # A choice is worth asking for only with something to deliver: with no text the root is shown as it is.
+        if not intake.message:
+            return json_response(IntakeResponse(path=intake_path(None, None)).model_dump())
         token = state.pending_intakes.mint(intake, None, needs_pick=True)
         return json_response(IntakeResponse(path=intake_path(None, token)).model_dump())
-    chat_id = resolved.chat_id
-    if chat_id is None:
-        account = _resolve_intake_account(intake)
-        if isinstance(account, Response):
-            return account
-        if account is not None and not intake.is_draft:
-            try:
-                created = agent_manager.create_chat("", account_id=account, message=intake.message)
-            except AgentNameConflictError as e:
-                return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-            except (AgentCreationError, OSError, ValueError) as e:
-                return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-            return json_response(IntakeResponse(path=intake_path(created.chat_id, None)).model_dump())
-        chat_id = agent_manager.mint_awaiting_chat(account or "").chat_id
-        token = state.pending_intakes.mint(intake, chat_id, needs_pick=False)
-        return json_response(IntakeResponse(path=intake_path(chat_id, token)).model_dump())
-    if intake.is_draft or _agent_chat_snapshot(agent_manager, chat_id) is None:
+    if resolved.chat_id is None:
+        return _intake_into_new_chat(state, intake)
+    return _intake_into_listed_chat(state, resolved.chat_id, intake)
+
+
+def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Response:
+    """The ``new_chat`` rules (spec 3.5): with an account and a send, the chat is created with the text as its
+    first message; otherwise a chat awaiting its first send is minted and the intake held for it."""
+    agent_manager = state.agent_manager
+    account = _resolve_intake_account(intake)
+    if isinstance(account, Response):
+        return account
+    if account is not None and not intake.is_draft:
+        created = _created_chat_or_refusal(
+            lambda: agent_manager.create_chat("", account_id=account, message=intake.message)
+        )
+        if isinstance(created, Response):
+            return created
+        return json_response(IntakeResponse(path=intake_path(created.chat_id, None)).model_dump())
+    minted = agent_manager.mint_awaiting_chat(account or "")
+    token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)
+    return json_response(IntakeResponse(path=intake_path(minted.chat_id, token)).model_dump())
+
+
+def _intake_into_listed_chat(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> Response:
+    """An intake that resolved to a chat the app lists: an empty text is nothing to send or draft, so the answer is
+    the chat's path alone (spec section 10); a draft, or a chat that is not yet an agent, is held for the root;
+    else the text goes through the ordinary send path."""
+    if not intake.message:
+        return json_response(IntakeResponse(path=intake_path(chat_id, None)).model_dump())
+    if intake.is_draft or _agent_chat_snapshot(state.agent_manager, chat_id) is None:
         token = state.pending_intakes.mint(intake, chat_id, needs_pick=False)
         return json_response(IntakeResponse(path=intake_path(chat_id, token)).model_dump())
     failure = _finish_intake_send(state, chat_id, intake)
@@ -1572,8 +1601,11 @@ def _apply_pending_intake(token: str) -> Response:
         first_message = intake.message
     elif not is_agent:
         composer_text = intake.message
-    else:
+    elif intake.message:
         _deliver_intake_send_in_background(state, chat_id, intake)
+    else:
+        # A chat that became an agent since the intake was held, with nothing to send: it is selected alone.
+        pass
     response = IntakeApplyResponse(
         path=intake_path(chat_id, None), chat_id=str(chat_id), composer_text=composer_text, first_message=first_message
     )
