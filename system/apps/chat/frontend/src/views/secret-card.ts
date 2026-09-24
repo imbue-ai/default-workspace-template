@@ -192,6 +192,8 @@ export function declineSecret(requestId: string, note: string): Promise<{ ok: bo
  *  last submit or decline said. Owned by the live component. */
 export interface SecretCardState {
   valueByVariable: Record<string, string>;
+  /** Variables the user chose to see in plain text, to check what they typed. */
+  isRevealedByVariable: Record<string, boolean>;
   note: string;
   isDeclining: boolean;
   isBusy: boolean;
@@ -200,6 +202,7 @@ export interface SecretCardState {
 
 export interface SecretCardHandlers {
   onValueInput: (variable: string, value: string) => void;
+  onRevealToggle: (variable: string) => void;
   onNoteInput: (note: string) => void;
   onSubmit: () => void;
   onDeclineStart: () => void;
@@ -254,22 +257,39 @@ function renderInputs(details: SecretRequestDetails, state: SecretCardState, han
   return m(
     "div",
     { class: "secret-request-inputs mt-2.5 flex flex-col gap-2" },
-    details.variables.map((variable) =>
-      m("label", { class: "flex flex-col gap-1 text-(length:--font-size-helper) text-secondary" }, [
+    details.variables.map((variable) => {
+      const isRevealed = state.isRevealedByVariable[variable] ?? false;
+      return m("label", { class: "flex flex-col gap-1 text-(length:--font-size-helper) text-secondary" }, [
         m("span", { class: "secret-request-variable font-mono" }, variable),
-        m("input", {
-          class: inputClass({ mono: true }),
-          type: "password",
-          value: state.valueByVariable[variable] ?? "",
-          spellcheck: false,
-          autocomplete: "off",
-          "data-1p-ignore": "",
-          "data-variable": variable,
-          disabled: state.isBusy,
-          oninput: (event: Event) => handlers.onValueInput(variable, (event.target as HTMLInputElement).value),
-        }),
-      ]),
-    ),
+        m("div", { class: "flex items-center gap-1.5" }, [
+          m("input", {
+            class: inputClass({ mono: true }),
+            // Masked unless the user asks to check what they typed.
+            type: isRevealed ? "text" : "password",
+            value: state.valueByVariable[variable] ?? "",
+            spellcheck: false,
+            autocomplete: "off",
+            "data-1p-ignore": "",
+            "data-variable": variable,
+            disabled: state.isBusy,
+            oninput: (event: Event) => handlers.onValueInput(variable, (event.target as HTMLInputElement).value),
+          }),
+          m(
+            Button,
+            {
+              variant: "ghost",
+              sm: true,
+              extra: "secret-request-reveal shrink-0",
+              "aria-pressed": String(isRevealed),
+              "aria-label": `${isRevealed ? "Hide" : "Show"} ${variable}`,
+              disabled: state.isBusy,
+              onclick: () => handlers.onRevealToggle(variable),
+            },
+            isRevealed ? "Hide" : "Show",
+          ),
+        ]),
+      ]);
+    }),
   );
 }
 
@@ -391,7 +411,14 @@ export function SecretCard(): m.Component<{
   /** The decline note the transcript carried, when it did. */
   note: string | null;
 }> {
-  const state: SecretCardState = { valueByVariable: {}, note: "", isDeclining: false, isBusy: false, error: null };
+  const state: SecretCardState = {
+    valueByVariable: {},
+    isRevealedByVariable: {},
+    note: "",
+    isDeclining: false,
+    isBusy: false,
+    error: null,
+  };
 
   async function run(
     requestId: string,
@@ -421,6 +448,9 @@ export function SecretCard(): m.Component<{
       const handlers: SecretCardHandlers = {
         onValueInput: (variable, value) => {
           state.valueByVariable[variable] = value;
+        },
+        onRevealToggle: (variable) => {
+          state.isRevealedByVariable[variable] = !(state.isRevealedByVariable[variable] ?? false);
         },
         onNoteInput: (value) => {
           state.note = value;

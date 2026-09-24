@@ -43,7 +43,15 @@ function makeResult(secretRequest: Record<string, unknown> | undefined, isError 
 }
 
 function idleState(overrides: Partial<SecretCardState> = {}): SecretCardState {
-  return { valueByVariable: {}, note: "", isDeclining: false, isBusy: false, error: null, ...overrides };
+  return {
+    valueByVariable: {},
+    isRevealedByVariable: {},
+    note: "",
+    isDeclining: false,
+    isBusy: false,
+    error: null,
+    ...overrides,
+  };
 }
 
 function recordingHandlers(): SecretCardHandlers & { calls: string[] } {
@@ -51,6 +59,7 @@ function recordingHandlers(): SecretCardHandlers & { calls: string[] } {
   return {
     calls,
     onValueInput: (variable, value) => calls.push(`value:${variable}=${value}`),
+    onRevealToggle: (variable) => calls.push(`reveal:${variable}`),
     onNoteInput: (note) => calls.push(`note:${note}`),
     onSubmit: () => calls.push("submit"),
     onDeclineStart: () => calls.push("decline-start"),
@@ -151,6 +160,22 @@ describe("renderSecretCard", () => {
     input.value = "typed";
     input.dispatchEvent(new Event("input"));
     expect(handlers.calls).toEqual(["submit", "value:SVC_TOKEN=typed"]);
+  });
+
+  it("shows a revealed variable's value as text, keeps the rest masked, and routes the toggle", () => {
+    const handlers = recordingHandlers();
+    const state = idleState({ valueByVariable: { SVC_TOKEN: "t" }, isRevealedByVariable: { SVC_TOKEN: true } });
+    const root = renderToDom(details, null, null, true, state, handlers);
+    const typeOf = (variable: string) =>
+      root.querySelector<HTMLInputElement>(`input[data-variable='${variable}']`)!.type;
+    expect([typeOf("SVC_TOKEN"), typeOf("SVC_URL")]).toEqual(["text", "password"]);
+    const toggles = [...root.querySelectorAll<HTMLButtonElement>(".secret-request-reveal")];
+    expect(toggles.map((toggle) => [toggle.textContent, toggle.getAttribute("aria-pressed")])).toEqual([
+      ["Hide", "true"],
+      ["Show", "false"],
+    ]);
+    toggles[1].click();
+    expect(handlers.calls).toEqual(["reveal:SVC_URL"]);
   });
 
   it("shows the decline note field with its confirm and back buttons while declining", () => {
