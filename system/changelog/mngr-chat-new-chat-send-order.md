@@ -1,1 +1,1 @@
-The `welcome` create template is gone from `.mngr/settings.toml`: the chat app now sends `/welcome` itself once a silently started chat is up, and skips it when the user sent a message while the chat was starting.
+The new-chat greeting is gone: the `welcome` create template is removed from `.mngr/settings.toml`, as are the codex and pi system-prompt instructions for `/welcome`, and `system/scripts/welcome_count.py` (the counter that varied the greeting's hints) is deleted.

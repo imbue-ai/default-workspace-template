@@ -30,8 +30,7 @@ Provisioning and utility scripts:
   replacement for `mngr message <agent>`), `seed_welcome_chat.py` (open the
   workspace's first chat on the conversation the Mind app had before the
   workspace existed; run through `mngr exec` by the Mind app),
-  `welcome_count.py` (the number of times the welcome skill has run, which
-  varies its greeting), `require_create_account.py` (the
+  `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
