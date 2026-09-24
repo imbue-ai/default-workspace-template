@@ -120,21 +120,28 @@ def test_a_victim_that_started_after_the_snapshot_is_unpredicted() -> None:
     )
 
 
-def test_a_kill_is_judged_against_the_last_snapshot_that_still_has_its_victim() -> None:
+def test_a_kill_is_judged_against_the_last_snapshot_before_its_victim_shrank() -> None:
     before = oom_drill.Snapshot(
-        1.0, [_sample(60, "tilion", 1000, 1), _sample(50, "pytest", 900, 1)]
+        1.0,
+        [_sample(60, "tilion", 1000, 200_000), _sample(50, "pytest", 900, 20_000)],
     )
-    # Taken after earlyoom killed pid 60 but before the drill reaped it: a
-    # zombie, with no VmRSS.
+    # Taken after earlyoom signalled pid 60: process_mrelease has freed its
+    # memory while the process still exists.
+    released = oom_drill.Snapshot(
+        1.2, [_sample(60, "tilion", 1000, 0), _sample(50, "pytest", 900, 20_000)]
+    )
+    # Then an unreaped zombie, with no VmRSS.
     zombie = oom_drill.Snapshot(
-        1.5, [_sample(60, "tilion", 1000, None), _sample(50, "pytest", 900, 1)]
+        1.5,
+        [_sample(60, "tilion", 1000, None), _sample(50, "pytest", 900, 20_500)],
     )
-    after = oom_drill.Snapshot(2.0, [_sample(50, "pytest", 900, 1)])
-    snapshots = deque([before, zombie, after])
+    after = oom_drill.Snapshot(2.0, [_sample(50, "pytest", 900, 20_000)])
+    snapshots = deque([before, released, zombie, after])
 
-    assert oom_drill.last_snapshot_with(60, snapshots) is before
-    assert oom_drill.last_snapshot_with(50, snapshots) is after
-    assert oom_drill.last_snapshot_with(99, snapshots) is None
+    assert oom_drill.last_snapshot_with(60, snapshots, tolerance_kib=1024) is before
+    # pid 50 never shrank beyond the tolerance, so its newest snapshot counts.
+    assert oom_drill.last_snapshot_with(50, snapshots, tolerance_kib=1024) is after
+    assert oom_drill.last_snapshot_with(99, snapshots, tolerance_kib=1024) is None
 
 
 def test_status_memory_reads_gvisor_and_kernel_threads() -> None:
