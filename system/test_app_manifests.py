@@ -84,6 +84,51 @@ def _manifest_path_constant(module_file: Path) -> str | None:
     return None
 
 
+def _scripts_by_package() -> dict[Path, dict[str, str]]:
+    """Every app package's ``[project.scripts]`` table, keyed by the package directory."""
+    return {
+        pyproject_path.parent: (
+            tomllib.loads(pyproject_path.read_text())
+            .get("project", {})
+            .get("scripts", {})
+        )
+        for pyproject_path in sorted(_APPS_DIR.glob("*/pyproject.toml"))
+    }
+
+
+def _script_entry_points(script_name: str) -> list[tuple[Path, str]]:
+    """Every app package declaring a console script, with the ``module:function`` it points at.
+
+    One package may declare several (the terminal's declares ``terminal-app`` and
+    ``terminal-pty`` both), and several packages may declare the same name, in which case only
+    whichever is on PATH runs -- a declaration alone does not say a package runs anything.
+    """
+    return [
+        (package, scripts[script_name])
+        for package, scripts in _scripts_by_package().items()
+        if script_name in scripts
+    ]
+
+
+def _package_running_program(program: str, command_by_program: dict[str, str]) -> Path | None:
+    """The app package that runs a supervisord program: the sole declarer of the console script
+    its command ends in, whose script is therefore the only one of the apps' on PATH.
+
+    ``None``, so excusing nothing: a program with no block, one whose command runs something
+    other than an app's entry point, and one whose script several packages declare -- which of
+    those runs is not something this config decides. That last state is reported under its own
+    name by ``test_no_two_app_packages_declare_the_same_console_script``, since the collision
+    this silence leaves standing says nothing about the duplicated declaration behind it.
+    """
+    command = command_by_program.get(program, "")
+    if not command:
+        return None
+    entry_points = _script_entry_points(command.split()[-1])
+    if len(entry_points) != 1:
+        return None
+    return entry_points[0][0]
+
+
 def _entry_point_manifest_paths(command: str) -> list[str]:
     """The manifest an app's own entry point registers with, when the program's command ends in one.
 
@@ -92,21 +137,13 @@ def _entry_point_manifest_paths(command: str) -> list[str]:
     path is a constant the script's module exports as ``MANIFEST_PATH`` rather than a flag on the
     command line.
     """
-    script_name = command.split()[-1]
     manifest_paths: list[str] = []
-    for pyproject_path in _APPS_DIR.glob("*/pyproject.toml"):
-        scripts = (
-            tomllib.loads(pyproject_path.read_text())
-            .get("project", {})
-            .get("scripts", {})
-        )
-        if script_name not in scripts:
-            continue
-        module_name = scripts[script_name].partition(":")[0]
+    for package_directory, entry_point in _script_entry_points(command.split()[-1]):
+        module_name = entry_point.partition(":")[0]
         module_relative = Path(*module_name.split(".")).with_suffix(".py")
         for module_file in (
-            pyproject_path.parent / module_relative,
-            pyproject_path.parent / "src" / module_relative,
+            package_directory / module_relative,
+            package_directory / "src" / module_relative,
         ):
             if module_file.is_file():
                 manifest_path = _manifest_path_constant(module_file)
@@ -156,6 +193,56 @@ def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() ->
     unreserved = sorted(standalone_labels - RESERVED_APP_NAMES)
 
     assert unreserved == [], f"add these to RESERVED_APP_NAMES (and forward_port.py's RESERVED_NAMES): {unreserved}"
+
+
+def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
+    # The sidecar rule is a prefix match on the app NAME (``scope.py``'s
+    # ``sidecar_prefix``), so an app named ``pr`` claims ``program:pr-review`` as its
+    # own. Reserving the first label of every standalone program (the test above)
+    # does not cover this: both sides here carry a manifest, so neither is standalone,
+    # and the collision is between two ordinary apps. Checked over every manifest in
+    # the tree, user-built apps included, since that is where two such names would meet.
+    # An app matching itself is no collision: a manifest may set ``program`` to its own
+    # ``<name>-<role>`` form, and that program IS its sidecar. Neither is a program the
+    # claiming app's own package runs: ``terminal_pty`` is only the manifest of an origin
+    # the ``terminal`` package registers and runs (its ``terminal-pty`` console script), so
+    # ``program:terminal-pty`` is the terminal's sidecar in fact as well as by name.
+    command_by_program = _command_by_program()
+    manifest_by_package = {
+        path.parent: load_manifest(path, repo_root=_REPO_ROOT)
+        for path in _every_manifest_path()
+    }
+    collisions = sorted(
+        f"{owner.name} would claim {claimed.program!r} (app {claimed.name})"
+        for owner_package, owner in manifest_by_package.items()
+        for claimed in manifest_by_package.values()
+        if owner is not claimed
+        and claimed.program.startswith(f"{owner.name}-")
+        and owner_package != _package_running_program(claimed.program, command_by_program)
+    )
+
+    assert collisions == [], f"apps whose names collide with another app's program: {collisions}"
+
+
+def test_no_two_app_packages_declare_the_same_console_script() -> None:
+    # An app carrying a manifest installs as its own uv tool (``build_workspace.sh``), and
+    # ``_tool_env.sh`` points every one of those installs at a single ``UV_TOOL_BIN_DIR``, so
+    # two packages declaring one script name leave one file there for whichever installed
+    # last. It is also what lets a supervisord command ending in a bare script name be
+    # traced back to the package that runs it, which the sidecar guard above rests on.
+    # Checked over every app package, user-built apps included: their tools land in the
+    # same directory.
+    packages_by_script: dict[str, list[str]] = {}
+    for package, scripts in _scripts_by_package().items():
+        for script_name in scripts:
+            packages_by_script.setdefault(script_name, []).append(package.name)
+    shared = sorted(
+        f"{script_name}: {', '.join(sorted(packages))}"
+        for script_name, packages in packages_by_script.items()
+        if len(packages) > 1
+    )
+
+    assert shared == [], f"console scripts declared by more than one app package: {shared}"
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
