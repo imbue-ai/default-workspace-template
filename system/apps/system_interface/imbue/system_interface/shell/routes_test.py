@@ -1397,9 +1397,7 @@ class _RecordingLaunchPoster:
         return outcome
 
 
-def _launching_shell(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: _RecordingLaunchPoster, scope: str = "independent"
-) -> Flask:
+def _launching_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: _RecordingLaunchPoster) -> Flask:
     """The shell over the two-app registry plus a pinned ``buddy`` app declaring a POST launch path ``new`` at
     ``/api/intake`` with a preset, a declared param, and a text param, the way the chat's manifest does."""
     registry_path = write_two_app_registry(
@@ -1407,7 +1405,7 @@ def _launching_shell(
         registry_row_toml(
             "buddy",
             "http://localhost:7002",
-            pin=("/", "plain", scope, "bar"),
+            pin=("/", "plain", "independent", "bar"),
             launch_paths=(("root", "Buddy", "/"), ("new", "New buddy", "/api/intake")),
             launch_params={"new": ["message", "account_id"]},
             launch_text_params={"new": "message"},
