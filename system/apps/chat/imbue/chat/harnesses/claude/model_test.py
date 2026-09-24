@@ -131,8 +131,8 @@ def test_every_option_declares_the_full_effort_set() -> None:
 # models -> {id, family, display_name, capabilities} and aliases -> alias.default.
 #
 # Regenerate it whenever CLAUDE_CODE_VERSION moves. Everything below reads it rather than
-# restating it: the module docstring's warning about never hand-copying the catalog applies to
-# this file too.
+# restating it: the warning above CLAUDE_CATALOG in model.py about never hand-copying the
+# catalog applies to this file too.
 _BAKED_CATALOG_FIXTURE = Path(__file__).parent / "baked_model_catalog_v2_1_280.json"
 
 
