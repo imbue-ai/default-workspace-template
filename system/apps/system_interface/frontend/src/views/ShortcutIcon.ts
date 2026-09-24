@@ -56,7 +56,7 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
         // one look cannot say both. A transform moves nothing around it.
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
-          "rounded-(--desk-icon-radius) bg-surface p-2 shadow-raised transition-transform " +
+          "rounded-(--desk-icon-radius) bg-surface p-2 shadow-(--desk-icon-shadow) transition-transform " +
           "group-hover:scale-110 [&>svg]:size-full",
       },
       m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
