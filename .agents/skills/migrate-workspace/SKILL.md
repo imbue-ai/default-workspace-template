@@ -255,9 +255,10 @@ it.
 ## 6. Dispatch the worker
 
 **First, collect Step 3's backups.** The worker is the first step that writes
-anything, so this is where a restore point has to exist. If either is still
-running, wait for it; if the source's had no restore point to take, you have
-already settled that with the user.
+anything, so this is where a restore point has to exist. If either task dir has
+no `exit_code` yet, that backup is still running: end your turn and resume here
+when its result message arrives. If the source's had no restore point to take,
+you have already settled that with the user.
 
 Then open the tracking ticket, write the task file, launch, and background-poll.
 
