@@ -107,8 +107,10 @@ EXIT_FAILED = 1
 EXIT_DELIVERED_BUT_BLOCKED = 7
 EXIT_CHAT_GONE = 8
 
-# The event ``mngr message --format jsonl`` emits per agent the text reached.
+# The events ``mngr message --format jsonl`` emits per agent the text reached, and per agent
+# it did not (or reached behind a dialog), with the reason.
 MESSAGE_SENT_EVENT = "message_sent"
+MESSAGE_ERROR_EVENT = "message_error"
 
 # The route's ``kind`` for a send that landed behind a dialog
 # (``SendFailureKind.INPUT_BLOCKED`` in mngr).
@@ -459,7 +461,8 @@ def send_through_mngr(chat_id: str, text: str) -> int:
 
     ``EXIT_CHAT_GONE`` when mngr has no agent by that id: it then exits 0 having sent nothing
     (its ``--on-error`` default is ``continue``), and only the missing ``message_sent`` event
-    tells that apart from a delivery.
+    tells that apart from a delivery. mngr's reason for a failed or blocked send is a
+    ``message_error`` event in that output, so it is passed on to stderr.
     """
     completed = _run_mngr(
         ["mngr", "message", chat_id, "--start"],
@@ -469,6 +472,11 @@ def send_through_mngr(chat_id: str, text: str) -> int:
     )
     if completed is None:
         return EXIT_FAILED
+    for error in _jsonl_events(completed.stdout, MESSAGE_ERROR_EVENT):
+        print(
+            f"`mngr message` to {error.get('agent')}: {error.get('error')}",
+            file=sys.stderr,
+        )
     if completed.returncode == EXIT_DELIVERED and not _jsonl_events(
         completed.stdout, MESSAGE_SENT_EVENT
     ):

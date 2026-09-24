@@ -327,6 +327,33 @@ def test_a_chat_neither_the_chat_app_nor_mngr_knows_is_gone(
     assert len(_mngr_calls(fake_mngr)) == 1
 
 
+def test_a_failed_mngr_send_passes_its_reason_on(
+    fake_chat_app: Any,
+    fake_mngr: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With ``--format jsonl`` mngr gives a send's failure reason only as an event on stdout."""
+    fake_chat_app.answers = [(404, {"detail": "Chat 'x' not found"})]
+    monkeypatch.setenv(
+        "FAKE_MNGR_STDOUT",
+        json.dumps(
+            {
+                "event": "message_error",
+                "agent": "some-chat",
+                "error": "the agent's host is unreachable",
+            }
+        )
+        + "\n",
+    )
+    monkeypatch.setenv("FAKE_MNGR_EXIT", "1")
+
+    rc, _ = _run("-m", "hello", clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS)
+
+    assert rc == message_chat.EXIT_FAILED
+    assert "some-chat: the agent's host is unreachable" in capsys.readouterr().err
+
+
 def test_an_unreachable_chat_app_and_no_agent_by_the_id_is_a_failure_not_a_gone_chat(
     fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
