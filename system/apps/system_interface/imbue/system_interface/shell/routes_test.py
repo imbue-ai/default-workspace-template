@@ -1531,6 +1531,7 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
     poster = _RecordingLaunchPoster(
         [
             LaunchPostOutcome(status_code=400, body={"detail": "no account is signed in"}),
+            LaunchPostOutcome(status_code=404, body=None),
             LaunchPostOutcome(status_code=500, body={"detail": "boom"}),
             LaunchPostOutcome(status_code=200, body={"nope": True}),
             LaunchPostOutcome(status_code=200, body={"path": "//evil"}),
@@ -1545,6 +1546,10 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
     refused = _launch(client, body)
     assert refused.status_code == 400
     assert refused.get_json()["detail"] == "buddy refused the launch: no account is signed in"
+    # A 4xx with no detail is not a refusal the app wrote (a missing route answers 404 as HTML): the app could
+    # not be asked.
+    unrouted = _launch(client, body)
+    assert unrouted.status_code == 502 and "no refusal detail" in unrouted.get_json()["detail"]
     assert _launch(client, body).status_code == 502
     assert _launch(client, body).status_code == 502
     assert _launch(client, body).status_code == 502
