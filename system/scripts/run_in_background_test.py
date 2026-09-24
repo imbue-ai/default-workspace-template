@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import secrets
 import shlex
 import signal
 import subprocess
@@ -202,8 +203,10 @@ def test_a_stop_of_the_callers_agent_ends_the_command_but_not_its_report(
     command = _python_command(
         "import os, time; print('agent', os.environ.get('MNGR_AGENT_ID'), flush=True); time.sleep(60)"
     )
+    # An id of its own, so the kill below reaches no other run's processes.
+    agent_id = f"agent-{secrets.token_hex(16)}"
     started = _start_runner(
-        tmp_path, _agent_env(MNGR_AGENT_ID=_CHAT_ID), "Outlive a stop", *command
+        tmp_path, _agent_env(MNGR_AGENT_ID=agent_id), "Outlive a stop", *command
     )
     assert started.returncode == 0, started.stderr
     output_log = _task_dir_from(started.stdout, tmp_path) / "output.log"
@@ -212,11 +215,11 @@ def test_a_stop_of_the_callers_agent_ends_the_command_but_not_its_report(
         assert time.monotonic() < deadline, "the command never started"
         time.sleep(0.1)
 
-    _kill_processes_tagged_with_agent_id(_CHAT_ID)
+    _kill_processes_tagged_with_agent_id(agent_id)
 
     [(_, body)] = _wait_for_posts(fake_chat_app, 1)
     assert "<summary>Outlive a stop (killed by signal 9)</summary>" in body["message"]
-    assert f"agent {_CHAT_ID}" in body["message"]
+    assert f"agent {agent_id}" in body["message"]
 
 
 @pytest.mark.usefixtures("fake_mngr")
