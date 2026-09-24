@@ -1,6 +1,0 @@
-name = "todo-fixture"
-display_name = "Todo fixture"
-icon = "icon.svg"
-instances = false
-priority = "user"
-program = "todo-fixture"

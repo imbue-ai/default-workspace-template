@@ -1,1 +1,0 @@
-The `message_lengths_within_limits` quality criterion recognizes pi's turn-ending stop reasons (`stop`, and `length` at the output limit) alongside Anthropic's `end_turn` / `stop_sequence` / `max_tokens`, so a pi-coding agent's final answer in each turn is held to the 300-word answer limit rather than the 30-word status-line limit.

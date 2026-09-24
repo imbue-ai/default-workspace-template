@@ -1,8 +1,8 @@
 /**
  * The desktop's root: the backdrop with its windows and live pages, the taskbar, the launcher
- * overlay, the floating menus, the settings dialog, and the avatar chooser, wired to one
+ * menu, the floating menus, the settings dialog, and the avatar chooser, wired to one
  * ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
- * open, the launcher's query, the selected shortcut, the chooser and the designs it lists),
+ * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists),
  * measures the backdrop for the store, binds the gesture source to the document, and hosts the
  * live-page layer, reconciling it after every redraw.
  */
@@ -15,14 +15,7 @@ import type { MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { fetchWallpapers } from "../model/api";
 import { launchPathOf } from "../model/launch";
-import type {
-  AppRecord,
-  AvatarDesign,
-  Desktop,
-  DesktopShortcut,
-  LaunchPath,
-  WallpaperListing,
-} from "../model/records";
+import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -33,15 +26,19 @@ import {
   barEntries,
   desktopById,
   draftTargetOf,
-  effectiveWindowTitle,
   entryLook,
   floatingEntries,
-  isWindowMinimized,
-  openableApps,
   pinnedWindowOf,
 } from "../reducers/desktopState";
+import {
+  defaultHighlightIndex,
+  isRowEnabled,
+  launcherRowsOf,
+  moveHighlight,
+  secondaryTextRow,
+} from "../reducers/launcherRows";
+import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
-import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../model/TemplateCatalog";
 import { PINNED_ENTRY_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
@@ -49,8 +46,8 @@ import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
-import { LauncherOverlay, windowRowsOf } from "./LauncherOverlay";
-import type { LauncherWindowRow } from "./LauncherOverlay";
+import { LauncherMenu } from "./LauncherMenu";
+import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
@@ -91,12 +88,21 @@ export interface AppAttrs {
   readonly protocol: string;
 }
 
+/** Whether the secondary chord reads as Cmd+Enter: the browser runs on an Apple platform. */
+function isApplePlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform) || /Mac OS/.test(navigator.userAgent);
+}
+
 export function App(): m.Component<AppAttrs> {
   let openMenu: OpenMenu | null = null;
   let settingsDialog: SettingsDialogState | null = null;
   let avatarChooser: AvatarChooserState | null = null;
   let wallpapers: WallpaperListing[] | null = null;
   let launcherQuery = "";
+  // The row the arrows or a hover moved the highlight to; null follows the default rule for the rows shown.
+  let launcherHighlight: number | null = null;
+  // How far the launcher field stands above its one row, in px; the menu sits above it.
+  let launcherFieldRise = 0;
   let selectedShortcutKey: string | null = null;
   let pages: LivePagesLayer | null = null;
   let backdropArea: HTMLElement | null = null;
@@ -133,7 +139,7 @@ export function App(): m.Component<AppAttrs> {
 
   const onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
-    // One layer per Escape: a dialog up over the launcher (the template detail) takes it through the
+    // One layer per Escape: a dialog (the settings dialog, the avatar chooser) takes it through the
     // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
     if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
     if (store?.isLauncherOpen() === true) {
@@ -205,8 +211,15 @@ export function App(): m.Component<AppAttrs> {
         if (binding.kind === "taskbar-entry") return false;
         return !current.getState().modes.isCompact;
       },
-      onBegin: (binding, rootPoint, rootPress) => {
+      // Inert for the whole press: the pixels before the threshold are spent beside the handle, often
+      // over a neighbouring page, and a move the root cannot see is a move the threshold never counts.
+      onPressStart: () => {
         pages?.setGestureActive(true);
+      },
+      onPressEnd: () => {
+        pages?.setGestureActive(false);
+      },
+      onBegin: (binding, rootPoint, rootPress) => {
         const point = toBackdrop(rootPoint);
         switch (binding.kind) {
           case "window-move":
@@ -277,13 +290,11 @@ export function App(): m.Component<AppAttrs> {
           case "taskbar-entry":
             break;
         }
-        pages?.setGestureActive(false);
       },
       onCancel: (binding) => {
         current.cancelGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);
-        pages?.setGestureActive(false);
       },
       onLongPress: (binding, client) => {
         const anchor = anchorForPoint(client.x, client.y);
@@ -547,8 +558,8 @@ export function App(): m.Component<AppAttrs> {
       desktop,
       wallpapers,
       isDeleting: dialog.isDeleting,
-      onSave: async (name, color, glyph, sharing, wallpaper) => {
-        await current.updateDesktopSettings(desktop.id, name, color, glyph, sharing);
+      onSave: async (name, color, glyph, wallpaper) => {
+        await current.updateDesktopSettings(desktop.id, name, color, glyph);
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
         settingsDialog = null;
       },
@@ -562,37 +573,59 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function launcherRows(current: DesktopStore): LauncherWindowRow[] {
-    const state = current.getState();
-    const placements = activePlacements(state);
-    return windowRowsOf(
-      state.desktops,
-      state.activeDesktopId,
-      (name) => appByName(state, name),
-      (window, app) => effectiveWindowTitle(state, window, app),
-      (desktopId, windowId) => (desktopId === state.activeDesktopId ? isWindowMinimized(placements, windowId) : false),
-    );
+  function replacedDesktopNotice(current: DesktopStore): m.Children {
+    const replaced = current.getReplacedDesktop();
+    if (replaced === null) return null;
+    return m(ReplacedDesktopNotice, {
+      replacedDesktopName: replaced.replacedName,
+      seededDesktopName: replaced.seededName,
+      onDismiss: () => current.dismissReplacedDesktopNotice(),
+    });
   }
 
-  function runLaunchFromLauncher(
-    current: DesktopStore,
-    app: AppRecord,
-    launchPath: LaunchPath,
-    params: Readonly<Record<string, string>>,
-  ): void {
-    closeLauncher();
-    launcherQuery = "";
-    void current.openLaunchPath(app.name, launchPath.id, params);
+  function launcherMenu(current: DesktopStore): LauncherMenuRows {
+    return launcherRowsOf(current.getState(), launcherQuery);
   }
 
-  function pickWindowFromLauncher(current: DesktopStore, row: LauncherWindowRow): void {
+  /** The row Enter runs: where the arrows or a hover left the highlight while that row is still shown and
+   *  enabled, else the default of plan section 3.5. */
+  function launcherHighlightIndex(rows: readonly LauncherRow[]): number {
+    const moved = launcherHighlight;
+    if (moved !== null && moved >= 0 && moved < rows.length && isRowEnabled(rows[moved])) return moved;
+    return defaultHighlightIndex(rows);
+  }
+
+  /** Run a row (plan section 4.3): the menu closes and the field is cleared first, whatever the row does. */
+  function runLauncherRow(current: DesktopStore, row: LauncherRow): void {
     closeLauncher();
     launcherQuery = "";
-    if (row.desktopId !== current.getState().activeDesktopId) {
-      void current.switchDesktop(row.desktopId).then(() => current.restoreWindow(row.window.id));
-    } else {
-      current.restoreWindow(row.window.id);
+    launcherHighlight = null;
+    switch (row.kind) {
+      case "launch":
+        void current.runLaunchRow(row.app.name, row.launchPath.id);
+        return;
+      case "window":
+        if (row.desktopId !== current.getState().activeDesktopId) {
+          void current.switchDesktop(row.desktopId).then(() => current.restoreWindow(row.window.id));
+        } else {
+          current.restoreWindow(row.window.id);
+        }
+        return;
+      case "text":
+        void current.runFreeText(row.app.name, row.launchPath.id, row.text);
+        return;
     }
+  }
+
+  function runHighlightedRow(current: DesktopStore): void {
+    const { rows } = launcherMenu(current);
+    const index = launcherHighlightIndex(rows);
+    if (index >= 0) runLauncherRow(current, rows[index]);
+  }
+
+  function runSecondaryRow(current: DesktopStore): void {
+    const row = secondaryTextRow(launcherMenu(current).rows);
+    if (row !== null) runLauncherRow(current, row);
   }
 
   function onWindowControl(current: DesktopStore, windowId: string, control: WindowControl, event: MouseEvent): void {
@@ -626,7 +659,6 @@ export function App(): m.Component<AppAttrs> {
       document.addEventListener("pointerdown", onDocumentPointerDown, true);
       const root = vnode.dom as HTMLElement;
       detachGestures = vnode.attrs.gestures.attach(root, gestureListener(vnode.attrs.store, root));
-      ensureTemplateCatalogRequested();
     },
     onupdate() {
       pages?.reconcile();
@@ -647,6 +679,7 @@ export function App(): m.Component<AppAttrs> {
       const placements = activePlacements(state);
       const focused = activeFocusedWindowId(state);
       const isLauncherOpen = current.isLauncherOpen();
+      const launcher = launcherMenu(current);
       // A pinned entry answers the same way in the bar and afloat.
       const onEntryClick = (windowId: string): void => current.toggleTaskbarEntry(windowId);
       const onEntryContextMenu = (windowId: string, x: number, y: number): void => {
@@ -711,15 +744,16 @@ export function App(): m.Component<AppAttrs> {
                   },
                 }),
             isLauncherOpen
-              ? m(LauncherOverlay, {
-                  query: launcherQuery,
-                  apps: openableApps(state),
-                  windows: launcherRows(current),
-                  activeDesktopId: state.activeDesktopId,
-                  catalog: getTemplateCatalogState(),
+              ? m(LauncherMenu, {
+                  menu: launcher,
+                  highlightIndex: launcherHighlightIndex(launcher.rows),
                   isCompact: state.modes.isCompact,
-                  onRunLaunch: (app, launchPath, params) => runLaunchFromLauncher(current, app, launchPath, params),
-                  onPickWindow: (row) => pickWindowFromLauncher(current, row),
+                  isApplePlatform: isApplePlatform(),
+                  bottomOffsetPx: launcherFieldRise,
+                  onRun: (row) => runLauncherRow(current, row),
+                  onHighlight: (index) => {
+                    launcherHighlight = index;
+                  },
                 })
               : null,
           ],
@@ -737,6 +771,17 @@ export function App(): m.Component<AppAttrs> {
             onClose: closeLauncher,
             onQuery: (query) => {
               launcherQuery = query;
+              launcherHighlight = null;
+            },
+            onMoveHighlight: (delta) => {
+              const { rows } = launcherMenu(current);
+              launcherHighlight = moveHighlight(rows, launcherHighlightIndex(rows), delta);
+            },
+            onRunHighlight: () => runHighlightedRow(current),
+            onRunSecondary: () => runSecondaryRow(current),
+            onRise: (rise) => {
+              launcherFieldRise = rise;
+              m.redraw();
             },
           },
           tray: {
@@ -757,6 +802,7 @@ export function App(): m.Component<AppAttrs> {
         }),
         menuRows === null ? null : menu.view(menuRows),
         settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+        replacedDesktopNotice(current),
         avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
       ]);
     },

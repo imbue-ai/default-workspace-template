@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { desktopRecord } from "../testing/records";
@@ -49,10 +49,10 @@ describe("DesktopSettingsDialog", () => {
     const attrs = render();
     pressEnterInNameField();
     await settled();
-    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), "shared", null);
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null);
   });
 
-  it("saves every edited field: the typed name, the picked colour, glyph, wallpaper, and sharing", async () => {
+  it("saves every edited field: the typed name, the picked colour, glyph, and wallpaper", async () => {
     const attrs = render({ wallpapers: [{ kind: "bundled", name: "dawn", url: "/wallpapers/bundled/dawn" }] });
     const input = card().querySelector(".desktop-settings-name") as HTMLInputElement;
     input.value = "  Studio ";
@@ -61,14 +61,10 @@ describe("DesktopSettingsDialog", () => {
     swatches[swatches.length - 1].click();
     (card().querySelector('[aria-label="Squiggle 3"]') as HTMLButtonElement).click();
     (card().querySelector('[data-wallpaper="bundled:dawn"]') as HTMLButtonElement).click();
-    const select = card().querySelector(".desktop-settings-sharing") as HTMLSelectElement;
-    select.value = "personal";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    m.redraw.sync();
     (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
     await settled();
     const pickedColor = swatches[swatches.length - 1].getAttribute("aria-label")?.replace("Color ", "");
-    expect(attrs.onSave).toHaveBeenCalledWith("Studio", pickedColor, 2, "personal", { kind: "bundled", name: "dawn" });
+    expect(attrs.onSave).toHaveBeenCalledWith("Studio", pickedColor, 2, { kind: "bundled", name: "dawn" });
   });
 
   it("does not save a blank name: Save is disabled and Enter posts nothing", async () => {

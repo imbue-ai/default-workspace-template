@@ -1,1 +1,0 @@
-- Enable code-guardian in Paseo by recognizing `PASEO_AGENT_ID`, alongside the existing mngr and Sculptor launcher variables.

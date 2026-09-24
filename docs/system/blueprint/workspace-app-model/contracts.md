@@ -8,7 +8,7 @@ Every rule below is normative and describes the current contract; where a phase 
 
 ## 1. Identifiers and addresses
 
-- An **app name** obeys `system/scripts/forward_port.py`'s rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not the first label of a standalone supervisord program (`share`, `app`, `owner`, `vm`, `host`, `env`, which `system/test_app_manifests.py` keeps in step with the conf), not starting with `host-` or `agent-`.
+- An **app name** obeys `system/scripts/forward_port.py`'s rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not the first label of a standalone supervisord program (`share`, `app`, `owner`, `vm`, `host`, `env`, `agent`, and `github` for the `github-sync` program enabling GitHub sync adds, which `system/test_app_manifests.py` keeps in step with the conf), not starting with `host-` or `agent-`.
 - An **instance key** matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
   It is unique within its app and never changes for the life of the instance.
   Keys ride addresses, URLs, and JSON keys unencoded; a key never needs percent-encoding because its alphabet is URL-safe.
@@ -58,6 +58,7 @@ Built-in manifests:
 | `chat` | true | `chat` | `{launch = "root", mode = "new"}`; also a `[pin]` (`/`, avatar, independent, floating) | `root` ("Chat" at `/`, param `draft` optional), `new` ("New Chat" at `/new`, params `account_id` optional: a signed-in account to launch on; `message` optional: the first message the chat sends once it runs) | `chat-app --secondary` over `copies = {data = "data/.apps/chat"}` (`CHAT_DATA_DIR`), health `/api/health`, opens on `/?chat={key}` |
 | `terminal` | true | `terminal` | `{launch = "new", mode = "new"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Terminal" at `/new`, param `workdir` optional) | `terminal-app --no-register` over `copies = {store = "data/.apps/terminal"}`, a `{scratch}` state dir, and `MINDS_APPS_FILE = "{registry}"` (booted `--with terminal-pty`), health `/api/health` |
 | `terminal-pty` | true | `terminal` | none | none; also `internal = true` and `program = "terminal-pty"`: ttyd on its own origin, framed by the terminal's wrapper page | `terminal-pty --no-register` over a `{scratch}` state dir, health `/` |
+| `getting-started` | false | `getting-started` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 5` | none; the shell synthesizes `open` at `/` | `getting-started --no-register --state-dir {scratch}/state` over `GETTING_STARTED_PORT = "{port:main}"` and `GETTING_STARTED_HOST = "{host}"` (unregistered: it neither re-points the live row nor opens the first-visit window), health `/api/health` |
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
 

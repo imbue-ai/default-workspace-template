@@ -9,6 +9,7 @@ dependencies = [
     "click>=8.1",
     "flask>=3.0",
     "imbue-common",
+    "imbue-mngr-ttyd",
     "loguru>=0.7",
     "pydantic>=2.0",
     "werkzeug>=3.0",

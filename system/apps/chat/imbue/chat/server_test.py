@@ -1,9 +1,11 @@
 """Tests for the Flask server."""
 
 import fcntl
+import importlib.util
 import io
 import json
 import os
+from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,7 +26,9 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.chat_records import ChatRecord
@@ -47,6 +51,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
@@ -63,6 +68,8 @@ from imbue.chat.state import state_of
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -562,6 +569,59 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert tracked is not None and tracked.state == "WAITING"
 
 
+def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: bool) -> tuple[int, list[bool]]:
+    """Send one message to a claude agent in ``state`` and return the response status and every
+    ``is_connecting`` the page was pushed for its chat, in order."""
+    agent_id = f"agent-{uuid4().hex}"
+    state_dir = agent_state_dir(Path(os.environ["MNGR_HOST_DIR"]), agent_id)
+    state_dir.mkdir(parents=True)
+    if is_ready_marker_written:
+        (state_dir / "session_started").touch()
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="claude-agent",
+        state=state,
+        agent_state_dir=state_dir,
+        claude_config_dir=state_dir / ".claude",
+    )
+    broadcaster = WebSocketBroadcaster()
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="claude-agent", state=state)
+    pushes = broadcaster.register()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+    return response.status_code, drain_is_connecting_pushes(pushes, agent_id)
+
+
+def test_a_send_to_a_claude_agent_still_starting_reads_as_connecting_until_it_resolves() -> None:
+    """Claude's launch deletes its ``session_started`` marker and the SessionStart hook writes it
+    back, so a running agent without one has not finished starting: the send waits inside mngr
+    for the prompt, and the page is told so for exactly that long."""
+    status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=False)
+
+    assert status == 200
+    assert True in connecting_pushes
+    assert connecting_pushes[-1] is False
+
+
+def test_a_send_to_a_ready_claude_agent_never_reads_as_connecting() -> None:
+    status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=True)
+
+    assert status == 200
+    assert True not in connecting_pushes
+
+
+def test_a_send_to_a_stopped_agent_reads_as_connecting_while_the_send_starts_it() -> None:
+    """A stopped agent is started by the send itself, whatever its markers say from its last run."""
+    status, connecting_pushes = _send_and_record_connecting_pushes("STOPPED", is_ready_marker_written=True)
+
+    assert status == 200
+    assert True in connecting_pushes
+    assert connecting_pushes[-1] is False
+
+
 class _FakeCodexLedger:
     """A stand-in for the live codex ledger the endpoints reach through the agent manager."""
 
@@ -614,6 +674,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         model_state_path=agent_info.agent_state_dir / "model_state.json",
         send_to_harness=lambda text: True,
         notify_agents_changed=lambda: None,
+        is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
         on_queue_snapshot=lambda snapshot: None,
         on_user_turn=lambda event: None,
@@ -635,6 +696,15 @@ def _codex_session_over(ledger: "_FakeCodexLedger | None") -> CodexHarnessSessio
     session.ensure_live = lambda: None
     session._live_ledger = lambda: ledger
     return session
+
+
+def _codex_session_down_until_started(ledger: "_FakeCodexLedger") -> tuple[CodexHarnessSession, Callable[[], None]]:
+    """A codex session whose daemon is down until the returned ``bring_up`` runs (a revive's start)."""
+    session = CodexHarnessSession.__new__(CodexHarnessSession)
+    session.ensure_live = lambda: None
+    live: list[_FakeCodexLedger] = []
+    session._live_ledger = lambda: live[0] if live else None
+    return session, lambda: live.append(ledger)
 
 
 def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
@@ -688,13 +758,10 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
     ledger = _FakeCodexLedger()
 
     # The daemon is down until the revive starts the agent; the retry then finds the ledger.
-    session = CodexHarnessSession.__new__(CodexHarnessSession)
-    session.ensure_live = lambda: None
-    live: list[_FakeCodexLedger] = []
-    session._live_ledger = lambda: live[0] if live else None
+    session, bring_up = _codex_session_down_until_started(ledger)
 
     def fake_start(agent_name: str) -> None:
-        live.append(ledger)
+        bring_up()
 
     with (
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
@@ -704,6 +771,44 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
         response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
     assert response.status_code == 200
     assert ledger.sent == [("hi", "m9")]
+
+
+def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_revives(tmp_path: Path) -> None:
+    """With no live connection the send first waits on the daemon (here, through a revive), and the
+    chat reads as connecting from the start of the send until it resolves."""
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="codex-agent", harness=HarnessType.CODEX)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    ledger = _FakeCodexLedger()
+    session, bring_up = _codex_session_down_until_started(ledger)
+    is_connecting_at_connect: list[bool] = []
+    is_connecting_at_revive: list[bool] = []
+
+    # The first connect attempt runs before the send reports NOT_READY, so this reading is the
+    # pre-send check's alone.
+    def record_connecting_at_connect() -> None:
+        is_connecting_at_connect.append(is_chat_connecting(manager, agent_id))
+
+    def fake_start(agent_name: str) -> None:
+        is_connecting_at_revive.append(is_chat_connecting(manager, agent_id))
+        bring_up()
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server.start_agent", fake_start),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+        patch.object(session, "ensure_live", record_connecting_at_connect),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert ledger.sent == [("hi", "m-1")]
+    assert is_connecting_at_connect[0] is True
+    assert is_connecting_at_revive == [True]
+    assert is_chat_connecting(manager, agent_id) is False
 
 
 def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_manager: AgentManager) -> None:
@@ -2287,6 +2392,90 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
         and push["phase"] == ProvisionalChatPhase.CREATING.value
         for push in pushed
     )
+
+
+def test_create_chat_with_should_wait_answers_the_creates_own_failure(
+    config: Config,
+    signed_in_account: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    false_binary: str,
+) -> None:
+    """``should_wait`` holds the answer until ``mngr create`` has finished, so a caller outside
+    the workspace (``message_chat.py --create``) gets the create's own verdict rather than a
+    201 for a chat that then fails behind its back."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    state = build_test_state(
+        config=config,
+        agent_manager=AgentManager.build(
+            WebSocketBroadcaster(), mngr_binary=false_binary, chat_files_root=tmp_path / "chats"
+        ),
+    )
+    state.agent_manager.note_agent_list_known()
+    app = create_application(state)
+    # The primary's work dir has to exist for ``false`` to run there and fail as ``mngr create`` would.
+    state.agent_manager._agents["agent-123"] = AgentStateItem(
+        id="agent-123", name="primary", state="RUNNING", labels={}, work_dir=str(tmp_path)
+    )
+
+    response = app.test_client().post(
+        "/api/chats/create",
+        json={
+            "name": "assist-1a2b3c",
+            "message": "/assist it broke",
+            "labels": {"auto_open": "true"},
+            "should_wait": True,
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.get_json()["detail"].startswith("mngr create exited with code 1")
+    [record] = state.agent_manager.get_provisional_chats()
+    assert record.phase is ProvisionalChatPhase.FAILED and record.name == "assist-1a2b3c"
+
+
+def test_create_chat_refuses_a_label_the_app_sets_itself_with_a_400(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+
+    response = client.post("/api/chats/create", json={"labels": {"account": "someone-else"}})
+
+    assert response.status_code == 400
+    assert "account" in response.get_json()["detail"]
+
+
+def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) -> None:
+    """``system/scripts/message_chat.py --create`` is standard-library only and cannot import this
+    package, so its copy of the route's path, its waiver setting, and the fields it posts are
+    pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
+    a chat app from before them: a rename on this side would send every Minds-app chat back to the
+    bare ``mngr create`` without a single failing test."""
+    script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
+    spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.SKIP_CLAUDE_INSTALLATION_CHECK_SETTING == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+    assert module.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
+    body = module.create_request_body(
+        module.CreateRequest(
+            name="assist-1a2b3c",
+            message="/assist it broke",
+            labels={"auto_open": "true"},
+        )
+    )
+
+    parsed = CreateChatRequest.model_validate(body)
+    assert parsed.name == "assist-1a2b3c"
+    assert parsed.message == "/assist it broke"
+    assert parsed.labels == {"auto_open": "true"}
+    assert parsed.is_installation_check_skipped is True
+    assert body[module.WAIT_FIELD] is True and parsed.should_wait is True
 
 
 def test_create_chat_refuses_an_id_it_never_minted(

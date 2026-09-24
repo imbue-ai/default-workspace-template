@@ -9,11 +9,22 @@
 
 import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
-import { DRAFT_PARAM, chatPath, launchPathOf, launchPathWithParams } from "../model/launch";
+import {
+  DRAFT_PARAM,
+  NO_TEXT_APP_REASON,
+  chatPath,
+  freeTextRowsOf,
+  launchPathOf,
+  launchPathWithParams,
+  launchRowKindOf,
+  textPathOf,
+} from "../model/launch";
+import { applyPresence } from "../model/Presence";
 import type {
   AppRecord,
   AvatarCatalog,
   AvatarDesign,
+  ClientArrival,
   ClientRecord,
   Desktop,
   DesktopShortcut,
@@ -22,10 +33,12 @@ import type {
   FloatingPosition,
   GridCell,
   IfPresent,
+  Inventory,
+  LaunchPath,
   Layout,
   PinStyle,
   Placement,
-  SharingMode,
+  PresentUser,
   ShortcutMode,
   Wallpaper,
   WindowRecord,
@@ -65,13 +78,14 @@ import {
   initialDesktopState,
   isAppStoppable,
   isLayoutDirty,
+  openableApps,
   pinnedWindowOf,
   reduceDesktopState,
   renderedState,
   windowShowingChat,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState } from "../reducers/desktopState";
-import { cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
+import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
   ActiveDesktopChangedEvent,
@@ -87,15 +101,10 @@ const SAVE_DEBOUNCE_MS = 300;
 
 /** The routes the store calls, injectable so the store is tested against a fake shell. */
 export interface DesktopApi {
-  fetchDesktops(): Promise<Desktop[]>;
+  /** The desktops, the apps, and the clients in one read (contracts.md section 5.5): what a page boots from. */
+  fetchInventory(): Promise<Inventory>;
   createDesktop(name: string, color: string, glyph: number): Promise<Desktop>;
-  updateDesktopSettings(
-    desktopId: string,
-    name: string,
-    color: string,
-    glyph: number,
-    sharing: SharingMode,
-  ): Promise<Desktop>;
+  updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop>;
   setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop>;
   deleteDesktop(desktopId: string): Promise<string>;
   setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop>;
@@ -112,6 +121,7 @@ export interface DesktopApi {
   ): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
+  arriveClient(clientId: string): Promise<ClientArrival>;
   fetchClients(): Promise<ClientRecord[]>;
   setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
@@ -199,6 +209,8 @@ export class DesktopStore {
   private backdrop: PixelSize = { width: 0, height: 0 };
   private gesture: ActiveGesture | null = null;
   private isLauncherOpenNow = false;
+  // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
+  private replacedDesktop: ReplacedDesktop | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new SaveIdMinter();
   private readonly pendingRestores = new Set<string>();
@@ -221,7 +233,8 @@ export class DesktopStore {
   // push answers older than the push, and must not overwrite it.
   private avatarSelectionPushes = 0;
   private entryPushes = 0;
-  // The app list arrives only over the socket, so a deep link's open or launch waits for it here.
+  // Resolved by the first app list to land: the bootstrap's inventory read, or the socket's ``apps_updated`` when
+  // the socket is quicker; a deep link's open or launch waits for it.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
 
@@ -326,15 +339,17 @@ export class DesktopStore {
     this.dispatch({ type: "render_modes_changed", modes });
   }
 
-  /** Resolves once the app list has landed. It arrives only over the socket, so ``start`` resolving
-   *  does not imply it: a caller that needs the apps (which app holds chats, which window is pinned)
-   *  waits on this too. */
+  /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
+   *  ``apps_updated``, whichever comes first. A ``start`` that failed to read the inventory resolves without
+   *  it, so a caller that needs the apps (which app holds chats, which window is pinned) waits on this too. */
   whenAppsLoaded(): Promise<void> {
     return this.appsLoaded;
   }
 
-  /** Read this client's record, pick the desktop (a deep link's first), connect, fetch the layout, and
-   *  honour the deep link's open or launch. */
+  /** Connect, post this client's arrival, read the inventory (the apps, the desktops, and this client's record),
+   *  land on the deep link's desktop else the one the shell answered, fetch the layout, and honour the deep
+   *  link's open or launch. The apps come with the inventory rather than waiting on the socket, so a shortcut
+   *  is never drawn for an app the page does not know yet. */
   async start(deepLink: DeepLink): Promise<void> {
     this.deps.socket.connect({
       onConnected: () => this.takeConnected(),
@@ -351,30 +366,36 @@ export class DesktopStore {
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
+      onPresenceUpdated: (users) => this.takePresence(users),
     });
     void this.loadAvatarSelection();
     const entryPushesBefore = this.entryPushes;
-    let desktops: Desktop[];
-    let clients: ClientRecord[];
+    // The arrival comes first: it may seed a desktop for this user, which the inventory read then includes.
+    let arrival: ClientArrival | null;
     try {
-      [desktops, clients] = await Promise.all([
-        this.deps.api.fetchDesktops(),
-        this.deps.api.fetchClients().catch((error: unknown) => {
-          console.warn("[si] could not read the client records", error);
-          return [];
-        }),
-      ]);
+      arrival = await this.deps.api.arriveClient(this.deps.clientId);
     } catch (error) {
-      console.warn("[si] could not read the desktops", error);
-      this.deps.notify(`Could not read the desktops: ${(error as Error).message}`);
+      console.warn("[si] the shell could not settle where this client lands", error);
+      arrival = null;
+    }
+    let inventory: Inventory;
+    try {
+      inventory = await this.deps.api.fetchInventory();
+    } catch (error) {
+      console.warn("[si] could not read the inventory", error);
+      this.deps.notify(`Could not read the desktops and apps: ${(error as Error).message}`);
       return;
     }
+    // The apps before the desktops, so the first draw of a desktop's shortcuts already knows every app.
+    this.takeApps(inventory.apps);
     this.desktopsRevision += 1;
-    this.dispatch({ type: "desktops_updated", desktops });
-    const own = clients.find((client) => client.id === this.deps.clientId);
+    this.dispatch({ type: "desktops_updated", desktops: inventory.desktops });
+    this.replacedDesktop = replacedDesktopOf(arrival);
+    const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     this.takeFetchedEntries(own, entryPushesBefore);
-    const recorded = own?.active_desktop ?? null;
-    const chosen = chooseInitialDesktopId(desktops, deepLink.desktopId, recorded);
+    // The shell's answer says where this client lands; without one (the arrival failed), the recorded desktop.
+    const landing = arrival?.desktop_id ?? own?.active_desktop ?? null;
+    const chosen = chooseInitialDesktopId(inventory.desktops, deepLink.desktopId, landing);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -421,9 +442,14 @@ export class DesktopStore {
     await this.refetchLayout();
   }
 
-  private takeApps(apps: AppRecord[]): void {
+  private takeApps(apps: readonly AppRecord[]): void {
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
+  }
+
+  private takePresence(users: PresentUser[]): void {
+    applyPresence(users);
+    this.deps.redraw();
   }
 
   private async applyDeepLink(link: DeepLink): Promise<void> {
@@ -695,14 +721,18 @@ export class DesktopStore {
     }
   }
 
-  async updateDesktopSettings(
-    desktopId: string,
-    name: string,
-    color: string,
-    glyph: number,
-    sharing: SharingMode,
-  ): Promise<void> {
-    this.takeDesktop(await this.deps.api.updateDesktopSettings(desktopId, name, color, glyph, sharing));
+  async updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<void> {
+    this.takeDesktop(await this.deps.api.updateDesktopSettings(desktopId, name, color, glyph));
+  }
+
+  /** This user's deleted desktop and the one seeded in its place, while the notice about them is still owed. */
+  getReplacedDesktop(): ReplacedDesktop | null {
+    return this.replacedDesktop;
+  }
+
+  dismissReplacedDesktopNotice(): void {
+    this.replacedDesktop = null;
+    this.deps.redraw();
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<void> {
@@ -759,7 +789,9 @@ export class DesktopStore {
     }
   }
 
-  /** Run a shortcut in its mode: focus raises the app's most recent window and opens only when there is none. */
+  /** Run a shortcut in its mode: focus raises the app's most recent window and opens only when there is none.
+   *  Before the apps are known (the inventory has not answered) the user is told to wait rather than that
+   *  the app is missing. */
   async runLaunch(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const run = resolveLaunchRun(this.state, app, launch, mode);
     switch (run.kind) {
@@ -768,6 +800,9 @@ export class DesktopStore {
         return;
       case "open":
         await this.openWindowAt(run.app, run.path, run.launch, "new");
+        return;
+      case "connecting":
+        this.deps.notify(STILL_CONNECTING_NOTICE);
         return;
       case "unavailable":
         this.deps.notify(`Cannot open: ${run.reason}`);
@@ -779,15 +814,64 @@ export class DesktopStore {
     return this.runLaunch(shortcut.target.app, shortcut.target.launch, shortcut.mode);
   }
 
-  /** Run a launch path with params (a seeded prompt): always opens a new window. */
-  async openLaunchPath(app: string, launch: string, params: Readonly<Record<string, string>>): Promise<void> {
-    const record = appByName(this.state, app);
-    const launchPath = record === undefined ? null : launchPathOf(record, launch);
-    if (record === undefined || launchPath === null) {
-      this.deps.notify(`Cannot open: ${app} has no launch path ${launch}`);
-      return;
+  /** The app and launch path a launcher row names, or null (told to the user) when the app declares no such path. */
+  private launchOf(appName: string, launchId: string): { app: AppRecord; launchPath: LaunchPath } | null {
+    const app = appByName(this.state, appName);
+    const launchPath = app === undefined ? null : launchPathOf(app, launchId);
+    if (app === undefined || launchPath === null) {
+      this.deps.notify(`Cannot open: ${appName} has no launch path ${launchId}`);
+      return null;
     }
-    await this.openWindowAt(record.name, launchPathWithParams(launchPath, params), launchPath.id, "new");
+    return { app, launchPath };
+  }
+
+  /** Run a launch-path row (launcher plan section 3.3): a launch path at its app's pin path raises the pinned window
+   *  on the active desktop and opens nothing; every other opens a new window at the path. */
+  async runLaunchRow(appName: string, launchId: string): Promise<void> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return;
+    if (launchRowKindOf(found.app, found.launchPath) === "focus") {
+      const pinned = pinnedWindowOf(this.state, found.app.name);
+      if (pinned !== null) {
+        this.restoreWindow(pinned.id);
+        return;
+      }
+    }
+    await this.openWindowAt(found.app.name, found.launchPath.path, found.launchPath.id, "new");
+  }
+
+  /** Run a free-text row with ``text`` (launcher plan section 3.2), pinned-first: when the app has an independent
+   *  pinned window on the active desktop, this client's view of it is pointed at the launch path with the text
+   *  (the write an agent's navigate makes, which moves this client's page alone) and the window is restored and
+   *  raised; otherwise a new window opens at that path. A linked pinned window is never navigated to a launch
+   *  path, since every client would run it. False when the text cannot go (over the path bound) or the shell
+   *  refused, each told to the user. */
+  async runFreeText(appName: string, launchId: string, text: string): Promise<boolean> {
+    const found = this.launchOf(appName, launchId);
+    if (found === null) return false;
+    const target = textPathOf(found.launchPath, text);
+    if (target.kind === "disabled") {
+      this.deps.notify(target.reason);
+      return false;
+    }
+    const pinned = pinnedWindowOf(this.state, found.app.name);
+    if (pinned !== null && pinned.scope === "independent") {
+      const isTaken = await this.navigateOwnWindow(pinned.id, target.path);
+      this.restoreWindow(pinned.id);
+      return isTaken;
+    }
+    return (await this.openWindowAt(found.app.name, target.path, found.launchPath.id, "new")) !== null;
+  }
+
+  /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
+   *  with no free-text row on the machine the user is told. */
+  async startWithText(text: string): Promise<boolean> {
+    const [primary] = freeTextRowsOf(openableApps(this.state));
+    if (primary === undefined) {
+      this.deps.notify(NO_TEXT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout
@@ -1247,16 +1331,30 @@ export class DesktopStore {
   }
 }
 
-/** The desktop a fresh window lands on: the deep link's when it exists, else the client's recorded
- *  one when it exists, else the first; null with no desktops. */
+/** What the notice that a visitor's desktop was deleted names: the deleted desktop, and the one the shell seeded
+ *  in its place (not necessarily the one this client landed on: a deep link's desktop wins the landing). */
+export interface ReplacedDesktop {
+  readonly replacedName: string;
+  readonly seededName: string;
+}
+
+/** The replaced desktop an arrival reports, when it does; the shell names the deleted desktop only alongside the
+ *  one it seeded, so an answer with one but not the other reports nothing. */
+export function replacedDesktopOf(arrival: ClientArrival | null): ReplacedDesktop | null {
+  if (arrival === null || arrival.replaced_desktop_name === null || arrival.created_desktop === null) return null;
+  return { replacedName: arrival.replaced_desktop_name, seededName: arrival.created_desktop.name };
+}
+
+/** The desktop a fresh window lands on: the deep link's when it exists, else the one the shell's arrival answer
+ *  named when it exists, else the first; null with no desktops. */
 export function chooseInitialDesktopId(
   desktops: readonly Desktop[],
   deepLinkDesktopId: string | null,
-  recordedDesktopId: string | null,
+  arrivalDesktopId: string | null,
 ): string | null {
   if (desktops.length === 0) return null;
   const ids = new Set(desktops.map((desktop) => desktop.id));
   if (deepLinkDesktopId !== null && ids.has(deepLinkDesktopId)) return deepLinkDesktopId;
-  if (recordedDesktopId !== null && ids.has(recordedDesktopId)) return recordedDesktopId;
+  if (arrivalDesktopId !== null && ids.has(arrivalDesktopId)) return arrivalDesktopId;
   return desktops[0].id;
 }

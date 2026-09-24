@@ -37,17 +37,27 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 """
 
 import argparse
+import functools
 import importlib.util
 import re
+import socket
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
+from types import ModuleType
 from typing import Iterable
 
 import tomlkit
 
-# Both kebab and snake forms are reserved so a kebab name that converts to
-# a snake-cased existing app or service name is also rejected.
+# The template's own app and service names, which forward_port.py has no reason
+# to know about: it refuses names that can never be an origin label, while these
+# are perfectly good labels already taken by something built in. Both kebab and
+# snake forms are listed so a kebab name that converts to a snake-cased existing
+# name is also rejected. Everything the registry itself refuses -- reserved
+# names, reserved prefixes, length, character set -- is asked of forward_port.py
+# at validation time rather than copied here.
 RESERVED_NAMES = frozenset(
     {
         "system-interface",
@@ -61,22 +71,10 @@ RESERVED_NAMES = frozenset(
         "terminal",
         "deferred-install",
         "imbue-common",
-        # forward_port.py rejects ``localhost`` at registration time (it is
-        # the local origin's root domain); reserve it here too so the scaffold
-        # never mints an app that cannot register.
-        "localhost",
-        # ``auth`` is reserved for the share stack's dedicated ``auth-<rand>``
-        # origin label (the sole public ``/_auth/*`` origin); forward_port.py
-        # rejects it, so the scaffold must too.
-        "auth",
     }
 )
-# Workspace hostnames carry their coordinate as a ``host-<hex>`` label
-# (``agent-`` is the legacy spelling); a service name starting with either
-# prefix could collide with that coordinate label, so forward_port.py rejects
-# both and the scaffold must too.
-RESERVED_NAME_PREFIXES = ("host-", "agent-")
-# forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
+# forward_port.py owns the registration rule (names and icons alike); reuse it so
+# a name it would refuse, or a bad icon, fails here instead of at registration.
 _FORWARD_PORT_PATH = (
     Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 )
@@ -89,11 +87,18 @@ def _kebab_to_snake(name: str) -> str:
     return name.replace("-", "_")
 
 
-def _read_and_validate_icon(path: Path) -> str:
+@functools.cache
+def _load_forward_port() -> ModuleType:
+    """The registration script, loaded by path: it is stdlib-only and not importable."""
     spec = importlib.util.spec_from_file_location("_forward_port", _FORWARD_PORT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _read_and_validate_icon(path: Path) -> str:
+    module = _load_forward_port()
     markup, error = module.read_icon_file(path)
     if error is not None:
         sys.exit(f"error: {error}")
@@ -101,25 +106,23 @@ def _read_and_validate_icon(path: Path) -> str:
 
 
 def _validate_name(name: str) -> None:
-    # The name becomes the leading label of the service's origin hostname
-    # (the app is served at http://<name>.<workspace-host>/), so it must be
-    # DNS-safe kebab-case and stay out of the reserved coordinate prefix
-    # space. forward_port.py accepts a superset (underscores are tolerated
-    # there for legacy names like ``system_interface``), so every name the
-    # scaffold mints registers cleanly -- a drift test in
-    # system/scripts/forward_port_test.py pins that subset relation.
+    # The name becomes the leading label of the service's origin hostname (the
+    # app is served at http://<name>.<workspace-host>/), so the scaffold is
+    # deliberately stricter than the registry: kebab-case only, letter-start, no
+    # underscores, where forward_port.py still tolerates legacy names like
+    # ``system_interface``. Strictness is all this adds. Whether the registry
+    # would accept the name is asked of forward_port.py itself, so a name the
+    # scaffold mints always registers -- rather than being pinned by a copy of
+    # its reserved list that can drift out from under the check.
     if not KEBAB_RE.match(name):
         sys.exit(
             f"error: --name {name!r} is not valid kebab-case "
             "(lowercase letters/digits with single hyphens, "
             "starting with a letter)"
         )
-    for prefix in RESERVED_NAME_PREFIXES:
-        if name.startswith(prefix):
-            sys.exit(
-                f"error: --name {name!r} starts with {prefix!r}, which is "
-                "reserved for workspace hostnames"
-            )
+    registration_problem = _load_forward_port().validate_service_name(name)
+    if registration_problem is not None:
+        sys.exit(f"error: --name {name!r} could not be registered: {registration_problem}")
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
 
@@ -186,18 +189,29 @@ def _apps_toml_ports(apps_toml: Path) -> set[int]:
     return ports
 
 
+def _is_port_bound(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
         repo_root / "system/supervisord.conf"
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
+    # Reserve known internal ports that may not have supervisor entries
+    in_use.add(8083)  # browser CDP proxy
     if requested is not None:
-        if requested in in_use:
+        if requested in in_use or _is_port_bound(requested):
             sys.exit(
                 f"error: --port {requested} is already in use by another app or service"
             )
         return requested
     port = LOWEST_AUTO_PORT
-    while port in in_use:
+    while port in in_use or _is_port_bound(port):
         port += 1
     return port
 
@@ -593,6 +607,35 @@ def _run_uv_sync(repo_root: Path) -> None:
     _run_checked(["uv", "sync", "--all-packages"], repo_root, "uv sync --all-packages")
 
 
+def _start_and_wait(
+    repo_root: Path, name: str, port: int, timeout: float = 10.0
+) -> None:
+    # Reload supervisord to pick up the new program block
+    _run_checked(["supervisorctl", "reread"], repo_root, "supervisorctl reread")
+    _run_checked(["supervisorctl", "update"], repo_root, "supervisorctl update")
+
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.time() + timeout
+    last_err = None
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "scaffold-check"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return
+        except Exception as e:
+            last_err = e
+            time.sleep(0.05)
+
+    status_res = subprocess.run(
+        ["supervisorctl", "status", name], cwd=repo_root, capture_output=True, text=True
+    )
+    sys.exit(
+        f"error: service {name} failed to become healthy at {url} within {timeout}s (last error: {last_err})\n"
+        f"status: {status_res.stdout.strip()}"
+    )
+
+
 def _find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
@@ -606,7 +649,7 @@ def _find_repo_root(start: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
     parser.add_argument(
@@ -638,6 +681,11 @@ def main() -> None:
         action="store_true",
         help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
     )
+    parser.add_argument(
+        "--start",
+        action="store_true",
+        help="register with supervisord (reread + update) and wait for health endpoint",
+    )
     args = parser.parse_args()
 
     _validate_name(args.name)
@@ -668,13 +716,21 @@ def main() -> None:
         _install_app_tool(repo_root, package)
         _run_uv_sync(repo_root)
 
+    if args.start:
+        _start_and_wait(repo_root, args.name, port)
+
+    start_msg = (
+        f"Service `{args.name}` started and healthy on http://127.0.0.1:{port}/.\n"
+        if args.start
+        else ""
+    )
     print(
-        f"Created lib at {lib_dir.relative_to(repo_root)} "
+        f"{start_msg}Created lib at {lib_dir.relative_to(repo_root)} "
         f"(app `{args.name}` on port {port}, registered in "
         f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."
+        f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 
