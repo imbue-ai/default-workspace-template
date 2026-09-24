@@ -3118,17 +3118,15 @@ class AgentManager:
         """Put a just-created chat on its pick and hand it the message its create left out.
 
         A silent start's message is the greeting, unless something was sent to the chat while it
-        was created: the user has already said something, and a greeting would run first and
-        leave their message queued behind it.
+        was created or while its pick was applied: the user has already said something, and a
+        greeting would run first and leave their message queued behind it.
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
         what the user chose the switch by. The message goes through the send path a held send
         takes; a refusal is logged the same way.
         """
-        is_greeted = is_silent_start and not self._has_waiting_new_chat_sends(chat_id)
-        first_message = WELCOME_MESSAGE if is_greeted else message
-        if model_pick is None and not first_message:
+        if model_pick is None and not message and not is_silent_start:
             return
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
@@ -3142,6 +3140,9 @@ class AgentManager:
                 self.apply_model_pick(agent_info, model_pick)
             except ModelApplyError as e:
                 _loguru_logger.warning("Chat {}: could not set model {}: {}", chat_id, model_pick.model_id, e)
+        # The chat is listed before the pick is applied, so a send made meanwhile counts too.
+        is_greeted = is_silent_start and not self._has_waiting_new_chat_sends(chat_id)
+        first_message = WELCOME_MESSAGE if is_greeted else message
         if first_message:
             deliver_held_send(
                 capabilities.deliver,

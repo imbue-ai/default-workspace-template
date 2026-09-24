@@ -94,6 +94,7 @@ from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
+from imbue.chat.testing import HookedMngrMessenger
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import drain_is_connecting_pushes
@@ -1233,6 +1234,44 @@ def test_a_message_sent_while_a_silent_chat_is_created_is_its_first_and_it_is_no
     assert errors == []
     with agent_manager._lock:
         assert ChatId("test-id") not in agent_manager._new_chat_send_gate_by_chat_id
+
+
+def test_a_message_sent_while_a_silent_chats_pick_is_applied_is_its_first_and_it_is_not_greeted(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chat is listed before its pick is applied, so the user can send while the pick goes in."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    created_id = str(MngrAgentId())
+    chat_id = ChatId(created_id)
+    errors: list[str] = []
+    senders: list[threading.Thread] = []
+
+    def send_once_the_pick_starts(message: str) -> None:
+        if not senders:
+            senders.append(_send_while_the_chat_is_created(manager, chat_id, "hello", delivered, errors))
+
+    messenger = HookedMngrMessenger(before_send=send_once_the_pick_starts)
+    manager = AgentManager.build(broadcaster, messenger=messenger, chat_files_root=tmp_path / "chats")
+    seed_creating_chat(manager, chat_id, "Chat 1")
+    delivered = _record_deliveries(manager)
+
+    manager._run_creation(
+        chat_id,
+        created_id,
+        "chat-1",
+        ["true"],
+        tmp_path,
+        {},
+        HarnessType.CLAUDE,
+        model_pick=ModelPick(model_id="haiku", effort="low"),
+        is_silent_start=True,
+    )
+    (sender,) = senders
+    sender.join(timeout=5.0)
+
+    assert [message for _agent, message in messenger.sent][0] == "/model haiku"
+    assert delivered == ["hello"]
+    assert errors == []
 
 
 def test_a_message_sent_while_a_chat_is_created_goes_after_the_message_the_create_left_out(
