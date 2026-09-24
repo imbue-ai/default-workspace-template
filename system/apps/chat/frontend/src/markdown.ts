@@ -13,7 +13,33 @@ const TOOL_CALL_PREFIX = "Tool call: ";
 
 export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
-  return DOMPurify.sanitize(rawHtml);
+  const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true });
+  unlinkWorkspacePaths(fragment);
+  const container = document.createElement("div");
+  container.append(fragment);
+  return container.innerHTML;
+}
+
+/**
+ * Keep a clicked message link from replacing the conversation.
+ *
+ * A web link is left alone: the desktop app opens external links in the browser.
+ * An absolute path is a file the chat backend serves as a download (see the
+ * show-files-in-chat skill); ``download`` makes a missing file fail as a download
+ * rather than load an error page over the chat. Any other path (relative, a
+ * fragment, ``file:``) has nothing to open it yet, so it is unwrapped to its text.
+ */
+function unlinkWorkspacePaths(root: DocumentFragment): void {
+  for (const anchor of Array.from(root.querySelectorAll("a"))) {
+    const href = anchor.getAttribute("href") ?? "";
+    const isWebLink = /^[a-z][a-z\d+.-]*:/i.test(href) && !/^file:/i.test(href);
+    if (isWebLink || href.startsWith("//")) continue;
+    if (href.startsWith("/")) {
+      anchor.setAttribute("download", "");
+      continue;
+    }
+    anchor.replaceWith(...Array.from(anchor.childNodes));
+  }
 }
 
 /**

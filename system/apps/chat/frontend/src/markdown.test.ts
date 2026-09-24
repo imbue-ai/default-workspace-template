@@ -1,9 +1,10 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
 // lightbox touches the DOM imperatively; markdown.ts only needs its export to exist.
 vi.mock("./lightbox", () => ({ openImageLightbox: vi.fn() }));
 
-import { requestedAtUrl } from "./markdown";
+import { renderMarkdown, requestedAtUrl } from "./markdown";
 
 describe("requestedAtUrl", () => {
   it("appends the per-message post time to an absolute on-disk path", () => {
@@ -29,5 +30,46 @@ describe("requestedAtUrl", () => {
 
   it("does not double-append when a query string is already present", () => {
     expect(requestedAtUrl("/x/chart.png?v=2", "ts-1")).toBeNull();
+  });
+});
+
+describe("renderMarkdown links", () => {
+  function render(source: string): HTMLElement {
+    const container = document.createElement("div");
+    container.innerHTML = renderMarkdown(source);
+    return container;
+  }
+
+  it("leaves web links as ordinary links", () => {
+    const anchor = render("[Docs](https://example.com/docs) and [mail](mailto:a@example.com)").querySelectorAll("a");
+    expect(Array.from(anchor, (a) => a.getAttribute("href"))).toEqual([
+      "https://example.com/docs",
+      "mailto:a@example.com",
+    ]);
+    expect(anchor[0].hasAttribute("download")).toBe(false);
+  });
+
+  it("keeps an absolute path as a download link", () => {
+    const anchor = render("[Q4 report](/home/user/workspace/data/documents/q4.pdf)").querySelector("a")!;
+    expect(anchor.getAttribute("href")).toBe("/home/user/workspace/data/documents/q4.pdf");
+    expect(anchor.hasAttribute("download")).toBe(true);
+  });
+
+  it.each([
+    "[the skill](.agents/skills/assist/SKILL.md)",
+    "[guide](docs/guide.md:12)",
+    "[section](#usage)",
+    "[local](file:///home/user/workspace/notes.md)",
+  ])("renders %s as its label text with no link", (source) => {
+    const container = render(source);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent!.trim()).toBe(source.slice(1, source.indexOf("]")));
+  });
+
+  it("keeps the markup and image inside an unwrapped link", () => {
+    const container = render("[**bold** ![Chart](/home/user/workspace/data/images/chart.png)](data/images/chart.png)");
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("strong")!.textContent).toBe("bold");
+    expect(container.querySelector("img")!.getAttribute("src")).toBe("/home/user/workspace/data/images/chart.png");
   });
 });
