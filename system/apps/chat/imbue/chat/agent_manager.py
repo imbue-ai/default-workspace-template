@@ -3105,7 +3105,10 @@ class AgentManager:
                 if failed is not None and failed.error is not None:
                     error = failed.error
         finally:
-            self._open_new_chat_send_gate(chat_id)
+            # A failed create has already refused its sends, and a retry may have put a new gate
+            # under the same id since.
+            if success:
+                self._open_new_chat_send_gate(chat_id)
             self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
 
     def _settle_new_chat(
@@ -3193,7 +3196,7 @@ class AgentManager:
             return gate is not None and gate.has_issued_tickets()
 
     def _open_new_chat_send_gate(self, chat_id: ChatId) -> None:
-        """Let the sends waiting for a created chat through. A no-op once its create has failed."""
+        """Let the sends waiting for a created chat through."""
         with self._lock:
             gate = self._new_chat_send_gate_by_chat_id.get(chat_id)
         if gate is None:
