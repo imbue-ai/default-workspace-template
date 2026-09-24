@@ -95,7 +95,7 @@ A service that needs a credential the user supplied through the
 `python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command>`
 inside the `bash -c` string, so the file's variables reach that process and
 nothing else does; the value goes in no config file and no command line, and
-the secrets guard refuses every other read of the file.
+the secrets guard refuses the direct reads of the file it recognises.
 
 Services inherit the agent environment (`MNGR_AGENT_STATE_DIR`,
 `MNGR_HOST_DIR`, `LATCHKEY_*`, ...) from the bootstrap shell
