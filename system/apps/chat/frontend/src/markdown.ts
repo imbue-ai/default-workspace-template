@@ -29,7 +29,8 @@ export function renderMarkdown(source: string): string {
  * An absolute path is a file the chat backend serves as a download (see the
  * show-files-in-chat skill); ``download`` makes a missing file fail as a download
  * rather than load an error page over the chat. Any other path (relative, a
- * fragment, ``file:``) has nothing to open it yet, so it is unwrapped to its text.
+ * fragment, ``file:``) cannot open anything from the chat's origin, so it is
+ * unwrapped to its text.
  * A dotted "scheme" is a file name with a line number (``q4.md:12``), not a URL.
  */
 function rewritePathLinks(root: DocumentFragment): void {
