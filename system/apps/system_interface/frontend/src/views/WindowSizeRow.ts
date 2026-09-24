@@ -25,8 +25,8 @@ import {
 import type { Frame, WindowState } from "../model/records";
 import { zoneGlyph } from "./glyphs";
 
-/** The pictogram's box inside its tile. */
-const ZONE_GLYPH_SIZE = 22;
+/** The pictogram's box inside its tile, which leaves the tile 2px of its own around the drawing. */
+const ZONE_GLYPH_SIZE = 20;
 
 export interface WindowSizeActions {
   /** Place the window in a zone one of the window states stands for. */
@@ -73,8 +73,8 @@ export function windowSizeRow(actions: WindowSizeActions, onPlaced: () => void):
       // off their hover boxes rather than at the indent a row of text is cut for. The 4px above and
       // below is the card's own padding, so only the sides are spelled out here.
       m("div", { class: "mx-1 flex flex-col gap-1" }, [
-        // Indented by a menu row's own `px-2`, which is where every other label in a menu starts --
-        // and, near enough, where the pictograms' outlines start inside their hover boxes.
+        // Indented by a menu row's own `px-2`, which is where every other label in a menu starts,
+        // and within a couple of pixels of where the pictograms' outlines start inside their tiles.
         m("span", { class: "px-2 text-(length:--font-size-helper) text-primary" }, "Move and resize"),
         m(
           "div",
@@ -89,7 +89,7 @@ export function windowSizeRow(actions: WindowSizeActions, onPlaced: () => void):
                 "aria-label": zone.label,
                 title: zone.label,
                 class:
-                  "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-secondary " +
+                  "flex h-6 w-6 cursor-pointer items-center justify-center rounded-lg text-secondary " +
                   "hover:bg-fill-hover hover:text-primary focus-visible:outline-2 focus-visible:outline-accent",
                 onclick: (event: MouseEvent) => {
                   event.stopPropagation();
