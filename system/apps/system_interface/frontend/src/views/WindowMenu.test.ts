@@ -18,7 +18,7 @@ function rowOf(rows: MenuRow[], key: string): ActionRow {
 const size = { setState: vi.fn(), setFrame: vi.fn() };
 
 describe("windowMenuRows", () => {
-  it("offers Size, Share, Stop or Start, and Close for an ordinary running app", () => {
+  it("offers Move and resize, Share, Stop or Start, and Close for an ordinary running app", () => {
     const app = appRecord("docs");
     const setAppLifecycle = vi.fn();
     const rows = windowMenuRows(app, {
@@ -58,7 +58,7 @@ describe("windowMenuRows", () => {
     ).toEqual(["size", "|", "close"]);
   });
 
-  it("drops the size section where the caller gives none (compact, where every window is maximized)", () => {
+  it("drops Move and resize where the caller gives none (compact, where every window is maximized)", () => {
     expect(
       keysOf(
         windowMenuRows(appRecord("docs"), {
@@ -86,7 +86,7 @@ describe("windowMenuRows", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("offers only Size and Close for a window of an app the shell no longer lists", () => {
+  it("offers only Move and resize and Close for a window of an app the shell no longer lists", () => {
     expect(
       keysOf(
         windowMenuRows(undefined, { size, onSized: vi.fn(), share: vi.fn(), setAppLifecycle: vi.fn(), close: vi.fn() }),
