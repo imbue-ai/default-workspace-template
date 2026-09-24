@@ -266,6 +266,8 @@ export class FakeDesktopApi implements DesktopApi {
       const desktop = this.desktop(desktopId);
       const window = desktop.windows.find((candidate) => candidate.id === target.windowId);
       if (window === undefined) throw new Error(`No window ${target.windowId}`);
+      // As the shell does (a 400): the launch lands only in a window of its own app.
+      if (window.app !== request.app) throw new Error(`Window ${target.windowId} is not a window of ${request.app}`);
       const title =
         window.scope === "independent"
           ? (this.windowPaths.get(`${request.clientId}/${window.id}`)?.title ?? "")
