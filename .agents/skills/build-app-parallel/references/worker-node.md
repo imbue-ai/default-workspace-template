@@ -130,16 +130,13 @@ is the orchestrator and the nodes after you, and the shape below is what they
 need.
 
 The body of a `done` report is the handoff the nodes after you read, and it is
-pasted whole into the task file of every node that depends on you. A long report
-is a tax on all of them: in earlier builds these ran to 1,500 words, and a late
-node opened a 6,000-word task file to find the 40 words that were its own
-subtask.
+pasted whole into the task file of every node that depends on you, so keep it
+short for their sake. Report only what is not already in the folder: the nodes
+after you can read the files you wrote, so what they need from you is what to
+call, what shape to expect, and what is missing.
 
-So report only what is not already in the folder. The nodes after you can read
-the files you wrote; what they cannot get from the tree is what to call, what
-shape to expect, and what is missing. **Everything except item 3 fits in 300
-words together.** Item 3 has no cap -- it is the part the next node cannot work
-without.
+**Items 1, 2, 4, 5 and 6 come to around 300 words together.** Item 3 has no
+target -- it is the part the next node cannot work without.
 
 1. **What you built** -- three sentences. No subheadings and no walkthrough of
    the page or the module.
