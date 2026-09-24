@@ -15,8 +15,9 @@ sees the key and every request.
 
 A server that runs here is code with this workspace's access, including every
 variable the wrapper hands it; the secrets guard stops your own tool calls, not
-a process. So install the version you looked at, never whatever is newest:
-`npm view <package> version` gives the current one, and the command names it
+a process. So install the version you looked at, not whatever is newest at each
+launch. `npm view <package> version` gives an npm package's current version, and
+its pypi.org page gives a Python package's; the command names that version
 (`npx -y @example/mcp-server@1.2.3`, `uvx example-mcp@1.2.3`). To move to a
 newer version, look at what changed and edit the pin.
 
