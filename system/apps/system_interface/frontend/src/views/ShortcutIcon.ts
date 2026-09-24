@@ -105,7 +105,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           "data-connecting": isConnecting ? "true" : null,
           "aria-pressed": isSelected ? "true" : "false",
           class:
-            "shortcut group absolute flex flex-col items-center justify-center gap-1 p-(--desk-cell-gap) " +
+            "shortcut group absolute flex flex-col items-center justify-start gap-1 p-(--desk-cell-gap) " +
             "text-center outline-none touch-none select-none " +
             (isLifted ? "opacity-40 " : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
@@ -131,6 +131,8 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
         [
           // The tint hugs the icon and its label rather than the whole cell, so the gap the cell leaves
           // around it reads as space between shortcuts. The drop target draws the same box.
+          // Its contents start at its top rather than centring: every icon then sits on the same line
+          // across the grid, and every name starts on the same line, whatever wraps to a second one.
           m("span", {
             class:
               "shortcut-highlight pointer-events-none absolute inset-(--desk-cell-gap) rounded-lg " +

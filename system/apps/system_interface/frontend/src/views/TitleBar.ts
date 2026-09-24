@@ -43,7 +43,7 @@ function control(
   onControl: TitleBarAttrs["onControl"],
   options: { readonly extra?: string; readonly hover?: m.Attributes } = {},
 ): m.Vnode {
-  const extra = `window-control shrink-0 min-h-(--desk-touch-target) min-w-(--desk-touch-target)${
+  const extra = `window-control shrink-0 min-h-(--desk-window-control-size) min-w-(--desk-window-control-size)${
     options.extra === undefined ? "" : ` ${options.extra}`
   }`;
   return m(
