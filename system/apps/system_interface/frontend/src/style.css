@@ -45,3 +45,10 @@
 .taskbar-entries::-webkit-scrollbar {
   display: none;
 }
+
+/* The closed hand for as long as a window is being dragged by its title bar. The window follows
+   the pointer, so the handle stays under it the whole way; the attribute is on the desktop's root
+   because the cursor has to win over the grab the handle wears at rest. */
+[data-window-dragging] [data-drag-handle] {
+  cursor: grabbing;
+}

@@ -72,6 +72,11 @@ type OpenMenu =
 /** The width the desktop's menus never go under, so a menu of two-word verbs is still a card. */
 const MENU_MIN_WIDTH = 176;
 
+/** Set on the desktop's root while a window is being dragged by its title bar, for as long as the
+ *  pointer should hold the closed hand (style.css). Written straight onto the element: the drag
+ *  paints without redrawing, and mithril leaves an attribute no vnode carries alone. */
+const WINDOW_DRAGGING_ATTRIBUTE = "data-window-dragging";
+
 interface SettingsDialogState {
   readonly desktopId: string;
   readonly isDeleting: boolean;
@@ -226,6 +231,7 @@ export function App(): m.Component<AppAttrs> {
         const point = toBackdrop(rootPoint);
         switch (binding.kind) {
           case "window-move":
+            root.setAttribute(WINDOW_DRAGGING_ATTRIBUTE, "");
             current.beginWindowMove(binding.windowId, point);
             return;
           case "window-resize":
@@ -276,6 +282,7 @@ export function App(): m.Component<AppAttrs> {
         const point = toBackdrop(rootPoint);
         switch (binding.kind) {
           case "window-move":
+            root.removeAttribute(WINDOW_DRAGGING_ATTRIBUTE);
             current.endWindowMove(point);
             paintWindow(current, binding.windowId);
             break;
@@ -295,6 +302,7 @@ export function App(): m.Component<AppAttrs> {
         }
       },
       onCancel: (binding) => {
+        root.removeAttribute(WINDOW_DRAGGING_ATTRIBUTE);
         current.cancelGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);

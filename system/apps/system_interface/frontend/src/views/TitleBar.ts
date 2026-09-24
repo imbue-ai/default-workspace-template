@@ -88,6 +88,9 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           class:
             "title-bar pointer-events-auto flex h-(--desk-title-bar-height) shrink-0 items-center border-b " +
             "border-default pr-1 pl-2 touch-none select-none " +
+            // The open hand says the bar is the handle. Not in compact mode, where a window fills
+            // the backdrop and there is nothing to drag it to. The controls carry their own cursor.
+            (isCompact ? "" : "cursor-grab ") +
             (isFocused ? "bg-surface text-primary" : "bg-surface-secondary text-secondary"),
           ondblclick: (event: MouseEvent) => {
             if ((event.target as Element).closest("[data-window-control]") !== null) return;
