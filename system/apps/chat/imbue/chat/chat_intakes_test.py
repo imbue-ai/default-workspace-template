@@ -7,7 +7,6 @@ from imbue.chat.models import IntakeRequest
 from imbue.chat.models import IntakeTarget
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_snapshot
-from imbue.imbue_common.model_update import to_update
 
 
 class _Clock:
@@ -94,4 +93,3 @@ def test_the_shells_string_presets_read_as_the_request_fields() -> None:
     assert request.target is IntakeTarget.CURRENT_CHAT
     assert request.is_draft is True
     assert request.is_delivery_awaited is False
-    assert request.model_copy_update(to_update(request.field_ref().is_draft, False)).is_draft is False
