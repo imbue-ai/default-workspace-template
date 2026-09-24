@@ -7,10 +7,11 @@ over a real (temporary) workspace and assert on the tree it leaves behind.
 
 The port pre-flight is checked against the same kind of workspace: every program
 declares its port in its own drop-in now, so a pre-flight that read only the main
-config would hand a new app a port another program already holds. Its auto pick
-runs in-process with a bind probe that reports nothing bound, because the real
-probe asks this machine, and a live workspace already has apps listening across
-the auto-pick range.
+config would hand a new app a port another program already holds. Its port
+choice -- the auto pick and the refusal of a requested port -- runs in-process
+with a bind probe that reports nothing bound, because the real probe asks this
+machine, and a live workspace already has apps listening across the auto-pick
+range.
 """
 
 from __future__ import annotations
