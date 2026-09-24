@@ -219,7 +219,8 @@ the record does; discarding the chat before its first send drops both.
 
 A chat that starts with no message sends nothing and waits for the user's
 first one. Fast mode is a per-chat setting with three modes
-(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`,
+`GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 **off** (standard speed throughout), **auto** (fast for the first
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
 (fast throughout). A new chat starts in the workspace's default mode
