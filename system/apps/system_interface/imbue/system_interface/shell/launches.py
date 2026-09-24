@@ -78,8 +78,9 @@ def post_launch(post: LaunchPost) -> LaunchPostOutcome:
 
 @pure
 def validated_launch_params(launch_path: RegistryLaunchPath, params: Mapping[str, str]) -> dict[str, str]:
-    """The caller's params as the launch path declares them; a name it does not declare, or a required one missing,
-    raises LaunchRefusedError (a 400)."""
+    """The caller's values for the params the launch path declares, in manifest order; a name it does not declare
+    raises LaunchRefusedError (a 400). The registry row carries the param names alone, so whether a param is
+    required is not checked here."""
     declared = [str(param) for param in launch_path.params]
     undeclared = sorted(name for name in params if name not in declared)
     if undeclared:
