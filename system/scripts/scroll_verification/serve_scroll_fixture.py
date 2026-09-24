@@ -44,7 +44,9 @@ def build_fixture() -> AgentInfo:
         session_id = f"scrollfix-session-{index:03d}"
         shutil.copyfile(source, projects_dir / f"{session_id}.jsonl")
         history_lines.append(f"{session_id} startup")
-    (agent_state_dir / "claude_session_id_history").write_text("\n".join(history_lines) + "\n")
+    (agent_state_dir / "claude_session_id_history").write_text(
+        "\n".join(history_lines) + "\n"
+    )
     (agent_state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
     return AgentInfo(
         id=AGENT_ID,
@@ -78,9 +80,7 @@ def main() -> None:
                 "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
             },
         ),
-        patch(
-            "imbue.chat.server.discover_agents", return_value=[agent_info]
-        ),
+        patch("imbue.chat.server.discover_agents", return_value=[agent_info]),
     ):
         broadcaster = WebSocketBroadcaster()
         manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())

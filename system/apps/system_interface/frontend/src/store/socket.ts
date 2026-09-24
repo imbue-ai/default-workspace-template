@@ -1,11 +1,12 @@
 /**
  * The shell's WebSocket (desktop-interface contracts.md section 6), the one socket this window
- * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, and ``avatar_status``;
- * the window answers with its ``client_state`` (which client it is, on which desktop) and re-sends
- * it on every switch. ``placements_updated``, ``active_desktop_changed``,
- * ``client_entries_changed``, and the transient ``layout_op`` are how this client's other windows,
- * the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
- * ``avatar_selection_changed`` are how the workspace's avatar reaches every window.
+ * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, ``avatar_status``,
+ * ``update_notice_changed``, and ``presence_updated``; the window answers with its ``client_state``
+ * (which client it is, on which desktop) and re-sends it on every switch. ``placements_updated``,
+ * ``active_desktop_changed``, ``client_entries_changed``, and the transient ``layout_op`` are how this
+ * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
+ * ``avatar_selection_changed`` are how the workspace's avatar reaches every window, ``update_notice_changed``
+ * how the update notice does, and ``presence_updated`` is who is connected to the workspace.
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
@@ -17,8 +18,17 @@ import {
   parseAvatarStatus,
   parseDesktops,
   parseEntries,
+  parsePresentUsers,
+  parseUpdateNoticeChanged,
 } from "../model/records";
-import type { AppRecord, AvatarStatus, Desktop, EntryPresentation } from "../model/records";
+import type {
+  AppRecord,
+  AvatarStatus,
+  Desktop,
+  EntryPresentation,
+  PresentUser,
+  UpdateNoticeWire,
+} from "../model/records";
 
 /** The transient ops that reach the browser as messages: the rest are applied to the files. */
 export type LayoutOpName = "refresh" | "reload_system_interface";
@@ -54,7 +64,11 @@ export interface SocketHandlers {
   onClientEntriesChanged(event: ClientEntriesChangedEvent): void;
   onAvatarStatus(status: AvatarStatus): void;
   onAvatarSelectionChanged(design: string): void;
+  /** The update notice as the shell now holds it, null once the record is cleared. */
+  onUpdateNoticeChanged(notice: UpdateNoticeWire | null): void;
   onLayoutOp(event: LayoutOpEvent): void;
+  /** The connected users, one entry per user, on connect and whenever someone joins or leaves. */
+  onPresenceUpdated(users: PresentUser[]): void;
   /** The socket (re)opened: the client state is re-reported through ``reportClientState``. */
   onConnected(): void;
 }
@@ -70,6 +84,7 @@ interface RawSocketEvent {
   type?: unknown;
   apps?: unknown;
   desktops?: unknown;
+  users?: unknown;
   op?: unknown;
   args?: unknown;
   requester?: unknown;
@@ -155,6 +170,9 @@ export class ShellSocket implements DesktopSocket {
       case "desktops_updated":
         handlers.onDesktopsUpdated(parseDesktops(event.desktops));
         return;
+      case "presence_updated":
+        handlers.onPresenceUpdated(parsePresentUsers(event.users));
+        return;
       case "placements_updated":
         handlers.onPlacementsUpdated({
           desktopId: String(event.desktop_id ?? ""),
@@ -179,6 +197,9 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "avatar_selection_changed":
         handlers.onAvatarSelectionChanged(parseAvatarSelectionChanged(event));
+        return;
+      case "update_notice_changed":
+        handlers.onUpdateNoticeChanged(parseUpdateNoticeChanged(event));
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

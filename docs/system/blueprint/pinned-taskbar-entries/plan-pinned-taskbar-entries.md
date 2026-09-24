@@ -37,8 +37,7 @@ The avatar's knowledge of agents therefore comes from reading a file mngr writes
 | Design | One SVG drawing of the avatar on a 100 by 100 grid, animated by mood; seven ship, more can be registered |
 | Mood | What the avatar's image expresses: `working` or `idle` |
 
-The desktop's `shared` and `personal` sharing modes keep their V1 meaning, who may open and close windows on a desktop, and are unrelated to a window's location scope.
-The two pairs of words are never mixed.
+Every desktop is shared (desktop-interface concepts.md, decision 13); a window's location scope is about whose path the window follows, and says nothing about who may open or close windows on a desktop.
 
 ## 3. The model
 

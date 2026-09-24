@@ -3,8 +3,8 @@
 import json
 import os
 import queue
-import shutil
 import signal
+import threading
 import time
 import tomllib
 from datetime import datetime
@@ -32,7 +32,6 @@ from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
-from imbue.chat.agent_manager import _build_observe_command_argv
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import chat_status_for_agent
@@ -79,7 +78,9 @@ from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
+from imbue.chat.models import ModelPickRejectedError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -90,11 +91,13 @@ from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
+from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
+from imbue.chat.testing import observer_holding_the_lock
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import wait_until_true
@@ -103,9 +106,13 @@ from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.observe import acquire_observe_lock
+from imbue.mngr.api.observe import append_observe_event
+from imbue.mngr.api.observe import get_observe_events_dir
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
+from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.interfaces.data_types import HostDetails
 from imbue.mngr.primitives import AgentId as MngrAgentId
@@ -115,7 +122,6 @@ from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
-from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
 
@@ -1079,7 +1085,7 @@ def test_unknown_observe_event_type_is_ignored(agent_manager: AgentManager) -> N
             "source": "mngr/agent_states",
         }
     )
-    agent_manager._handle_observe_output_line(line, True)
+    agent_manager._handle_observe_line(line)
     assert agent_manager.get_agents() == []
 
 
@@ -1195,7 +1201,9 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
     with agent_manager._lock:
         assert created_id in agent_manager._activity_tracked_agents
-        assert created_id in agent_manager._model_watcher_by_agent
+    # Model tracking follows ``_agents`` membership: the shared poller lists its paths
+    # from it, so a held created agent is polled...
+    assert created_id in agent_manager._list_model_state_paths()
 
     for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
         agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("older-chat")]))
@@ -1203,7 +1211,8 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     assert agent_manager.get_agent_by_id(created_id) is None
     with agent_manager._lock:
         assert created_id not in agent_manager._activity_tracked_agents
-        assert created_id not in agent_manager._model_watcher_by_agent
+    # ...and a let-go one is not.
+    assert created_id not in agent_manager._list_model_state_paths()
 
 
 def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
@@ -1282,20 +1291,20 @@ def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_t
     assert "the real reason" in proto.error
 
 
-def test_handle_observe_output_line_empty_is_ignored(agent_manager: AgentManager) -> None:
-    """Empty lines from the observe subprocess are silently ignored."""
-    agent_manager._handle_observe_output_line("   ", True)
+def test_handle_observe_line_empty_is_ignored(agent_manager: AgentManager) -> None:
+    """Blank lines of the event file are silently ignored."""
+    agent_manager._handle_observe_line("   ")
     assert agent_manager.get_agents() == []
 
 
-def test_handle_observe_output_line_raises_on_invalid_json(agent_manager: AgentManager) -> None:
-    """Invalid JSON on stdout from mngr observe surfaces as JSONDecodeError so the upstream bug is visible."""
+def test_handle_observe_line_raises_on_invalid_json(agent_manager: AgentManager) -> None:
+    """Invalid JSON in the event file surfaces as JSONDecodeError so the upstream bug is visible."""
     with pytest.raises(json.JSONDecodeError):
-        agent_manager._handle_observe_output_line("not json {", True)
+        agent_manager._handle_observe_line("not json {")
     assert agent_manager.get_agents() == []
 
 
-def test_handle_observe_output_line_dispatches_agent_state(
+def test_handle_observe_line_dispatches_agent_state(
     agent_manager: AgentManager,
 ) -> None:
     """Valid AGENT_STATE JSONL lines are parsed and dispatched."""
@@ -1304,7 +1313,7 @@ def test_handle_observe_output_line_dispatches_agent_state(
     event = make_agent_state_event(agent)
     line = json.dumps(event.model_dump(mode="json"))
 
-    agent_manager._handle_observe_output_line(line, True)
+    agent_manager._handle_observe_line(line)
 
     agents = agent_manager.get_agents()
     assert len(agents) == 1
@@ -1391,16 +1400,6 @@ def test_full_snapshot_omitting_agent_drops_it(
 
     agent_manager._handle_observe_event(make_full_agent_state_event([]))
     assert len(agent_manager.get_agents()) == 0
-
-
-def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroadcaster) -> None:
-    """The ``mngr_binary`` argument to ``build()`` overrides the default binary path."""
-    manager = AgentManager.build(broadcaster, mngr_binary="/path/to/custom-mngr")
-    try:
-        cmd = manager._build_observe_command()
-        assert cmd == ["/path/to/custom-mngr", "observe", "--stream-events"]
-    finally:
-        manager.stop()
 
 
 # mngr CLI argv contract
@@ -1947,6 +1946,10 @@ def test_get_chat_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadca
         manager.stop()
 
 
+def _events_status_detail(manager: AgentManager) -> str:
+    return manager.get_agent_events_status().detail
+
+
 def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
     """Only running chats are autocompacted: workers, primary, and dead chats are excluded."""
     manager = AgentManager.build(broadcaster)
@@ -1989,168 +1992,91 @@ def test_agent_manager_autocompactor_custom_injection_and_lifecycle(
     assert manager._autocompactor._thread is None
 
 
-def test_observe_argv_accepted_by_live_cli() -> None:
-    argv = _build_observe_command_argv("mngr")
-    assert_mngr_argv_valid(argv)
-    assert "--stream-events" in argv
+def test_manager_folds_the_events_the_observer_writes(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The live agent view is the fold of the observer's event file, written by mngr's own writer.
 
-
-def test_resolve_observe_cwd_prefers_existing_work_dir(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When ``MNGR_AGENT_WORK_DIR`` points at a real directory, observe runs there."""
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    manager = AgentManager.build(broadcaster)
-    try:
-        assert manager._resolve_observe_cwd() == tmp_path
-    finally:
-        manager.stop()
-
-
-def test_resolve_observe_cwd_falls_back_when_work_dir_missing(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If ``MNGR_AGENT_WORK_DIR`` is set but the path does not exist, use ``$HOME``.
-
-    Guards the fallback that keeps observe runnable in tests that stub the env
-    var with a non-existent path (e.g. the shared ``agent_manager`` fixture).
+    A full snapshot seeds the view, a state event upserts one agent, and a removal drops it;
+    the stream reads healthy once the first snapshot has been folded.
     """
-    missing = tmp_path / "does-not-exist"
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(missing))
-    manager = AgentManager.build(broadcaster)
-    try:
-        assert manager._resolve_observe_cwd() == Path.home()
-    finally:
-        manager.stop()
+    get_observe_events_dir(tmp_path).mkdir(parents=True)
+    with observer_holding_the_lock(tmp_path):
+        agent_manager._start_follow()
+        assert not agent_manager.get_agent_events_status().is_stream_healthy
+        first = _agent_details("first-agent")
+        append_observe_event(tmp_path, make_full_agent_state_event([first]))
+        wait_for(lambda: [a.id for a in agent_manager.get_agents()] == [str(first.id)], timeout=10.0)
+        assert agent_manager.is_agent_list_known()
+        assert agent_manager.get_agent_events_status().is_stream_healthy
+
+        second = _agent_details("second-agent")
+        append_observe_event(tmp_path, make_agent_state_event(second))
+        wait_for(lambda: len(agent_manager.get_agents()) == 2, timeout=10.0)
+
+        append_observe_event(tmp_path, make_agent_removed_event(first.id, first.name, first.host.id))
+        wait_for(lambda: [a.id for a in agent_manager.get_agents()] == [str(second.id)], timeout=10.0)
 
 
-def test_resolve_observe_cwd_falls_back_when_work_dir_unset(
-    broadcaster: WebSocketBroadcaster,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.allow_warnings
+def test_chat_booting_ahead_of_its_observer_reports_degraded_then_folds(
+    agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    """With ``MNGR_AGENT_WORK_DIR`` unset, observe runs from ``$HOME``."""
-    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
-    manager = AgentManager.build(broadcaster)
-    try:
-        assert manager._resolve_observe_cwd() == Path.home()
-    finally:
-        manager.stop()
+    """supervisord starts the chat and the observer together in no guaranteed order.
 
-
-def test_start_observe_spawns_long_lived_subprocess(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """End-to-end: the observe subprocess stays alive after startup.
-
-    A healthy ``mngr observe`` keeps running until it is explicitly stopped;
-    this test asserts that after ``_start_observe`` returns, the child is
-    still running a short window later rather than having exited on its own.
+    The chat must come up first without retrying: its health says no observer holds the
+    lock, and the observer's opening snapshot seeds the view when it arrives.
     """
-    if shutil.which("mngr") is None:
-        pytest.skip("mngr binary not on PATH")
+    get_observe_events_dir(tmp_path).mkdir(parents=True)
+    agent_manager._start_follow()
+    wait_for(lambda: "holds the lock" in _events_status_detail(agent_manager), timeout=10.0)
+    assert not agent_manager.get_agent_events_status().is_stream_healthy
+    assert not agent_manager.is_agent_list_known()
 
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    # Point the subprocess at a clean cwd with no project-local .mngr/settings.toml;
-    # otherwise running pytest from inside a mngr-managed worktree would inherit
-    # a config with ``is_allowed_in_pytest = false`` and the child would abort.
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    # And at an empty project config dir: the account this module's autouse fixture commits
-    # writes a settings.local.toml into the shared one, which carries no
-    # ``is_allowed_in_pytest`` and so would make the child abort the same way.
-    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path / "mngr-project-config"))
-    # And at an empty host dir: with the developer's real ~/.mngr, the spawned
-    # observe enumerates their live agents and queries tmux about them, which
-    # trips the tmux resource guard on any machine with running agents. The
-    # test only asserts the child stays alive, which an empty world satisfies.
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
-    manager = AgentManager.build(broadcaster)
-    try:
-        manager._start_observe()
-        assert manager._observe_process is not None
-        # If the subprocess exits within the window it's a failure (bad command,
-        # crashed on startup, etc.). A healthy observe keeps running.
-        exited = poll_until(
-            lambda: manager._observe_process is not None and manager._observe_process.poll() is not None,
-            timeout=1.5,
-            poll_interval=0.1,
-        )
-        assert not exited, (
-            "mngr observe subprocess exited within 1.5s of startup "
-            f"(returncode={manager._observe_process.returncode}); stderr: "
-            f"{manager._observe_process.read_stderr()!r}"
-        )
-    finally:
-        manager.stop()
+    with observer_holding_the_lock(tmp_path):
+        agent = _agent_details("late-agent")
+        append_observe_event(tmp_path, make_full_agent_state_event([agent]))
+        wait_for(lambda: agent_manager.get_agent_events_status().is_stream_healthy, timeout=10.0)
+        assert [a.id for a in agent_manager.get_agents()] == [str(agent.id)]
 
 
-def test_start_observe_logs_error_when_subprocess_exits_unexpectedly(
-    broadcaster: WebSocketBroadcaster,
-    false_binary: str,
-    loguru_records: list[str],
+@pytest.mark.allow_warnings
+def test_observer_dying_mid_run_keeps_the_last_list_and_reports_degraded(
+    agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    """If the observe subprocess exits on its own, the watchdog logs an ERROR.
+    """A shed or restarted observer no longer freezes the chat's agent view for good.
 
-    Uses ``/usr/bin/false`` (or equivalent) as a stand-in mngr binary so the
-    spawned process exits immediately with a non-zero code.
+    The last known list stays served and the health says why it may be stale; the
+    returning observer's opening snapshot replaces it and the health recovers.
     """
-    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    get_observe_events_dir(tmp_path).mkdir(parents=True)
+    before = _agent_details("before-restart")
+    fd = acquire_observe_lock(tmp_path)
+    agent_manager._start_follow()
+    append_observe_event(tmp_path, make_full_agent_state_event([before]))
+    wait_for(lambda: agent_manager.get_agent_events_status().is_stream_healthy, timeout=10.0)
+
+    release_observe_lock(fd)
+    # Releasing the lock changes nothing under the follower's directory watch, so the
+    # outage is noticed on its next wake: a change in the events dir here, the fallback
+    # poll (ten seconds) in production.
+    (get_observe_events_dir(tmp_path) / "wake").touch()
+    wait_for(lambda: "exited" in _events_status_detail(agent_manager), timeout=10.0)
+    assert not agent_manager.get_agent_events_status().is_stream_healthy
+    assert [a.id for a in agent_manager.get_agents()] == [str(before.id)]
+
+    with observer_holding_the_lock(tmp_path):
+        after = _agent_details("after-restart")
+        append_observe_event(tmp_path, make_full_agent_state_event([after]))
+        wait_for(lambda: agent_manager.get_agent_events_status().is_stream_healthy, timeout=15.0)
+        wait_for(lambda: [a.id for a in agent_manager.get_agents()] == [str(after.id)], timeout=10.0)
+
+
+def test_secondary_manager_never_writes_chat_memory_scores(broadcaster: WebSocketBroadcaster) -> None:
+    """A second chat beside the live one is handed no capability to re-tag chats' scores."""
+    manager = AgentManager.build(broadcaster, is_secondary=True)
     try:
-        manager._start_observe()
-        logged_error = poll_until(
-            lambda: any(r.startswith("ERROR") and "mngr observe" in r for r in loguru_records),
-            timeout=5.0,
-            poll_interval=0.05,
-        )
-        assert logged_error, (
-            "Expected an ERROR log from the observe watchdog; got: "
-            f"{[r for r in loguru_records if r.startswith('ERROR')]}"
-        )
+        assert manager._oom_prioritizer._set_adj(os.getpid(), 0) is False
     finally:
         manager.stop()
-
-
-def test_start_observe_watchdog_stays_quiet_on_clean_shutdown(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    loguru_records: list[str],
-) -> None:
-    """Calling ``stop()`` on a healthy observe subprocess must not produce errors."""
-    if shutil.which("mngr") is None:
-        pytest.skip("mngr binary not on PATH")
-
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    # See test_start_observe_spawns_long_lived_subprocess for why these are needed.
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
-    manager = AgentManager.build(broadcaster)
-    manager._start_observe()
-    # ``_start_observe`` only returns after ``run_process_in_background``
-    # has spawned the child and its RunningProcess thread has started, so the
-    # subprocess is guaranteed to be running by the time we call stop().
-    assert manager._observe_process is not None
-    manager.stop()
-
-    errors = [r for r in loguru_records if r.startswith("ERROR") and "mngr observe" in r]
-    assert errors == [], f"Watchdog logged errors during clean shutdown: {errors}"
-
-
-def test_handle_observe_output_line_logs_stderr_as_warning(
-    agent_manager: AgentManager,
-    loguru_records: list[str],
-) -> None:
-    """Stderr output from the observe subprocess is surfaced as a warning."""
-    agent_manager._handle_observe_output_line("something bad happened", is_stdout=False)
-
-    warnings = [r for r in loguru_records if r.startswith("WARNING") and "mngr observe stderr" in r]
-    assert warnings, f"Expected a stderr warning; got: {loguru_records}"
-    assert "something bad happened" in warnings[0]
 
 
 # Activity-state integration
@@ -3055,6 +2981,121 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.matched.id == "gpt-5.6-terra"
 
 
+# =============================================================================
+# The shared model-state poller (the bounded replacement for per-agent watchers)
+# =============================================================================
+
+
+def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_changes(
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """One poller pass after a ``model_state.json`` write lands the choice on the wire.
+
+    Regression guard for the per-agent-watcher replacement: the poller is now the only
+    thing that turns a harness's state-file write into a recompute + broadcast.
+    """
+    agent_id = "agent-1"
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
+    state_path = get_model_state_path(HarnessType.CODEX, agent_manager._get_agent_state_dir(agent_id))
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Settle the poller's stamps on the pre-write world, so the broadcast below is
+    # attributable to the write alone (not to first-sighting derivation).
+    agent_manager._model_state_poller.poll_once()
+    client_queue = broadcaster.register()
+
+    state_path.write_text(json.dumps({"model": "gpt-5.6-terra", "effort": "high", "fast": False}))
+    agent_manager._model_state_poller.poll_once()
+
+    choice = agent_manager._agents[agent_id].model_choice
+    assert choice is not None
+    assert choice.identity.model_id == "gpt-5.6-terra"
+    msg = _last_chats_updated(_drain(client_queue))
+    assert msg is not None
+    assert msg["chats"][0]["active_agent"]["model_choice"] is not None
+
+    # An unchanged file stays quiet: no further broadcast on the next pass.
+    agent_manager._model_state_poller.poll_once()
+    assert _last_chats_updated(_drain(client_queue)) is None
+
+
+def test_tracking_many_agents_spawns_no_per_agent_threads(
+    agent_manager: AgentManager,
+    tmp_path: Path,
+) -> None:
+    """Folding a snapshot full of agents must not grow the thread count.
+
+    Regression guard for the long-run thread leak: every observed agent used to get its
+    own watchdog observer for model tracking (four OS threads per agent, held for the
+    agent's whole life), so a host accumulating agents grew the chat app to hundreds of
+    threads. Model tracking is now the one shared poller, started in ``start()``.
+    """
+    agents = [_agent_details(f"threadless-{i}") for i in range(8)]
+    for agent in agents:
+        (tmp_path / "agents" / str(agent.id)).mkdir(parents=True)
+
+    threads_before = set(threading.enumerate())
+    agent_manager._handle_observe_event(make_full_agent_state_event(agents))
+    assert len(agent_manager.get_agents()) == 8
+
+    new_threads = set(threading.enumerate()) - threads_before
+    assert new_threads == set(), f"Tracking agents spawned threads: {[t.name for t in new_threads]}"
+
+
+def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManager) -> None:
+    """The poller's path set is re-resolved from ground truth, so an agent first tracked
+    under the default-harness guess is polled at its REAL state path once observe reports
+    the true harness -- the per-agent watcher used to bake the guessed path in forever."""
+    agent_id = "agent-1"
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
+    state_dir = agent_manager._get_agent_state_dir(agent_id)
+    assert agent_manager._list_model_state_paths() == {
+        agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)
+    }
+
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
+    assert agent_manager._list_model_state_paths() == {
+        agent_id: get_model_state_path(HarnessType.CODEX, state_dir)
+    }
+
+
+def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
+    agent_manager: AgentManager,
+) -> None:
+    """A codex agent restarted on another account answers for its options only once its daemon is up; until then
+    the pick is checked against the set the agent was offered before, which may lack a model the new account has.
+    That is a refusal worth trying again, while a pick outside a set that is known is rejected for good."""
+    _seed_agent(agent_manager, "agent-codex", harness=HarnessType.CODEX)
+    write_codex_model_options(
+        get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-codex")),
+        (_codex_model_entry("gpt-5.5", "high"),),
+    )
+    codex_info = agent_manager.get_agent_info_by_id("agent-codex")
+    assert codex_info is not None
+    with pytest.raises(ModelApplyError) as refused:
+        agent_manager.apply_model_pick(codex_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
+    assert not isinstance(refused.value, ModelPickRejectedError)
+
+    _seed_agent(agent_manager, "agent-claude")
+    claude_info = agent_manager.get_agent_info_by_id("agent-claude")
+    assert claude_info is not None
+    with pytest.raises(ModelPickRejectedError):
+        agent_manager.apply_model_pick(claude_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
+
+
+def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for_good(
+    agent_manager: AgentManager,
+) -> None:
+    """Antigravity's model is changed from its terminal, so a pick for one (from a stale page, or any other caller
+    of the switch route) fails at once rather than being tried again for a rebind's whole budget."""
+    _seed_agent(agent_manager, "agent-agy", harness=HarnessType.ANTIGRAVITY)
+    agy_info = agent_manager.get_agent_info_by_id("agent-agy")
+    assert agy_info is not None
+    with pytest.raises(ModelPickRejectedError, match="changed from the agent's terminal"):
+        agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3.7-flash-high"))
+
+
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
     """Swap in an OOM prioritizer that captures its band writes, and return the log.
 
@@ -3674,7 +3715,11 @@ def _openai_account() -> str:
 
 
 def _handoff_manager(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, sent: list[tuple[str, str, str]], has_user_turn: bool = True
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    sent: list[tuple[str, str, str]],
+    has_user_turn: bool = True,
+    messenger: RecordingMngrMessenger | None = None,
 ) -> tuple[AgentManager, InMemoryChatRecordStore, Path]:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     store = InMemoryChatRecordStore()
@@ -3684,6 +3729,7 @@ def _handoff_manager(
         mngr_binary=mngr_binary,
         chat_files_root=tmp_path / "chats",
         prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+        messenger=messenger if messenger is not None else RecordingMngrMessenger(),
     )
     manager.set_handoff_capabilities(_handoff_capabilities(sent, has_user_turn=has_user_turn))
     return manager, store, argv_log
@@ -3883,25 +3929,58 @@ def test_a_switch_that_failed_after_its_successor_was_adopted_retries_only_where
         manager.stop()
 
 
-def test_a_pick_is_refused_for_a_switch_that_keeps_the_agent(
+def test_a_rebind_carries_a_model_pick_to_the_restarted_agent_and_a_refused_pick_retries_only_the_pick(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A rebind keeps the agent's model settings, so a pick beside it is a refusal, not a silent drop."""
+    """A switch that keeps the agent takes a pick too: once the agent is back on the new account, the pick goes to it
+    through the model bar's own path before the confirming message. A pick the agent's options do not hold fails
+    the switch at the model step, and its retry runs no second restart."""
     sent: list[tuple[str, str, str]] = []
-    manager, _store, _argv_log, agent_id, _first_account, second_account = _rebind_manager(
-        broadcaster, tmp_path, monkeypatch, sent
+    messenger = RecordingMngrMessenger()
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent, messenger=messenger
     )
+    chat_id = ChatId(agent_id)
     try:
-        with pytest.raises(HandoffError, match="keeps its model settings"):
-            manager.begin_switch(
-                ChatId(agent_id),
-                second_account,
-                "hi",
-                "m-1",
-                HeldSendOrigin.CLIENT,
-                model_pick=ModelPick(model_id="opus"),
-            )
-        assert manager.get_handoff_state(ChatId(agent_id)) is None
+        kind, _phase, _block = manager.begin_switch(
+            chat_id,
+            second_account,
+            "Carry on here",
+            "m-1",
+            HeldSendOrigin.CLIENT,
+            model_pick=ModelPick(model_id="haiku", effort="low"),
+        )
+        assert kind is TransitionKind.REBIND
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+        assert [message for _agent, message in messenger.sent] == ["/model haiku", "/effort low", "/fast off"]
+        assert {agent for agent, _message in messenger.sent} == {agent_id}
+        assert sent == [(agent_id, "Carry on here", "m-1")]
+        assert store.read(chat_id) is None
+
+        manager.begin_switch(
+            chat_id,
+            first_account,
+            "And back",
+            "m-2",
+            HeldSendOrigin.CLIENT,
+            model_pick=ModelPick(model_id="gpt-6-astra", effort="high"),
+        )
+
+        def is_failed() -> bool:
+            state = manager.get_handoff_state(chat_id)
+            return state is not None and state.phase is HandoffPhase.FAILED
+
+        wait_for(is_failed, timeout=15.0)
+        failed = manager.get_handoff_state(chat_id)
+        assert failed is not None and failed.kind is TransitionKind.REBIND
+        assert failed.failed_step is HandoffFailedStep.MODEL and failed.error == "Unknown model 'gpt-6-astra'"
+        # The restart landed before the pick was tried, and the confirming message waits for the pick.
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"] * 2
+        assert sent == [(agent_id, "Carry on here", "m-1")]
+
+        assert manager.retry_handoff(chat_id, first_account) is HandoffPhase.RESTARTING
+        wait_for(is_failed, timeout=15.0)
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"] * 2
     finally:
         manager.stop()
 
@@ -4112,6 +4191,35 @@ def test_a_handoff_is_refused_for_the_wrong_targets(broadcaster: WebSocketBroadc
         manager.stop()
 
 
+def test_a_secondary_chat_refuses_every_switch(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A preview's chat records are a scratch copy, so a switch from it would split the live chat's view."""
+    sent: list[tuple[str, str, str]] = []
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        broadcaster,
+        chat_record_store=InMemoryChatRecordStore(),
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+        is_secondary=True,
+    )
+    manager.set_handoff_capabilities(_handoff_capabilities(sent))
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    try:
+        with pytest.raises(HandoffError, match="from a preview"):
+            manager.begin_switch(ChatId(first), _openai_account(), "hi", "m-1", HeldSendOrigin.CLIENT)
+        with pytest.raises(HandoffError, match="from a preview"):
+            manager.cancel_handoff(ChatId(first))
+        with pytest.raises(HandoffError, match="from a preview"):
+            manager.retry_handoff(ChatId(first), _openai_account())
+        assert manager.get_handoff_state(ChatId(first)) is None
+        assert sent == []
+        assert not argv_log.exists() or argv_log.read_text() == ""
+    finally:
+        manager.stop()
+
+
 # The rebind: changing a chat's account in place (``chat_rebinds.py`` runs it; these cover the manager's side).
 
 
@@ -4126,12 +4234,13 @@ def _rebind_manager(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     sent: list[tuple[str, str, str]],
+    messenger: RecordingMngrMessenger | None = None,
 ) -> tuple[AgentManager, InMemoryChatRecordStore, Path, str, str, str]:
     """A manager over the test's own host dir, tracking a claude chat bound to one Anthropic account with a second
     signed in; returns it with the record store, the mngr argv log, the agent id, and the two account ids."""
     host_dir = tmp_path / "host"
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
-    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent, messenger=messenger)
     first_account, second_account = _anthropic_account(), _anthropic_account()
     agent_id = f"agent-{uuid4().hex}"
     seed_agent_state(manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": first_account})

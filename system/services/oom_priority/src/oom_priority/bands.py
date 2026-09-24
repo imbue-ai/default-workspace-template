@@ -222,9 +222,16 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # the app that frames it.
     "terminal-pty": 12,
     "system_interface": 20,
-    # The chat app (the agent harness UI): just above the shell it is embedded
-    # in, and below every other service, since a shed chat app costs every open
-    # chat its page until it restarts.
+    # The agent observer ('mngr observe', the writer of the lifecycle event file
+    # every chat instance follows): just below the chat, because shedding it
+    # blinds every chat's agent view at once until supervisord brings it back
+    # while freeing almost nothing (it is a small Python process), whereas a shed
+    # chat app comes back to a stream the observer kept writing.
+    "agent-observer": 24,
+    # The chat app (the agent harness UI): just above the observer it follows,
+    # itself just above the shell the chat is embedded in, and below every other
+    # service, since a shed chat app costs every open chat its page until it
+    # restarts.
     "chat": 25,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.
@@ -257,9 +264,12 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
     # The file viewer: dufs, the tiny static file server the program runs
-    # directly. It holds little memory and supervisord restarts it if shed, so
-    # this is the most expendable built-in service of all.
+    # directly. It holds little memory and supervisord restarts it if shed.
     "files": 75,
+    # The Getting Started page: one static page and a cached catalog. A shed costs
+    # one reload of a window that shows nothing of the user's, so this is the most
+    # expendable built-in service of all.
+    "getting-started": 80,
     "user": USER_SERVICE,
     # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the

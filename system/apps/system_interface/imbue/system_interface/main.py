@@ -12,10 +12,15 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
+from imbue.system_interface.presence import DEFAULT_PRESENCE_DIRECTORY
+from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
+from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
+from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
-from imbue.system_interface.template_catalog import build_template_catalog_store
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -38,30 +43,57 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default=DEFAULT_STATE_DIRECTORY,
         help="Where the shell keeps its desktops, placements, and client records (desktop contracts.md section 4)",
     )
+    parser.add_argument(
+        "--presence-dir",
+        type=Path,
+        default=DEFAULT_PRESENCE_DIRECTORY,
+        help="Where the shell keeps the per-user presence files and the profile cache",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help=(
+            "Boot as a preview of a proposed change: the real desktop over the state directory it is "
+            "given (a seeded copy) and the registry MINDS_APPS_FILE names, refusing only the verbs that "
+            "would reach the live workspace (an app's stop and start, the update notice's)"
+        ),
+    )
     return parser.parse_args(argv)
 
 
-def build_production_state(config: Config, state_directory: Path) -> SystemInterfaceState:
+def build_production_state(
+    config: Config, state_directory: Path, presence_directory: Path, is_preview: bool = False
+) -> SystemInterfaceState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together. It builds but
     does not start the shell (``main`` does that once the app is assembled), so it watches
     nothing and fetches nothing by itself. Tests build a state via ``testing.build_test_state``.
     """
+    broadcaster = WebSocketBroadcaster()
+    profiles = ProfileResolver(
+        cache_directory=presence_directory / PROFILES_DIRECTORY_NAME, share_env_path=DEFAULT_SHARE_ENV_PATH
+    )
+    presence = PresenceStore(directory=presence_directory)
     return SystemInterfaceState(
         config=config,
         shell=build_shell_state(
-            state_directory=state_directory, registry_path=registry_path(), broadcaster=WebSocketBroadcaster()
+            state_directory=state_directory, registry_path=registry_path(), broadcaster=broadcaster, profiles=profiles
         ),
-        template_catalog=build_template_catalog_store(
-            catalog_url=config.system_interface_template_catalog_url, state_directory=state_directory
-        ),
+        presence=presence,
+        presence_sweep=build_presence_sweep(presence, profiles, broadcaster),
+        profiles=profiles,
+        is_preview=is_preview,
     )
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:
     """Build the Flask app from parsed CLI args: the state over the state directory, and the routes over it."""
-    return create_application(build_production_state(config, state_directory=args.state_dir))
+    return create_application(
+        build_production_state(
+            config, state_directory=args.state_dir, presence_directory=args.presence_dir, is_preview=args.preview
+        )
+    )
 
 
 def main() -> None:
@@ -73,9 +105,10 @@ def main() -> None:
         state = get_state()
 
     # Start the shell now that the app is assembled: the stale-client prune, the registry
-    # watch, and the liveness sweep. This is the one place it is started; ``build_application``
-    # only constructs, so tests that build an app never start it.
+    # watch, the liveness sweep, and the presence sweep. This is the one place they are started;
+    # ``build_application`` only constructs, so tests that build an app never start them.
     state.shell.start()
+    state.presence_sweep.start()
 
     # Tear down the broadcaster and the inventory on exit. ``atexit`` covers a normal return;
     # the signal handlers cover supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which

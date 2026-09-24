@@ -9,19 +9,28 @@ from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
+from imbue.system_interface.shell.testing import write_rollback_point
+from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.testing import FakeSupervisorServer
@@ -112,6 +121,29 @@ def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: 
 # Section 5: stop and start
 
 
+def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    """Stop and start act on supervisord, which a preview shares with the live shell, so a preview refuses them
+    with a detail naming itself and touches no program. Opening a window edits the preview's own state copy, so
+    it goes through, and the document says which kind of shell answered."""
+    fake_supervisor.statename_by_program["files"] = "RUNNING"
+    registry_path = write_two_app_registry(tmp_path, registry_row_toml("plain", "http://localhost:1", program="plain"))
+    inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
+    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+    client = application.test_client()
+
+    refusals = [client.post("/api/apps/plain/stop"), client.post("/api/apps/plain/start")]
+    assert [refusal.status_code for refusal in refusals] == [403, 403]
+    assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
+    assert fake_supervisor.statename_by_program.get("plain") is None
+    _register_client(application, "c1", "home")
+    assert _open_window(client, "terminal", "/new").status_code == 201
+    assert client.get("/api/inventory").get_json()["is_preview"] is True
+
+
 def test_stop_and_start_drive_the_supervised_program(
     tmp_path: Path,
     broadcaster: WebSocketBroadcaster,
@@ -181,12 +213,13 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     ]
 
     document = client.get("/api/inventory").get_json()
-    assert set(document) == {"desktops", "apps", "clients"}
+    assert set(document) == {"is_preview", "desktops", "apps", "clients"}
+    assert document["is_preview"] is False
     assert [desktop["id"] for desktop in document["desktops"]] == ["home"]
     assert [window["id"] for window in document["desktops"][0]["windows"]] == [window["id"]]
     assert {entry["name"]: entry["launch_paths"] for entry in document["apps"]} == {
-        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": []}],
-        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": []}],
+        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": [], "text_param": None}],
+        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": [], "text_param": None}],
     }
     by_id = {entry["id"]: entry for entry in document["clients"]}
     assert by_id["c1"]["active_desktop"] == "home" and by_id["c1"]["shown"] == [window["id"]]
@@ -629,7 +662,7 @@ def test_the_default_desktop_is_seeded_from_the_registry_on_the_first_read(clien
     desktops = client.get("/api/desktops").get_json()["desktops"]
     assert [desktop["id"] for desktop in desktops] == ["home"]
     (home,) = desktops
-    assert home["name"] == "Home" and home["sharing"] == "shared" and home["wallpaper"] is None
+    assert home["name"] == "Home" and home["wallpaper"] is None and "sharing" not in home
     assert home["windows"] == []
     assert home["shortcuts"] == [
         {
@@ -654,14 +687,11 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert client.post("/api/desktops", json={"name": "research!", "color": "#12B5A5", "glyph": 4}).status_code == 409
     assert client.post("/api/desktops", json={"name": "Bad", "color": "red", "glyph": 4}).status_code == 400
     settled = client.post(
-        "/api/desktops/research/settings",
-        json={"name": "Research 2", "color": "#222222", "glyph": 2, "sharing": "personal"},
+        "/api/desktops/research/settings", json={"name": "Research 2", "color": "#222222", "glyph": 2}
     )
-    assert settled.status_code == 200 and settled.get_json()["sharing"] == "personal"
+    assert settled.status_code == 200 and settled.get_json()["name"] == "Research 2"
     assert (
-        client.post(
-            "/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2, "sharing": "shared"}
-        ).status_code
+        client.post("/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2}).status_code
         == 404
     )
 
@@ -882,7 +912,7 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     listed = _op(client, "desktops", {}, requester)
     assert listed.status_code == 200 and [desktop["id"] for desktop in listed.get_json()["desktops"]] == ["home"]
     # The read ops answer the whole inventory document, apps and clients included.
-    assert set(listed.get_json()) == {"ok", "desktops", "apps", "clients"}
+    assert set(listed.get_json()) == {"ok", "is_preview", "desktops", "apps", "clients"}
     assert [entry["id"] for entry in listed.get_json()["clients"]] == ["c1"]
 
     # An open at a launch path with params, and one at an explicit path.
@@ -1091,3 +1121,233 @@ def test_a_malformed_op_argument_is_a_400_naming_the_argument(
     refused = _op(client, op, args, _TERMINAL_REQUESTER)
     assert refused.status_code == 400
     assert fragment in refused.get_json()["detail"]
+
+
+# The arrival (desktop plan section 3.10)
+
+_ALICE = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
+_BOB = RequestIdentity(owner=False, user_id="user-bob", email="bob@example.com")
+_OWNER = RequestIdentity(owner=True, user_id="user-owner", email="owner@example.com")
+
+
+def _arrive(client: FlaskClient, client_id: str, identity: RequestIdentity | None) -> dict[str, Any]:
+    headers = {} if identity is None else identity_headers(identity)
+    response = client.post(f"/api/clients/{client_id}/arrive", headers=headers)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.get_json()
+
+
+def test_an_arrival_before_the_registry_is_read_lands_nowhere_and_records_nothing(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The default desktop is only created once the registry has been read, so until then there is no desktop to
+    land on, none to seed a visitor's from, and no record to write."""
+    unread = AppInventory(
+        registry_path=write_two_app_registry(tmp_path), broadcaster=broadcaster, liveness_prober=FakeLivenessProber()
+    )
+    app = shell_application(tmp_path, unread, broadcaster)
+    assert _arrive(app.test_client(), "c-early", _ALICE) == {
+        "desktop_id": None,
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    assert _shell(app).clients.get_client("c-early") is None
+    assert _shell(app).users.list_users() == []
+    assert _shell(app).list_desktops() == []
+
+
+def test_the_owner_and_an_anonymous_client_arrive_on_their_recorded_desktop_or_the_first(
+    client: FlaskClient, app: Flask
+) -> None:
+    assert _arrive(client, "c-new", None) == {
+        "desktop_id": "home",
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    _record_client(app, "c-owner", "research")
+    assert _arrive(client, "c-owner", _OWNER)["desktop_id"] == "research"
+    # Arriving makes no desktop and records no user for either of them, but the client is recorded on its landing.
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == ["home", "research"]
+    assert _shell(app).users.list_users() == []
+    new_client = _shell(app).clients.get_client("c-new")
+    assert new_client is not None and new_client.active_desktop == "home" and new_client.user_id is None
+
+
+def test_a_browser_that_last_arrived_as_the_owner_is_no_returning_client_of_a_visitor(
+    client: FlaskClient, app: Flask
+) -> None:
+    _arrive(client, "c-alice", _ALICE)
+    _record_client(app, "c-alice", "home")
+    # The owner signs in on that browser: the record forgets the visitor and lands where the owner was.
+    assert _arrive(client, "c-alice", _OWNER)["desktop_id"] == "home"
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.user_id is None
+    # The visitor signing in again there is not returning to a desktop of theirs: they land on their own.
+    assert _arrive(client, "c-alice", _ALICE)["desktop_id"] == "alice"
+
+
+def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_clients_land_on_it(
+    client: FlaskClient, app: Flask
+) -> None:
+    shell = _shell(app)
+    client_queue = _register_client(app, "c-owner", "home")
+    opened = _open_window(client, "terminal", "/?session=terminal-1", client_id="c-owner").get_json()["window"]
+    drain_messages(client_queue)
+
+    arrival = _arrive(client, "c-alice-laptop", _ALICE)
+    created = arrival["created_desktop"]
+    assert arrival["desktop_id"] == "alice" and arrival["replaced_desktop_name"] is None
+    # Named after her email's local part: the shell of this test can reach no connector for her profile.
+    assert created["id"] == "alice" and created["name"] == "alice" and created["glyph"] == 1
+    home = client.get("/api/desktops").get_json()["desktops"][0]
+    assert created["shortcuts"] == home["shortcuts"]
+    (copied,) = created["windows"]
+    assert copied["id"] != opened["id"] and (copied["app"], copied["path"]) == ("terminal", "/?session=terminal-1")
+    assert home["windows"] == [opened]
+    # Everyone hears of the new desktop; the client's record names the user and the desktop.
+    assert "desktops_updated" in {message["type"] for message in drain_messages(client_queue)}
+    record = shell.clients.get_client("c-alice-laptop")
+    assert record is not None and record.user_id == "user-alice" and record.active_desktop == "alice"
+    stored = shell.users.get_user(UserId("user-alice"))
+    assert stored is not None and stored.desktop_id == "alice" and stored.display_name is None
+
+    # A second client of the same user lands on the same desktop; nothing new is made.
+    second = _arrive(client, "c-alice-phone", _ALICE)
+    assert second == {"desktop_id": "alice", "created_desktop": None, "replaced_desktop_name": None}
+    # A returning client of hers keeps the desktop it moved to.
+    _record_client(app, "c-alice-laptop", "home")
+    assert _arrive(client, "c-alice-laptop", _ALICE)["desktop_id"] == "home"
+    # Another user gets their own.
+    bob = _arrive(client, "c-bob", _BOB)
+    assert bob["desktop_id"] == "bob" and bob["created_desktop"]["glyph"] == 2
+    # A browser context that last arrived as Bob, or anonymously, is no returning client of Alice's: it lands on
+    # her desktop, not on the one it was on.
+    assert _arrive(client, "c-bob", _ALICE)["desktop_id"] == "alice"
+    _record_client(app, "c-shared", "home")
+    assert _arrive(client, "c-shared", _ALICE)["desktop_id"] == "alice"
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
+        "home",
+        "alice",
+        "bob",
+    ]
+
+
+def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_reported(
+    client: FlaskClient, app: Flask
+) -> None:
+    _arrive(client, "c-alice", _ALICE)
+    # She renames her desktop and comes back once, so the shell knows it by the new name when it goes.
+    renamed = client.post("/api/desktops/alice/settings", json={"name": "Alice's Lab", "color": "#16A34A", "glyph": 1})
+    assert renamed.status_code == 200
+    assert _arrive(client, "c-alice", _ALICE) == {
+        "desktop_id": "alice",
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    assert client.post("/api/desktops/alice/delete").status_code == 200
+    again = _arrive(client, "c-alice", _ALICE)
+    assert again["desktop_id"] == "alice" and again["replaced_desktop_name"] == "Alice's Lab"
+    assert again["created_desktop"]["name"] == "alice"
+    # A client of hers that had a record was moved along with her.
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.active_desktop == "alice"
+
+
+# The update notice
+
+
+def _repo_root(app: Flask) -> Path:
+    return _shell(app).update_notice.repo_root
+
+
+def test_the_pending_update_is_the_kept_rollback_point_or_null(client: FlaskClient, app: Flask) -> None:
+    assert client.get("/api/updates/pending").get_json() is None
+    write_rollback_point(_repo_root(app), apps=["terminal", "system_interface"], needs_system_services_restart=True)
+    notice = client.get("/api/updates/pending").get_json()
+    assert notice["apps"] == ["terminal", "system_interface"]
+    assert notice["needs_system_services_restart"] is True
+    assert notice["progress"] is None and notice["outcome"] is None
+
+
+def test_confirming_the_pending_update_closes_it_through_the_script(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    write_rollback_point(_repo_root(app))
+
+    assert client.post("/api/updates/pending/confirm").status_code == 204
+
+    assert [call["argv"] for call in read_stub_update_self_calls(_repo_root(app))] == [["confirm-last"]]
+    assert client.get("/api/updates/pending").get_json() is None
+    # Nothing left to confirm: a second click is told so rather than run the script again.
+    refused = client.post("/api/updates/pending/confirm")
+    assert refused.status_code == 409 and "no update notice" in refused.get_json()["detail"]
+
+
+def test_a_failing_confirm_names_the_failure_and_keeps_the_notice(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app), exit_code=1)
+    write_rollback_point(_repo_root(app))
+    failed = client.post("/api/updates/pending/confirm")
+    assert failed.status_code == 500
+    assert "told to fail" in failed.get_json()["detail"]
+    assert client.get("/api/updates/pending").get_json() is not None
+
+
+@pytest.mark.timeout(30)
+def test_rolling_back_the_pending_update_starts_the_script_and_answers_accepted(
+    client: FlaskClient, app: Flask
+) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    write_rollback_point(_repo_root(app), apps=["terminal"])
+
+    accepted = client.post("/api/updates/pending/rollback")
+
+    assert accepted.status_code == 202
+    wait_for(lambda: len(read_stub_update_self_calls(_repo_root(app))) == 1, timeout=10.0)
+    assert read_stub_update_self_calls(_repo_root(app))[0]["argv"] == ["rollback-last"]
+
+
+@pytest.mark.timeout(30)
+def test_a_rollback_the_script_refuses_answers_conflict_with_the_scripts_reason(
+    client: FlaskClient, app: Flask
+) -> None:
+    write_stub_update_self_script(_repo_root(app), exit_code=1)
+    write_rollback_point(_repo_root(app), apps=["terminal"])
+
+    refused = client.post("/api/updates/pending/rollback")
+
+    assert refused.status_code == 409
+    assert "told to fail" in refused.get_json()["detail"]
+    assert client.get("/api/updates/pending").get_json()["progress"] is None
+
+
+def test_a_rollback_is_refused_while_one_runs_and_once_the_point_settled(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    assert client.post("/api/updates/pending/rollback").status_code == 409
+
+    write_rollback_point(_repo_root(app), progress="Reverting the update")
+    running = client.post("/api/updates/pending/rollback")
+    assert running.status_code == 409 and "already running" in running.get_json()["detail"]
+
+    write_rollback_point(_repo_root(app), outcome="Rolled back to the previous version.")
+    settled = client.post("/api/updates/pending/rollback")
+    assert settled.status_code == 409 and "already rolled back" in settled.get_json()["detail"]
+    assert read_stub_update_self_calls(_repo_root(app)) == []
+
+
+def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The notice is live workspace state; a preview shows it (its page is the live shell's page, one app
+    swapped) but the two verbs act on the live tree and its copies."""
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
+    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+    write_stub_update_self_script(_repo_root(application))
+    write_rollback_point(_repo_root(application))
+    client = application.test_client()
+
+    assert client.get("/api/updates/pending").get_json()["apps"] == ["terminal"]
+    for verb in ("confirm", "rollback"):
+        refusal = client.post(f"/api/updates/pending/{verb}")
+        assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
+    assert read_stub_update_self_calls(_repo_root(application)) == []
+    assert client.get("/api/updates/pending").get_json() is not None
