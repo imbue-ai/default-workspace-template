@@ -6,7 +6,7 @@ Usage, from the repo root::
     python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>
 
 This is the one sanctioned way a stored secret reaches a process: an agent's own
-command, an ``.mcp.json`` server command, a supervisord program, or a scheduled
+command, an ``mcp-servers.json`` server command, a supervisord program, or a scheduled
 job names the env file here instead of reading it, so the value never appears in
 a tool call, a config file, or a transcript. The PreToolUse guard
 (``agent_secrets_guard.sh``, policy P9 in

@@ -19,7 +19,7 @@ line in `template.md` without its counterpart here.
 Secrets are the one requirement derived rather than written: an app declares
 the env files it needs in its `app.toml` (`[[secrets]]`: `file`, `variables`,
 `note`) and a skill under `secrets:` in its SKILL.md front matter, and the
-snapshot's `.mcp.template.json` and supervisord programs name the files they
+snapshot's `mcp-servers.json` and supervisord programs name the files they
 run under. Every referenced `data/.secrets/<file>.env` must be declared, and
 every declared variable must exist in the publishing workspace's own file, or
 the publish stops here: an adopter is asked for exactly what the declarations
@@ -52,8 +52,7 @@ from pathlib import Path
 APP_MANIFEST_NAME = "app.toml"
 SKILL_FILE_NAME = "SKILL.md"
 SECRETS_DIRECTORY = "data/.secrets"
-MCP_TEMPLATE_FILE = ".mcp.template.json"
-MCP_FILE = ".mcp.json"
+MCP_SERVERS_FILE = "mcp-servers.json"
 SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
 
 # A reference to a secret file anywhere in a config: the file's slug is what a
@@ -282,7 +281,7 @@ def collect_declarations(
 def collect_references(repo_root: Path) -> dict[str, list[str]]:
     """Every secret file the snapshot's MCP config and supervisord programs name, with where."""
     sources_by_file: dict[str, list[str]] = {}
-    candidates = [repo_root / MCP_TEMPLATE_FILE, repo_root / MCP_FILE]
+    candidates = [repo_root / MCP_SERVERS_FILE]
     dropins = repo_root / SUPERVISORD_DROPIN_DIRECTORY
     if dropins.is_dir():
         candidates.extend(sorted(dropins.glob("*.conf")))
@@ -421,7 +420,7 @@ def render_manifest(
         "#   The [[requirements.secret]] entries below were AGGREGATED from the",
         "#   included apps' app.toml [[secrets]] and skills' SKILL.md secrets:",
         "#   declarations, plus every data/.secrets/<file>.env the snapshot's",
-        "#   .mcp.template.json and supervisord programs run under. Fix a wrong one",
+        "#   mcp-servers.json and supervisord programs run under. Fix a wrong one",
         "#   at its declaration, not here.",
         "#",
         "#   adaptation = worked through INTERACTIVELY with the user afterwards.",

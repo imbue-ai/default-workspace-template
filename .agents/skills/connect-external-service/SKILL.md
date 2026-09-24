@@ -25,8 +25,9 @@ explain; do not ask them to choose a mechanism.
 | 6 | **Direct API** | An official SDK, CLI, or documented HTTP API takes a key the user can copy from their account settings. An API that needs an OAuth app registration is workable too, but offered as the more technical option, with row 7 the default. | "Example has an API; I'll ask you for its key and call it from here." | `references/direct-api.md` |
 | 7 | **Browser** | Always. Sign-ins, CAPTCHAs, and two-factor prompts go to the user through `handoff`. | "I'll drive a browser you can watch and take over." | the `agentic-browser-fleet` skill |
 
-A row's test is cheap on purpose: run `latchkey services list` first, then
-look at the service's docs for the shape its API takes. Do not run the whole
+A row's test is cheap on purpose: run `latchkey services list` and `mcpc`
+(which lists the MCP connections this workspace already has) first, then look
+at the service's docs for the shape its API takes. Do not run the whole
 table when an earlier row is plainly workable. The one test the docs do not
 answer is row 4's: when they rule out a key, ask what the service's own website
 calls once you are signed in, which they never mention.

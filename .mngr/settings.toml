@@ -48,9 +48,13 @@ host_env__extend = [
     # channel to third-party services that bypasses the latchkey gateway for
     # the services latchkey DOES support. MCP itself is not disallowed: for a
     # service latchkey has no builtin for, the connect-external-service skill
-    # may wire that service's own MCP server through the project's .mcp.json
-    # (.claude/settings.json approves those with enableAllProjectMcpServers).
+    # connects that service's MCP server through mcpc, the workspace's shared
+    # MCP client, rather than through any one harness.
     "ENABLE_CLAUDEAI_MCP_SERVERS=false",
+    # mcpc keeps its sessions, OAuth sign-ins, and the headers it sends under
+    # here, so the secrets guard covers them and every agent, app, and cron job
+    # (which rebuilds this environment) shares one set of connections.
+    "MCPC_HOME_DIR=/home/user/workspace/data/.secrets/mcpc",
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
     # tk reads TICKETS_DIR if set; absolute path so it works from worktree

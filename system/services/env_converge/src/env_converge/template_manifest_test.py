@@ -703,8 +703,8 @@ def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
     (tmp_path / "system/supervisord.conf.d/widget.conf").write_text(
         'command=bash -c "python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget"\n'
     )
-    (tmp_path / ".mcp.template.json").write_text(
-        '{"mcpServers": {"m": {"args": ["data/.secrets/mailer.env"]}}}'
+    (tmp_path / "mcp-servers.json").write_text(
+        '{"mcpServers": {"m": {"args": ["/home/user/workspace/data/.secrets/mailer.env"]}}}'
     )
 
     problems = validate_template_tree(tmp_path)
@@ -714,7 +714,7 @@ def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
         "widget.conf" in problem and "widget.env" in problem for problem in problems
     )
     assert any(
-        ".mcp.template.json" in problem and "mailer.env" in problem
+        "mcp-servers.json" in problem and "mailer.env" in problem
         for problem in problems
     )
 

@@ -109,6 +109,5 @@
     }
   },
   "effortLevel": "high",
-  "enableAllProjectMcpServers": true,
   "autoMemoryDirectory": "~/workspace/data/memories"
 }

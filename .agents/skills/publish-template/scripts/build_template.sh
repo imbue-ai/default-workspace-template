@@ -351,13 +351,6 @@ git clean -fdxq
 # apps/foo even when apps/ already exists on the base -- never nesting apps/apps.
 rsync -a "$STAGE/" "$REPO/"
 
-# An included .mcp.json ships as .mcp.template.json: nothing may activate on
-# adoption before the secrets its servers run under exist, so use-template merges
-# each entry into the adopter's .mcp.json only once that entry's file is stored.
-if [ -f "$REPO/.mcp.json" ]; then
-    mv "$REPO/.mcp.json" "$REPO/.mcp.template.json"
-fi
-
 # 4. (carry-forward already handled in step 1's staging)
 
 # 5. secret scan (authoritative, hard-failing blocker)

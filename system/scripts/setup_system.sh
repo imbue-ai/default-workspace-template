@@ -56,6 +56,7 @@ provision_drop_inherited_pins
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
 : "${LATCHKEY_VERSION:=3.9.0}"
+: "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Shared curl flags for the pinned-binary downloads below. --retry-all-errors
@@ -403,6 +404,10 @@ chmod 600 /root/.ssh/known_hosts
 
 # latchkey (gateway CLI) and modal (python tool).
 npm install -g "latchkey@${LATCHKEY_VERSION}"
+# mcpc: the one MCP client every harness, app, and scheduled job shares, so a
+# connected MCP server is reachable from all of them without per-harness config.
+npm install -g "@apify/mcpc@${MCPC_VERSION}"
+command -v mcpc >/dev/null
 uv tool install "modal==${MODAL_VERSION}"
 
 # Secret-scanner binaries (betterleaks + kingfisher) for the publish-template

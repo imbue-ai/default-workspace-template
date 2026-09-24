@@ -1,6 +1,7 @@
 # data/.secrets/
 
-Per-secret env files. Two kinds live here:
+Per-secret env files, plus the shared MCP client's credentials. Three kinds
+live here:
 
 - Files the minds app injects (for example `restic.env` for the backup repository
   and `share.env` for the sharing stack's materials).
@@ -9,6 +10,10 @@ Per-secret env files. Two kinds live here:
   per variable as `NAME='value'`, written by the chat app with mode 0600. The
   agent never sees the value; it names the file and the variables, and the user
   types the value into the card.
+- `mcpc/`, the state of `mcpc`, the MCP client every agent, app, and scheduled
+  job shares (`MCPC_HOME_DIR` points here): its sessions, the OAuth sign-ins it
+  holds, and the headers it sends. It is reached only through the `mcpc`
+  command; `mcpc` lists the connections and `mcpc @<name> close` ends one.
 
 Gitignored and never synced to GitHub; treat everything in here as sensitive.
 
@@ -21,7 +26,7 @@ environment and nothing else:
 python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>
 ```
 
-That form is what an agent's own commands, `.mcp.json` server commands,
+That form is what an agent's own commands, `mcp-servers.json` server commands,
 supervisord programs, and scheduled jobs use. Nothing else may read the file:
 a PreToolUse guard (`system/scripts/agent_secrets_guard.sh`) refuses `cat`,
 `source`, `sed`, `python3 -c`, a redirect, or a `Read`/`Edit` tool call that
