@@ -72,6 +72,13 @@ def post_launch(post: LaunchPost) -> LaunchPostOutcome:
     try:
         body = response.json()
     except ValueError:
+        logger.warning(
+            "Launch answer from {} at {} was not JSON ({}): {!r}",
+            post.app,
+            post.url,
+            response.status_code,
+            response.text[:_DETAIL_LIMIT],
+        )
         body = None
     return LaunchPostOutcome(status_code=response.status_code, body=body)
 
