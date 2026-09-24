@@ -52,7 +52,7 @@ The table:
 
 | Field | Type | Required | Default | Rule |
 |---|---|---|---|---|
-| `path` | string | yes | | The home path: a path under the app's origin obeying the launch-path rule (one leading slash, no query string, path characters only). It must be a page that is safe to open any number of times, since the pinned window is created at it without a launch path and without settling |
+| `path` | string | yes | | The home path: a path under the app's origin obeying the launch-path rule (one leading slash, no query string, path characters only). It must be a page that is safe to open any number of times, since the pinned window is created at it without a launch path |
 | `style` | string | no | `plain` | `plain` or `avatar`; the entry styles the shell ships |
 | `scope` | string | no | `linked` | `linked` or `independent`; the location scope of the pinned window |
 | `default_mode` | string | no | `bar` | `bar` or `floating`; the entry mode a client that has chosen none renders |
@@ -62,7 +62,7 @@ The chat's manifest declares `path = "/"`, `style = "avatar"`, `scope = "indepen
 ### 3.2 Pinned windows
 
 Every desktop holds exactly one pinned window per pinned app.
-A pinned window is an ordinary window record, `{id, app, path, title, opened_at, is_settling, is_pinned, scope}`, with `is_pinned` true, `path` the home path, `title` empty, `is_settling` false, and `scope` the pin's.
+A pinned window is an ordinary window record, `{id, app, path, title, opened_at, is_pinned, scope}`, with `is_pinned` true, `path` the home path, `title` empty, and `scope` the pin's.
 It is shared like every window, and it has the same id for every client.
 Both new fields are additive with defaults, `is_pinned = false` and `scope = "linked"`, so a V1 `desktops.json` reads unchanged and the file keeps version 1.
 
@@ -240,9 +240,9 @@ Each is a stable, documented mngr convention; a change to any of them shows up a
 Choosing a design writes the workspace's selection and every window follows the broadcast.
 The dialog closes on Escape, on a press outside, or on Done.
 
-"Design your own..." drafts the prototype's design prompt into the conversation the user already has open, unsent, rather than starting a chat: the shell points this client's view of the pinned window at the pin's home launch path with the text as its `draft` parameter (the same location write an agent's `navigate` makes) and restores the window, and the app does the rest.
-The shell names no app: the target is the pinned window on the active desktop whose app declares, at the pin's home path, a launch path that takes `draft`; the button is disabled, with the reason as its tooltip, when none does.
-The chat's root takes `draft` this way: the text goes to the composer of the chat the URL selects, else the shown one, else the most recently active one, else a chat created for it, and the root then reports the selection alone so a reload drafts nothing again.
+"Design your own..." drafts the prototype's design prompt into the conversation the user already has open, unsent, rather than starting a chat: the shell runs the app's draft launch path with the text through its launch route, targeting the pinned window (the post-launch-paths plan section 4.3), which posts the text with this client's view of the window as `window_path`, points that view at the page the app answers (the same location write an agent's `navigate` makes), and restores the window; the app does the rest.
+The shell names no app: the target is the pinned window on the active desktop whose app declares a launch path with a `draft_param`; the button is disabled, with the reason as its tooltip, when none does.
+The chat's `draft` launch path posts to its intake route with `target = current_chat` and `is_draft = true`: the text goes to the composer of the chat `window_path` selects, else the most recently active one, else a chat created for it, and the route answers `/?chat=<id>&intake=<token>`; the root applies the intake into the composer and then reports the selection alone, so a reload drafts nothing again.
 The prompt tells the agent to draw a design, show a preview, and register it only after the user approves; nothing is sent until the user sends it.
 
 Registration is the prototype's loopback-only route: an agent inside the workspace posts a design's id, label, SVG, and source path, the shell validates and stores it, and it appears in the chooser.
@@ -364,7 +364,7 @@ default_mode = "floating"
 
 ### 7.3 Window
 
-`{"id", "app", "path", "title", "opened_at", "is_settling", "is_pinned": false, "scope": "linked"}`; the two new fields default when absent.
+`{"id", "app", "path", "title", "opened_at", "is_pinned": false, "scope": "linked"}`; the two new fields default when absent.
 
 ### 7.4 Client record (wire and file)
 
