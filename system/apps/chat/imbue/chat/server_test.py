@@ -261,6 +261,28 @@ def test_upload_attachment_stores_file_and_returns_path(client: FlaskClient) -> 
     assert Path(data["path"]).read_bytes() == b"image-bytes"
 
 
+def test_an_element_reference_is_written_to_a_file_the_answer_names(client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    tempfile.tempdir = None
+    envelope = {"element_reference": {"app": "docs", "tag": "a", "text": "Read the intro"}}
+    response = client.post("/api/element-references", json={"reference": envelope})
+    tempfile.tempdir = None
+    assert response.status_code == 200
+    path = Path(response.get_json()["path"])
+    assert path.is_relative_to(tmp_path)
+    assert json.loads(path.read_text()) == envelope
+
+
+def test_an_element_reference_that_is_not_an_envelope_is_refused(client: FlaskClient) -> None:
+    refused = client.post("/api/element-references", json={"reference": {"other": {}}})
+    assert refused.status_code == 400
+    assert "element_reference" in refused.get_json()["detail"]
+    malformed = client.post("/api/element-references", json=["not", "an", "object"])
+    assert malformed.status_code == 400
+
+
 def test_upload_attachment_without_file_returns_400(client: FlaskClient) -> None:
     """Posting with no file part is a 400."""
     response = client.post("/api/uploads", data={}, content_type="multipart/form-data")

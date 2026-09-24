@@ -30,6 +30,7 @@ import {
   SHELL_OPEN,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
+  SHELL_DRAFT_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageUrl } from "../model/pageUrl";
@@ -122,6 +123,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_FOCUSED, (frame) => this.takeFocused(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
+    setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     this.store.setPageDriver(this);
   }
 
@@ -399,6 +401,7 @@ export class LivePagesLayer implements PageDriver {
       clientId: state.clientId,
       windowId: page.windowId,
       desktopId,
+      app: page.app,
       path,
     });
     page.greetedDesktopId = desktopId;
@@ -456,6 +459,18 @@ export class LivePagesLayer implements PageDriver {
       return;
     }
     void this.store.startWithText(text);
+  }
+
+  /** ``shell:draft-text {text}`` from a page (element-reference-menu plan section 5): the text is drafted into the
+   *  chat the pinned draft launch path names; the frame has to be one the shell created. */
+  private takeDraftText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined) return;
+    const text = payload.text;
+    if (typeof text !== "string") {
+      console.warn(`[si] shell:draft-text ignored: it carried no text (${JSON.stringify(payload)})`);
+      return;
+    }
+    void this.store.draftText(text);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

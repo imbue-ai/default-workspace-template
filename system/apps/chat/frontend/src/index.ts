@@ -19,7 +19,11 @@ import { isMessageCarriedBySwitch } from "./models/Response";
 import { ChatPanel } from "./views/ChatPanel";
 import { SubagentView } from "./views/SubagentView";
 import { initShellPermissionResolutions } from "./views/permission-card";
-import { connectChatToShell, isFrameRendered } from "./shell";
+import { connectChatToShell, getShellHandshake, isFrameRendered } from "./shell";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { spillOversizeElementReferences } from "./models/elementReferences";
+import { prependToComposer } from "./views/MessageInput";
 
 declare global {
   interface Window {
@@ -62,9 +66,21 @@ async function bootstrap(): Promise<void> {
   initShellPermissionResolutions();
   // Only the chat's own page reports the chat's presence: a subagent view is a second page
   // of the same chat in the same client, and its reports would overwrite the chat page's.
-  connectChatToShell(chatId, {
+  const connection = connectChatToShell(chatId, {
     isPresenceReported: sessionId === "",
     path: sessionId === "" ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
+  });
+  // The element menu (element-reference-menu plan section 7.3): a chat page drafts a reference straight into its
+  // own composer, whoever frames it; a sub-agent view has no composer and asks the shell, through the root.
+  const isChatPage = sessionId === "";
+  installElementContextMenu({
+    connection,
+    handshake: getShellHandshake,
+    draft: isChatPage
+      ? (text) => void spillOversizeElementReferences(text).then((spilled) => prependToComposer(chatId, spilled))
+      : undefined,
+    isDraftAvailable: isChatPage ? () => true : undefined,
+    open: createContextMenuOpener().open,
   });
   void loadAccountsWithRetry();
   const rootElement = document.getElementById("app");

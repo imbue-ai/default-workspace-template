@@ -277,11 +277,13 @@ def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
 # from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open). A navigable
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
-# its frame to move it. Its ``#held`` input is state no reload survives.
+# its frame to move it. Its ``#held`` input is state no reload survives. It installs the served element context
+# menu as a scaffolded app's page does, so a right-click in the frame drafts through the shell.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" />
 <script type="module">
 import { connectToShell } from "__BASE_URL__/_static/app_contract.js";
+import { installElementContextMenu } from "__BASE_URL__/_static/context_menu.js";
 const isNavigable = __NAVIGABLE__;
 const where = document.getElementById("where");
 const titleOf = (path) => "Stub " + path;
@@ -306,6 +308,7 @@ if (isNavigable) {
   };
 }
 const connection = connectToShell(handlers);
+installElementContextMenu({ connection, handshake: () => window.__handshake ?? null });
 window.__navigateTo = (path) => {
   history.pushState(null, "", path);
   show(path);
@@ -852,6 +855,64 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         menu.locator(f'[data-launch="{_PINNED_APP_NAME}:root"]').click()
         expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_path: Path, page: Page) -> None:
+    """A right-click in a framed page opens the page's own element menu (the served module, as a scaffolded app's
+    page installs it); "Explain this element..." hands the shell a prompt over the element's reference through
+    ``shell:draft-text``, and the shell posts the pinned app's draft launch path with it (the element-reference-menu
+    plan sections 4.1 and 6), pointing this client's view of the pinned window at the page it answers. The reference
+    carries the page's scope from the handshake and the element as the page has it. A right-click on the desktop's
+    own backdrop opens the shell's element menu, whose rows are the reference rows."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        window_id = _open_via_shortcut(page, server)
+        frame = _page_frame(page, window_id)
+
+        frame.locator("#where").click(button="right")
+        card = frame.locator("[data-context-menu]")
+        expect(card).to_be_visible()
+        expect(card.locator("[data-context-menu-row]")).to_have_count(3)
+        card.locator('[data-context-menu-row="explain-element"]').click()
+        expect(card).to_be_hidden()
+
+        assert poll_until(lambda: len(_posted_launches(server.pinned_url)) == 1, timeout=15.0, poll_interval=0.1)
+        (posted,) = _posted_launches(server.pinned_url)
+        assert posted["path"] == f"/{_PINNED_DRAFT_LAUNCH_ID}"
+        assert posted["body"]["client_id"] == client_id
+        assert posted["body"]["desktop_id"] == _HOME_DESKTOP_ID
+        assert posted["body"]["window_path"] == _PINNED_HOME_PATH
+        text = posted["body"][_PINNED_TEXT_PARAM]
+        prompt, _, block_open, block_json, block_close, _ = text.split("\n")
+        assert prompt == "Explain this element:"
+        assert (block_open, block_close) == ("```json", "```")
+        reference = json.loads(block_json)["element_reference"]
+        assert reference["app"] == _STUB_APP_NAME
+        assert reference["window_id"] == window_id
+        assert reference["client_id"] == client_id
+        assert reference["desktop_id"] == _HOME_DESKTOP_ID
+        assert reference["tag"] == "div"
+        assert reference["id"] == "where"
+        assert reference["selector"] == "#where"
+        assert reference["page_path"] == _STUB_LAUNCH_PATH
+        assert reference["text"] == _STUB_LAUNCH_PATH
+        assert [ancestor["tag"] for ancestor in reference["ancestors"]] == ["body"]
+        assert reference["viewport"]["width"] > 0
+
+        draft_page_path = _launched_page_path(_PINNED_DRAFT_LAUNCH_ID, {_PINNED_TEXT_PARAM: text})
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], draft_page_path)
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+
+        # The desktop's own chrome: a right-click on the empty backdrop opens the shell's element menu.
+        page.locator("[data-backdrop-area]").click(button="right", position={"x": 700, "y": 20})
+        shell_menu = page.locator(".element-menu")
+        expect(shell_menu).to_be_visible()
+        expect(shell_menu.locator('[data-menu-row="explain-element"]')).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(shell_menu).to_be_hidden()
 
 
 @pytest.mark.timeout(60, func_only=False)

@@ -79,6 +79,13 @@ _FORWARD_PORT_PATH = (
     Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 )
 LOWEST_AUTO_PORT = 8080
+# The browser-side modules every app serves from its own origin (a module import is a fetch
+# without cookies, which the forwarder refuses across origins): the app contract and the
+# element context menu, built by the shell's frontend into its static output. Mirrors
+# app_manifest.registry's SHELL_APP_CONTRACT_PATH and SHELL_CONTEXT_MENU_PATH; the scaffold
+# runs in its own environment and cannot import the library, so it carries the path.
+SHELL_STATIC_MODULES_DIR = "system/apps/system_interface/imbue/system_interface/static/_static"
+SHELL_STATIC_MODULE_NAMES = ("app_contract.js", "context_menu.js")
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
@@ -250,6 +257,8 @@ packages = ["src/{package}"]
 def _lib_runner(name: str, package: str, description: str, port: int) -> str:
     env_var = f"{package.upper()}_DATA_DIR"
     port_env_var = f"{package.upper()}_PORT"
+    shell_static_modules_dir = SHELL_STATIC_MODULES_DIR
+    shell_static_module_names = SHELL_STATIC_MODULE_NAMES
     return f'''"""{description}.
 
 Services run from /home/user/workspace (the repo root). Conventions:
@@ -284,7 +293,7 @@ WebSockets.
 import os
 from pathlib import Path
 
-from flask import Flask, Response
+from flask import Flask, Response, abort, send_file
 from werkzeug.serving import run_simple
 
 # Persistent state for this app lives under DATA_DIR. It defaults to
@@ -302,24 +311,60 @@ DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 # Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
 PORT = int(os.environ.get("{port_env_var}", "{port}"))
 
+# The browser-side modules the workspace shell builds and every app serves from
+# its own origin: the app contract (how a page talks to the shell framing it) and
+# the element context menu (the right-click menu whose last rows hand the
+# clicked element to a chat). A module import is a fetch without cookies, which
+# the forwarder refuses across origins, so they are served here rather than from
+# the shell. Relative to the repo root the service runs from, like DATA_DIR.
+SHELL_STATIC_MODULES_DIR = Path("{shell_static_modules_dir}")
+SHELL_STATIC_MODULE_NAMES = {shell_static_module_names!r}
+
+# The script every page serves (keep it on every page): it connects the page to
+# the shell, reports where the page is on the handshake so the shell can reopen
+# this app's window at the same place, and installs the element context menu.
+# A page visited outside the shell runs it harmlessly: nothing arrives, and the
+# menu's Explain and Modify rows grey out.
+SHELL_PAGE_SCRIPT = """\
+<script type="module">
+  import {{ connectToShell }} from "/_static/app_contract.js";
+  import {{ installElementContextMenu }} from "/_static/context_menu.js";
+  let handshake = null;
+  const connection = connectToShell({{
+    onHandshake: (received) => {{
+      handshake = received;
+      connection.location(location.pathname + location.search, document.title);
+    }},
+  }});
+  installElementContextMenu({{ connection, handshake: () => handshake }});
+</script>"""
+
 app = Flask("{package}", static_folder=None)
 
 
 @app.route("/")
 def index() -> Response:
-    # The location beacon: post the path being viewed one hop up (to the
-    # workspace shell embedding this page) on each page load, so the shell can
-    # reopen this app's window at the same place. Keep the line on every page you
-    # serve; the shell validates the sender's origin and ignores the rest.
     return Response(
-        "<!doctype html><html><body>"
+        "<!doctype html><html><head><title>{name}</title></head><body>"
         "<h1>{name}</h1>"
         "<p>{description}</p>"
-        "<script>if (window.parent !== window) window.parent.postMessage("
-        '{{type: "shell:location", path: location.pathname + location.search}}, "*");</script>'
-        "</body></html>",
+        + SHELL_PAGE_SCRIPT
+        + "</body></html>",
         mimetype="text/html",
     )
+
+
+@app.route("/_static/<basename>")
+def shell_module(basename: str) -> Response:
+    # The two shell-built modules and nothing else: a name that is not one of
+    # them is a 404, so this route can never read outside that directory.
+    if basename not in SHELL_STATIC_MODULE_NAMES:
+        abort(404)
+    module_path = SHELL_STATIC_MODULES_DIR / basename
+    if not module_path.is_file():
+        abort(404)
+    # Flask resolves a relative path against the app's own directory, not the cwd.
+    return send_file(module_path.absolute(), mimetype="text/javascript")
 
 
 @app.route("/health")

@@ -18,6 +18,9 @@ import m from "mithril";
 import "../style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import {
@@ -53,6 +56,7 @@ import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import { intakeTokenFromSearch, rootPathFor, selectionFromSearch } from "./selection";
+import { spillOversizeElementReferences } from "../models/elementReferences";
 import { prependToComposer } from "../views/MessageInput";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
@@ -169,12 +173,33 @@ function launchWithFirstMessage(chatId: string, text: string): void {
   openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
 }
 
+/** Put ``text`` in a chat's composer after the spill (element-reference-menu plan section 7.2): a reference block too
+ *  large for the composer goes to a file first, and the composer takes its pointer form. */
+function draftIntoAfterSpill(chatId: string, text: string): void {
+  void spillOversizeElementReferences(text).then((spilled) => draftInto(chatId, spilled));
+}
+
+/** A reference drafted from the root's own chrome (the rail, the empty slot): into the selected chat's composer,
+ *  else through the shell, which lands it in the chat on screen (element-reference-menu plan section 3.4). */
+function draftReference(text: string): void {
+  if (selectedChatId !== null) {
+    draftIntoAfterSpill(selectedChatId, text);
+    return;
+  }
+  connection?.draftText(text);
+}
+
+/** Whether a reference drafted from the root has somewhere to go: a selected chat, or a shell to ask. */
+function isReferenceDraftAvailable(): boolean {
+  return selectedChatId !== null || (connection?.isFramed ?? false);
+}
+
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
  *  goes into its composer, a first message launches it. */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
-  if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
+  if (applied.composerText !== null) draftIntoAfterSpill(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) launchWithFirstMessage(applied.chatId, applied.firstMessage);
 }
 
@@ -310,6 +335,9 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isCompact,
     onPick: (chatId: string) => select(chatId),
     onNew: () => startNewChat(),
+    referenceScope: scopeOfHandshake(handshake),
+    onDraftReference: draftReference,
+    isReferenceDraftAvailable: isReferenceDraftAvailable(),
   };
 }
 
@@ -381,6 +409,18 @@ function bootstrap(): void {
   selectedChatId = selectionFromSearch(window.location.search);
   pendingToken = intakeTokenFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
+  // The element menu over the root's own chrome (element-reference-menu plan section 7.3); the rail's rows append
+  // the reference rows to their own menu instead.
+  installElementContextMenu({
+    connection: {
+      isFramed: connection?.isFramed ?? false,
+      draftText: (text) => connection?.draftText(text),
+    },
+    handshake: () => handshake,
+    draft: draftReference,
+    isDraftAvailable: isReferenceDraftAvailable,
+    open: createContextMenuOpener().open,
+  });
   reportLocation();
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));

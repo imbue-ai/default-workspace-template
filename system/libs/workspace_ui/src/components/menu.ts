@@ -861,6 +861,11 @@ export function createMenu(options: MenuOptions): Menu {
         event.stopPropagation();
         close();
       },
+      // A right-click on the sheet is the press that closes the menu, nothing more: the page's element
+      // menu yields to a handled event, and the browser's own stays away.
+      oncontextmenu: (event: MouseEvent) => {
+        event.preventDefault();
+      },
     });
   }
 
