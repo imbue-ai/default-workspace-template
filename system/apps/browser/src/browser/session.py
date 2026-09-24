@@ -609,7 +609,7 @@ class LiveBrowser(MutableModel):
     _lifecycle: Lifecycle = PrivateAttr(default="init")
     # Whether a desktop window has shown this browser. Only a browser some window showed is
     # stopped once none does (the window sweep); one nobody ever looked at -- an agent's with
-    # nobody connected, a window still settling at ``/new`` -- outlives every sweep. Rides the
+    # nobody connected -- outlives every sweep. Rides the
     # manifest (``window_seen``) so a daemon restart neither forgets nor invents it.
     _is_window_seen: bool = PrivateAttr(default=False)
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
@@ -2130,8 +2130,7 @@ class BrowserSessionManager(MutableModel):
     async def sweep_windows(self, window_paths: Sequence[str]) -> list[str]:
         """Mark every browser a window shows, and stop the ones a window showed once and none shows now.
 
-        ``window_paths`` is what the shell reports for this app; a path naming no browser (a window still
-        settling at ``/new``) shows nothing. Answers the names stopped. A browser still launching waits for a
+        ``window_paths`` is what the shell reports for this app; a path naming no browser shows nothing. Answers the names stopped. A browser still launching waits for a
         later sweep, a stopped one is stopped already, and a crashed one is left to its own cleanup.
         """
         shown = {name for path in window_paths if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None}

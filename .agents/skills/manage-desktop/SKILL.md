@@ -31,7 +31,7 @@ files.
 | **window** | One page of one app on one desktop: the app, the path under the app's origin the page is at (`chat` at `/?chat=<id>`, `terminal` at `/?session=<name>`, `files` at `/notes/`), and the title the page last reported. Named by an id, `win-<hex>`. |
 | **placement** | Where one *client* keeps one window on its screen: its frame, whether it is snapped or maximized, whether it is minimized. Per client, never shared. |
 | **client** | One browser (its windows share it). Each client has one active desktop and its own placements of every desktop. |
-| **launch path** | A path an app declares for opening a new page of itself (`chat` and `terminal` declare `new` at `/new`; `files` declares `new` at `/` with a `path` parameter). An app that declares none offers `open` at `/`. |
+| **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` and `browser` declare `new` at `/new`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
 | **shortcut** | An icon on a desktop's backdrop that runs one app's launch path, in `focus` mode (raise the app's most recent window, opening one only when it has none) or `new` mode (always open one). |
 
 **Shared vs per client.** Desktops, their windows, their shortcuts, and their
@@ -178,9 +178,8 @@ subcommand: it is the taskbar's desktop menu, or the shell's REST routes
 
 ## Inspecting state
 
-`desktops` prints every desktop with its windows (`id`, `app`, `path`, `title`,
-`is_settling`: true from an open at a launch path until the page's first
-location report; `is_pinned`: the app's pinned window, present on every desktop
+`desktops` prints every desktop with its windows (`id`, `app`, `path`, `title`;
+`is_pinned`: the app's pinned window, present on every desktop
 and never closed; `scope`: `linked`, or `independent` for a window whose path
 is each client's own, in which case the listed `path` is the shared home path
 and `client_paths` says where each client's page is, by client id) and shortcuts,

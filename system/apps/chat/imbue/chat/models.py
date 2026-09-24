@@ -650,6 +650,77 @@ class SeedChatRequest(FrozenModel):
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
 
 
+class IntakeTarget(LowerCaseStrEnum):
+    """How an intake chooses the chat that receives its text (post-launch-paths plan section 3.5)."""
+
+    # A chat created for the text, on the named account or the workspace's default.
+    NEW_CHAT = auto()
+    # The chat the window the text was typed into shows, else the most recently messaged one, else a new one.
+    CURRENT_CHAT = auto()
+    # The one chat there is, else the chat the user picks from the root's picker, else a new one.
+    CHAT_SELECTOR = auto()
+    # The chat ``chat_id`` names.
+    CHAT = auto()
+
+
+class IntakeRequest(FrozenModel):
+    """The body of ``POST /api/chats/intake``: text entering a chat from outside a chat page.
+
+    The shell posts it for the chat's POST launch paths, with the manifest's presets (``target``,
+    ``is_draft``) beside the launcher's text and its envelope (``client_id``, ``desktop_id``,
+    ``window_path``), so every value may arrive as a string; pydantic reads ``"true"`` as a bool.
+    """
+
+    message: str = Field(default="", description="The text; empty for a new chat that starts with nothing")
+    target: IntakeTarget = Field(description="How the receiving chat is chosen")
+    chat_id: str = Field(default="", description="The chat, when the target is ``chat``")
+    is_draft: bool = Field(
+        default=False, description="Put the text in the chat's composer, unsent, instead of sending"
+    )
+    account_id: str = Field(default="", description="The account a new chat starts on; empty picks the default")
+    is_delivery_awaited: bool = Field(
+        default=False,
+        description="Answer once the harness has accepted (or refused) the send, instead of once the chat is decided",
+    )
+    client_id: str = Field(default="", description="The client the text came from, for the shell's activity log")
+    desktop_id: str = Field(default="", description="The desktop that client was on; both or neither with client_id")
+    window_path: str = Field(
+        default="", description="The path of the window the text was typed into, which ``current_chat`` reads"
+    )
+
+
+class IntakeResponse(FrozenModel):
+    """The answer of ``POST /api/chats/intake``: the pure page path the shell opens or navigates a window at."""
+
+    path: str = Field(description="``/?chat=<id>``, or with ``&intake=<token>`` (``/?intake=<token>`` for a choice)")
+
+
+class PendingIntakeView(FrozenModel):
+    """The answer of ``GET /api/chats/intakes/<token>``: what the chat root has to do about a held intake."""
+
+    message: str = Field(description="The text")
+    is_draft: bool = Field(description="Whether the text is drafted rather than sent")
+    needs_pick: bool = Field(description="Whether the root has to offer the picker before the intake can be applied")
+    chat_id: str | None = Field(description="The chat the intake resolved to; null for a choice")
+
+
+class IntakeApplyRequest(FrozenModel):
+    """The body of ``POST /api/chats/intakes/<token>/apply``."""
+
+    chat_id: str = Field(default="", description="The chat the user picked, for an intake that needed a pick")
+
+
+class IntakeApplyResponse(FrozenModel):
+    """The answer of ``POST /api/chats/intakes/<token>/apply`` (post-launch-paths plan section 3.6.1)."""
+
+    path: str = Field(description="``/?chat=<chat_id>``")
+    chat_id: str = Field(description="The receiving chat")
+    composer_text: str | None = Field(description="Text for the chat's composer, unsent; null when nothing is drafted")
+    first_message: str | None = Field(
+        description="The first message of a chat awaiting its first send with no account; the root launches it"
+    )
+
+
 class CreatedChat(FrozenModel):
     """A freshly-created chat's identity: its id and its name pair."""
 

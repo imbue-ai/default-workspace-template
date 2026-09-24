@@ -70,19 +70,18 @@ On a stock machine the chat declares two: `new` ("New Chat", primary) and `send`
 
 ### 3.2 Running a free-text row
 
-Running a free-text row with text `t` means running its launch path with `t` as the value of its text param (URL-encoded into the query string, as `launchPathWithParams` does today), in **pinned-first** mode:
+Running a free-text row with text `t` means running its launch path through the shell's launch route with `t` as the value of its text (or draft) param (the post-launch-paths plan section 4.1), in **pinned-first** mode:
 
-1. When the row's app has a pinned window of independent scope on the active desktop, this client's view of that window is pointed at the path (`navigateOwnWindow`, the write an agent's `navigate` makes, which for an independent window moves this client's page alone) and the window is restored and raised.
-2. Otherwise a new window is opened at the launch path (`if_present: new`, settling as today). A linked pinned window is never navigated: every client shares its page, so pointing it at a launch path would run the launch on all of them.
+1. When the row's app has a pinned window on the active desktop, whatever its scope, the launch's target is that window: the shell resolves the page (for a POST launch path, by posting the text and its envelope to the app) and points the window at it as a location report from this client would (an independent window moves this client's page alone; a linked one moves everyone's, which is safe since the page is pure), and the window is restored and raised.
+2. Otherwise a new window is opened at the page (target `new`).
 
-The text is bounded by the window path: a path is at most 2048 characters (contracts section 1), so a free-text row whose resulting path would exceed that is disabled, with "Too long to send from here" as its tooltip and no key binding while it is disabled.
+A GET launch path's text is bounded by the window path: a path is at most 2048 characters (contracts section 1), so a free-text row whose page path would exceed that is disabled, with "Too long to send from here" as its tooltip and no key binding while it is disabled.
 The bound is checked on the encoded path, not the typed length, since encoding can triple a non-ASCII text.
+A POST launch path carries the text in a body and has no such bound.
 
 Empty text runs the primary action with no text param at all (for the chat, an empty new chat) and disables the secondary action.
 
-**Note:** the launch path is a GET with a side effect (issue imbue-ai/default-workspace-template#646).
-Pointing one client's view of an independent window at it runs it once, on this client, which is why this design needs no idempotency key; the key stays that issue's business for linked windows.
-One narrow gap is accepted, as V1 accepts it for a settling window: a reload of the pinned window between the navigate and the page's report of where it landed runs the launch path again.
+**Note:** the chat's free-text launch paths are POSTs (the post-launch-paths plan, which resolved issue imbue-ai/default-workspace-template#646): the shell makes the request once and the window only ever shows the pure page the app answered, so a reload runs nothing again and no idempotency key is needed.
 
 A free-text row is never matched by the query, so typing `new chat` highlights no row and Enter starts a chat whose first message is "new chat".
 The row's caption shows the text it will send (section 4.2), so what Enter does is on screen before it is pressed; this is accepted.
@@ -221,14 +220,14 @@ A refusal from the shell is reported through the store's notification, as every 
 ### 4.4 Starting a chat from Getting Started
 
 A tile or a detail action posts `shell:start-with-text` with its seeded text.
-The shell runs the primary text action with it (section 3.2): on a stock machine, this client's view of the pinned chat window goes to `/new?message=...`, the chat root creates the chat and reports `/?chat=<id>`, and the window is restored and raised over Getting Started, whose own window is neither moved nor minimized.
+The shell runs the primary text action with it (section 3.2): on a stock machine, the shell posts the chat's `new` launch path the text, the chat creates the chat and answers `/?chat=<id>`, this client's view of the pinned chat window goes there, and the window is restored and raised over Getting Started, whose own window is neither moved nor minimized.
 The user reads the chat's first turn beside the tiles they came from.
 
 ### 4.5 Sending a text to an existing chat
 
-Ctrl+Enter, or the "Send to chat..." row, runs the chat's `send` launch path with the text (section 8): the pinned chat window is pointed at `/send?message=<text>` and restored.
-With one chat to send to, the chat root sends the text there at once, selects it, and reports `/?chat=<id>`; with none it starts a new chat with the text, as `new` would.
-Otherwise the chat root shows a picker over its list, a typeahead over every chat's title; Enter or a click sends the text to that chat, selects it, and reports `/?chat=<id>`; Escape dismisses the picker and reports the selection alone, so the text is dropped.
+Ctrl+Enter, or the "Send to chat..." row, runs the chat's `send` launch path with the text (section 8): the shell posts it to the chat's intake route, and the pinned chat window is pointed at the page it answers and restored.
+With one chat to send to, the chat sends the text there at once and answers `/?chat=<id>`; with none it starts a new chat with the text, as `new` would.
+Otherwise the chat holds the text as a pending intake and answers `/?intake=<token>`: the root shows a picker over its list, a typeahead over every chat's title; Enter or a click applies the intake to that chat (the chat sends the text and the root selects it, reporting `/?chat=<id>`); Escape dismisses the picker, discards the intake, and reports the selection alone, so the text is dropped.
 Sending is the chat app's ordinary send, so a stopped chat is started by it as any send starts one.
 
 ### 4.6 First visit
@@ -323,22 +322,25 @@ The `.launcher-tile` class goes with the tiles.
 
 ## 8. The chat app
 
-- `new` gains `text_param = "message"`.
+As amended by the post-launch-paths plan, the chat's free-text launch paths are POSTs to one intake route:
+
+- `new` has `text_param = "message"` and is a POST at `/api/chats/intake` with `presets = {target = "new_chat"}`.
 - A second free-text launch path, in manifest order after `new`:
 
   ```toml
   [[launch_paths]]
   id = "send"
   label = "Send to chat..."
-  path = "/send"
+  path = "/api/chats/intake"
+  method = "POST"
   params = [{name = "message", label = "Message to send", required = false}]
+  presets = {target = "chat_selector"}
   text_param = "message"
   ```
 
-- `/send` is its own path, served by the chat backend as the root is served at `/new`, so no launch path shares the pin's home path but `root`, and the two free-text rows read alike (`/new?message=`, `/send?message=`).
-- The root handles `/send?message=<text>` on load and on `shell:navigate`, before selection: it opens the picker of 4.5 over the list, sends on pick through its ordinary send, selects the chat, and reports `/?chat=<id>`; on dismissal it reports the selection alone.
-  A `send` with no text is a no-op that reports the selection.
-- `root` keeps `draft`; nothing else changes.
+- The intake route answers the page the shell opens: `/?chat=<id>` when the text was sent, or `/?intake=<token>` for the picker of 4.5, which the root shows on load and on `shell:navigate` before selection and finishes by applying the pending intake; on dismissal it discards the intake and reports the selection alone.
+  A `send` with no text answers the root's path with nothing pending.
+- The root serves `/` with no params of its own; a draft goes through the `draft` launch path (pinned-taskbar-entries plan section 4.7).
   The desktop shortcut still opens a second chat list (window-bound-resources decision 15), which this design leaves alone.
 
 ## 9. mngr-side changes
@@ -384,7 +386,7 @@ Each step leaves the tree green; the whole is one pull request per repository.
 
 - Searching inside apps from the launcher (an app-declared search route), as the desktop plan already defers.
 - Ordering apps by recent use; the shell has no activity data.
-- The idempotency key for launch paths on linked windows (issue #646).
+- ~~The idempotency key for launch paths on linked windows (issue #646)~~: resolved by the post-launch-paths plan, which made every launch path that creates something a POST.
 - A first-visit window on later desktops, for later clients, or a per-user first visit; a manifest-declared first window the shell would seed itself.
 - Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" leaves with the tiles and returns when a row menu is designed.
 - The chat shortcut opening a second chat list while a pinned one exists.

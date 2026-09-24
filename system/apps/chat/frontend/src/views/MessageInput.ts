@@ -20,7 +20,8 @@ import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { getSelectedAccount, openProviderChooser } from "../models/Providers";
+import { accountForAgent, getSelectedAccount, openProviderChooser } from "../models/Providers";
+import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
   findComposerPopup,
@@ -502,11 +503,13 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         m.redraw();
 
         try {
-          // A seeded chat awaiting its first send has no agent yet, and this send is what
-          // launches one: on the signed-in account, else on the one the chooser produces. The
-          // message rides the launch as the agent's first, so nothing is sent after it lands.
-          if (getProvisionalChat(chatId)?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
-            const accountId = await chooseAccountForFirstSend();
+          // A chat awaiting its first send (a seeded one, or one an intake minted) has no agent
+          // yet, and this send is what launches one: on the account it was minted for, else the
+          // signed-in one, else the one the chooser produces. The message rides the launch as
+          // the agent's first, so nothing is sent after it lands.
+          const awaiting = getProvisionalChat(chatId);
+          if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
+            const accountId = await chooseAccountForFirstSend(awaiting);
             if (accountId === null) {
               // The chooser closed with no sign-in: nothing was launched, and the message is
               // the user's to keep.
@@ -566,11 +569,13 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       }
 
       /**
-       * The account a seeded chat's first send launches it on: the signed-in one when there is
-       * one, else whatever the provider chooser produces, or null when it is dismissed instead.
+       * The account a chat's first send launches it on: the one the chat was minted for when it
+       * names one (an intake's), else the signed-in one when there is one, else whatever the
+       * provider chooser produces, or null when it is dismissed instead.
        */
-      function chooseAccountForFirstSend(): Promise<string | null> {
-        const account = getSelectedAccount();
+      function chooseAccountForFirstSend(provisional: ProvisionalChat | undefined): Promise<string | null> {
+        const minted = provisional === undefined ? null : accountForAgent(provisional.account_id);
+        const account = minted ?? getSelectedAccount();
         if (account !== null) {
           return Promise.resolve(account.id);
         }

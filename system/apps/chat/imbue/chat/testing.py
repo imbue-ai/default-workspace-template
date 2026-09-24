@@ -65,7 +65,9 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
@@ -73,6 +75,7 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -87,7 +90,6 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
 from imbue.system_interface.server import create_application as create_shell_application
-from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
 from imbue.system_interface.testing import find_free_port
@@ -720,6 +722,32 @@ class RunningWorkspace(FrozenModel):
     )
 
 
+def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name: str = "Chat-1") -> ChatSnapshot:
+    """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
+    return ChatSnapshot(
+        chat_id=ChatId(chat_id),
+        title=name.replace("-", " "),
+        name=name,
+        project=None,
+        status=ChatStatus.IDLE,
+        labels={},
+        agent_ids=(chat_id,),
+        handoff=None,
+        active_agent=ActiveAgentSnapshot(
+            agent_id=chat_id,
+            name=name,
+            harness=HarnessType.CLAUDE,
+            account_id=None,
+            state="RUNNING",
+            activity_state=ActivityState.IDLE,
+            model_choice=None,
+            queued_messages=(),
+            shoulder_tap_available=False,
+        ),
+        last_messaged_at=last_messaged_at,
+    )
+
+
 def seed_failed_chat(
     agent_manager: AgentManager,
     chat_id: ChatId,
@@ -776,6 +804,51 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
     return fake_bin_dir
 
 
+# The chat app's registry row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list
+# at ``/`` and the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+_CHAT_REGISTRY_ROW_TEMPLATE: Final[str] = """[[apps]]
+name = "chat"
+url = "{url}"
+label = ""
+display_name = "Chat"
+critical = true
+internal = false
+default_shortcut = {{ launch = "root", mode = "new" }}
+[[apps.launch_paths]]
+id = "root"
+label = "Chat"
+path = "/"
+[[apps.launch_paths]]
+id = "new"
+label = "New Chat"
+path = "/api/chats/intake"
+method = "POST"
+params = ["account_id", "message"]
+presets = {{ target = "new_chat" }}
+text_param = "message"
+[[apps.launch_paths]]
+id = "send"
+label = "Send to chat..."
+path = "/api/chats/intake"
+method = "POST"
+params = ["message"]
+presets = {{ target = "chat_selector" }}
+text_param = "message"
+[[apps.launch_paths]]
+id = "draft"
+label = "Draft into chat"
+path = "/api/chats/intake"
+method = "POST"
+params = ["message"]
+presets = {{ target = "current_chat", is_draft = "true" }}
+draft_param = "message"
+"""
+
+
+def chat_registry_row_toml(chat_url: str) -> str:
+    return _CHAT_REGISTRY_ROW_TEMPLATE.format(url=chat_url)
+
+
 @contextmanager
 def running_workspace(
     tmp_path: Path,
@@ -820,19 +893,7 @@ def running_workspace(
     fake_bin_dir = _write_fake_binaries(tmp_path)
 
     registry_path = tmp_path / "registry" / "apps.toml"
-    rows = [
-        registry_row_toml(
-            "chat",
-            chat_url,
-            is_critical=True,
-            default_shortcut=("new", "new"),
-            display_name="Chat",
-            launch_paths=(("new", "New Chat", "/new"), ("send", "Send to chat...", "/send")),
-            launch_params={"new": ("account_id", "message"), "send": ("message",)},
-            launch_text_params={"new": "message", "send": "message"},
-        )
-    ]
-    write_registry(registry_path, *rows)
+    write_registry(registry_path, chat_registry_row_toml(chat_url))
 
     with (
         patch.dict(

@@ -62,22 +62,34 @@ def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.Mon
         lambda self, session, restore_tabs=None, **k: launched.append((session, restore_tabs)),
     )
 
-    response = runner.application.test_client().get("/new?url=https://example.com", follow_redirects=False)
+    # The shell's envelope fields ride beside the param and are ignored.
+    response = runner.application.test_client().post(
+        "/new", json={"url": "https://example.com", "client_id": "client-1", "desktop_id": "home"}
+    )
 
-    assert response.status_code == 302, response.text
-    name = response.headers["Location"].removeprefix("/?session=")
+    assert response.status_code == 200, response.text
+    name = response.get_json()["path"].removeprefix("/?session=")
     assert name in runner.manager._browsers
-    assert response.headers["Location"] == f"/?session={name}"
+    assert response.get_json() == {"path": f"/?session={name}"}
     assert launched == [(runner.manager._browsers[name], ["https://example.com"])]
 
 
 def test_new_refuses_a_start_page_that_is_not_http(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
 
-    response = runner.application.test_client().get("/new?url=ftp://example.com", follow_redirects=False)
+    response = runner.application.test_client().post("/new", json={"url": "ftp://example.com"})
 
     assert response.status_code == 400
     assert "url" in response.get_json()["error"]
+
+
+def test_new_refuses_a_body_that_is_not_a_json_object_and_a_get(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    client = runner.application.test_client()
+
+    assert client.post("/new", json=["https://example.com"]).status_code == 400
+    assert client.post("/new", data="").status_code == 400
+    assert client.get("/new").status_code == 405
 
 
 def test_new_answers_the_browser_already_up_without_another_launch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,11 +102,11 @@ def test_new_answers_the_browser_already_up_without_another_launch(monkeypatch: 
     up._lifecycle = "running"
     runner.manager._browsers["browser-1"] = up
 
-    redirected = runner.application.test_client().get("/new", follow_redirects=False)
+    launched_path = runner.application.test_client().post("/new", json={})
     created = runner.application.test_client().post("/browsers", json={})
 
-    assert redirected.status_code == 302, redirected.text
-    assert redirected.headers["Location"] == "/?session=browser-1"
+    assert launched_path.status_code == 200, launched_path.text
+    assert launched_path.get_json() == {"path": "/?session=browser-1"}
     assert created.get_json() == {"name": "browser-1"}
     assert launched == []
 

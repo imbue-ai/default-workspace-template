@@ -76,7 +76,8 @@ describe("the launcher menu", () => {
 
   it("the Enter caption follows a moved highlight; the secondary row always wears its chord", () => {
     const menu = launcherRowsOf(stateWithWindows(), "shell");
-    const { root } = render(menu, { highlightIndex: menu.rows.length - 1 });
+    const secondaryIndex = menu.rows.findIndex((row) => row.kind === "text" && row.textAction === "secondary");
+    const { root } = render(menu, { highlightIndex: secondaryIndex });
     const secondary = root.querySelector('[data-text-action="secondary"]')!;
     expect(secondary.getAttribute("data-highlighted")).toBe("true");
     expect(secondary.textContent).toContain("Ctrl+Enter");
@@ -108,7 +109,23 @@ describe("the launcher menu", () => {
     root.querySelector('[data-text-action="primary"]')!.dispatchEvent(new PointerEvent("pointerenter"));
     expect(attrs.onHighlight).toHaveBeenCalledWith(2);
     unmountViews();
-    const tooLong = render(launcherRowsOf(stateWithWindows(), "x".repeat(2100)));
+    // A GET free-text row over the path bound is the disabled row; the chat-like app's POST rows never are.
+    let bounded = initialDesktopState("client-1", { isCompact: false, isTouch: false });
+    bounded = reduceDesktopState(bounded, {
+      type: "apps_updated",
+      apps: [
+        appRecord("noting", {
+          launcher_rank: 1,
+          launch_paths: [
+            launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
+            launchPathRecord({ id: "send", path: "/send", params: ["message"], text_param: "message" }),
+          ],
+        }),
+      ],
+    });
+    bounded = reduceDesktopState(bounded, { type: "desktops_updated", desktops: [desktopRecord("home")] });
+    bounded = reduceDesktopState(bounded, { type: "desktop_activated", desktopId: "home" });
+    const tooLong = render(launcherRowsOf(bounded, "x".repeat(2100)));
     const disabled = tooLong.root.querySelector('[data-text-action="secondary"]') as HTMLElement;
     expect(disabled.getAttribute("data-disabled")).toBe("true");
     disabled.click();

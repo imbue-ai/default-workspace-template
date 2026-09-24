@@ -133,10 +133,10 @@ def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_
 def test_windows_are_opened_located_and_closed_idempotently(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: ())
-    opened = store.open_window("home", window_record(_WIN_1, "chat", "/new?message=hi", is_settling=True))
+    opened = store.open_window("home", window_record(_WIN_1, "chat", "/"))
     assert [window.id for window in opened.windows] == [_WIN_1]
     located = store.set_window_location("home", _WIN_1, WindowPath("/?chat=agent-1"), WindowTitle("Plan"))
-    assert located.is_written is True and located.desktop.windows[0].is_settling is False
+    assert located.is_written is True and located.desktop.windows[0].path == "/?chat=agent-1"
     again = store.set_window_location("home", _WIN_1, WindowPath("/?chat=agent-1"), WindowTitle("Plan"))
     assert again.is_written is False
     with pytest.raises(WindowNotFoundError):

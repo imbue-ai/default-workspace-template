@@ -152,11 +152,38 @@ function failed(accountId: string, error: string): void {
   };
 }
 
+/** A chat with no seed that waits for its first send (an intake that could not launch it at once). */
+function awaiting(accountId: string): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 2",
+    account_id: accountId,
+    phase: "awaiting_first_send",
+    error: null,
+    is_seeded: false,
+  };
+}
+
 describe("ChatPanel over a provisional chat", () => {
   beforeEach(() => {
     mocks.launchChat.mockReset();
     mocks.launchChat.mockImplementation(async () => ({}));
     mocks.chat = undefined;
+    mocks.fetchEvents.mockClear();
+  });
+
+  it("shows an unseeded chat awaiting its first send as an empty conversation, not a failure", () => {
+    awaiting("");
+    const render = mountPanel();
+
+    const tree = render();
+
+    expect(findByClass(tree, "message-list-awaiting")).toBeTruthy();
+    expect(findByClass(tree, "message-list-create-failed")).toBeUndefined();
+    expect(findByClass(tree, "message-list-creating")).toBeUndefined();
+    expect(renderedText(tree)).toContain("Send a message to start this chat.");
+    // Nothing to read: the chat has no seed and no agent.
+    expect(mocks.fetchEvents).not.toHaveBeenCalled();
   });
 
   it("shows a failed create's reason and retries it on the record's account", () => {
