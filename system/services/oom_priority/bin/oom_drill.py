@@ -464,6 +464,8 @@ def main() -> int:
                 if kill["band"] is not None:
                     shed_sleepers.add(kill["pid"])
                 failure = failure or record_failure
+            if failure:
+                break
             is_every_sleeper_gone = all(
                 proc.poll() is not None or pid in shed_sleepers
                 for pid, (proc, _) in sleepers.items()
