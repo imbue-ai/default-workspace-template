@@ -583,7 +583,7 @@ def _open_target(
 ) -> _OpenTarget:
     """What an ``open`` op opens: an explicit path, else the page of the launch path it names (the app's default, or
     its first), resolved as the launch route resolves one (a GET launch path with its params as the query, a POST one
-    asked for its page with the client and desktop as the envelope)."""
+    asked for its page with the client and its desktop as the envelope, or no envelope for an open with no client)."""
     app = _app_name_or_raise(arguments.app, "app")
     entry = shell.require_app_entry(str(app))
     if arguments.path:
@@ -625,7 +625,7 @@ def _open_unplaced(
         desktop = desktops[0]
     else:
         raise LayoutOpError("there is no desktop to open on yet")
-    target = _open_target(shell, arguments, None, desktop.id)
+    target = _open_target(shell, arguments, None, None)
     outcome = shell.open_window_unplaced(desktop.id, target.app, target.path, arguments.if_present)
     logger.info("layout op=open requester={} desktop={} client=none args={}", requester, desktop.id, args_raw)
     return jsonify(

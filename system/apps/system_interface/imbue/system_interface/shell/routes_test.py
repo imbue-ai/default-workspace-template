@@ -1579,11 +1579,11 @@ def test_an_open_op_at_a_post_launch_path_posts_for_its_page_with_and_without_a_
     }
     windows = {window["id"]: window["path"] for window in opened.get_json()["desktop"]["windows"]}
     assert windows[opened.get_json()["window_id"]] == "/?chat=agent-3"
-    # With no client to target the open lands unplaced, and the post carries only the desktop.
+    # With no client to target the open lands unplaced, and the post carries no envelope at all.
     _shell(app).broadcaster.unregister(first_queue)
     _register_client(app, "c2", "home")
     _register_client(app, "c3", "home")
     unplaced = _op(client, "open", {"app": "buddy", "launch": "new", "params": {"message": "later"}}, None)
     assert unplaced.status_code == 200, unplaced.get_json()
     assert unplaced.get_json()["client_id"] is None
-    assert poster.posts[1].body == {"target": "new_chat", "message": "later", "desktop_id": "home"}
+    assert poster.posts[1].body == {"target": "new_chat", "message": "later"}
