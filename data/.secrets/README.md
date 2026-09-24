@@ -12,8 +12,9 @@ live here:
   types the value into the card.
 - `mcpc/`, the state of `mcpc`, the MCP client every agent, app, and scheduled
   job shares (`MCPC_HOME_DIR` and `~/.mcpc` both point here): its sessions, the
-  OAuth sign-ins it holds, and the headers it sends. It is reached only through the `mcpc`
-  command; `mcpc` lists the connections and `mcpc @<name> close` ends one.
+  OAuth sign-ins it holds, and the headers it sends. It is reached only through
+  the `mcpc` command; `mcpc` lists the connections and `mcpc @<name> close` ends
+  one.
 
 Gitignored and never synced to GitHub; treat everything in here as sensitive.
 

@@ -105,8 +105,8 @@ mcpc connect mcp-servers.json:example @example
 ```
 
 For a hosted server with a header, run the connect under the wrapper, naming its
-`secretsFile`, so mcpc reads the variable; it stores the header with the session and sends it from then
-on:
+`secretsFile`, so mcpc reads the variable; it stores the header with the session
+and sends it from then on:
 
 ```bash
 python3 system/scripts/with_secrets.py data/.secrets/example.env -- mcpc connect mcp-servers.json:example @example
@@ -127,8 +127,9 @@ mcpc --json @example tools-call search '{"query": "invoices", "limit": 5}'
 
 `--json` prints the MCP result object, and exits non-zero when the call fails
 (a tool's own error comes back with `"isError": true`); that is the form an app
-or a scheduled job uses, from any language, by running the command. The server's tools are yours as soon as the connect returns: there
-is nothing to restart.
+or a scheduled job uses, from any language, by running the command. The
+server's tools are yours as soon as the connect returns: there is nothing to
+restart.
 
 A session mcpc keeps runs a background process of about 100 MB for as long as the
 session is open. Keep sessions for a service the user will keep using; close one
