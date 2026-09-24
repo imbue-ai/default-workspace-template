@@ -40,7 +40,7 @@ app, and from a scheduled job.
   `mcpServers` shape. It holds no secret: a key is named as `${VAR}`, and a file
   holding one is named by its path.
 - **A session per server**, named `@<name>` after its entry. mcpc keeps it in a
-  small background process and brings it back on the next call after a restart.
+  background process and brings it back on the next call after a restart.
 - **`MCPC_HOME_DIR`** points at `data/.secrets/mcpc/`, where mcpc keeps its
   sessions, the OAuth sign-ins it holds, and the headers it sends. The secrets
   guard covers the directory; reach it only through `mcpc`.
