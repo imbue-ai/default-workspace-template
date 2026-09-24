@@ -258,13 +258,28 @@ function renderPaneNote(marker: string, state: "loading" | "unavailable", extra 
 /** How much of a long output the panel shows before asking. Enough that most calls
  *  are unaffected and a long one still opens with its shape visible, short enough
  *  that a thousand-line log does not bury the rest of the transcript when a chip is
- *  opened by mistake. */
+ *  opened by mistake.
+ *
+ *  Both limits are needed. Lines alone miss the payload with no newlines in it at
+ *  all -- minified JSON, base64, a captured request body -- which the pane wraps
+ *  (`break-all whitespace-pre-wrap`) into hundreds of visual lines from one logical
+ *  one. Characters alone would clamp mid-line on ordinary console output. */
 const OUTPUT_CLAMP_LINES = 20;
+const OUTPUT_CLAMP_CHARS = 2000;
 
-/** Where the "showing all of it" state lives -- its own key, so it does not survive
- *  as the chip's open state does: reopening a chip starts clamped again. */
+/** Where the "showing all of it" state lives. Its own key rather than the chip's,
+ *  so unfolding a log does not also count as opening the chip -- and cleared with
+ *  the chip (see {@link closeChip}), so reopening one starts clamped again. */
 function outputKey(call: ToolCall): string {
   return `chip-output:${call.tool_call_id}`;
+}
+
+/** Close a chip. The unfolded-output state is a second key, and the expansion store
+ *  is never swept, so without clearing it here "showing all" would outlive the panel
+ *  it belongs to and a reopened chip would dump its whole log again. */
+function closeChip(call: ToolCall): void {
+  setBlockExpanded(chipKey(call), false);
+  setBlockExpanded(outputKey(call), false);
 }
 
 /** A text button under the clamped pane; sized and toned like a chip, since it is
@@ -283,13 +298,27 @@ function outputLines(text: string): string[] {
   return lines;
 }
 
+/** What to show of an output and what to call the rest, or null when the whole of
+ *  it is short enough to show. */
+function clampedOutput(text: string): { shown: string; label: string } | null {
+  const lines = outputLines(text);
+  const byLines = lines.length > OUTPUT_CLAMP_LINES;
+  let shown = byLines ? lines.slice(0, OUTPUT_CLAMP_LINES).join("\n") : text;
+  const byChars = shown.length > OUTPUT_CLAMP_CHARS;
+  if (byChars) shown = shown.slice(0, OUTPUT_CLAMP_CHARS);
+  if (!byLines && !byChars) return null;
+  // Counting lines is the useful measure when there are lines to count; for one
+  // long line it would read "View all 1 lines" and promise nothing.
+  return { shown, label: byLines ? `View all ${lines.length} lines` : "Show the whole output" };
+}
+
 /** The output pane, clamped when it is long enough to be worth asking about. */
 function renderOutput(call: ToolCall, text: string): m.Vnode {
-  const lines = outputLines(text);
-  if (lines.length <= OUTPUT_CLAMP_LINES) return renderPane("tool-call-output", text);
+  const clamped = clampedOutput(text);
+  if (clamped === null) return renderPane("tool-call-output", text);
   const showingAll = isBlockExpanded(outputKey(call));
   return m("div", [
-    renderPane("tool-call-output", showingAll ? text : lines.slice(0, OUTPUT_CLAMP_LINES).join("\n")),
+    renderPane("tool-call-output", showingAll ? text : clamped.shown),
     m(
       "button",
       {
@@ -297,7 +326,7 @@ function renderOutput(call: ToolCall, text: string): m.Vnode {
         class: OUTPUT_TOGGLE_CLASS,
         onclick: () => setBlockExpanded(outputKey(call), !showingAll),
       },
-      showingAll ? "Show less" : `View all ${lines.length} lines`,
+      showingAll ? "Show less" : clamped.label,
     ),
   ]);
 }
@@ -328,7 +357,7 @@ function renderDetailHeader(chip: ChipCall): m.Vnode {
         class: DETAIL_CLOSE_CLASS,
         "aria-label": "Close",
         title: "Close",
-        onclick: () => setBlockExpanded(chipKey(chip.call), false),
+        onclick: () => closeChip(chip.call),
       },
       m.trust(icon("close", { size: 14, strokeWidth: 1.75 })),
     ),
@@ -445,7 +474,7 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
               key: chip.call.tool_call_id,
               onclick: () => {
                 // One open at a time: opening a chip closes whichever was open.
-                if (open !== null) setBlockExpanded(chipKey(open.call), false);
+                if (open !== null) closeChip(open.call);
                 if (!isOpen) setBlockExpanded(chipKey(chip.call), true);
               },
             },
