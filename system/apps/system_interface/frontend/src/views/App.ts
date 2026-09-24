@@ -351,7 +351,7 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  /** The size section's actions for a window, or null in compact mode, where every window renders
+  /** The zone grid's actions for a window, or null in compact mode, where every window renders
    *  maximized and there is nothing to choose. */
   function sizeActionsOf(current: DesktopStore, windowId: string): WindowSizeActions | null {
     if (current.getState().modes.isCompact) return null;
@@ -361,7 +361,7 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  /** The maximize control's own menu: the size section alone. */
+  /** The maximize control's own menu: the zone grid under its own heading. */
   function rowsOfSizeMenu(current: DesktopStore, windowId: string): MenuRow[] | null {
     const actions = sizeActionsOf(current, windowId);
     if (actions === null) return null;
