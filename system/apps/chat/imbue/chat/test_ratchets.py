@@ -59,7 +59,7 @@ def test_prevent_broad_exception_catch() -> None:
     # One for the intentional catch-all wrapping the creation thread's body in
     # agent_manager._run_creation. The thread runs with is_checked=False, so any
     # exception that escapes is silently swallowed; without that catch-all a bug
-    # anywhere inside leaves the chat's page on "Starting the chat..." forever,
+    # anywhere inside leaves the chat's page blank forever,
     # because the provisional chat is never settled and provisional_chat_completed
     # never fires. Treat this one as load-bearing rather than sloppy.
     # One for auth_flows._credentials_restored_on_error, which puts the previous
