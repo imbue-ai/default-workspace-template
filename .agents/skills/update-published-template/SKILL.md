@@ -14,7 +14,7 @@ companion to `publish-template` (a template's first publish),
 template THIS mind already published: it re-cuts the source workspace's
 changes since the last version onto the published snapshot and fast-forwards
 `main` by exactly one commit, leaving every hand-crafted thing in the published
-repo (manifest prose, thumbnail, `/welcome`, adopters' "Adaptation history")
+repo (manifest prose, thumbnail, adopters' "Adaptation history")
 exactly as published.
 
 Like `publish-template`, this skill delegates the re-assembly to a
@@ -32,10 +32,9 @@ format) and a template's own publish count. See
 > already holds content that only exists because a human and an agent made it: the
 > finished "What it is" / "How it works" / "Requirements"
 > prose in `template.md`, the bespoke `template.svg`
-> thumbnail, the template-specific `/welcome`, and the adopters' "Adaptation
-> history". A naive re-run of `build_template.sh` RESETS to the raw `BASE_REF`
-> and REGENERATES all of that from scratch (FILL-IN placeholders, the generic
-> placeholder SVG, a fresh welcome, an empty adaptation history) -- it would
+> thumbnail, and the adopters' "Adaptation history". A naive re-run of
+> `build_template.sh` RESETS to the raw `BASE_REF` and REGENERATES all of that from scratch (FILL-IN placeholders, the generic
+> placeholder SVG, an empty adaptation history) -- it would
 > DESTROY every one of those. **NEVER run `build_template.sh` for an update,
 > and never reset the assembly worktree to `BASE_REF`.** The update worker resets
 > to the PUBLISHED TIP's tree (fetched from the repo) and overlays ONLY the
@@ -332,7 +331,7 @@ the bundle is pushed to the worker. The task body directs the worker to:
    git clean -fdxq
    ```
    This is the line that preserves every hand-crafted thing: the manifest prose,
-   the "## Recipe", the thumbnail SVG, the `/welcome`, and the adopters'
+   the "## Recipe", the thumbnail SVG, and the adopters'
    "Adaptation history" are all present in the published tip and are now the
    working tree.
 5. **Apply the approved delta on top of the published tip, and nothing else.**
