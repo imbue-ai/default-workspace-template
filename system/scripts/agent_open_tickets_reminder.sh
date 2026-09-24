@@ -57,7 +57,7 @@ You have step records that are not yet closed:
 
 $open_lines
 
-For each one, decide before continuing: keep working on it (call \`tk start <id>\` if it's not already in_progress), replace it with a fresh step, or close it now with \`tk close <id> "<summary>"\` (the positional summary is required for steps). The summary is a concise one-line description of the *work done* in this step (the caption a non-technical user sees), not the outcome -- the outcome goes in your final assistant message. Steps are sequential: do not start a new step until the previous one is closed.
+For each one, decide before continuing: keep working on it (call \`tk start <id>\` if it is not already in_progress), replace it with a fresh step, or close it now with \`tk close <id> "<summary>"\` (the positional summary is required for steps). The summary is a concise one-line description of the *work done* in this step (the caption a non-technical user sees), not the outcome -- the outcome goes in your final assistant message. Steps are sequential: do not start a new step until the previous one is closed.
 
 See CLAUDE.md > Task management for the full protocol.
 EOF
