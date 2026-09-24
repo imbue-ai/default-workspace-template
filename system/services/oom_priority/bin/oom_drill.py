@@ -16,8 +16,9 @@ scoring, which on a Linux kernel is also the kernel's own. A wrong victim, or
 a built-in service (adj <= 80) shed while something at adj >= 900 remained,
 stops the drill at once and frees the hog's memory.
 
-Stdlib-only and self-contained, so it can be streamed into a workspace:
-``mngr exec <agent> 'python3 - --bands 1000,900,600,300,75,25' < oom_drill.py``.
+Stdlib-only and self-contained, so it can be sent into a workspace inside the
+command (``mngr exec`` does not pass its stdin through):
+``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 - --bands 1000,900,600,300,75,25"``.
 It must run as a process allowed to set -1000 (root under gVisor, or anywhere
 with ``CAP_SYS_RESOURCE``). Prints one JSON verdict on stdout and exits 0 only
 when the drill passed.

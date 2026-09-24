@@ -10,10 +10,13 @@ To check the shed *order* itself, run the automated drill,
 sleeper per band you name, grows a hog at `oom_score_adj` -1000 until the last
 sleeper is shed, and checks each kill against a prediction of earlyoom's
 badness taken just before it; it prints a JSON verdict and exits non-zero on the
-first wrong victim. It is stdlib-only, so it can be streamed in:
+first wrong victim. It is stdlib-only, so it can be sent in as part of the
+command. `mngr exec` does not pass its stdin through (a `python3 -` fed by
+`< oom_drill.py` runs nothing and exits 0), so the script travels
+base64-encoded:
 
 ```bash
-mngr exec <agent> 'python3 - --bands 1000,900,600,300,75,25' < system/services/oom_priority/bin/oom_drill.py
+mngr exec <agent> "echo $(base64 < system/services/oom_priority/bin/oom_drill.py | tr -d '\n') | base64 -d | python3 - --bands 1000,900,600,300,75,25"
 ```
 
 Stop the browser and every chat first, so the drill's sleepers are what earlyoom
