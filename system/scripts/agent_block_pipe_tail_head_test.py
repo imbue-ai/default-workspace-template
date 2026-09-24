@@ -33,6 +33,7 @@ def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
         "pytest |& cat | tail -20",
         "pytest > >(cat | tail -20)",
         "pytest |\ncat | tail -20",
+        "cat notes.md\npytest | tail -20",
         "cat $(pytest) | head",
         "cat <(pytest) | head",
         "cat `pytest` | head",
