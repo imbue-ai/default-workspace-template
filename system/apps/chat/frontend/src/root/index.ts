@@ -172,8 +172,9 @@ async function applyIntake(token: string, pickedChatId: string | null): Promise<
 }
 
 /** The ``intake`` the root's URL carries: fetched, then applied at once, or offered through the picker when the
- *  chat is the user's to choose. Whatever happens, the root reports the selection alone afterwards, so the
- *  window's stored path drops the token and a reload applies nothing again. */
+ *  chat is the user's to choose. Once applied or given up (a pick, a dismissal, a token already gone), the root
+ *  reports the selection alone, so the window's stored path drops the token and a reload applies nothing again;
+ *  while the picker is open the selection and the token path stand as they are. */
 async function takeIntake(token: string, requestedChatId: string | null): Promise<void> {
   // The shell holds the token path as this window's location until the root reports another, so the selection
   // goes up even when it is the one already reported.
@@ -188,7 +189,7 @@ async function takeIntake(token: string, requestedChatId: string | null): Promis
   }
   if (intake.needsPick) {
     pendingPick = { token, intake };
-    select(requestedChatId);
+    m.redraw();
     return;
   }
   await applyIntake(token, null);
