@@ -509,7 +509,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     # A chat still being created has no agent yet: the request waits for it, so the message
-    # reaches the new agent first and in the order it was sent.
+    # reaches the new agent in the order it was sent, ahead of any greeting.
     parsed_chat_id = parse_chat_ref(chat_id)
     if parsed_chat_id is None:
         return _chat_not_found_response(chat_id)
