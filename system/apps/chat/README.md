@@ -203,7 +203,7 @@ the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. A send to a chat
 still being created waits for its agent: once the create lands, the sends go
 in the order they arrived, after the first message the create itself carries;
-a create that fails refuses them with 409. See `docs/system/blueprint/chat-agent-split/`.
+a create that fails refuses them with 409, as it does every send to the chat until it is tried again. See `docs/system/blueprint/chat-agent-split/`.
 
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
