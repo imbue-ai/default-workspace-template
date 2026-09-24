@@ -770,12 +770,21 @@ export class DesktopStore {
     }
   }
 
+  /** Move a shortcut to a cell, showing it there at once and putting it back if the shell refuses:
+   *  a drop that waited on the round trip would draw the icon in the cell it came from meanwhile. */
   async moveShortcut(app: string, launch: string, cell: GridCell): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
+    this.takeDesktop({
+      ...desktop,
+      shortcuts: desktop.shortcuts.map((shortcut) =>
+        shortcut.target.app === app && shortcut.target.launch === launch ? { ...shortcut, cell } : shortcut,
+      ),
+    });
     try {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
+      this.takeDesktop(desktop);
       this.deps.notify(`Could not move the shortcut: ${(error as Error).message}`);
     }
   }
@@ -1184,9 +1193,13 @@ export class DesktopStore {
     this.updateShortcutDrag(pointer);
     const settled = this.gesture;
     this.gesture = null;
+    // The move goes in BEFORE the redraw: with the gesture gone and the shortcut still recorded in
+    // the cell it was lifted from, a redraw here would put the icon back where it started for as
+    // long as the move takes, which reads as the drop bouncing.
+    if (settled !== null && settled.kind === "shortcut") {
+      void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
+    }
     this.notifyListeners();
-    if (settled === null || settled.kind !== "shortcut") return;
-    void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
   }
 
   /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. Nothing moves

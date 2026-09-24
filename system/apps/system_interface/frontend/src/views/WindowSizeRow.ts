@@ -11,7 +11,6 @@
 
 import m from "mithril";
 import type { CustomRow } from "@imbue/workspace-ui/src/components/menu";
-import { MENU_ROW_SLAB } from "@imbue/workspace-ui/src/components/menu";
 import {
   BOTTOM_HALF_FRAME,
   BOTTOM_LEFT_QUARTER_FRAME,
@@ -63,15 +62,17 @@ function placeIn(zone: WindowZone, actions: WindowSizeActions): void {
   else actions.setState(zone.state);
 }
 
-/** The row: "Size" over the tiles, laid out four to a line so the halves and the quarters each
- *  read as their own line. */
+/** The row: the heading over the tiles, five to a line so the whole-and-halves and the quarters
+ *  each read as their own line. */
 export function windowSizeRow(actions: WindowSizeActions, onPlaced: () => void): CustomRow {
   return {
     kind: "custom",
     key: "size",
     render: () =>
-      m("div", { class: `${MENU_ROW_SLAB} flex flex-col gap-1 py-1` }, [
-        m("span", { class: "text-(length:--font-size-helper) text-faint" }, "Size"),
+      // Tighter than a menu row's own slab: the tiles are the content, and the card's edge should
+      // sit near their hover boxes rather than at a text row's indent.
+      m("div", { class: "mx-1 flex flex-col gap-1 px-1 py-1" }, [
+        m("span", { class: "text-(length:--font-size-helper) text-primary" }, "Move and resize"),
         m(
           "div",
           { class: "grid w-max grid-cols-5 gap-1" },
