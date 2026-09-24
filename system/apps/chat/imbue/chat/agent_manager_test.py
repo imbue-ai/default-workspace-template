@@ -439,6 +439,25 @@ def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_f
     assert manager.get_fast_mode_state(ChatId(created.chat_id)).mode is FastModeMode.OFF
 
 
+def test_a_chat_created_with_nothing_to_say_is_created_silently_and_then_greeted(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    delivered = _record_deliveries(manager)
+    try:
+        manager.create_chat("")
+        wait_until_true(lambda: len(delivered) > 0, 10, "the greeting's delivery")
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert "--message" not in argv_line
+    assert delivered == ["/welcome"]
+
+
 def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -3160,14 +3179,10 @@ def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManag
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
     state_dir = agent_manager._get_agent_state_dir(agent_id)
-    assert agent_manager._list_model_state_paths() == {
-        agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)
-    }
+    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)}
 
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
-    assert agent_manager._list_model_state_paths() == {
-        agent_id: get_model_state_path(HarnessType.CODEX, state_dir)
-    }
+    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CODEX, state_dir)}
 
 
 def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
