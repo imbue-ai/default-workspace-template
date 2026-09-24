@@ -59,6 +59,19 @@ describe("resolveLaunchRun", () => {
       reason: "Docs has no launch path odd",
     });
   });
+
+  it("an unknown app is connecting, not unregistered, until the first app list lands", () => {
+    const connecting = [
+      { type: "desktops_updated", desktops: [home] } as DesktopEvent,
+      { type: "desktop_activated", desktopId: "home" } as DesktopEvent,
+    ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
+    expect(resolveLaunchRun(connecting, "docs", "new", "focus")).toEqual({ kind: "connecting" });
+    const loaded = reduceDesktopState(connecting, { type: "apps_updated", apps: [] });
+    expect(resolveLaunchRun(loaded, "docs", "new", "focus")).toEqual({
+      kind: "unavailable",
+      reason: "docs is not registered",
+    });
+  });
 });
 
 describe("new desktops and added shortcuts", () => {

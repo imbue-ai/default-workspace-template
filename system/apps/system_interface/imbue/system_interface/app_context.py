@@ -6,6 +6,9 @@ from pydantic import Field
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.config import Config
+from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.presence import PresenceSweep
+from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
 
@@ -35,6 +38,12 @@ class SystemInterfaceState(MutableModel):
     config: Config
     # The shell's own collaborators (the inventory, the stores, the activity log).
     shell: ShellState
+    # Who is connected right now: the per-user files under data/.state/presence.
+    presence: PresenceStore
+    # The periodic check that notices a silent departure and tells the windows.
+    presence_sweep: PresenceSweep
+    # Each account's display name and avatar, from imbue_cloud through the on-disk cache.
+    profiles: ProfileResolver
     # Captures the tree HEAD this process started from, so the app shell can
     # say when the served tree has moved under it (see update_staleness.py).
     # A factory (not a shared default): the HEAD read happens per state build,
@@ -52,6 +61,7 @@ class SystemInterfaceState(MutableModel):
 
     def shutdown(self) -> None:
         """Tear down every owned resource. Idempotent."""
+        self.presence_sweep.stop()
         self.shell.broadcaster.shutdown()
         self.shell.stop()
 

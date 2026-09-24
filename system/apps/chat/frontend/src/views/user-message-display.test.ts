@@ -29,6 +29,19 @@ function allText(node: unknown): string {
   return "";
 }
 
+/** What each `MarkdownContent` in the tree was handed; the bubble delegates its attachment
+ *  block to one, which renders as innerHTML and so has no text of its own to collect. */
+function markdownContents(node: unknown): string[] {
+  if (node == null) return [];
+  if (Array.isArray(node)) return node.flatMap(markdownContents);
+  if (typeof node === "object") {
+    const v = node as { attrs?: { content?: unknown }; children?: unknown };
+    const own = typeof v.attrs?.content === "string" ? [v.attrs.content] : [];
+    return [...own, ...markdownContents(v.children)];
+  }
+  return [];
+}
+
 function renderInner(event: UserMessageEvent): m.Vnode {
   const comp = StableUserMessage();
   return comp.view(m(StableUserMessage, { event })) as m.Vnode;
@@ -158,5 +171,37 @@ describe("user-message-display status messages", () => {
     expect(prevented).toBe(true);
     expect(containerEl.classList.contains("message-system-status-container--expanded")).toBe(true);
     expect(isBlockExpanded("status:evt-status-summary")).toBe(true);
+  });
+});
+
+describe("user-message-display prompt bubbles", () => {
+  const SEED_BLOCK = "<chat-seed-context>\nthe conversation the chat opened on\n</chat-seed-context>";
+  const ATTACHMENT = "See attachment here: ![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";
+
+  function wrappedSend(spoken: string): UserMessageEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-seeded-first-send",
+      source: "claude",
+      role: "user",
+      content: `${SEED_BLOCK}\n${spoken}`,
+      display: "prompt_with_context",
+      display_body: spoken,
+    };
+  }
+
+  it("shows only what the user typed when the chat app wrapped the send in context", () => {
+    const inner = renderInner(wrappedSend("1"));
+
+    expect(allText(inner)).toBe("1");
+    expect(allText(inner)).not.toContain("chat-seed-context");
+  });
+
+  it("still renders the attachment a wrapped send carries, beside the words", () => {
+    const inner = renderInner(wrappedSend(`here you go\n\n${ATTACHMENT}`));
+
+    expect(allText(inner)).toBe("here you go");
+    expect(markdownContents(inner)).toEqual([ATTACHMENT]);
   });
 });

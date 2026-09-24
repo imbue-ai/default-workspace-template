@@ -34,7 +34,7 @@ Two independent questions decide what to do next.
 
 Classify by git history:
 
-- **Built-in** if the file is any of:
+- **Built-in** if the code is mngr's (installed from the commit `pyproject.toml` pins, not a file in this repo -- see B), or if the file is any of:
   - under `vendor/` (a vendored snapshot of an external repo, e.g. `system/vendor/tk/`), or
   - introduced by the initial template commit (the root commit of this repo's history), or
   - last changed by a commit reachable from an `update-self:` merge (the `/update-self` skill merges upstream template code with a commit subject starting `update-self:`).
@@ -85,37 +85,7 @@ Whatever the path, verify that the symptom you reproduced in step 1 is actually 
 
 Report **any built-in-code issue** (per A) to imbue -- even if you already fixed it (the upstream copy still needs the fix). Do **not** report purely user-created issues; those are yours and the user's to handle.
 
-To report, do **not** submit directly. POST your diagnosis to the minds report route through the latchkey gateway. The desktop app then opens a pre-filled "report a bug" modal for the user to review and submit (the human gates the send):
-
-```bash
-DESCRIPTION="$(cat <<'EOF'
-<one-paragraph summary of the problem>
-
-Root cause: <file:line and what is wrong>
-Classification: built-in (<mngr / template / update-self>), <fixable here | needs a change in mngr | needs a new desktop-app version>
-Fix: <what you changed, or why it cannot be fixed from here>
-EOF
-)"
-
-# Report against the workspace's PRIMARY agent id, not your own ($MNGR_AGENT_ID).
-# The desktop app pops the modal in the window showing that workspace, and it
-# identifies the window by the primary (is_primary) agent id. If you are an
-# /assist chat (a sub-agent spawned in this workspace), $MNGR_AGENT_ID is your
-# own id, not the workspace's -- reporting under it would pop the modal in
-# whatever window is focused instead of this one. Resolve the primary id from
-# the local agent list (only this workspace's agents are visible from here, so
-# exactly one agent carries is_primary); fall back to your own id if the lookup
-# comes up empty.
-WORKSPACE_AGENT_ID="$(mngr ls --include 'has(labels.is_primary)' --ids)"
-WORKSPACE_AGENT_ID="${WORKSPACE_AGENT_ID:-$MNGR_AGENT_ID}"
-
-latchkey curl -sS -X POST \
-  "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$WORKSPACE_AGENT_ID/report" \
-  -H "Content-Type: application/json" \
-  -d "$(jq -n --arg d "$DESCRIPTION" '{description: $d}')"
-```
-
-A successful call returns `{"ok": true}` and pops the pre-filled modal in the app. Tell the user a report has been opened for their review.
+Send it as `.agents/shared/references/report-built-in-issues.md` describes: exactly one report per pass, covering every built-in issue you found, which pops a pre-filled modal for the user to review and send.
 
 ## Summary of decisions
 

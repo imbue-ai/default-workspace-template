@@ -25,9 +25,11 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
+from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -62,6 +64,7 @@ from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
@@ -93,6 +96,8 @@ from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -575,6 +580,61 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     assert "Let's" in argv_line and "/welcome" not in argv_line
 
 
+def test_a_seeded_chats_launch_carries_the_conversation_the_chat_opened_on(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first agent joins a conversation it cannot see: the seed is a segment this app renders
+    from a file, not a transcript any harness could read. So the launch hands it that conversation
+    ahead of the user's own words -- which is the whole of what a reply like "1" means."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    turns = (
+        SeedTurn(role=SeedRole.USER, text="Wait.. what is honest software?"),
+        SeedTurn(role=SeedRole.ASSISTANT, text="Software that works for you."),
+        SeedTurn(
+            role=SeedRole.ASSISTANT,
+            text="## Your workspace is ready\n\n### 1. Take a tour\n\n### 2. Bring a repository over",
+        ),
+    )
+    try:
+        seeded = manager.seed_chat("Getting started", turns)
+        manager.create_chat("", chat_id=seeded.chat_id, message="1")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+        )
+    finally:
+        manager.stop()
+
+    # The recorded argv flattens the message's newlines, so the seeded turns are matched by the
+    # lines that carry their sense: the options a reply of "1" can only mean one of.
+    (recorded,) = argv_log.read_text().splitlines()
+    assert "Wait.. what is honest software?" in recorded
+    assert "### 1. Take a tour" in recorded and "### 2. Bring a repository over" in recorded
+    # The user's own words close the message, so the agent answers them and not the context.
+    assert recorded.endswith(f"</{SEED_CONTEXT_TAG}> 1")
+
+
+def test_a_waited_launch_of_a_seeded_chat_reports_the_member_agent_it_created(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A seeded chat's first agent has an id of its own, so a waited launch finds it by membership."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+        launched = manager.create_chat("", chat_id=seeded.chat_id, message="Let's build something")
+
+        outcome = manager.wait_for_chat_creation(launched.chat_id, timeout=30.0)
+    finally:
+        manager.stop()
+
+    assert outcome is not None and outcome.is_created is True and outcome.error == ""
+
+
 def test_a_seeded_chat_whose_launch_failed_is_relaunched_as_the_seeds_successor(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -879,11 +939,118 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "project_id": "",
         "account_id": signed_in.id,
         "message": "",
+        "labels": {},
+        "is_installation_check_skipped": False,
         "phase": "creating",
         "error": None,
         "is_seeded": False,
     }
     assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["failed-1"]
+
+
+def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """An update chat whose create failed on the claude pin is retried from the page with the same
+    waiver and labels, or the retry fails the same way; the record carries them like the message."""
+    (signed_in,) = read_index().accounts
+    seed_failed_chat(
+        agent_manager,
+        ChatId("failed-2"),
+        "update-self-1a2b3c",
+        account_id=signed_in.id,
+        message="/update-self",
+        labels={"auto_open": "true"},
+        is_installation_check_skipped=True,
+    )
+    q = broadcaster.register()
+
+    agent_manager.create_chat("", chat_id="failed-2", account_id=signed_in.id)
+    agent_manager.stop()
+
+    raw = q.get_nowait()
+    assert raw is not None
+    pushed = json.loads(raw)
+    assert pushed["phase"] == "creating"
+    assert pushed["labels"] == {"auto_open": "true"}
+    assert pushed["is_installation_check_skipped"] is True
+    assert pushed["message"] == "/update-self"
+
+
+def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentManager) -> None:
+    """``display_name`` and ``account`` are what the app derives the chat's identity and binding
+    from; a caller restating them would make the argv carry two answers."""
+    with pytest.raises(AgentCreationError, match="display_name"):
+        agent_manager.create_chat("x", labels={"display_name": "other", "auto_open": "true"})
+    assert agent_manager.get_provisional_chats() == []
+
+
+def test_create_chat_refuses_labels_and_the_waiver_beside_a_minted_id(agent_manager: AgentManager) -> None:
+    (signed_in,) = read_index().accounts
+    seed_failed_chat(agent_manager, ChatId("failed-3"), "Chat 1", account_id=signed_in.id)
+    with pytest.raises(AgentCreationError, match="relabel"):
+        agent_manager.create_chat("", chat_id="failed-3", labels={"auto_open": "true"})
+    with pytest.raises(AgentCreationError, match="relabel"):
+        agent_manager.create_chat("", chat_id="failed-3", is_installation_check_skipped=True)
+
+
+def test_a_waited_create_reports_the_failure_the_record_holds(
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    false_binary: str,
+) -> None:
+    """A caller that waits on the create learns how it ended without polling: the reason is the
+    one the provisional record keeps for the page, and a chat never created here is unknown."""
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("Doomed chat")
+
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+
+        assert outcome is not None
+        assert outcome.is_created is False
+        assert outcome.error.startswith("mngr create exited with code 1")
+        failed = manager.get_provisional_chat(created.chat_id)
+        assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
+        assert manager.wait_for_chat_creation(ChatId("never-created"), timeout=0.0) is None
+        # The settled event is dropped once waited on; the record it settled stays for the page.
+        assert manager.wait_for_chat_creation(created.chat_id, timeout=0.0) is None
+        assert manager.get_provisional_chat(created.chat_id) is not None
+    finally:
+        manager.stop()
+
+
+def test_a_waited_create_answers_once_the_agent_is_listed_with_the_callers_labels(
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    true_binary: str,
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("Assist chat", labels={"auto_open": "true", "assist": "true"})
+
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+
+        assert outcome is not None and outcome.is_created is True and outcome.error == ""
+        agent = manager.get_agent_by_id(created.chat_id)
+        assert agent is not None
+        # The pre-observe state carries the caller's labels beside the app's own, as the
+        # observed agent will.
+        assert agent.labels["auto_open"] == "true"
+        assert agent.labels["assist"] == "true"
+        assert agent.labels["user_created"] == "true"
+    finally:
+        manager.stop()
 
 
 def test_discard_provisional_chat_drops_a_failed_chat(
@@ -1505,6 +1672,19 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
     argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
+
+
+def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver() -> None:
+    """A create from outside the workspace (the Minds app's assist and update chats, through
+    ``message_chat.py --create``) rides its labels and the claude version-check waiver on the
+    same argv the app's own creates use."""
+    argv = _chat_create_argv(
+        extra_labels=["auto_open=true", "assist=true"], settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
+    )
+    assert_mngr_argv_valid(argv)
+    labels = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--label"]
+    assert labels[-2:] == ["auto_open=true", "assist=true"]
+    assert argv[argv.index("-S") + 1] == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
@@ -2981,9 +3161,7 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.matched.id == "gpt-5.6-terra"
 
 
-# =============================================================================
 # The shared model-state poller (the bounded replacement for per-agent watchers)
-# =============================================================================
 
 
 def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_changes(
@@ -4493,3 +4671,48 @@ def test_status_mapping_follows_the_chat_row(
     lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
+
+
+def test_a_chat_reads_as_connecting_while_any_of_its_sends_waits_on_the_agent(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="connecting-agent")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1") as mark_first:
+        mark_first()
+        with agent_manager.track_connecting_send(agent_id, "m-2") as mark_second:
+            mark_second()
+            assert is_chat_connecting(agent_manager, agent_id)
+        # The second send resolved; the first still waits on the agent.
+        assert is_chat_connecting(agent_manager, agent_id)
+    assert not is_chat_connecting(agent_manager, agent_id)
+
+    # The page hears the change twice -- on, then off -- not once per mark.
+    assert drain_is_connecting_pushes(pushes, agent_id) == [True, False]
+
+
+def test_a_send_that_never_waits_on_the_agent_leaves_the_chat_alone(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="ready-agent")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1"):
+        assert not is_chat_connecting(agent_manager, agent_id)
+
+    assert drain_is_connecting_pushes(pushes, agent_id) == []
+
+
+def test_a_send_that_fails_while_connecting_still_clears_the_mark(agent_manager: AgentManager) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="failing-agent")
+
+    with pytest.raises(SendFailedError):
+        with agent_manager.track_connecting_send(agent_id, "m-1") as mark_connecting:
+            mark_connecting()
+            raise SendFailedError("the agent is in shell mode")
+
+    assert not is_chat_connecting(agent_manager, agent_id)

@@ -1,6 +1,6 @@
 /**
- * The dialog for one desktop's settings (plan section 4.8): its name, colour, glyph, wallpaper,
- * and sharing mode, plus the one place a desktop can be deleted. Deleting is confirm-gated in
+ * The dialog for one desktop's settings (plan section 4.8): its name, colour, glyph, and wallpaper,
+ * plus the one place a desktop can be deleted. Deleting is confirm-gated in
  * place (a second, red button inside this same dialog) rather than a second stacked dialog. The
  * last desktop cannot be deleted; the shell refuses with a 409 the dialog shows.
  */
@@ -9,7 +9,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
-import type { Desktop, SharingMode, Wallpaper, WallpaperListing } from "../model/records";
+import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 
 // The palette is exactly the glyphs' own signature colors, so every desktop colour belongs to
@@ -25,13 +25,7 @@ export interface DesktopSettingsDialogAttrs {
   readonly wallpapers: readonly WallpaperListing[] | null;
   /** Whether the dialog opens straight into the delete confirmation. */
   readonly isDeleting: boolean;
-  readonly onSave: (
-    name: string,
-    color: string,
-    glyph: number,
-    sharing: SharingMode,
-    wallpaper: Wallpaper | null,
-  ) => Promise<void>;
+  readonly onSave: (name: string, color: string, glyph: number, wallpaper: Wallpaper | null) => Promise<void>;
   readonly onDelete: () => Promise<void>;
   readonly onCancel: () => void;
 }
@@ -50,7 +44,6 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
   let name = "";
   let color = SQUIGGLE_GLYPHS[0].color;
   let glyphIndex = 0;
-  let sharing: SharingMode = "shared";
   let wallpaper: Wallpaper | null = null;
   let isSaving = false;
   let isDeleting = false;
@@ -65,7 +58,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     error = null;
     m.redraw();
     try {
-      await attrs.onSave(chosen, color, glyphIndex, sharing, wallpaper);
+      await attrs.onSave(chosen, color, glyphIndex, wallpaper);
     } catch (e) {
       error = (e as Error).message;
       isSaving = false;
@@ -212,7 +205,6 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
       name = desktop.name;
       color = desktop.color;
       glyphIndex = normalizedGlyphIndex(desktop.glyph);
-      sharing = desktop.sharing;
       wallpaper = desktop.wallpaper;
       isConfirmingDelete = vnode.attrs.isDeleting;
     },
@@ -265,21 +257,6 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           ),
           m("label", { class: MODAL_LABEL_CLASS }, "Wallpaper"),
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
-          m("label", { class: MODAL_LABEL_CLASS }, "Sharing"),
-          m(
-            "select",
-            {
-              class: inputClass({ extra: "mb-3 desktop-settings-sharing" }),
-              value: sharing,
-              onchange(event: Event) {
-                sharing = (event.target as HTMLSelectElement).value === "personal" ? "personal" : "shared";
-              },
-            },
-            [
-              m("option", { value: "shared" }, "Shared with everyone on this workspace"),
-              m("option", { value: "personal" }, "Personal"),
-            ],
-          ),
           error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
           isConfirmingDelete
             ? m("p", { class: MODAL_MESSAGE_CLASS }, [

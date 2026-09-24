@@ -35,6 +35,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
+from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
+from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -173,7 +177,9 @@ def build_test_state(
     is_preview: bool = False,
     repo_root: Path | None = None,
     static_directory: Path | None = None,
+    presence_directory: Path | None = None,
     agent_events_path: Path | None = None,
+    profiles: ProfileResolver | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -188,13 +194,29 @@ def build_test_state(
     test fills itself. The avatar's catalog lives under the state directory, and its mood is read
     from ``agent_events_path`` (a file under the state directory by default, absent until a test
     writes it).
+    ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
+    the resolver that names and pictures each account (one that can reach no connector by default, so no test
+    fetches anything unless it says so).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
+    resolved_presence_directory = (
+        presence_directory if presence_directory is not None else _fresh_shell_state_directory() / "presence"
+    )
     resolved_config = config if config is not None else Config()
+    resolved_broadcaster = broadcaster if broadcaster is not None else WebSocketBroadcaster()
+    resolved_profiles = (
+        profiles
+        if profiles is not None
+        else ProfileResolver(
+            cache_directory=resolved_presence_directory / PROFILES_DIRECTORY_NAME,
+            share_env_path=resolved_presence_directory / "share.env",
+        )
+    )
+    presence = PresenceStore(directory=resolved_presence_directory)
     shell = build_shell_state(
         state_directory=state_directory,
         registry_path=registry_path(),
-        broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
+        broadcaster=resolved_broadcaster,
         inventory=inventory,
         wallpaper_files_directory=state_directory / "wallpapers",
         avatar_catalog_directory=state_directory / "avatars",
@@ -202,6 +224,7 @@ def build_test_state(
         if agent_events_path is not None
         else state_directory / "agent-events.jsonl",
         repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
+        profiles=resolved_profiles,
     )
     resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
     return SystemInterfaceState(
@@ -209,6 +232,9 @@ def build_test_state(
         shell=shell,
         is_preview=is_preview,
         static_directory=resolved_static_directory,
+        presence=presence,
+        presence_sweep=build_presence_sweep(presence, resolved_profiles, resolved_broadcaster),
+        profiles=resolved_profiles,
     )
 
 

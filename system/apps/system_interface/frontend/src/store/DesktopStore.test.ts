@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
+import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
+import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, settle } from "../testing/fakeShell";
 import {
   appRecord,
@@ -9,6 +11,7 @@ import {
   desktopRecord,
   launchPathRecord,
   placementRecord,
+  presentUserRecord,
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
@@ -45,10 +48,10 @@ function makeStore(redraw: () => void = () => undefined): DesktopStore {
   return store;
 }
 
+/** A started store; the apps come from the inventory (``api.apps``), no socket message needed. */
 async function startedStore(redraw: () => void = () => undefined): Promise<DesktopStore> {
   const store = makeStore(redraw);
   await store.start(NO_LINK);
-  socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
   return store;
 }
 
@@ -58,6 +61,7 @@ beforeEach(() => {
   socket = new FakeDesktopSocket();
   notices = [];
   reloads = 0;
+  api.apps = [appRecord("docs"), appRecord("notes")];
   api.desktops = [
     desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b")] }),
     desktopRecord("work"),
@@ -66,34 +70,109 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetPresenceForTesting();
   vi.useRealTimers();
 });
 
 describe("bootstrap", () => {
-  it("lands on the recorded desktop, reports it, and fetches its layout", async () => {
+  it("arrives first, reads the inventory, lands on the desktop the shell answers, reports it, and fetches its layout", async () => {
     api.clients = [
       clientRecord(CLIENT, { active_desktop: "work" }),
       clientRecord("other", { active_desktop: "home" }),
     ];
     const store = await startedStore();
+    // The arrival is posted before the inventory is read (it may seed a desktop); the avatar read is independent.
+    expect(api.calls.indexOf(`arriveClient:${CLIENT}`)).toBeGreaterThanOrEqual(0);
+    expect(api.calls.indexOf(`arriveClient:${CLIENT}`)).toBeLessThan(api.calls.indexOf("fetchInventory"));
+    expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(1);
+    expect(api.calls).not.toContain("fetchClients");
     expect(store.getState().activeDesktopId).toBe("work");
     expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
     expect(store.getState().isLayoutLoaded).toBe(true);
+    expect(store.getReplacedDesktop()).toBeNull();
   });
 
-  it("a deep link's desktop wins, and its open and launch wait for the apps to arrive over the socket", async () => {
+  it("knows the apps from the inventory, so a desktop is complete with a socket that never connects", async () => {
+    const store = await startedStore();
+    // Nothing was delivered over the socket: the apps, the desktops, and the layout all came over REST.
+    expect(socket.handlers).not.toBeNull();
+    expect(store.getState().isAppsLoaded).toBe(true);
+    expect(store.getState().apps.map((app) => app.name)).toEqual(["docs", "notes"]);
+    expect(resolveLaunchRun(store.getState(), "notes", "new", "new")).toEqual({
+      kind: "open",
+      app: "notes",
+      path: "/new",
+      launch: "new",
+    });
+    await store.runLaunch("gone", "new", "focus");
+    expect(notices).toEqual(["Cannot open: gone is not registered"]);
+  });
+
+  it("is connecting, not missing apps, until the inventory answers; the socket's app list also ends the wait", async () => {
+    const answerReads = api.holdReads();
+    const store = makeStore();
+    const starting = store.start(NO_LINK);
+    await settle();
+    expect(store.getState().isAppsLoaded).toBe(false);
+    expect(resolveLaunchRun(store.getState(), "docs", "new", "focus")).toEqual({ kind: "connecting" });
+    await store.runLaunch("docs", "new", "focus");
+    expect(notices).toEqual([STILL_CONNECTING_NOTICE]);
+    let isAppsLoaded = false;
+    void store.whenAppsLoaded().then(() => {
+      isAppsLoaded = true;
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs")]);
+    await settle();
+    expect(isAppsLoaded).toBe(true);
+    expect(store.getState().isAppsLoaded).toBe(true);
+    answerReads();
+    await starting;
+    expect(store.getState().apps.map((app) => app.name)).toEqual(["docs", "notes"]);
+  });
+
+  it("lands a first-time user on the desktop the shell seeded for them, and notices a replaced one until dismissed", async () => {
+    const seeded = desktopRecord("alice-2", { name: "Alice 2" });
+    api.arrival = { created_desktop: seeded, replaced_desktop_name: "Alice" };
+    const redraws: number[] = [];
+    const store = await startedStore(() => redraws.push(1));
+    expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["home", "work", "alice-2"]);
+    expect(store.getState().activeDesktopId).toBe("alice-2");
+    expect(store.getReplacedDesktop()).toEqual({ replacedName: "Alice", seededName: "Alice 2" });
+    const before = redraws.length;
+    store.dismissReplacedDesktopNotice();
+    expect(store.getReplacedDesktop()).toBeNull();
+    expect(redraws.length).toBe(before + 1);
+  });
+
+  it("the notice names the seeded desktop even when a deep link lands the client elsewhere", async () => {
+    api.arrival = { created_desktop: desktopRecord("alice", { name: "Alice" }), replaced_desktop_name: "Alice" };
+    const store = makeStore();
+    await store.start({ desktopId: "work", open: null, launch: null });
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(store.getReplacedDesktop()).toEqual({ replacedName: "Alice", seededName: "Alice" });
+  });
+
+  it("falls back to the recorded desktop when the arrival cannot be settled", async () => {
     api.clients = [clientRecord(CLIENT, { active_desktop: "work" })];
     const store = makeStore();
-    const started = store.start({
+    api.refusal = "shell down";
+    const started = store.start(NO_LINK);
+    api.refusal = null;
+    await started;
+    // The arrival was refused; the reads that followed were not, and the client's recorded desktop is the landing.
+    expect(api.calls).toContain(`arriveClient:${CLIENT}`);
+    expect(store.getState().activeDesktopId).toBe("work");
+  });
+
+  it("a deep link's desktop wins, and its open and launch run against the inventory's apps", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "work" })];
+    const store = makeStore();
+    await store.start({
       desktopId: "home",
       open: { app: "docs", path: "/a" },
       launch: { app: "notes", launch: "new" },
     });
-    await settle();
     expect(store.getState().activeDesktopId).toBe("home");
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
-    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("notes")]);
-    await started;
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([
       "openWindow:home:docs:/a:focus:-",
       "openWindow:home:notes:/new:new:new",
@@ -128,12 +207,13 @@ describe("bootstrap", () => {
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
 
-  it("tells the user when the desktops cannot be read, instead of failing silently", async () => {
+  it("tells the user when the inventory cannot be read, instead of failing silently", async () => {
     api.refusal = "the shell is restarting";
     const store = makeStore();
     await store.start(NO_LINK);
-    expect(notices).toEqual(["Could not read the desktops: the shell is restarting"]);
+    expect(notices).toEqual(["Could not read the desktops and apps: the shell is restarting"]);
     expect(store.getState().activeDesktopId).toBeNull();
+    expect(store.getState().isAppsLoaded).toBe(false);
   });
 
   it("chooses the first desktop when nothing names one", () => {
@@ -798,6 +878,19 @@ describe("gestures", () => {
     await settle();
     expect(api.calls).toContain("moveDesktopShortcut:home:docs:new:2,2");
     expect(store.getGesture()).toBeNull();
+  });
+});
+
+describe("presence", () => {
+  it("a pushed presence set replaces the connected users and schedules a redraw", async () => {
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    const before = redraws;
+    expect(getPresentUsers()).toEqual([]);
+    socket.deliver().onPresenceUpdated([presentUserRecord("user-bob-4471")]);
+    expect(getPresentUsers().map((user) => user.user_id)).toEqual(["user-bob-4471"]);
+    expect(redraws).toBe(before + 1);
+    expect(store.getState().desktops).toHaveLength(2);
   });
 });
 

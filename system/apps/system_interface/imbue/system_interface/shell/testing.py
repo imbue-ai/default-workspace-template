@@ -21,9 +21,10 @@ from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import cascade_frame
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
@@ -184,6 +185,11 @@ def recording_app(received: list[dict[str, Any]]) -> Flask:
     return app
 
 
+def identity_headers(identity: RequestIdentity) -> dict[str, str]:
+    """The ``X-Imbue-Identity`` header a share gateway stamps on a request, as a test client sends it."""
+    return {IDENTITY_HEADER: identity.model_dump_json()}
+
+
 def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:
     """Every message a registered fake client has been sent so far, parsed."""
     messages: list[dict[str, Any]] = []
@@ -230,7 +236,6 @@ def desktop_with_windows(*windows: Window) -> Desktop:
         name="Home",
         color="#2f6b4f",
         glyph=0,
-        sharing=SharingMode.SHARED,
         wallpaper=None,
         shortcuts=(),
         windows=windows,

@@ -269,7 +269,8 @@ class QueuedMessageState(FrozenModel):
         description=(
             "True while this chip is a message the backend is actively re-sending (a codex "
             "shoulder-tap's interrupt+resend, Fix 3): it stays continuously visible but is rendered "
-            "'Sending...' rather than as a plain queued chip, so it never blinks out (contract A1a). "
+            "as an ordinary sent message rather than as a plain queued chip, so it never blinks "
+            "out (contract A1a). "
             "False for an ordinary parked queue chip."
         ),
     )
@@ -503,6 +504,12 @@ class ActiveAgentSnapshot(FrozenModel):
     model_choice: ModelChoice | None = Field(description="The live model/effort/fast selection, or None")
     queued_messages: tuple[QueuedMessageState, ...] = Field(description="The harness queue, in enqueue order")
     shoulder_tap_available: bool = Field(description="Whether something is queued and no send is in flight")
+    is_connecting: bool = Field(
+        description=(
+            "Whether a send is in flight and waiting for the agent to come up: it was stopped, or its "
+            "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
+        )
+    )
 
 
 class ChatSnapshot(FrozenModel):
@@ -571,10 +578,37 @@ class CreateChatRequest(FrozenModel):
         description="The first message the chat sends once it is running; empty sends none "
         "(a chat minted earlier keeps the message it was minted with)",
     )
+    labels: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra labels for the chat's agent (an ``auto_open`` that surfaces its window, say); "
+        "the labels the app sets itself (``APP_OWNED_LABEL_KEYS``: ``user_created``, ``display_name``, "
+        "``account``, ``project``, ``chat_id``, ``chat_seq``) are refused, and a chat minted "
+        "earlier keeps the ones it was minted with",
+    )
+    is_installation_check_skipped: bool = Field(
+        default=False,
+        description="Create the chat even if the workspace's claude binary no longer matches the template's pin, "
+        "so the update chat that repairs that can still be made (``message_chat.py --create`` asks for it on "
+        "every create); a chat minted earlier keeps its own",
+    )
+    should_wait: bool = Field(
+        default=False,
+        description="Answer once the chat's ``mngr create`` has finished, with its failure reason when it "
+        "failed, instead of as soon as the create has started",
+    )
     model: ModelPick | None = Field(
         default=None,
         description="The model the chat runs on, applied once the agent is up and before its first message; "
         "None for the harness's default",
+    )
+
+
+class ChatCreationOutcome(FrozenModel):
+    """How a chat's ``mngr create`` ended, for a caller that waited for it."""
+
+    is_created: bool = Field(description="Whether the chat now runs on its agent")
+    error: str = Field(
+        default="", description="Why the create failed, as the provisional record holds it; '' on success"
     )
 
 
@@ -604,6 +638,10 @@ class ProvisionalChat(FrozenModel):
         default="", description="The account it launches on; empty for a seeded chat before its first send"
     )
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
+    labels: dict[str, str] = Field(default_factory=dict, description="The extra labels its create was asked for")
+    is_installation_check_skipped: bool = Field(
+        default=False, description="Whether its create waves the claude version check"
+    )
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
     is_seeded: bool = Field(

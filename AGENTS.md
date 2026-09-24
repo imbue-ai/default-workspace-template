@@ -162,6 +162,13 @@ Users make "creations": apps (opened as windows), skills (a skill run automatica
 Use the `update-self` skill to pull improvements from the upstream template repo, and the `submit-upstream-changes` skill to push shared changes (skills, scripts, config) back upstream.
 The upstream is defined in `system/config/parent.toml`.
 
+**Finding a defect in built-in code is itself a reason to escalate it upstream -- the user does not have to ask.** Built-in means mngr (installed from the commit `pyproject.toml` pins), vendored (`system/vendor/`), from the initial template commit, or arrived via an `update-self:` merge; the `/assist` skill's "Classify the cause" section has the exact test. The code that needs changing is upstream's, so a local ticket cannot reach it: every workspace that hits the same bug would rediscover it and bury it again. Two channels, by what you have:
+
+- A diagnosis, no fix: report it, using the POST in `.agents/shared/references/report-built-in-issues.md`. It pops a modal for the user to review and send, so the human still gates it. One report per pass, covering everything you found -- not one per issue.
+- A fix you can stand behind: `submit-upstream-changes`, which opens a PR against the parent template repo. Not for mngr: a fix there is its own PR on the mngr repo, not a template one, so an mngr defect goes in a report.
+
+Fixing it locally is *not* an alternative: a fix to a file that is byte-identical to the release only manufactures divergence the next update has to reconcile. "Recorded in `tk`" is not a valid end state for a built-in defect -- either escalate it, or tell the user plainly that you found one and are not escalating it, and why.
+
 # Using crystallized skills
 
 - **A bare slash-command message invokes the skill of that name.** A user message that is exactly `/name` (possibly with arguments), such as `/welcome` or `/assist`, means: read `.agents/skills/<name>/SKILL.md` and follow it as the user's instruction. Do it silently -- read the file without commentary and reply with what the skill says to reply, nothing else. Never narrate the mechanism ("I'm using the welcome flow...", "let me look up that skill"): the user typed a command, not a question about how commands work. (Some harnesses expand these commands into the skill's instructions before you see them; if you are reading the raw `/name` text, the expansion is yours to do.)

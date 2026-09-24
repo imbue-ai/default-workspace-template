@@ -8,7 +8,7 @@ Every rule below is normative and describes the current contract; where a phase 
 
 ## 1. Identifiers and addresses
 
-- An **app name** obeys `system/scripts/forward_port.py`'s rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not the first label of a standalone supervisord program (`share`, `app`, `owner`, `vm`, `host`, `env`, which `system/test_app_manifests.py` keeps in step with the conf), not starting with `host-` or `agent-`.
+- An **app name** obeys `system/scripts/forward_port.py`'s rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not the first label of a standalone supervisord program (`share`, `app`, `owner`, `vm`, `host`, `env`, `agent`, and `github` for the `github-sync` program enabling GitHub sync adds, which `system/test_app_manifests.py` keeps in step with the conf), not starting with `host-` or `agent-`.
 - An **instance key** matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
   It is unique within its app and never changes for the life of the instance.
   Keys ride addresses, URLs, and JSON keys unencoded; a key never needs percent-encoding because its alphabet is URL-safe.

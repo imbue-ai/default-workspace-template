@@ -114,7 +114,7 @@ Sweeps are serialised: a hint during a sweep queues one more sweep rather than r
 
 Resources that exist before this release (the staging workspace's four terminal sessions with two windows) are never window-seen and are never collected; they are cleaned up by hand once, and the changelog entry says so.
 
-The sweep looks at every desktop, `shared` or `personal` alike: a window anywhere keeps the resource.
+The sweep looks at every desktop, the owner's and every visitor's alike: a window anywhere keeps the resource.
 A window at a path the app cannot parse (a settling `/new?workdir=...`, an unknown query) names no resource.
 
 **Note:** a `desktops.json` that is reset or restored from an older backup drops every window at once, and every window-seen resource is then collected on the next sweep.

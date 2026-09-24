@@ -117,6 +117,10 @@ def render_caddyfile(
     admin localhost:2019
     auto_https off
     https_port {https_port}
+    # Caddy's built-in directive order runs forward_auth BEFORE request_header,
+    # which would make the identity strip below delete the value forward_auth
+    # just injected. Reorder so the strip runs first.
+    order request_header before forward_auth
     servers {{
         # h1/h2 only: h3 is UDP, which the SNI-passthrough relay can never
         # carry, so advertising it (Alt-Svc) just makes browsers probe a
@@ -175,15 +179,15 @@ https://*.{workspace_domain}:{https_port} {{
     }}
 
     handle {{
-        # The gateway's identity headers are trustworthy only because a client
-        # can never smuggle its own copy past the auth step: strip any inbound
-        # X-Share-Owner / X-Share-Email before anything downstream sees the
-        # request, then let copy_headers below inject the values the verified
-        # /_auth/verify response carries. request_header runs ahead of
-        # forward_auth in caddy's directive order, so the strip always precedes
-        # the injection.
-        request_header -X-Share-Owner
-        request_header -X-Share-Email
+        # The gateway's identity header is trustworthy only because a client can
+        # never smuggle its own copy past the auth step: strip any inbound
+        # X-Imbue-Identity before anything downstream sees the request, then let
+        # copy_headers below inject the value the verified /_auth/verify
+        # response carries. Textual position does not decide when this runs --
+        # the global ``order request_header before forward_auth`` does; without
+        # it caddy would run the strip after forward_auth and delete the
+        # injected value.
+        request_header -X-Imbue-Identity
         forward_auth {gateway_backend} {{
             uri /_auth/verify
             # forward_auth copies the original request's headers into the auth
@@ -197,11 +201,8 @@ https://*.{workspace_domain}:{https_port} {{
             header_up X-Forwarded-Upgrade {{header.Upgrade}}
             header_up -Upgrade
             # Inject the gateway's verified identity onto the onward request: the
-            # filtered cookie, the owner flag (always), and the requester email
-            # (present only for a non-owner; for the owner the response carries
-            # none, so copy_headers adds nothing and the stripped header stays
-            # absent).
-            copy_headers X-Share-Filtered-Cookie>Cookie X-Share-Owner X-Share-Email
+            # filtered cookie and the requester's identity record.
+            copy_headers X-Share-Filtered-Cookie>Cookie X-Imbue-Identity
         }}
 
 {"".join(service_blocks)}\

@@ -64,6 +64,7 @@ from imbue.chat.harnesses.codex.tool_labels import shell_commands
 from imbue.chat.harnesses.codex.tool_labels import tool_labels
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
@@ -358,6 +359,18 @@ def _item_content_text(content: Any) -> str | None:
     return text or None
 
 
+def _extract_compaction_summary(item: dict[str, Any]) -> str | None:
+    """Extract a text summary from a ContextCompaction item, or None."""
+    for key in ("summary", "text", "body"):
+        val = item.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    content_text = _item_content_text(item.get("content"))
+    if content_text and content_text.strip():
+        return content_text.strip()
+    return None
+
+
 def _synthetic_event_id(kind: str, timestamp: str, payload: dict[str, Any]) -> str:
     """A position-independent id for a rollout line codex gave no id of its own.
 
@@ -478,14 +491,40 @@ def parse_lines(
             )
         if payload_type == "item_completed":
             item = payload.get("item")
-            if isinstance(item, dict) and item.get("type") == "UserMessage":
-                # Rollouts use snake_case; the live app-server item uses clientId.
-                client_id = item.get("client_id")
-                return _user_message_events(
-                    timestamp,
-                    _item_content_text(item.get("content")),
-                    client_id if isinstance(client_id, str) else None,
-                )
+            if isinstance(item, dict):
+                if item.get("type") == "UserMessage":
+                    # Rollouts use snake_case; the live app-server item uses clientId.
+                    client_id = item.get("client_id")
+                    return _user_message_events(
+                        timestamp,
+                        _item_content_text(item.get("content")),
+                        client_id if isinstance(client_id, str) else None,
+                    )
+                if item.get("type") == "ContextCompaction":
+                    turn_id = payload.get("turn_id")
+                    item_id = item.get("id")
+                    if isinstance(item_id, str) and item_id:
+                        event_id = f"codex-compaction-{item_id}"
+                    elif isinstance(turn_id, str) and turn_id:
+                        event_id = f"codex-turn-{turn_id}-context_compacted"
+                    else:
+                        event_id = _synthetic_event_id("context_compacted", timestamp, payload)
+
+                    event: dict[str, Any] = {
+                        "timestamp": timestamp,
+                        "type": "user_message",
+                        "event_id": event_id,
+                        "source": SOURCE,
+                        "role": "system",
+                        "content": "Context was compacted",
+                        "message_uuid": event_id,
+                        "display": DisplayKind.STATUS,
+                        "non_turn_tail": True,
+                    }
+                    summary = _extract_compaction_summary(item)
+                    if summary:
+                        event["display_body"] = summary
+                    return [event]
             # Other item_completed items (AgentMessage, CommandExecution, Reasoning)
             # are display duplicates of the response_item lines we already parse; skip.
             return []

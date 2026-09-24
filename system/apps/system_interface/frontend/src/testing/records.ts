@@ -1,8 +1,8 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it (and one shaped like the
  * chat's manifest), a desktop, a window, a placement, a launch path, a client record, a layout, the
- * avatar state, the theme metrics, and the update notice as the shell sends it. Each takes
- * overrides so a test spells only what it is about.
+ * avatar state, the theme metrics, a connected user, and the update notice as the shell sends it.
+ * Each takes overrides so a test spells only what it is about.
  */
 
 import type {
@@ -12,6 +12,7 @@ import type {
   LaunchPath,
   Layout,
   Placement,
+  PresentUser,
   UpdateNoticeWire,
   WindowRecord,
 } from "../model/records";
@@ -96,14 +97,13 @@ export function windowRecord(
   };
 }
 
-/** A shared desktop named after its id, with no wallpaper, shortcuts, or windows. */
+/** A desktop named after its id, with no wallpaper, shortcuts, or windows. */
 export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Desktop {
   return {
     id,
     name: capitalized(id),
     color: "#2f6b4f",
     glyph: 0,
-    sharing: "shared",
     wallpaper: null,
     shortcuts: [],
     windows: [],
@@ -141,6 +141,20 @@ export function layoutRecord(placements: readonly Placement[], updatedAt: string
 /** A shown, normal placement at the first cascade frame. */
 export function placementRecord(windowId: string, overrides: Partial<Placement> = {}): Placement {
   return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
+}
+
+/** A non-owner with one open tab, an email at example.com, and neither a display name nor a profile picture. */
+export function presentUserRecord(userId: string, overrides: Partial<PresentUser> = {}): PresentUser {
+  return {
+    user_id: userId,
+    email: `${userId}@example.com`,
+    display_name: null,
+    profile_picture_url: null,
+    owner: false,
+    first_seen: "2026-09-19T10:00:00.000000000Z",
+    last_seen: "2026-09-19T10:00:00.000000000Z",
+    ...overrides,
+  };
 }
 
 /** An open notice (no rollback started) for an apply that touched ``apps``, one program each. */

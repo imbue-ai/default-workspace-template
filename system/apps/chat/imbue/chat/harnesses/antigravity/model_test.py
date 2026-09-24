@@ -73,6 +73,7 @@ def _session(model_state_path: Path) -> AntigravityHarnessSession:
             model_state_path=model_state_path,
             send_to_harness=lambda text: True,
             notify_agents_changed=lambda: None,
+            is_harness_starting_up=lambda: False,
             is_tracked=lambda: True,
             on_queue_snapshot=lambda snapshot: None,
             on_user_turn=lambda event: None,

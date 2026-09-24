@@ -9,10 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
 
 from host_backup.capabilities import BackupCapabilities, SnapshotMethod
 from host_backup.config import BackupConfig, RetentionSettings
-from host_backup.events import TICK_TERMINAL_EVENT_TYPES
+from host_backup.events import EVENTS_LOG_ROTATION_BYTES, TICK_TERMINAL_EVENT_TYPES
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
     ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
@@ -24,6 +25,7 @@ from host_backup.runner import (
     _LoopState,
     _parse_restic_timestamp,
     _refresh_environment_record,
+    _run_one_tick,
     _run_restic_backup,
     _should_tick_now,
     _take_snapshot,
@@ -279,6 +281,41 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
     observed.add(last_event_type(state.events_dir))
 
     assert observed == TICK_TERMINAL_EVENT_TYPES
+
+
+def test_a_tick_starts_a_fresh_events_log_once_the_old_one_is_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rotation happens before the tick writes anything, so the tick's events all
+    land in one file: `host-backup-now` reads the triggered tick from the fresh file,
+    and a tick split across two would leave its start in one and its end in the other."""
+    # An empty cwd has no restic.env, so the tick ends before restic runs.
+    monkeypatch.chdir(tmp_path)
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    with (events_dir / "events.jsonl").open("wb") as fh:
+        fh.seek(EVENTS_LOG_ROTATION_BYTES)
+        fh.write(b"\n")
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = events_dir
+    state.current_tick_id = "tick-under-test"
+
+    _run_one_tick(state=state, config=_build_config(), trigger_reason="config_change")
+
+    rotated_logs = [
+        child
+        for child in events_dir.iterdir()
+        if ROTATED_JSONL_PATTERN.match(child.name)
+    ]
+    assert len(rotated_logs) == 1
+    assert rotated_logs[0].stat().st_size == EVENTS_LOG_ROTATION_BYTES + 1
+    events = _read_events(events_dir)
+    assert [event["type"] for event in events] == [
+        "CONFIG_RELOADED",
+        "BACKUP_STARTED",
+        "TICK_SKIPPED_DUE_TO_MISSING_SECRETS",
+    ]
+    assert {event["tick_id"] for event in events} == {"tick-under-test"}
 
 
 def test_cleanup_runs_with_no_snapshot_result_in_hand(tmp_path: Path) -> None:

@@ -23,6 +23,8 @@ from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTO
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
+from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -32,6 +34,7 @@ from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
@@ -43,6 +46,7 @@ from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import StoredWindowPath
+from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
@@ -50,32 +54,44 @@ from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import window_wire_json
+from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import pinned_window
 from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktop_document import settled_windows
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
+from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
+from imbue.system_interface.shell.desktops import desktop_kept_by_returning_client
+from imbue.system_interface.shell.desktops import desktop_name_for_user
+from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
+from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import PinnedWindowError
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
+from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
 from imbue.system_interface.shell.window_paths import WindowPathStore
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
@@ -105,6 +121,10 @@ class ShellState(MutableModel):
         frozen=True, description="Where the workspace's own wallpaper files are read from"
     )
     clients: ClientStore = Field(frozen=True, description="clients.json")
+    users: UserStore = Field(frozen=True, description="users.json: the desktop made for each signed-in visitor")
+    profiles: ProfileResolver = Field(
+        frozen=True, description="Each account's display name and avatar, from imbue_cloud through the on-disk cache"
+    )
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     avatar_catalog: AvatarCatalogStore = Field(
@@ -454,6 +474,109 @@ class ShellState(MutableModel):
             self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
         return outcome.is_active_desktop_changed
 
+    def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
+        """Where a client whose shell page just loaded lands (desktop plan section 3.10): the owner and anonymous
+        clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
+        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
+        while a returning client of theirs keeps the desktop it was on. None while the workspace has no desktop."""
+        now = datetime.now(timezone.utc)
+        user_id = visiting_user_id(identity)
+        # The profile (what the desktop made for a visitor is named after) is resolved before the lock: it may be a
+        # fetch, bounded but slow, and nobody else's arrival should wait on it.
+        profile = self.profiles.resolve(user_id, now) if user_id is not None else None
+        # The whole read-decide-write runs under the state lock (re-entrant, so the stores' own takes nest): two
+        # arrivals of one new user at once (a browser restoring its tabs) must not both seed a desktop for them.
+        with STATE_FILES_LOCK:
+            desktops = self.list_desktops()
+            record = self.clients.get_client(client_id)
+            shared_landing = resolve_active_desktop(record, desktops)
+            if shared_landing is None:
+                return None
+            outcome = (
+                self._land_visiting_user(user_id, identity, profile, record, desktops, now)
+                if user_id is not None
+                else ClientArrivalOutcome(desktop_id=shared_landing, created_desktop=None, replaced_desktop_name=None)
+            )
+            # Every arrival stamps the user it came as (None for the owner), so the returning-client rule never
+            # reads a user the browser has since stopped being.
+            recorded = self.clients.record_arrival(client_id, user_id, outcome.desktop_id, now)
+        if outcome.created_desktop is not None:
+            self.broadcast_desktops_updated()
+        # A client that already had a record may have other windows open on the desktop it was moved off.
+        if record is not None and recorded.is_active_desktop_changed:
+            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(outcome.desktop_id))
+        return outcome
+
+    def _land_visiting_user(
+        self,
+        user_id: UserId,
+        identity: RequestIdentity,
+        profile: UserProfile | None,
+        record: ClientRecord | None,
+        desktops: Sequence[Desktop],
+        now: datetime,
+    ) -> ClientArrivalOutcome:
+        """Where a visiting user's client lands, with the user's record brought up to date: the desktop made for
+        them, seeded now when they have none or when the one they had has been deleted (which the outcome names),
+        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock."""
+        known = self.users.get_user(user_id)
+        desktop_by_id = {desktop.id: desktop for desktop in desktops}
+        own_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        created: Desktop | None = None
+        replaced_desktop_name: str | None = None
+        if own_desktop is not None:
+            kept = desktop_kept_by_returning_client(record, user_id, desktop_by_id.keys())
+            landing = kept if kept is not None else own_desktop.id
+        else:
+            created = self._create_desktop_for_user(identity, profile, desktops, now)
+            own_desktop = created
+            landing = created.id
+            replaced_desktop_name = known.desktop_name if known is not None else None
+        # The record carries the desktop's name as it stands at this arrival, so a notice after a deletion names
+        # the desktop as the user last saw it, renames included.
+        self.users.record_user(
+            UserRecord(
+                user_id=user_id,
+                desktop_id=own_desktop.id,
+                desktop_name=own_desktop.name,
+                email=identity.email,
+                display_name=profile.display_name if profile is not None else None,
+                last_seen=now,
+            )
+        )
+        return ClientArrivalOutcome(
+            desktop_id=landing, created_desktop=created, replaced_desktop_name=replaced_desktop_name
+        )
+
+    def _create_desktop_for_user(
+        self, identity: RequestIdentity, profile: UserProfile | None, desktops: Sequence[Desktop], now: datetime
+    ) -> Desktop:
+        """A desktop named after the user (their profile's display name, else their email's local part), seeded from
+        the first desktop (its shortcuts, wallpaper, and settled windows as new windows), with the next free glyph and
+        that glyph's colour."""
+        name = desktop_name_for_user(profile.display_name if profile is not None else None, identity.email, desktops)
+        glyph = next_glyph_index([desktop.glyph for desktop in desktops])
+        source = desktops[0]
+        seeded = desktop_seeded_from(
+            source,
+            slugify_desktop_name(name),
+            name,
+            DESKTOP_GLYPH_COLORS[glyph],
+            glyph,
+            [mint_window_id() for _ in settled_windows(source)],
+            now,
+        )
+        created = self.desktops.add_desktop(seeded)
+        logger.info(
+            "Seeded desktop {!r} for user {} from {!r} ({} shortcut(s), {} window(s))",
+            created.name,
+            identity.user_id,
+            source.name,
+            len(created.shortcuts),
+            len(created.windows),
+        )
+        return created
+
     def set_client_entry_presentation(
         self, client_id: ClientId, app: AppName, presentation: EntryPresentation
     ) -> ClientRecord:
@@ -495,11 +618,13 @@ def build_shell_state(
     avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
     agent_events_path: Path | None = None,
     repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
+    profiles: ProfileResolver | None = None,
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests, and
     ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
     environment names; ``repo_root`` (the workspace the update notice's record and script live under) is the
-    served tree by default."""
+    served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
+    that can reach no connector, so a shell built without one names visitors by email."""
     return ShellState(
         state_directory=state_directory,
         inventory=inventory
@@ -510,6 +635,12 @@ def build_shell_state(
         window_paths=WindowPathStore(state_directory=state_directory),
         wallpaper_files_directory=wallpaper_files_directory,
         clients=ClientStore(state_directory=state_directory),
+        users=UserStore(state_directory=state_directory),
+        profiles=profiles
+        if profiles is not None
+        else ProfileResolver(
+            cache_directory=state_directory / "profiles", share_env_path=state_directory / "share.env"
+        ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=avatar_catalog_directory),

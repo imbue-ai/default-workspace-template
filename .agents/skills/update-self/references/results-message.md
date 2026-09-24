@@ -42,7 +42,8 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    nothing of theirs), say that the release arrived exactly as it was shipped
    and tested -- never that checks ran and passed.
 6. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
-   missing backup, a deviation the worker disclosed that could not be closed.
+   missing backup, unfinished work from an earlier update attempt that Step 3b
+   set aside, a deviation the worker disclosed that could not be closed.
 7. **Pre-existing issues** -- only if any, and only after verifying
    attribution (worker guide §4a): whether each lives in **built-in** code
    (present at the target ref -> report upstream) or the **user's own** code.
