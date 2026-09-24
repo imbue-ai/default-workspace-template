@@ -170,11 +170,6 @@ from imbue.mngr.primitives import HostName
 # and it travels as `harness`, not folded into the role name.
 CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 
-# The ``-S`` that waves the claude version check for one create: the in-container mngr
-# refuses every claude create on a pin mismatch, including the update run that would fix
-# it, so ``message_chat.py --create`` asks for it on every chat it makes from outside.
-SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
-
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
 # handoff's successor labels); a caller's extra labels may not restate them.
 APP_OWNED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
@@ -297,7 +292,6 @@ def _build_chat_create_command(
     account_args: Sequence[str] = (),
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
-    settings: Sequence[str] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -358,8 +352,6 @@ def _build_chat_create_command(
     # chat's window), which ``create_chat`` screens against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
-    for setting in settings:
-        cmd.extend(["-S", setting])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
     # once the harness signals readiness, exactly as the ``welcome`` template's ``/welcome``
     # does (a CLI ``--message`` takes precedence over a template's). A create that has a model
@@ -2812,7 +2804,6 @@ class AgentManager:
         chat_id: str = "",
         message: str = "",
         labels: Mapping[str, str] | None = None,
-        is_installation_check_skipped: bool = False,
         model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         """Create a chat, as an agent in the primary agent's work dir on the given harness.
@@ -2854,10 +2845,9 @@ class AgentManager:
 
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's window surfaced (``auto_open``); one that restates a label the app
-        sets itself (``APP_OWNED_LABEL_KEYS``) is refused. ``is_installation_check_skipped``
-        waves the claude version check (``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING``). Both are
-        kept on the provisional record like the message, so a relaunch by ``chat_id`` (the
-        page's "Try again") creates on the same terms and refuses new ones.
+        sets itself (``APP_OWNED_LABEL_KEYS``) is refused. They are kept on the provisional
+        record like the message, so a relaunch by ``chat_id`` (the page's "Try again") creates
+        with the same labels and refuses new ones.
 
         ``model_pick`` is the model the chat runs on. It is applied once the agent is up, so
         with a pick the create is silent and the message is delivered afterwards through the
@@ -2873,10 +2863,10 @@ class AgentManager:
         assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
 
         explicit_name = explicit_chat_name(requested_name)
-        if chat_id and (explicit_name or project_id or extra_labels or is_installation_check_skipped):
+        if chat_id and (explicit_name or project_id or extra_labels):
             raise AgentCreationError(
-                f"Chat {chat_id} keeps the name and project it was minted with, and its create's labels "
-                "and waiver; a launch cannot rename, refile, or relabel it"
+                f"Chat {chat_id} keeps the name and project it was minted with, and its create's labels; "
+                "a launch cannot rename, refile, or relabel it"
             )
         owned_keys = sorted(APP_OWNED_LABEL_KEYS.intersection(extra_labels))
         if owned_keys:
@@ -2929,7 +2919,6 @@ class AgentManager:
                 display_name = provisional.name
                 project_id = provisional.project_id
                 extra_labels = dict(provisional.labels)
-                is_installation_check_skipped = provisional.is_installation_check_skipped
             else:
                 launched_chat_id = ChatId(str(AgentId()))
                 display_name = self._mint_display_name_locked(explicit_name)
@@ -2948,7 +2937,6 @@ class AgentManager:
                 account_id=account.id,
                 message=message,
                 labels=extra_labels,
-                is_installation_check_skipped=is_installation_check_skipped,
                 phase=ProvisionalChatPhase.CREATING,
                 is_seeded=seed_record is not None,
             )
@@ -2999,7 +2987,6 @@ class AgentManager:
             account_args,
             initial_message="" if deferred_message else launch_message,
             extra_labels=[*membership_labels, *(f"{key}={value}" for key, value in extra_labels.items())],
-            settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
         self._broadcaster.broadcast_provisional_chat_created(provisional)

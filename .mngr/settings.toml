@@ -201,10 +201,13 @@ settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerou
 # the OOM Claude hooks' path form; the "main" type overrides command below so
 # its sleeping window-0 is unaffected.
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py claude"
-# Pin Claude Code to a specific version; the provisioning-time version check
-# refuses to start the agent if the installed binary diverges. Bump this in
-# sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
+# Pin Claude Code to a specific version, checked against the installed binary on
+# every create. Bump this in sync with the CLAUDE_CODE_VERSION default in
+# system/scripts/setup_system.sh. A mismatch only warns: a workspace's binary can
+# drift from the pin, and failing the create would block the very chat (the update
+# run) that repairs it. The same holds for every pinned harness below.
 version = "2.1.269"
+version_mismatch = "WARN"
 # Do not provision a per-agent Claude config dir. A claude is bound to a
 # provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
 # account's folder under ~/.minds/accounts (the chat app's own creates, and the
@@ -247,8 +250,10 @@ command = "sleep infinity"
 # + auto-dismiss so the container agent runs unattended, matching
 # agent_types.claude's posture (auto_allow_permissions sets codex
 # approval_policy="never"). The codex binary is baked into the image
-# (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- do not
-# reinstall/verify at provision.
+# (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- never
+# install at provision -- while `version` is still checked against the baked binary and
+# a mismatch only warns (see agent_types.claude.version). A pinned codex also skips mngr's
+# provision-time codex update check: the version moves only with CODEX_VERSION.
 #
 # NO model or effort is pinned, deliberately -- and claude is now the only agent type that
 # pins one. A codex slug is not a property of the workspace, it is a property of the ACCOUNT:
@@ -285,6 +290,8 @@ auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 sandbox_mode = "danger-full-access"
 check_installation = false
+version = "0.154.0"
+version_mismatch = "WARN"
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
 # [features] keys, not mngr fields -- kept here on the agent-type block for one place to read.
 # - memories = false: disable codex's built-in memory system so it never writes to
@@ -336,7 +343,8 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # the "pi-coding" agent type -- Pi coding CLI as a peer harness (short alias `pi`).
 # Registered by the imbue-mngr-pi-coding plugin; the pi binary is baked
 # into the image (system/scripts/setup_system.sh, PI_VERSION), so check_installation
-# is off.
+# is off, while `version` is still checked against the baked binary and a mismatch
+# only warns (see agent_types.claude.version).
 #
 # No model is pinned: pi is many-provider,
 # many-auth. Its model (`provider/model`) and effort (thinking level: off..max)
@@ -363,6 +371,8 @@ auto_allow_permissions = true
 share_home_npm_dir = true
 auto_dismiss_dialogs_at_startup = true
 check_installation = false
+version = "0.83.0"
+version_mismatch = "WARN"
 # Harness-only instructions, appended to every pi agent's system prompt.
 # The `/welcome` entry is what claude gets from its slash-command expansion: pi does not
 # expand `/welcome` into the skill, so it is told to follow it.
@@ -376,8 +386,9 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # is its own base type (registered by the imbue-mngr-opencode plugin, installed
 # with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. The
 # opencode binary is baked into the image (system/scripts/setup_system.sh,
-# OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
-# provision.
+# OPENCODE_VERSION), so check_installation is off -- never install at provision --
+# while `version` is still checked against the baked binary and a mismatch only warns
+# (see agent_types.claude.version).
 #
 # No model is pinned -- as with every agent type but claude now. OpenCode is a
 # many-provider, many-auth harness: its model is a `provider/model` slug that comes
@@ -394,6 +405,8 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 [agent_types.opencode]
 auto_allow_permissions = true
 check_installation = false
+version = "1.18.19"
+version_mismatch = "WARN"
 # Launch through the OOM band wrapper, like every other harness. opencode is the one
 # harness whose `command` is not a launch PREFIX but the binary itself: the plugin passes
 # it through as MNGR_OPENCODE_BIN and opencode_launch.sh invokes it for BOTH the server
