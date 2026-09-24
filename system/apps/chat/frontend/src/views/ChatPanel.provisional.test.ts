@@ -159,6 +159,23 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.chat = undefined;
   });
 
+  it("leaves the page blank while the chat is being created", () => {
+    mocks.proto = {
+      chat_id: AGENT_ID,
+      name: "Chat 1",
+      account_id: "acct-1",
+      phase: "creating",
+      error: null,
+      is_seeded: false,
+    };
+    const render = mountPanel();
+
+    const tree = render();
+
+    expect(findByClass(tree, "message-list-creating")).toBeTruthy();
+    expect(renderedText(tree).trim()).toBe("");
+  });
+
   it("shows a failed create's reason and retries it on the record's account", () => {
     failed("acct-1", "mngr create exited with code 1");
     const render = mountPanel();

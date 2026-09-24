@@ -1,0 +1,1 @@
+A new chat's page stays blank while the chat is being created, instead of showing "Starting the chat...". A message typed in the meantime still shows as a held "Sending" bubble at the bottom until the chat is ready.

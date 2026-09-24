@@ -804,7 +804,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
 def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_it_lands(
     tmp_path: Path, page: Page
 ) -> None:
-    """With an account signed in the create runs immediately on it; the page says so while the
+    """With an account signed in the create runs immediately on it; the page stays blank while the
     create runs, and the composer arrives when the agent registers. The launcher points the chat's pinned
     window at ``/new`` in place, so the create can land before the notice is looked for: either is
     accepted, and the composer is what must arrive."""
@@ -813,7 +813,7 @@ def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_i
         creating_or_landed = chat.locator(".message-list-creating, .message-input-textbox")
         expect(creating_or_landed.first).to_be_visible(timeout=15000)
         if chat.locator(".message-list-creating").count() > 0:
-            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat")
+            expect(chat.locator(".message-list-creating")).to_have_text("")
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
         assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
