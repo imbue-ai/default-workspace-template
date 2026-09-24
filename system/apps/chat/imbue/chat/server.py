@@ -27,6 +27,7 @@ from flask import current_app
 from flask import request
 from flask import send_file
 from flask import send_from_directory
+from flask.ctx import AppContext
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
@@ -1438,9 +1439,13 @@ def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeReq
     return accepted if isinstance(accepted, Response) else None
 
 
-def _log_undelivered_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> None:
-    """The send of an intake nobody waits on: its failure is a warning in the log."""
-    failure = _deliver_intake_send(state, chat_id, intake)
+def _log_undelivered_intake_send(
+    app_context: AppContext, state: ChatAppState, chat_id: ChatId, intake: IntakeRequest
+) -> None:
+    """The send of an intake nobody waits on, run under the app's context (the send path resolves the agent through
+    the current app): its failure is a warning in the log."""
+    with app_context:
+        failure = _deliver_intake_send(state, chat_id, intake)
     if failure is not None:
         logger.warning(
             "An intake's send to chat {} was not delivered ({}): {}",
@@ -1451,14 +1456,12 @@ def _log_undelivered_intake_send(state: ChatAppState, chat_id: ChatId, intake: I
 
 
 def _deliver_intake_send_in_background(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> None:
-    # The send path resolves the agent through the current app, so the thread runs under an app context of its own.
-    app_context = current_app.app_context()
-
-    def _send_under_app_context() -> None:
-        with app_context:
-            _log_undelivered_intake_send(state, chat_id, intake)
-
-    threading.Thread(target=_send_under_app_context, name=f"intake-send-{chat_id}", daemon=True).start()
+    threading.Thread(
+        target=_log_undelivered_intake_send,
+        args=(current_app.app_context(), state, chat_id, intake),
+        name=f"intake-send-{chat_id}",
+        daemon=True,
+    ).start()
 
 
 def _finish_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> Response | None:
