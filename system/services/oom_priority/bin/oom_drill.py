@@ -40,7 +40,7 @@ DEFAULT_LEDGER: Final[Path] = Path(
     "/home/user/workspace/data/.state/oom_priority/events/shed.jsonl"
 )
 DEFAULT_EARLYOOM_LOG: Final[Path] = Path("/var/log/supervisor/earlyoom-stderr.log")
-# What --prefer/--avoid are worth, in oom_score_adj points.
+# What --avoid is worth, in oom_score_adj points.
 AVOID_ADJ: Final[int] = -300
 UNKILLABLE_ADJ: Final[int] = -1000
 # A built-in service, the primary agent or never-kill infrastructure.
