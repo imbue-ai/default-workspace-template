@@ -28,11 +28,12 @@ export function renderMarkdown(source: string): string {
  * show-files-in-chat skill); ``download`` makes a missing file fail as a download
  * rather than load an error page over the chat. Any other path (relative, a
  * fragment, ``file:``) has nothing to open it yet, so it is unwrapped to its text.
+ * A dotted "scheme" is a file name with a line number (``q4.md:12``), not a URL.
  */
 function unlinkWorkspacePaths(root: DocumentFragment): void {
   for (const anchor of Array.from(root.querySelectorAll("a"))) {
     const href = anchor.getAttribute("href") ?? "";
-    const isWebLink = /^[a-z][a-z\d+.-]*:/i.test(href) && !/^file:/i.test(href);
+    const isWebLink = /^[a-z][a-z\d+-]*:/i.test(href) && !/^file:/i.test(href);
     if (isWebLink || href.startsWith("//")) continue;
     if (href.startsWith("/")) {
       anchor.setAttribute("download", "");
