@@ -15,10 +15,12 @@ const GLYPH_PATHS = {
   maximize: '<rect x="4" y="4" width="16" height="16" rx="2"/>',
   restore:
     '<rect x="3" y="8" width="13" height="13" rx="2"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/>',
+  // Dots of r=2 rather than the 1.5 the other glyphs' 2px strokes suggest: a dot reads lighter than
+  // a line of the same width, and these are drawn small enough that the thinner one disappears.
   kebab:
-    '<circle cx="12" cy="5" r="1.5" fill="currentColor" stroke="none"/>' +
-    '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
-    '<circle cx="12" cy="19" r="1.5" fill="currentColor" stroke="none"/>',
+    '<circle cx="12" cy="5" r="2" fill="currentColor" stroke="none"/>' +
+    '<circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>' +
+    '<circle cx="12" cy="19" r="2" fill="currentColor" stroke="none"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
 } as const;
