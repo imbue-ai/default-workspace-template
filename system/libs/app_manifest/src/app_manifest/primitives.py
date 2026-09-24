@@ -252,7 +252,8 @@ class PriorityName(str):
 
 
 class LaunchParamName(NonEmptyStr):
-    """The name of a launch path's query parameter, as the manifest declares it and the shell appends it."""
+    """The name of a launch path's param or preset, as the manifest declares it and the shell sends it (a GET launch
+    path's query, a POST launch path's body)."""
 
 
 class ProgramName(NonEmptyStr):
