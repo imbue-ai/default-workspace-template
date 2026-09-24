@@ -143,13 +143,14 @@ def _quoted_detail(body: Any) -> str:
 
 @pure
 def launched_path(app: str, outcome: LaunchPostOutcome) -> WindowPath:
-    """The page path a POST launch answered. A 4xx is the app's refusal, passed on as LaunchRefusedError with its
-    detail; anything else that is not a 200 carrying a window path is LaunchUnavailableError."""
+    """The page path a POST launch answered. A 4xx carrying a ``detail`` is the app's refusal, passed on as
+    LaunchRefusedError with that detail; anything else that is not a 200 carrying a window path (a 4xx with no
+    detail among them: a missing or GET-only route, not a refusal the app wrote) is LaunchUnavailableError."""
     if 400 <= outcome.status_code < 500:
         detail = _quoted_detail(outcome.body)
-        raise LaunchRefusedError(
-            f"{app} refused the launch" + (f": {detail}" if detail else f" ({outcome.status_code})")
-        )
+        if detail:
+            raise LaunchRefusedError(f"{app} refused the launch: {detail}")
+        raise LaunchUnavailableError(f"{app} answered the launch with {outcome.status_code} and no refusal detail")
     if outcome.status_code != 200:
         raise LaunchUnavailableError(f"{app} answered the launch with {outcome.status_code} instead of a page path")
     answered = outcome.body.get(PATH_FIELD) if isinstance(outcome.body, dict) else None
