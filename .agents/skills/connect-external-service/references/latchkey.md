@@ -186,6 +186,17 @@ value will be sent as:
 `header` cannot be `Host` or an `X-Latchkey-*` header, and cannot be combined
 with `login` (a login flow supplies its own credential shape).
 
+Whenever the user will paste a key, also say where it comes from in
+`payload.credential_instructions`: the approval window covers the chat, so
+directions you gave there are out of sight while the user fills it in. The
+window shows the text beside the key input, as plain text (no links or
+formatting), at most 500 characters: the menu path to the key and which scopes
+or permissions to tick. It cannot be combined with `login` either.
+
+```bash
+  -d '{... "payload": {"domain": "api.clickup.com", "scheme": "https", "header": "Authorization: {token}", "credential_instructions": "In ClickUp, click your avatar (bottom left), then Settings > Apps. Under API Token click Generate and copy the token (it starts with pk_)."}}'
+```
+
 ### Signing in instead of a key (row 4)
 
 When no key works, the service's own website may still be reachable: its pages
