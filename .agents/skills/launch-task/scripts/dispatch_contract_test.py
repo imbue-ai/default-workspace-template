@@ -315,6 +315,18 @@ def test_every_prose_await_is_started_through_the_harness_neutral_runner() -> No
         )
 
 
+def test_no_prose_waits_through_a_harness_own_background_tool() -> None:
+    """A wait an agent must be woken from goes through ``run_in_background.py``: Claude's
+    ``run_in_background`` flag does not start a turn when its command finishes on most harnesses."""
+    offenders = [
+        f"{prose.relative_to(_REPO_ROOT)}:{number}: {line.strip()}"
+        for prose in _prose_files()
+        for number, line in enumerate(prose.read_text(encoding="utf-8").splitlines(), start=1)
+        if re.search(r"run_in_background(?!\.py)\b", line)
+    ]
+    assert not offenders, "\n".join(offenders)
+
+
 def _run_task_block(dispatcher: _Dispatcher, cwd: Path) -> Path:
     """Execute the dispatcher's task-file block in ``cwd`` (with the runtime dir
     its launch names already present, as the skill's earlier step creates it)

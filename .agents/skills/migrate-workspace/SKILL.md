@@ -116,16 +116,26 @@ grep "migrate-workspace" /tmp/migrate-inflight.txt
 ```
 
 **Back up both sides -- in the background.** A backup runs for minutes, and
-nothing in Steps 4 and 5 depends on one, so start both (`run_in_background:
-true`) and carry on detecting the layout and building the inventory while they
-run. Collect them before Step 6, which dispatches the first thing that writes
-anything.
+nothing in Steps 4 and 5 depends on one, so start both through
+`system/scripts/run_in_background.py` and carry on detecting the layout and
+building the inventory while they run:
 
 ```bash
-uv run host-backup-now --timeout 600
-ssh -i /tmp/mind_key -p <port> <user>@<host> \
+python3 system/scripts/run_in_background.py --description "Back up this workspace" \
+    --task-dir data/.tasks/migrate-workspace/backup-this -- \
+    uv run host-backup-now --timeout 600
+python3 system/scripts/run_in_background.py --description "Back up the old workspace" \
+    --task-dir data/.tasks/migrate-workspace/backup-source -- \
+    ssh -i /tmp/mind_key -p <port> <user>@<host> \
     'cd <source-repo-root> && uv run host-backup-now --timeout 600'
 ```
+
+Collect both before Step 6, which dispatches the first thing that writes
+anything: each task dir's `exit_code` and `output.log` hold a finished backup's
+result. A dir with no `exit_code` yet is a backup still running, so end your
+turn there; its result arrives as a message and starts your next one, and you
+pick up at Step 6. A result message for a backup you have already collected
+needs nothing more.
 
 **Bound both waits explicitly.** An older `host-backup-now` ends its wait only on
 a restic outcome, so a tick that never reaches restic -- most likely one skipped
@@ -135,7 +145,7 @@ runs; see [references/pre-declutter-layout.md](references/pre-declutter-layout.m
 ("The 30-minute `host-backup-now` hang") for the events-log fallback that reads
 the tick's real outcome.
 
-Confirm each prints `restic_backup_succeeded`. If the *source* reports
+Confirm each `output.log` has `restic_backup_succeeded`. If the *source* reports
 `tick_skipped_due_to_missing_secrets` -- or times out having printed nothing,
 which on an old source means the same thing until you check the events log -- it
 has no restore point: tell the user plainly and get their explicit go-ahead. This
