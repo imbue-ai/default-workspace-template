@@ -36,6 +36,7 @@ import {
 } from "../models/Chats";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
+  accountForAgent,
   closeProviderChooser,
   getSelectedAccount,
   isProviderChooserOpen,
@@ -143,10 +144,11 @@ function draftInto(chatId: string, text: string): void {
   prependToComposer(chatId, text);
 }
 
-/** Launch a chat awaiting its first send with ``text`` (an intake that arrived with nothing signed in): on the
- *  signed-in account when one has appeared meanwhile, else through the provider chooser; a dismissed chooser
- *  leaves the text in the composer, where the next send offers the chooser again. A chooser already open (for
- *  the New chat button) takes no second intent, so the text goes to the composer at once. */
+/** Launch a chat awaiting its first send with ``text`` (an intake that could not launch it at once): on the account
+ *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile, else
+ *  through the provider chooser, as the composer's first send does; a dismissed chooser leaves the text in the
+ *  composer, where the next send offers the chooser again. A chooser already open (for the New chat button) takes
+ *  no second intent, so the text goes to the composer at once. */
 function launchWithFirstMessage(chatId: string, text: string): void {
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
@@ -154,7 +156,8 @@ function launchWithFirstMessage(chatId: string, text: string): void {
       draftInto(chatId, text);
     });
   };
-  const account = getSelectedAccount();
+  const minted = getProvisionalChats().find((chat) => chat.chat_id === chatId);
+  const account = accountForAgent(minted?.account_id) ?? getSelectedAccount();
   if (account !== null) {
     launchOrDraft(account.id);
     return;
