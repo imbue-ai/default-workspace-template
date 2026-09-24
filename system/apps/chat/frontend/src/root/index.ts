@@ -133,22 +133,18 @@ function draftInto(chatId: string, text: string): void {
  *  signed-in account when one has appeared meanwhile, else through the provider chooser; a dismissed chooser
  *  leaves the text in the composer, where the next send offers the chooser again. */
 function launchWithFirstMessage(chatId: string, text: string): void {
-  const account = getSelectedAccount();
-  if (account !== null) {
-    launchChat(chatId, account.id, text).catch((error: unknown) => {
+  const launchOrDraft = (accountId: string): void => {
+    launchChat(chatId, accountId, text).catch((error: unknown) => {
       alert(`Failed to start the chat: ${(error as Error).message}`);
       draftInto(chatId, text);
     });
+  };
+  const account = getSelectedAccount();
+  if (account !== null) {
+    launchOrDraft(account.id);
     return;
   }
-  openProviderChooser({
-    onSignedIn: (accountId) =>
-      void launchChat(chatId, accountId, text).catch((error: unknown) => {
-        alert(`Failed to start the chat: ${(error as Error).message}`);
-        draftInto(chatId, text);
-      }),
-    onDismissed: () => draftInto(chatId, text),
-  });
+  openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
 }
 
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
