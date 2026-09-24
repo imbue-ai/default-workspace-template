@@ -17,7 +17,9 @@ import type { AppRecord, WindowState } from "../model/records";
 import { appGlyph, glyph } from "./glyphs";
 
 const CONTROL_GLYPH_SIZE = 14;
-const APP_GLYPH_SIZE = 16;
+/** The two actions that follow the title: a step under the window's own controls. */
+const TITLE_ACTION_GLYPH_SIZE = 12;
+const APP_GLYPH_SIZE = 14;
 
 export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh";
 
@@ -35,15 +37,24 @@ export interface TitleBarAttrs {
   readonly onDoubleClick: () => void;
 }
 
+/** A control's box. The window's own controls take the size the bar leaves them, as a floor over the
+ *  Button's step so a finger still gets the whole touch target; the two actions beside the title take
+ *  the smaller size outright, which needs `!` to beat the step the Button sets itself. */
+function controlSizeClass(size: "control" | "action"): string {
+  return size === "action"
+    ? "h-(--desk-title-action-size)! w-(--desk-title-action-size)!"
+    : "min-h-(--desk-window-control-size) min-w-(--desk-window-control-size)";
+}
+
 function control(
   name: WindowControl,
   label: string,
   markup: string,
   isOpen: boolean,
   onControl: TitleBarAttrs["onControl"],
-  options: { readonly extra?: string; readonly hover?: m.Attributes } = {},
+  options: { readonly extra?: string; readonly hover?: m.Attributes; readonly size?: "control" | "action" } = {},
 ): m.Vnode {
-  const extra = `window-control shrink-0 min-h-(--desk-window-control-size) min-w-(--desk-window-control-size)${
+  const extra = `window-control shrink-0 ${controlSizeClass(options.size ?? "control")}${
     options.extra === undefined ? "" : ` ${options.extra}`
   }`;
   return m(
@@ -102,11 +113,13 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           // one thing and dim together when the window loses focus.
           m("span", { class: "flex shrink-0 items-center" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
           m("span", { class: "window-title ml-1 min-w-0 truncate text-(length:--font-size-row) font-medium" }, title),
-          control("refresh", "Refresh", icon("refresh", { size: CONTROL_GLYPH_SIZE }), false, onControl, {
+          control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
             extra: "ml-2",
+            size: "action",
           }),
-          control("menu", "Window menu", glyph("kebab", CONTROL_GLYPH_SIZE), isMenuOpen, onControl, {
+          control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
             extra: "ml-0.5",
+            size: "action",
           }),
           m("span", { class: "flex-1" }),
           control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
