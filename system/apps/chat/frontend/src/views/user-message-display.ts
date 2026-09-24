@@ -91,6 +91,9 @@ function renderStatusMessage(label: string, body: string, expansionKey: string):
   );
 }
 
+/** A notice's lead when the backend's decision names none. */
+export const NOTICE_FALLBACK_LABEL = "Background task completed";
+
 /** A one-line notice on the agent's rail: a tick, the lead, and the summary. The lead carries
  *  the weight because it is what the eye is scanning for down a long transcript; the summary is
  *  ordinary prose beside it. */
@@ -129,7 +132,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
         return renderSystemChip(cls.label ?? "System message", cls.body, `chip:${event.event_id}`);
       }
       if (cls.kind === UserMessageKind.Notice) {
-        return renderNotice(cls.label ?? "Background task completed", cls.body);
+        return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body);
       }
       if (cls.kind === UserMessageKind.StatusMessage) {
         const label = cls.label ?? (cls.body || "Context was compacted");

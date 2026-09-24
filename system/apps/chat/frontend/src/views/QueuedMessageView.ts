@@ -31,7 +31,12 @@ import { prependToComposer, raiseFailureNotice } from "./MessageInput";
 import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
-import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS, renderNotice } from "./user-message-display";
+import {
+  NOTICE_FALLBACK_LABEL,
+  USER_BUBBLE_CLASS,
+  USER_MESSAGE_ROW_CLASS,
+  renderNotice,
+} from "./user-message-display";
 import { classifyUserMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 
@@ -98,7 +103,7 @@ function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
   });
   if (cls.kind === UserMessageKind.Notice) {
     return m("div", { class: "queued-message queued-notice opacity-85", key: `queued-${queued.queued_id}` }, [
-      renderNotice(cls.label ?? "Background task", cls.body),
+      renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body),
     ]);
   }
   if (queued.is_sending === true) {
