@@ -25,7 +25,7 @@ import {
 import type { Frame, WindowState } from "../model/records";
 import { zoneGlyph } from "./glyphs";
 
-/** The pictogram's box inside its tile, which leaves the tile 2px of its own around the drawing. */
+/** The pictogram's box inside its tile, which leaves the tile 4px of its own around the drawing. */
 const ZONE_GLYPH_SIZE = 20;
 
 export interface WindowSizeActions {
@@ -89,7 +89,7 @@ export function windowSizeRow(actions: WindowSizeActions, onPlaced: () => void):
                 "aria-label": zone.label,
                 title: zone.label,
                 class:
-                  "flex h-6 w-6 cursor-pointer items-center justify-center rounded-lg text-secondary " +
+                  "flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-secondary " +
                   "hover:bg-fill-hover hover:text-primary focus-visible:outline-2 focus-visible:outline-accent",
                 onclick: (event: MouseEvent) => {
                   event.stopPropagation();
