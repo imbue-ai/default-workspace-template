@@ -384,6 +384,19 @@ class RecordingMngrMessenger(MngrMessenger):
         return self.press_succeeds
 
 
+class HookedMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that calls ``before_send`` with each message before recording it, for a test
+    that needs something to happen while the manager is messaging an agent."""
+
+    before_send: Callable[[str], None]
+
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
+        self.before_send(message)
+        return super().send_to_agent(agent_id, message, known_locations)
+
+
 class SummaryWritingMngrMessenger(RecordingMngrMessenger):
     """A recording messenger whose agent "writes" the handoff summary it is asked for at once.
 
