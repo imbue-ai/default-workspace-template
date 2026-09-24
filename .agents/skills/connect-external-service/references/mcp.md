@@ -27,10 +27,11 @@ claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in
 gateway for services latchkey *does* support; a server for a service it does not
 support bypasses nothing.
 
-Prefer, in order: a server authenticated by an API key; a local stdio server
-that needs no credential; a server with its own OAuth sign-in. The first two
-take their key through the secret card (below). The third needs a browser for
-the consent screen, which you hand to the user (last section).
+A server gets its credential one of three ways: an API key, which goes through
+the secret card (below); nothing at all, for a server that needs none; or its
+own OAuth sign-in, whose consent screen needs a browser you hand to the user
+(last section). For the service's own server none of these outranks another; a
+community server takes a key or nothing, as above.
 
 ## The key goes through the secret card, and the server reads it through the wrapper
 
