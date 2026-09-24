@@ -24,13 +24,26 @@ MAX_APP_NAME_LENGTH: Final[int] = 32
 # set in step with ``system/supervisord.conf``. ``github`` is the one it cannot see:
 # ``github-sync`` is only written once GitHub sync is enabled.
 RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset(
-    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"}
+    {
+        "localhost",
+        "auth",
+        "share",
+        "app",
+        "owner",
+        "vm",
+        "host",
+        "env",
+        "github",
+        "agent",
+    }
 )
 RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
 MAX_DISPLAY_NAME_LENGTH: Final[int] = 64
 
-LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z0-9][a-z0-9-]{0,31}$"
+)
 
 # A launch path is a path under the app's origin that the shell opens a window at: rooted
 # with one slash (``//`` would read as another host), no query string (the shell appends the
@@ -205,7 +218,8 @@ class PriorityName(str):
 
 
 class LaunchParamName(NonEmptyStr):
-    """The name of a launch path's query parameter, as the manifest declares it and the shell appends it."""
+    """The name of a launch path's param or preset, as the manifest declares it and the shell sends it (a GET launch
+    path's query, a POST launch path's body)."""
 
 
 class ProgramName(NonEmptyStr):
