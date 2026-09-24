@@ -94,7 +94,7 @@ function renderStatusMessage(label: string, body: string, expansionKey: string):
 /** A one-line notice on the agent's rail: a tick, the lead, and the summary. The lead carries
  *  the weight because it is what the eye is scanning for down a long transcript; the summary is
  *  ordinary prose beside it. */
-function renderNotice(label: string, body: string): m.Vnode {
+export function renderNotice(label: string, body: string): m.Vnode {
   return m("div", { class: "message-notice flex items-start gap-1.5 text-(length:--font-size-helper)" }, [
     m("span", { class: "mt-px shrink-0 text-accent" }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 }))),
     m("span", { class: "min-w-0 text-secondary" }, [

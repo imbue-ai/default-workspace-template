@@ -31,7 +31,9 @@ import { prependToComposer, raiseFailureNotice } from "./MessageInput";
 import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
-import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
+import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS, renderNotice } from "./user-message-display";
+import { classifyUserMessage } from "./message-classification";
+import { UserMessageKind } from "./message-kinds";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
@@ -78,8 +80,9 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
 }
 
 /** Render one queued message as a user bubble. Reuses the user-bubble *view* (the
- *  same markup ``StableUserMessage`` produces for a plain prompt) directly, rather
- *  than the classifier -- a queued message is always shown verbatim.
+ *  same markup ``StableUserMessage`` produces for a plain prompt) directly: a queued message is
+ *  shown verbatim, except one the transcript will show as a notice (a background command's
+ *  report), which shows as that notice already.
  *
  *  A chip the backend reports as ``is_sending`` (a codex shoulder-tap's interrupt+resend)
  *  renders identically to the optimistic "Sending…" bubble (see OutgoingMessageView) -- same
@@ -87,6 +90,17 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  through the resend rather than blinking out (contract A1a); the backend drives the transition
  *  to the committed turn. */
 function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
+  const cls = classifyUserMessage({
+    content: queued.content,
+    display: queued.display ?? undefined,
+    display_label: queued.display_label ?? undefined,
+    display_body: queued.display_body ?? undefined,
+  });
+  if (cls.kind === UserMessageKind.Notice) {
+    return m("div", { class: "queued-message queued-notice opacity-85", key: `queued-${queued.queued_id}` }, [
+      renderNotice(cls.label ?? "Background task", cls.body),
+    ]);
+  }
   if (queued.is_sending === true) {
     return m("div", { class: OUTGOING_ROW_CLASS, key: `queued-${queued.queued_id}` }, [
       m("div", { class: OUTGOING_BUBBLE_CLASS }, [
