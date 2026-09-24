@@ -207,7 +207,7 @@ def _land(page: Page, server: RunningWorkspace, query: str = "") -> None:
     """Open the shell and wait for the home desktop's backdrop and the chat's seeded shortcut."""
     page.goto(f"{server.shell_url}/{query}")
     expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
-    expect(page.locator(f'[data-shortcut="{CHAT_APP_NAME}:new"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-shortcut="{CHAT_APP_NAME}:root"]')).to_be_visible(timeout=15000)
 
 
 def _open_fixture_chat_root(page: Page, server: RunningWorkspace) -> None:
