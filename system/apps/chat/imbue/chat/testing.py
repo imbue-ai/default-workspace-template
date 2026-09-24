@@ -17,6 +17,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import queue
 import socket
 import sys
 import threading
@@ -168,6 +169,27 @@ def is_e2e_browser_installed() -> bool:
     else:
         cache_dir = Path.home() / ".cache" / "ms-playwright"
     return cache_dir.exists() and any(cache_dir.iterdir())
+
+
+def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
+    """Every ``is_connecting`` value the ``chats_updated`` pushes queued so far carried for ``chat_id``, in order."""
+    values: list[bool] = []
+    while not client_queue.empty():
+        raw = client_queue.get_nowait()
+        assert raw is not None
+        message = json.loads(raw)
+        if message["type"] == "chats_updated":
+            values.extend(
+                chat["active_agent"]["is_connecting"] for chat in message["chats"] if chat["chat_id"] == chat_id
+            )
+    return values
+
+
+def is_chat_connecting(manager: AgentManager, chat_id: str) -> bool:
+    """The ``is_connecting`` the chat's current snapshot reports; the chat must have one."""
+    snapshot = manager.get_chat_snapshot(chat_id)
+    assert snapshot is not None
+    return snapshot.active_agent.is_connecting
 
 
 def seed_agent_state(
@@ -324,10 +346,15 @@ def make_two_member_chat_record(first_id: str, second_id: str, first_event_count
 
 
 def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
-    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's."""
+    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's.
+
+    One line per invocation, whatever the arguments hold: a newline inside an argument (a
+    ``--message`` carrying a whole conversation) is written as a space, so a reader can still
+    count the calls and split a line into its tokens.
+    """
     log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
-    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
+    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
     script.chmod(0o755)
     return str(script), log_path
 

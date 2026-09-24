@@ -3,8 +3,10 @@ import shlex
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -68,6 +70,7 @@ from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import seed_agent_info
+from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
@@ -92,7 +95,7 @@ from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
-from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.chat.harnesses.model_state_poll import ModelStatePoller
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_resolver
@@ -105,6 +108,7 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session_watcher import TranscriptReader
+from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
@@ -664,6 +668,7 @@ def chat_snapshot_for_active_agent(
     chat: _ResolvedChat,
     is_permission_pending: bool,
     shoulder_tap_available: bool,
+    is_connecting: bool,
     last_messaged_at: float | None,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
@@ -698,6 +703,7 @@ def chat_snapshot_for_active_agent(
             model_choice=agent.model_choice,
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
+            is_connecting=is_connecting,
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -852,13 +858,16 @@ class AgentManager:
     # around it -- per-harness behavior is the session implementation's.
     _session_by_agent: dict[str, AgentHarnessSession]
     # The alt-harness sign-in preflight (injectable so tests skip the real CLI).
-    # The last computed model choice per agent, and the filesystem watcher that
-    # re-derives it when the agent's model_state.json changes. The live read is
-    # harness-neutral (the shared reader + the harness's registered state-file path), so
-    # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
-    # None = the harness has recorded no model yet -> the bar renders no slots.
+    # The last computed model choice per agent. The live read is harness-neutral (the
+    # shared reader + the harness's registered state-file path), so there is no per-agent
+    # resolver to cache -- the switch endpoint builds one inline. None = the harness has
+    # recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
-    _model_watcher_by_agent: dict[str, PathWatcher]
+    # The ONE model-state poller for every tracked agent: re-derives an agent's choice
+    # whenever its ``model_state.json`` stamp changes. One thread total -- per-agent
+    # watchers cost four OS threads per agent and grew without bound with the host's
+    # agent count (see :mod:`imbue.chat.harnesses.model_state_poll`).
+    _model_state_poller: ModelStatePoller
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
     # prioritizer's recency ranking from real history.
     _message_stamps: MessageStampStore
@@ -886,6 +895,9 @@ class AgentManager:
     # from the transcript events the watcher parses. A non-empty set is the chat's
     # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
+    # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up. A
+    # non-empty set is the snapshot's ``is_connecting``.
+    _connecting_message_ids_by_agent: dict[str, set[str]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -971,7 +983,10 @@ class AgentManager:
         manager._queue_idle_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
-        manager._model_watcher_by_agent = {}
+        manager._model_state_poller = ModelStatePoller.build(
+            list_model_state_paths=manager._list_model_state_paths,
+            on_model_state_changed=manager._on_model_state_changed,
+        )
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
@@ -986,6 +1001,7 @@ class AgentManager:
             manager._auto_open.request_open(restored_chat_id)
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
+        manager._connecting_message_ids_by_agent = {}
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -1035,6 +1051,7 @@ class AgentManager:
         self._auto_open.start()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
+        self._model_state_poller.start()
         if not self._is_secondary:
             self._autocompactor.start()
         self._start_session_sweep()
@@ -1052,6 +1069,7 @@ class AgentManager:
         self._oom_prioritizer.stop()
         self._autocompactor.stop()
         self._auto_open.stop()
+        self._model_state_poller.stop()
 
         self._session_sweep_stop.set()
         if self._session_sweep_thread is not None:
@@ -1065,12 +1083,6 @@ class AgentManager:
             follower.stop()
 
         self._creation_cg.__exit__(None, None, None)
-
-        with self._lock:
-            model_watchers = list(self._model_watcher_by_agent.values())
-            self._model_watcher_by_agent.clear()
-        for watcher in model_watchers:
-            watcher.stop()
 
         with self._lock:
             sessions = list(self._session_by_agent.values())
@@ -1210,6 +1222,9 @@ class AgentManager:
             pending_by_agent = {
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
+            connecting_by_agent = {
+                agent.id: bool(self._connecting_message_ids_by_agent.get(agent.id)) for agent, _chat in listed
+            }
         last_messaged = self._message_stamps.read()
         return [
             chat_snapshot_for_active_agent(
@@ -1217,6 +1232,7 @@ class AgentManager:
                 chat,
                 pending_by_agent[agent.id],
                 self._shoulder_tap_available(agent),
+                connecting_by_agent[agent.id],
                 last_messaged.get(chat.chat_id),
             )
             for agent, chat in listed
@@ -1231,10 +1247,16 @@ class AgentManager:
             chat = self._resolve_chat_locked(parsed)
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
+            is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
         if chat is None or agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_active_agent(
-            agent, chat, is_pending, self._shoulder_tap_available(agent), self._message_stamps.read().get(chat.chat_id)
+            agent,
+            chat,
+            is_pending,
+            self._shoulder_tap_available(agent),
+            is_connecting,
+            self._message_stamps.read().get(chat.chat_id),
         )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
@@ -2378,6 +2400,27 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(to_update(agent_state.field_ref().state, "WAITING"))
         self._broadcast_chats_updated()
 
+    @contextmanager
+    def track_connecting_send(self, agent_id: str, message_id: str) -> Iterator[Callable[[], None]]:
+        """Scope one send's delivery. The yielded callable marks the send as waiting for the agent to
+        come up (the snapshot's ``is_connecting``); leaving the scope clears the mark."""
+        try:
+            yield lambda: self._set_send_connecting(agent_id, message_id, is_connecting=True)
+        finally:
+            self._set_send_connecting(agent_id, message_id, is_connecting=False)
+
+    def _set_send_connecting(self, agent_id: str, message_id: str, *, is_connecting: bool) -> None:
+        with self._lock:
+            message_ids = self._connecting_message_ids_by_agent.get(agent_id, set())
+            was_connecting = bool(message_ids)
+            updated_message_ids = (message_ids | {message_id}) if is_connecting else (message_ids - {message_id})
+            if updated_message_ids:
+                self._connecting_message_ids_by_agent[agent_id] = updated_message_ids
+            else:
+                self._connecting_message_ids_by_agent.pop(agent_id, None)
+        if bool(updated_message_ids) != was_connecting:
+            self._broadcast_chats_updated()
+
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
@@ -2557,12 +2600,9 @@ class AgentManager:
                 session = self._session_by_agent.get(agent_id)
             if session is not None:
                 session.ensure_live()
-            # Installs the state-file watcher once the agent's state dir exists, which it may
-            # not have when the agent was first tracked.
-            self._ensure_model_tracking(agent_id)
-            # ...and broadcast, which that does not: it recomputes silently, on the reasoning
-            # that its callers are already about to broadcast the whole agent list. Nothing
-            # follows this one, so a bar that just became resolvable would stay unrendered.
+            # Recompute AND broadcast: options arriving from a late connect change the
+            # derived choice with no state-file write to wake the poller, so this sweep
+            # is what turns a late connect into a rendered bar.
             self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
@@ -2897,9 +2937,17 @@ class AgentManager:
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
         role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode.launches_fast))
 
+        # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
+        # this app renders from a file, which no harness transcript holds, so its launch carries
+        # that conversation ahead of the user's own words. The provisional record keeps the words
+        # alone, so a retry after a failed create wraps them once.
+        launch_message = (
+            message if seed_record is None else seed_context_message(self._chat_files_root / launched_chat_id, message)
+        )
+
         # With a pick the message follows the create rather than riding it: the model has to be
         # set before the first turn, and ``mngr create --message`` starts that turn itself.
-        deferred_message = message if model_pick is not None else ""
+        deferred_message = launch_message if model_pick is not None else ""
         cmd = _build_chat_create_command(
             self._mngr_binary,
             display_name,
@@ -2910,7 +2958,7 @@ class AgentManager:
             role_templates,
             project_id,
             account_args,
-            initial_message="" if deferred_message else message,
+            initial_message="" if deferred_message else launch_message,
             extra_labels=[*membership_labels, *(f"{key}={value}" for key, value in extra_labels.items())],
         )
 
@@ -3563,6 +3611,9 @@ class AgentManager:
             state_dir=state_dir,
             send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
             notify_agents_changed=self._broadcast_chats_updated,
+            is_harness_starting_up=lambda: is_harness_starting_up(
+                state_dir, spec.startup_ready_marker, spec.process_started_marker_filename
+            ),
             is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
@@ -3732,40 +3783,43 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
-        """Watch the agent's live model-state file once its state dir exists.
+        """Derive the agent's current model choice, without broadcasting.
 
         The live read is harness-neutral -- the shared reader over the harness's
-        registered ``model_state.json`` -- so there is nothing to build per agent;
-        this just derives the current choice and, when the local state dir is present,
-        starts the one watch that drives every later recompute. Idempotent (the watch is
-        retried on later calls until the dir appears).
+        registered ``model_state.json`` -- so there is nothing to build per agent.
+        Later recomputes are driven by the ONE shared :class:`ModelStatePoller`
+        (started in ``start``), which re-lists every agent's state-file path from
+        ground truth each pass; nothing per-agent is installed here. Idempotent.
         """
-        agent_state = self.get_agent_by_id(agent_id)
-        if agent_state is None:
-            return
-        with self._lock:
-            needs_watcher = agent_id not in self._model_watcher_by_agent
         self._recompute_model_choice(agent_id, broadcast_on_change=False)
-        if needs_watcher and self._get_agent_state_dir(agent_id).exists():
-            state_path = get_model_state_path(agent_state.harness, self._get_agent_state_dir(agent_id))
-            new_watcher = PathWatcher.build(
-                (state_path,),
-                lambda: self._recompute_model_choice(agent_id, broadcast_on_change=True),
-            )
-            with self._lock:
-                already_watched = agent_id in self._model_watcher_by_agent
-                if not already_watched:
-                    self._model_watcher_by_agent[agent_id] = new_watcher
-            if not already_watched:
-                new_watcher.start()
 
     def _stop_model_tracking(self, agent_id: str) -> None:
-        """Stop the model watcher and clear the cached choice for an agent."""
+        """Clear the cached model choice for an agent (the poller drops its own stamp
+        when the agent leaves ``_agents``)."""
         with self._lock:
-            watcher = self._model_watcher_by_agent.pop(agent_id, None)
             self._model_choice_by_agent.pop(agent_id, None)
-        if watcher is not None:
-            watcher.stop()
+
+    def _list_model_state_paths(self) -> dict[str, Path]:
+        """Every tracked agent's model-state file path, resolved from current ground truth.
+
+        The shared poller calls this each pass, so an agent whose harness heals after
+        first sight (the create path tracks before observe reports it) is polled at its
+        real path from the next pass on -- nothing bakes a guessed path in.
+        """
+        with self._lock:
+            return {
+                agent_id: get_model_state_path(agent.harness, self._get_agent_state_dir(agent_id))
+                for agent_id, agent in self._agents.items()
+            }
+
+    def _on_model_state_changed(self, agent_id: str) -> None:
+        """One agent's model-state file changed: re-derive and broadcast on change.
+
+        Runs on the poller thread. Safe for spurious calls (an agent that just left
+        ``_agents`` or a content-identical rewrite): the recompute no-ops for unknown
+        agents and suppresses unchanged broadcasts.
+        """
+        self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
         """Recompute an agent's model choice from its live state file, then cache/broadcast it.

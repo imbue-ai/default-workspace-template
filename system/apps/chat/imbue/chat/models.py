@@ -269,7 +269,8 @@ class QueuedMessageState(FrozenModel):
         description=(
             "True while this chip is a message the backend is actively re-sending (a codex "
             "shoulder-tap's interrupt+resend, Fix 3): it stays continuously visible but is rendered "
-            "'Sending...' rather than as a plain queued chip, so it never blinks out (contract A1a). "
+            "as an ordinary sent message rather than as a plain queued chip, so it never blinks "
+            "out (contract A1a). "
             "False for an ordinary parked queue chip."
         ),
     )
@@ -503,6 +504,12 @@ class ActiveAgentSnapshot(FrozenModel):
     model_choice: ModelChoice | None = Field(description="The live model/effort/fast selection, or None")
     queued_messages: tuple[QueuedMessageState, ...] = Field(description="The harness queue, in enqueue order")
     shoulder_tap_available: bool = Field(description="Whether something is queued and no send is in flight")
+    is_connecting: bool = Field(
+        description=(
+            "Whether a send is in flight and waiting for the agent to come up: it was stopped, or its "
+            "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
+        )
+    )
 
 
 class ChatSnapshot(FrozenModel):

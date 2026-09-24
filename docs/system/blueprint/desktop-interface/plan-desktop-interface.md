@@ -23,7 +23,7 @@ The full definitions are in [concepts.md](concepts.md); this table is the vocabu
 
 | Term | Meaning |
 |---|---|
-| Desktop | A named, shared collection of windows and shortcuts, with a wallpaper and a sharing mode |
+| Desktop | A named, shared collection of windows and shortcuts, with a wallpaper |
 | Window | One app page on one desktop: app, path, title; shared |
 | Placement | One client's frame, state, and minimized flag for one window |
 | Layout | One client's ordered placements for one desktop; the order is the stack |
@@ -53,9 +53,9 @@ It carries no lists of anything inside an app.
 
 ### 3.2 Desktops
 
-A desktop is `{id, name, color, glyph, sharing, wallpaper, shortcuts, windows}`, stored in `desktops.json` in creation order.
+A desktop is `{id, name, color, glyph, wallpaper, shortcuts, windows}`, stored in `desktops.json` in creation order.
 The id is the slugified name and never changes; two names that shorten to one id conflict.
-`sharing` is `shared` or `personal`; V1 stores and shows it and enforces nothing, since the workspace has one user.
+Every desktop is shared: a window holds a resource (a terminal, a browser) for everyone, so a desktop that only one person could see would still be everyone's, and there is no private mode. What keeps users out of each other's way is that each arriving user gets a desktop of their own (3.10).
 A fresh workspace, and a workspace whose state directory holds no `desktops.json`, gets one desktop named `Home` with the theme's default wallpaper and the seeded shortcuts of 3.6.
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
 Deleting the last desktop is refused with `409`.
@@ -91,8 +91,8 @@ Saves work as today: the browser writes its own gestures with a save id and the 
 
 ### 3.5 Clients
 
-A client is `{id, active_desktop, last_seen}` in `clients.json`; the device kind is gone.
-The active desktop is stored on the server so a client resumes where it was and its windows mirror each other.
+A client is `{id, active_desktop, last_seen, user_id}` in `clients.json`; the device kind is gone.
+The active desktop is stored on the server so a client resumes where it was and its windows mirror each other; `user_id` is the signed-in visitor the client last arrived as (3.10), null for the owner.
 A client unseen for 90 days is dropped with every layout it owns, by the sweep that runs at shell start and daily.
 A client whose active desktop no longer exists is moved to the first desktop on its next report.
 
@@ -121,7 +121,8 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | Which apps exist, their display name, icon, launch paths, criticality, priority | Manifest, mirrored into the registry |
 | Whether an app is running; Stop and Start | Shell, via supervisord |
 | What is inside an app, and its own verbs on those things | The app, in its pages |
-| Desktops: name, colour, glyph, sharing, wallpaper, shortcuts and cells | Shell, shared |
+| Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
+| Which desktop was made for which user | Shell, in `users.json` |
 | Which windows a desktop holds; each window's path and title | Shell, shared; the page reports path and title |
 | Each client's placements and stacking order; the active desktop | Shell, per client |
 | Taskbar entries, tray widgets, the launcher's contents | Derived in the browser |
@@ -135,6 +136,17 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 - A page's iframe is created once per window per client and is never re-parented; only a window's close, or its desktop's deletion, destroys it.
 - Rendering never writes: no frame, cell, or state is rewritten by a fit, a clamp, or a compact-mode override.
 - `postMessage` and `message` listeners exist only in the contract module, the shell's relay, the embed module, and an app's own declared relay module (the chat root page's), enforced by `test_embed_ratchets.py`.
+
+### 3.10 Users and their desktops
+
+The shell learns who is asking from the `X-Imbue-Identity` header every request carries (the share identity spec): an `owner` flag, and a `user_id` with an `email` when the workspace is shared and the requester is signed in; what to call them and their profile picture is the account's profile, fetched from imbue_cloud (contracts.md section 5.1).
+A page's first act is to post its arrival (`POST /api/clients/<client_id>/arrive`), and the answer is the desktop the client lands on; it then reads the inventory (`GET /api/inventory`: the desktops, the apps, and the clients in one answer), so it knows every app before it draws a shortcut, and the socket carries the changes from then on.
+The owner, and any request without a `user_id`, land as before: the client's stored desktop, else the first.
+A **visiting user** (`owner` false with a `user_id`) landing on someone else's desktop would open and close that person's windows, so on their first arrival the shell makes them a desktop: named after them (display name, else the email's local part, else `Guest`, made unique), with the next free glyph and its colour, seeded from the first desktop (its shortcuts, its wallpaper, and a new window at the path of each of its settled windows, so they see what is open without touching the originals).
+The shell remembers it in `users.json` and stamps the client's record with the `user_id`; every later client of that user lands on that desktop, and a returning client keeps the desktop it was on (one that last arrived as someone else, or anonymously, is not returning: it lands on the user's desktop).
+If the desktop was deleted meanwhile, the next arrival seeds another and the page shows a notice naming the deleted one once.
+Every desktop stays shared and visible to everyone in the switcher; the user's desktop is theirs by convention, not by access control.
+Visitors granted a single app never load the shell and are not concerned.
 
 ## 4. Behaviour
 
@@ -212,7 +224,7 @@ A desktop's windows therefore never move anything under a user's pointer except 
 ### 4.8 Desktops: switching, creating, settings, deleting
 
 Switching is a client-state report; the client's pages for the previous desktop stay alive and hidden.
-The Desktops widget's menu creates a desktop (`New desktop`, minting `Desktop <n>` and the next glyph), opens its settings (name, colour, glyph, wallpaper, sharing), and deletes it (confirmed; refused for the last one).
+The Desktops widget's menu creates a desktop (`New desktop`, minting `Desktop <n>` and the next glyph), opens its settings (name, colour, glyph, wallpaper), and deletes it (confirmed; refused for the last one).
 Creating switches the creating client to the new desktop.
 
 ### 4.9 Shortcut gestures
@@ -226,7 +238,7 @@ Left to right: the launcher field; one entry per window of the active desktop in
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
 A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
-The tray's one widget is Desktops (concepts.md 2.8); it is one component with one popover, and adding another is adding a component to a list.
+The tray's widgets are Presence (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
 ### 4.11 The launcher
@@ -259,7 +271,7 @@ Window cycling and keyboard move and resize are deferred.
 
 ### 5.1 State files
 
-Under `data/.state/system_interface/`: `desktops.json`, `placements/<desktop_id>/<client_id>.json`, `clients.json`, and the client-activity event log as today.
+Under `data/.state/system_interface/`: `desktops.json`, `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
 Under `data/.apps/system_interface/`: `wallpapers/`.
 The old `projects.json`, `layouts/`, and `migrated.json` are ignored and left in place; a `CLEANUP:` note names them for deletion once migration lands.
 The boot-time `migrate_workspace_layouts.py` is removed from bootstrap and the apply, and deleted.
@@ -458,7 +470,7 @@ The order is additive first: the apps learn the new contract and gain their laun
 - Theme switching and a settings route; V1 ships one theme.
 - Wallpaper upload from the settings dialog; V1 lists files already in the wallpapers directory.
 - Taskbar auto-hide; window cycling and keyboard move and resize; a status signal from pages to the taskbar; a window-targeted shortcut kind.
-- Enforcing the sharing mode once workspaces have more than one user; presence and a multiplayer chat (the avatar is specified by the pinned-taskbar-entries plan).
+- A multiplayer chat (the avatar is specified by the pinned-taskbar-entries plan; presence ships as the tray's Presence widget).
 - A richer launcher (type-ahead over app contents through an app-declared search route); the launcher's menu lists launch paths, windows, and free-text rows only, and the New Tab sections are the Getting Started app's.
 - Narrowing a per-app share grant to the terminal alone, which needs its pty origin admitted with it.
 - Reporting a terminal's in-tmux session switch as a location, which needs the ttyd client to learn the session name.
