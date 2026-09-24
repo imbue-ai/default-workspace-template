@@ -513,20 +513,21 @@ def _send_message_endpoint(chat_id: str) -> Response:
     parsed_chat_id = parse_chat_ref(chat_id)
     if parsed_chat_id is None:
         return _chat_not_found_response(chat_id)
+    # Read before the wait: a send that cannot be read never counts as said to the new chat.
+    send_message_request = SendMessageRequest.model_validate(request.get_json())
     try:
         with agent_manager.new_chat_send_turn(parsed_chat_id):
-            return _send_message_to_chat(chat_id)
+            return _send_message_to_chat(chat_id, send_message_request)
     except NewChatCreateFailedError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
 
 
-def _send_message_to_chat(chat_id: str) -> Response:
+def _send_message_to_chat(chat_id: str, send_message_request: SendMessageRequest) -> Response:
     state = get_state()
     agent_manager: AgentManager = state.agent_manager
     if _find_active_agent(chat_id) is None:
         return _chat_not_found_response(chat_id)
 
-    send_message_request = SendMessageRequest.model_validate(request.get_json())
     message_id = send_message_request.message_id or uuid4().hex
 
     # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
