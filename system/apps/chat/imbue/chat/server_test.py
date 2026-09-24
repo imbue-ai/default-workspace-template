@@ -604,6 +604,20 @@ def test_a_send_to_a_chat_whose_create_fails_is_refused_so_the_page_can_put_it_b
     assert messenger.sent == []
 
 
+def test_a_send_to_a_chat_being_created_that_cannot_be_read_is_refused_without_waiting_in_line() -> None:
+    """A malformed send is not something said to the new chat: it neither waits for the create nor keeps the chat's greeting from it."""
+    agent_id = "agent-00000000000000000000000000000001"
+    manager, messenger = _manager_creating_chat(agent_id)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    thread, responses = _post_in_background(client, f"/api/chats/{agent_id}/message", {"text": "hello"})
+    thread.join(timeout=10.0)
+
+    assert [response.status_code for response in responses] == [500]
+    assert not manager._has_waiting_new_chat_sends(ChatId(agent_id))
+    assert messenger.sent == []
+
+
 def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     """mngr's send auto-starts a stopped claude/pi agent, and the observe stream sees the revival
     only on its full snapshot; a delivered send flips the tracked lifecycle at once, so the UI
