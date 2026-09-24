@@ -1,8 +1,9 @@
 /**
  * One taskbar entry (plan section 4.10): a window of the active desktop, the app's icon and the
- * title (icon only in compact mode), dimmed while minimized, the focused one marked. A click restores and raises, minimizes the focused
- * window, or raises; a right click or long press opens the entry's menu. A pinned entry in the
- * ``avatar`` style draws the workspace's avatar in place of the icon, wearing the current mood.
+ * title (icon only in compact mode), dimmed while minimized, the focused one marked. A click
+ * restores and raises, minimizes the focused window, or raises; a right click or long press opens
+ * the entry's menu. A pinned entry in the ``avatar`` style draws the workspace's avatar in place of
+ * the icon, wearing the current mood.
  */
 
 import m from "mithril";
