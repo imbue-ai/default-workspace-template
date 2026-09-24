@@ -247,7 +247,7 @@ function handleEvent(event: WsEvent): void {
       if (replayedProvisionalIds !== null) {
         // The list ends a (re)connect's replay. A record the app did not replay is one it no
         // longer holds (it restarted while the create ran), so no push is coming for it: the
-        // record goes, and a send held for it proceeds to report the backend's refusal.
+        // record goes, and whatever waits on it proceeds to meet the backend's refusal.
         const replayed = replayedProvisionalIds;
         replayedProvisionalIds = null;
         provisionalChats = provisionalChats.filter((p) => replayed.has(p.chat_id));
@@ -278,7 +278,7 @@ function handleEvent(event: WsEvent): void {
     case "provisional_chat_created": {
       // Also how a chat moves between phases (a seeded chat launched, a failed one retried):
       // the backend pushes the whole record again. A reconnect replays every provisional chat
-      // this way too, so a failed record seen here settles a send held for it as the
+      // this way too, so a failed record seen here settles whatever waits on it as the
       // completion message would have.
       const { type: _type, ...provisional } = event;
       provisionalChats = [...provisionalChats.filter((p) => p.chat_id !== provisional.chat_id), provisional];
@@ -337,7 +337,7 @@ export function getFailedCreateError(chatId: string): Error | null {
  *
  * A chat the app neither lists nor holds a provisional record for (destroyed while its page
  * was open, a stale URL) resolves at once too: no push is coming that could settle it, and the
- * send itself reports the backend's refusal. A held send is released the same way when a
+ * request that follows reports the backend's refusal. A waiter is released the same way when a
  * reconnect's replay turns out not to carry the chat's record any more.
  */
 export function whenChatRegistered(chatId: string): Promise<void> {

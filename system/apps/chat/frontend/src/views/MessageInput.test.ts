@@ -59,8 +59,8 @@ const mocks = vi.hoisted(() => {
     clearComposerAttachments: vi.fn(),
     interruptAgent: vi.fn(async () => {}),
     openProviderChooser: vi.fn(),
-    // Resolved at once by default: the agent exists. A test of a chat still being created
-    // swaps in a deferred promise.
+    // Resolved at once by default: the agent exists. A seeded chat's launch test swaps in a
+    // rejection for a create that fails.
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
     // Why a send cannot land: set for a chat whose create has failed.
     failedCreateError: null as Error | null,
