@@ -1,5 +1,5 @@
 /**
- * The backdrop (concepts.md section 2.4): the active desktop's wallpaper, its shortcut grid
+ * The backdrop (concepts.md section 2.4): over the active desktop's wallpaper, its shortcut grid
  * fitted to the current backdrop at render time, its windows in stacking order (each over the
  * live page the pages layer positions for it), the floating pinned entries above them, the snap
  * preview, and the ghost of a dragged shortcut. Every pixel comes from the store's geometry;
@@ -7,7 +7,6 @@
  */
 
 import m from "mithril";
-import { wallpaperImageUrl } from "../model/api";
 import { cellRect, placeShortcuts } from "../geometry/grid";
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, Desktop, DesktopShortcut, Placement } from "../model/records";
@@ -58,17 +57,14 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       const liftedKey = gesture?.kind === "shortcut" ? shortcutKey(gesture.app, gesture.launch) : null;
       const windowsById = new Map(desktop.windows.map((window) => [window.id, window]));
       const snapRect = store.snapPreviewRect();
-      const wallpaperStyle =
-        desktop.wallpaper === null ? {} : { backgroundImage: `url("${wallpaperImageUrl(desktop.wallpaper)}")` };
 
       return m(
         "div",
         {
           "data-desktop-id": desktop.id,
-          class:
-            "backdrop relative isolate h-full w-full overflow-hidden select-none bg-(--desk-backdrop) bg-cover " +
-            "bg-center bg-(image:--desk-default-wallpaper)",
-          style: wallpaperStyle,
+          // The wallpaper is the app layout's, painted across the whole viewport so the taskbar has
+          // something to blur; this layer stays clear of it.
+          class: "backdrop relative isolate h-full w-full overflow-hidden select-none",
         },
         [
           m(

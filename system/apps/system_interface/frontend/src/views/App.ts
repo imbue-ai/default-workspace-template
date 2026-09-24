@@ -13,7 +13,7 @@ import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
-import { fetchWallpapers } from "../model/api";
+import { fetchWallpapers, wallpaperImageUrl } from "../model/api";
 import { launchPathOf } from "../model/launch";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
@@ -686,7 +686,18 @@ export function App(): m.Component<AppAttrs> {
         openMenuAt({ kind: "entry", windowId }, anchorForPoint(x, y));
       };
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
-      return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
+      // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
+      // the taskbar's translucent surface then has the desktop behind it to blur, and the backdrop
+      // stays the viewport less the taskbar height that the geometry rules measure.
+      const wallpaperStyle =
+        desktop?.wallpaper == null ? {} : { backgroundImage: `url("${wallpaperImageUrl(desktop.wallpaper)}")` };
+      return m(
+        "div",
+        {
+          class: "app-layout flex h-screen flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          style: wallpaperStyle,
+        },
+        [
         m(UpdateStalenessBanner),
         m(UpdateNoticeBanner, { store: current }),
         m(

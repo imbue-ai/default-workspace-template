@@ -22,7 +22,8 @@
   --desk-touch-target: 32px;
   --desk-window-radius: 12px;
   --desk-window-shadow: var(--shadow-overlay);
-  --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 82%, transparent);
+  --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 70%, transparent);
+  --desk-taskbar-blur: 20px;
   --desk-backdrop: var(--c-bg);
   --desk-default-wallpaper: url(/wallpapers/bundled/dawn);
   --desk-icon-size: 48px;
