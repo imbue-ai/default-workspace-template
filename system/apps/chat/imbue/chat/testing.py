@@ -776,9 +776,10 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
     fake_claude.chmod(0o755)
     fake_mngr = fake_bin_dir / "mngr"
     # A create takes a beat, so a page opened on a chat being created is seen in that phase;
-    # ``FAKE_MNGR_CREATE_EXIT_CODE`` in the environment makes it fail with that status.
+    # ``FAKE_MNGR_CREATE_SECONDS`` in the environment lengthens it, and
+    # ``FAKE_MNGR_CREATE_EXIT_CODE`` makes it fail with that status.
     fake_mngr.write_text(
-        '#!/bin/sh\ncase "$1" in create) sleep 2; echo "create failed on purpose" >&2; '
+        '#!/bin/sh\ncase "$1" in create) sleep "${FAKE_MNGR_CREATE_SECONDS:-2}"; echo "create failed on purpose" >&2; '
         'exit "${FAKE_MNGR_CREATE_EXIT_CODE:-0}" ;; esac\nexit 0\n'
     )
     fake_mngr.chmod(0o755)

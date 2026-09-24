@@ -27,6 +27,7 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import CREATE_FAILED_SEND_DETAIL
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import _SwitchTarget
@@ -87,6 +88,8 @@ from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.models import TransitionKind
+from imbue.chat.new_chat_sends import NewChatCreateFailedError
+from imbue.chat.new_chat_sends import NewChatSendGate
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
@@ -390,7 +393,7 @@ def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A chat created with its own first message carries it; ``/welcome`` is only for a chat
-    that starts with nothing to say (``launch_role_templates``)."""
+    that starts with nothing to say (``_settle_new_chat``)."""
     q = broadcaster.register()
 
     seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
@@ -403,20 +406,10 @@ def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
     assert proto_msg["message"] == "Teach me about Mind"
 
 
-@pytest.mark.parametrize(
-    ("message", "is_fast", "expected"),
-    [
-        ("", True, ("welcome", "fast")),
-        ("", False, ("welcome",)),
-        ("Teach me about Mind", True, ("fast",)),
-        ("Teach me about Mind", False, ()),
-    ],
-)
-def test_launch_role_templates_follow_the_message_and_the_chats_fast_mode(
-    message: str, is_fast: bool, expected: tuple[str, ...]
-) -> None:
-    """Every chat that starts silent is greeted; a chat starts fast when its fast mode calls for it."""
-    assert launch_role_templates(message, is_fast) == expected
+@pytest.mark.parametrize(("is_fast", "expected"), [(True, ("fast",)), (False, ())])
+def test_launch_role_templates_follow_the_chats_fast_mode(is_fast: bool, expected: tuple[str, ...]) -> None:
+    """A chat starts fast when its fast mode calls for it; nothing else rides the templates."""
+    assert launch_role_templates(is_fast) == expected
 
 
 def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_folder(
@@ -1155,6 +1148,126 @@ def _seed_creating_chat(agent_manager: AgentManager, chat_id: ChatId, name: str)
         agent_manager._provisional_chats[chat_id] = ProvisionalChat(
             chat_id=chat_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
         )
+        agent_manager._new_chat_send_gate_by_chat_id[chat_id] = NewChatSendGate.build()
+
+
+def _record_deliveries(agent_manager: AgentManager) -> list[str]:
+    """Hand the manager a delivery that records each message's text, in the order it went."""
+    delivered: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        delivered.append(text)
+        return SendOutcome.OK
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    return delivered
+
+
+def _send_while_the_chat_is_created(
+    agent_manager: AgentManager, chat_id: ChatId, text: str, delivered: list[str], errors: list[str]
+) -> threading.Thread:
+    """A send to the chat, the way the message route makes it: it waits its turn, then delivers."""
+
+    def send() -> None:
+        try:
+            with agent_manager.new_chat_send_turn(chat_id):
+                delivered.append(text)
+        except NewChatCreateFailedError as e:
+            errors.append(str(e))
+
+    thread = threading.Thread(target=send, daemon=True)
+    thread.start()
+    wait_until_true(
+        lambda: agent_manager._has_waiting_new_chat_sends(chat_id), timeout_seconds=5.0, what="the send waiting"
+    )
+    return thread
+
+
+def test_a_chat_that_starts_with_nothing_to_say_is_greeted_once_it_is_up(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    delivered = _record_deliveries(agent_manager)
+
+    agent_manager._run_creation(
+        ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE, is_silent_start=True
+    )
+
+    assert delivered == ["/welcome"]
+    assert not agent_manager._has_waiting_new_chat_sends(ChatId("test-id"))
+
+
+def test_a_message_sent_while_a_silent_chat_is_created_is_its_first_and_it_is_not_greeted(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The greeting would run first and leave the user's message queued behind it."""
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    delivered = _record_deliveries(agent_manager)
+    errors: list[str] = []
+    sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "hello", delivered, errors)
+    assert delivered == []
+
+    agent_manager._run_creation(
+        ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE, is_silent_start=True
+    )
+    sender.join(timeout=5.0)
+
+    assert delivered == ["hello"]
+    assert errors == []
+    with agent_manager._lock:
+        assert ChatId("test-id") not in agent_manager._new_chat_send_gate_by_chat_id
+
+
+def test_a_message_sent_while_a_chat_is_created_goes_after_the_message_the_create_left_out(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    delivered = _record_deliveries(agent_manager)
+    errors: list[str] = []
+    sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "and another thing", delivered, errors)
+
+    agent_manager._run_creation(
+        ChatId("test-id"),
+        "test-id",
+        "test-agent",
+        ["true"],
+        tmp_path,
+        {},
+        HarnessType.CLAUDE,
+        deferred_message="Teach me about Mind",
+    )
+    sender.join(timeout=5.0)
+
+    assert delivered == ["Teach me about Mind", "and another thing"]
+    assert errors == []
+
+
+def test_a_failed_create_refuses_the_messages_sent_while_it_ran(agent_manager: AgentManager, tmp_path: Path) -> None:
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    delivered = _record_deliveries(agent_manager)
+    errors: list[str] = []
+    sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "hello", delivered, errors)
+
+    agent_manager._run_creation(
+        ChatId("test-id"), "test-id", "test-agent", ["sh", "-c", "exit 3"], tmp_path, {}, HarnessType.CLAUDE
+    )
+    sender.join(timeout=5.0)
+
+    assert delivered == []
+    assert errors == [CREATE_FAILED_SEND_DETAIL]
+    with agent_manager._lock:
+        assert ChatId("test-id") not in agent_manager._new_chat_send_gate_by_chat_id
+
+
+def test_a_send_to_a_chat_that_is_not_being_created_goes_at_once(agent_manager: AgentManager) -> None:
+    with agent_manager.new_chat_send_turn(ChatId("some-chat")):
+        pass
 
 
 def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
@@ -1511,15 +1624,15 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
-    """The launch templates (`welcome`, `fast`) stack via extra_role_templates; the
-    resulting argv must resolve against the live CLI."""
+    """The launch template (`fast`) stacks via extra_role_templates; the resulting argv must
+    resolve against the live CLI."""
     argv = _chat_create_argv(
         harness=HarnessType.CODEX,
-        extra_role_templates=("welcome", "fast"),
+        extra_role_templates=("fast",),
     )
     assert_mngr_argv_valid(argv)
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == ["chat", "welcome", "fast"]
+    assert templates == ["chat", "fast"]
 
 
 # the chat's originating project (the mngr ``project`` label)

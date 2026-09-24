@@ -1,0 +1,1 @@
+The `welcome` create template is gone from `.mngr/settings.toml`: the chat app now sends `/welcome` itself once a silently started chat is up, and skips it when the user sent a message while the chat was starting.

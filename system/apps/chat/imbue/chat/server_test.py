@@ -4,6 +4,7 @@ import fcntl
 import io
 import json
 import os
+import threading
 from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -27,6 +28,7 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import CREATE_FAILED_SEND_DETAIL
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.chat_records import ChatRecord
@@ -51,8 +53,10 @@ from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import ModelPick
+from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
+from imbue.chat.new_chat_sends import NewChatSendGate
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
@@ -75,6 +79,7 @@ from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
+from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
@@ -538,6 +543,69 @@ def test_send_message_success() -> None:
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
     # the agent by id (the live cache supplies the known location as the 3rd arg).
     assert messenger.sent == [(agent_id, "hello")]
+
+
+def _post_in_background(client: FlaskClient, path: str, body: dict[str, str]) -> tuple[threading.Thread, list[Any]]:
+    responses: list[Any] = []
+    thread = threading.Thread(target=lambda: responses.append(client.post(path, json=body)), daemon=True)
+    thread.start()
+    return thread, responses
+
+
+def _manager_creating_chat(chat_id: str) -> tuple[AgentManager, RecordingMngrMessenger]:
+    """A manager with ``chat_id``'s create running, the way ``create_chat`` leaves it."""
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._provisional_chats[ChatId(chat_id)] = ProvisionalChat(
+            chat_id=ChatId(chat_id), name="Chat 1", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
+        manager._new_chat_send_gate_by_chat_id[ChatId(chat_id)] = NewChatSendGate.build()
+    return manager, messenger
+
+
+def test_a_send_to_a_chat_being_created_waits_for_its_agent_and_is_then_delivered() -> None:
+    agent_id = "agent-00000000000000000000000000000001"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="chat-1",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    manager, messenger = _manager_creating_chat(agent_id)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        thread, responses = _post_in_background(client, f"/api/chats/{agent_id}/message", {"message": "hello"})
+        wait_until_true(
+            lambda: manager._has_waiting_new_chat_sends(ChatId(agent_id)), timeout_seconds=5.0, what="the send waiting"
+        )
+        assert messenger.sent == []
+        manager._open_new_chat_send_gate(ChatId(agent_id))
+        thread.join(timeout=10.0)
+
+    assert [response.status_code for response in responses] == [200]
+    assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_a_send_to_a_chat_whose_create_fails_is_refused_so_the_page_can_put_it_back() -> None:
+    agent_id = "agent-00000000000000000000000000000001"
+    manager, messenger = _manager_creating_chat(agent_id)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    thread, responses = _post_in_background(client, f"/api/chats/{agent_id}/message", {"message": "hello"})
+    wait_until_true(
+        lambda: manager._has_waiting_new_chat_sends(ChatId(agent_id)), timeout_seconds=5.0, what="the send waiting"
+    )
+    with manager._lock:
+        manager._mark_creation_failed_locked(ChatId(agent_id), "mngr create exited with code 3")
+    thread.join(timeout=10.0)
+
+    assert [response.status_code for response in responses] == [409]
+    assert responses[0].get_json()["detail"] == CREATE_FAILED_SEND_DETAIL
+    assert messenger.sent == []
 
 
 def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:

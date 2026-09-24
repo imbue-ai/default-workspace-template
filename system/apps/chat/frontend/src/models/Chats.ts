@@ -318,11 +318,22 @@ function settleRegistration(chatId: string, error: Error | null): void {
 }
 
 /**
+ * The reason a send to ``chatId`` cannot land, for a chat whose create has failed: nothing but a
+ * retry could ever start it. Null for any other chat, including one still being created, whose
+ * sends the chat app holds until its agent is up.
+ */
+export function getFailedCreateError(chatId: string): Error | null {
+  const provisional = getProvisionalChat(chatId);
+  if (getChatById(chatId) !== undefined || provisional?.phase !== "failed") return null;
+  return new Error(provisional.error ?? "The chat could not be started");
+}
+
+/**
  * Resolves once ``chatId`` is a chat the app lists: at once for one it already lists, and
  * for a chat still being created when its create lands. Rejects, with the reason, when the
  * create fails or the chat is discarded first -- at once for a chat whose create has already
- * failed, since nothing but a retry could ever land it. What a send typed into a chat that
- * does not exist yet waits on.
+ * failed, since nothing but a retry could ever land it. What a switch or a seeded chat's launch,
+ * which need the agent itself, wait on.
  *
  * A chat the app neither lists nor holds a provisional record for (destroyed while its page
  * was open, a stale URL) resolves at once too: no push is coming that could settle it, and the
