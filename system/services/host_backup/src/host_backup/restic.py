@@ -15,6 +15,13 @@ from pathlib import Path
 from typing import Final
 
 _RESTIC_TIMEOUT_SECONDS: Final[float] = 3600.0
+# Caps restic to one core and one file read at a time so a backup cannot starve
+# the workspace's agents and UI. `nice`/`ionice` cannot do this: gVisor, which
+# remote workspaces run under, accepts but ignores scheduling priorities.
+_RESOURCE_LIMIT_ENV: Final[Mapping[str, str]] = {
+    "GOMAXPROCS": "1",
+    "RESTIC_READ_CONCURRENCY": "1",
+}
 # Tags the minds backup restore stamps on its safety + restored-state snapshots
 # (kept in sync with the desktop client's restore script). The retention forget
 # preserves any snapshot carrying either so a recent "Restored from ..." timeline
@@ -52,9 +59,11 @@ def run_restic(
     *,
     env_overrides: Mapping[str, str],
     timeout_seconds: float = _RESTIC_TIMEOUT_SECONDS,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run `restic <args...>` with `env_overrides` merged onto `os.environ`."""
+    """Run `restic <args...>` under the resource limits, with `env_overrides` merged on top."""
     env = dict(os.environ)
+    env.update(_RESOURCE_LIMIT_ENV)
     env.update(env_overrides)
     return subprocess.run(
         ["restic", *args],
@@ -63,6 +72,7 @@ def run_restic(
         check=False,
         env=env,
         timeout=timeout_seconds,
+        cwd=cwd,
     )
 
 
@@ -98,11 +108,32 @@ def backup(
     tag: str,
     env_overrides: Mapping[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    """`restic backup --json <source> --tag <tag> [--exclude=<glob>...]`."""
-    args: list[str] = ["backup", "--json", str(source_path), "--tag", tag]
+    """`restic backup --json .` run inside `source_path`, so the snapshot holds its tree at the root.
+
+    restic skips re-reading a file only when the parent snapshot has a file at
+    the same path *inside the snapshot*, and an absolute source records every
+    component of it. outer_trigger reads each tick from a new
+    `<mount>/snapshots/<timestamp>/home`, so an absolute source never matches
+    the parent and every tick re-reads and re-hashes the whole tree.
+
+    The recorded path still changes every tick, so `--group-by ''` picks the
+    newest snapshot as the parent instead of looking for one with the same
+    path. `--ignore-inode` judges files by size and mtime alone, since a fresh
+    snapshot is not guaranteed to keep the inode numbers of the last one.
+    """
+    args: list[str] = [
+        "backup",
+        "--json",
+        ".",
+        "--group-by",
+        "",
+        "--ignore-inode",
+        "--tag",
+        tag,
+    ]
     for pattern in excludes:
         args.append(f"--exclude={pattern}")
-    return run_restic(tuple(args), env_overrides=env_overrides)
+    return run_restic(tuple(args), env_overrides=env_overrides, cwd=source_path)
 
 
 def forget(

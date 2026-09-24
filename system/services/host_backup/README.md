@@ -80,6 +80,20 @@ an encrypted restic repo on cheaper object storage.
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
   credentials, rustup's `settings.toml`) ride the backup.
+- Restic runs from inside the directory it reads and backs up `.`, so each
+  snapshot stores that tree at its root. restic only skips re-reading an
+  unchanged file when the previous snapshot holds it at the same path inside
+  the snapshot, and `outer_trigger` reads every tick from a new timestamped
+  path: with an absolute source, every tick re-read and re-hashed the whole
+  home tree. `--group-by ''` makes the newest snapshot the parent (the
+  recorded path still changes every tick), and `--ignore-inode` compares files
+  by size and mtime only. A restore reads the tree from `<snapshot>:/`;
+  snapshots taken before this change hold it under their recorded absolute
+  path instead.
+- Every restic command runs with `GOMAXPROCS=1` and
+  `RESTIC_READ_CONCURRENCY=1`, so a backup or prune uses one core and reads
+  one file at a time. This is the only lever that works everywhere: gVisor
+  (remote workspaces) ignores `nice`, and rejects `ionice` outright.
 - After every successful backup, `restic forget --group-by '' --keep-hourly N
   --keep-daily M --keep-weekly W --keep-monthly O` runs (cheap, index-only).
   Grouping is disabled because restic applies the keep-* policy per group and
