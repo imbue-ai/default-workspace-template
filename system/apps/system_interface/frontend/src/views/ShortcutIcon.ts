@@ -54,7 +54,7 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
       {
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
-          "rounded-xl bg-surface p-2 shadow-raised [&>svg]:size-full",
+          "rounded-(--desk-icon-radius) bg-surface p-2 shadow-raised [&>svg]:size-full",
       },
       m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
     ),
@@ -62,7 +62,7 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
       "span",
       {
         class:
-          "shortcut-label relative line-clamp-2 w-full rounded text-(length:--font-size-helper) leading-tight " +
+          "shortcut-label relative line-clamp-2 w-full rounded text-(length:--font-size-body) leading-tight " +
           "font-bold text-on-accent [text-shadow:var(--desk-shortcut-label-shadow)]",
       },
       label,

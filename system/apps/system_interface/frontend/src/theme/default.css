@@ -13,7 +13,7 @@
   --desk-cell-width: 96px;
   --desk-cell-height: 96px;
   --desk-grid-inset: 16px;
-  --desk-cell-gap: 6px;
+  --desk-cell-gap: 4px;
   --desk-window-min-width: 320px;
   --desk-window-min-height: 240px;
   --desk-title-min-visible: 120px;
@@ -28,7 +28,12 @@
   --desk-backdrop: var(--c-bg);
   --desk-default-wallpaper: url(/wallpapers/bundled/dawn);
   --desk-icon-size: 48px;
-  --desk-shortcut-label-shadow: 0 1px 1px rgb(0 0 0 / 0.85);
+  /* The icon tile's corner, as a fraction of the tile: an icon shown larger or smaller keeps
+     the same silhouette rather than growing a corner that is suddenly too tight or too round. */
+  --desk-icon-radius: calc(var(--desk-icon-size) * 0.32);
+  --desk-shortcut-label-shadow:
+    0 1px 7px rgb(0 0 0 / 0.4),
+    0 1px 2px rgb(0 0 0 / 0.4);
   --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;
