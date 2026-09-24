@@ -79,16 +79,23 @@ def test_new_refuses_a_start_page_that_is_not_http(monkeypatch: pytest.MonkeyPat
 
     response = runner.application.test_client().post("/new", json={"url": "ftp://example.com"})
 
+    # The reason rides under ``detail``, the key the shell's launch route passes on as the app's refusal.
     assert response.status_code == 400
-    assert "url" in response.get_json()["error"]
+    assert "url" in response.get_json()["detail"]
+    assert "error" not in response.get_json()
 
 
 def test_new_refuses_a_body_that_is_not_a_json_object_and_a_get(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
     client = runner.application.test_client()
 
-    assert client.post("/new", json=["https://example.com"]).status_code == 400
+    not_an_object = client.post("/new", json=["https://example.com"])
+    assert not_an_object.status_code == 400
+    assert "JSON object" in not_an_object.get_json()["detail"]
     assert client.post("/new", data="").status_code == 400
+    not_a_string = client.post("/new", json={"url": 3})
+    assert not_a_string.status_code == 400
+    assert "url" in not_a_string.get_json()["detail"]
     assert client.get("/new").status_code == 405
 
 

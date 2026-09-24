@@ -49,7 +49,8 @@ background agent, which is its own chat -- or the human).
   again when it was stopped, and answered as it is when it runs, with `url` opened
   as a new tab in front (an empty `url` opens nothing new, like no `url` at all; a
   `url` that is not an absolute `http(s)` URL is 400; 503 while Chromium is not
-  installed). `POST /browsers` with no name answers the same browser; with a name
+  installed; a refusal carries its reason as `{"detail"}`, which the shell passes on
+  to whoever ran the launch). `POST /browsers` with no name answers the same browser; with a name
   it is a create (409 for a duplicate or a full fleet). The shell opens a browser
   window at the launch path (`layout.py open browser`); everything else about a
   browser it learns from the page itself through the app contract. The `/browsers`
