@@ -16,6 +16,7 @@ import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/emb
 import { fetchWallpapers, wallpaperImageUrl } from "../model/api";
 import { launchPathOf } from "../model/launch";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
+import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -135,8 +136,13 @@ export function App(): m.Component<AppAttrs> {
     },
   });
 
-  /** Show ``next``'s menu against ``anchor``. */
+  /** Show ``next``'s menu against ``anchor``. A shortcut's menu selects the shortcut on the way:
+   *  the selection box is the only thing that says which icon the verbs are about, and a right
+   *  click (or a long press) reaches the menu without ever passing through a click that selects. */
   function openMenuAt(next: OpenMenu, anchor: MenuAnchor): void {
+    if (next.kind === "shortcut") {
+      selectedShortcutKey = shortcutKey(next.shortcut.target.app, next.shortcut.target.launch);
+    }
     openMenu = next;
     menu.open(anchor);
   }
