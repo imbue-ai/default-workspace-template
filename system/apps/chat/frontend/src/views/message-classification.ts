@@ -85,7 +85,7 @@ export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolea
 }
 
 /** True for a user_message that is a turn of the conversation (the registry's `isTurn`
- *  column): what fast mode's turn limit counts. */
+ *  column). */
 export function isTurnUserMessage(event: ClassifiableUserMessage): boolean {
   return KIND_SPEC[classifyUserMessage(event).kind].isTurn;
 }

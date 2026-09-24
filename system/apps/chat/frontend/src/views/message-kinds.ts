@@ -117,7 +117,11 @@ export interface KindSpec {
    * at it, so the work the agent resumes after it renders below it.
    */
   boundary: boolean;
-  /** Whether this message is a turn of the conversation: what fast mode's turn limit counts. */
+  /**
+   * Whether this message is a turn of the conversation -- an exchange the user can see: a
+   * message they sent, or a status line between turns -- rather than something injected into
+   * the agent's running work.
+   */
   isTurn: boolean;
   /** Exact, human-readable description of the net visual -- the contract. */
   netVisual: string;
