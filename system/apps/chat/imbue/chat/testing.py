@@ -90,6 +90,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
 from imbue.system_interface.server import create_application as create_shell_application
+from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
 from imbue.system_interface.testing import find_free_port
@@ -804,51 +805,6 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
     return fake_bin_dir
 
 
-# The chat app's registry row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list
-# at ``/`` and the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
-_CHAT_REGISTRY_ROW_TEMPLATE: Final[str] = """[[apps]]
-name = "chat"
-url = "{url}"
-label = ""
-display_name = "Chat"
-critical = true
-internal = false
-default_shortcut = {{ launch = "root", mode = "new" }}
-[[apps.launch_paths]]
-id = "root"
-label = "Chat"
-path = "/"
-[[apps.launch_paths]]
-id = "new"
-label = "New Chat"
-path = "/api/chats/intake"
-method = "POST"
-params = ["account_id", "message"]
-presets = {{ target = "new_chat" }}
-text_param = "message"
-[[apps.launch_paths]]
-id = "send"
-label = "Send to chat..."
-path = "/api/chats/intake"
-method = "POST"
-params = ["message"]
-presets = {{ target = "chat_selector" }}
-text_param = "message"
-[[apps.launch_paths]]
-id = "draft"
-label = "Draft into chat"
-path = "/api/chats/intake"
-method = "POST"
-params = ["message"]
-presets = {{ target = "current_chat", is_draft = "true" }}
-draft_param = "message"
-"""
-
-
-def chat_registry_row_toml(chat_url: str) -> str:
-    return _CHAT_REGISTRY_ROW_TEMPLATE.format(url=chat_url)
-
-
 @contextmanager
 def running_workspace(
     tmp_path: Path,
@@ -893,7 +849,33 @@ def running_workspace(
     fake_bin_dir = _write_fake_binaries(tmp_path)
 
     registry_path = tmp_path / "registry" / "apps.toml"
-    write_registry(registry_path, chat_registry_row_toml(chat_url))
+    # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
+    # the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    write_registry(
+        registry_path,
+        registry_row_toml(
+            "chat",
+            chat_url,
+            is_critical=True,
+            default_shortcut=("root", "new"),
+            display_name="Chat",
+            launch_paths=(
+                ("root", "Chat", "/"),
+                ("new", "New Chat", "/api/chats/intake"),
+                ("send", "Send to chat...", "/api/chats/intake"),
+                ("draft", "Draft into chat", "/api/chats/intake"),
+            ),
+            launch_params={"new": ("account_id", "message"), "send": ("message",), "draft": ("message",)},
+            launch_text_params={"new": "message", "send": "message"},
+            launch_draft_params={"draft": "message"},
+            launch_methods={"new": "POST", "send": "POST", "draft": "POST"},
+            launch_presets={
+                "new": {"target": "new_chat"},
+                "send": {"target": "chat_selector"},
+                "draft": {"target": "current_chat", "is_draft": "true"},
+            },
+        ),
+    )
 
     with (
         patch.dict(
