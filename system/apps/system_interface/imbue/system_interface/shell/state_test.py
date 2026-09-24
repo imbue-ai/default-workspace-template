@@ -250,7 +250,6 @@ def test_the_wallpapers_directory_is_absolute_however_the_workspace_root_is_name
     )
 
     assert built.wallpaper_files_directory == (tmp_path / "repo" / DEFAULT_WALLPAPER_FILES_DIRECTORY).resolve()
-    built_fields = {name: getattr(built, name) for name in ShellState.model_fields}
     with pytest.raises(ValidationError) as refused:
-        ShellState.model_validate({**built_fields, "wallpaper_files_directory": DEFAULT_WALLPAPER_FILES_DIRECTORY})
+        ShellState.model_validate({**dict(built), "wallpaper_files_directory": DEFAULT_WALLPAPER_FILES_DIRECTORY})
     assert str(DEFAULT_WALLPAPER_FILES_DIRECTORY) in str(refused.value)
