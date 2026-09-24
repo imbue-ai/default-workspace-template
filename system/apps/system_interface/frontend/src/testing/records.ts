@@ -26,7 +26,7 @@ function capitalized(name: string): string {
 
 /** An app ranked first whose free-text rows are GET launch paths, each at ``/<id>`` taking the typed text as
  *  ``message``: what the page-path bound applies to, unlike the chat-like app's POST rows. */
-export function getFreeTextAppRecord(name: string, launchIds: readonly string[]): AppRecord {
+export function getMethodFreeTextAppRecord(name: string, launchIds: readonly string[]): AppRecord {
   return appRecord(name, {
     launcher_rank: 1,
     launch_paths: launchIds.map((id) =>
