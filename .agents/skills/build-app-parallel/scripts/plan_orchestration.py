@@ -292,11 +292,22 @@ def render_node_task(
         if handoff_sections
         else "None. This node starts from the original request alone.\n"
     )
+    # Both paths sit in the node's own folder, and ``finish_report_path`` is the
+    # only one passed in, so the task file is derived from it rather than rebuilt
+    # from a run dir this function does not have.
+    task_file = finish_report_path.parent.parent / "task.md"
     return (
         f"---\nfinish_report_path: {finish_report_path}\n---\n\n"
         f"# Task: node {node_idx} of an app build\n\n"
-        f"Follow `{WORKER_RULES_REFERENCE}` for how to work in the shared build "
-        "folder and how to report back. It is part of this task.\n\n"
+        f"You are **node {node_idx}**. This file is your task. It is at "
+        f"`{task_file}`, and every path here -- including the "
+        "`finish_report_path` above -- is relative to the folder you are already "
+        "working in, so there is nothing to go looking for.\n\n"
+        f"Read `{WORKER_RULES_REFERENCE}` before you start: it is how you work "
+        "here and how you report back, and it is part of this task.\n\n"
+        "The other nodes' task files sit beside yours. They are not yours to "
+        "read -- what you need from the nodes you depend on is quoted below, in "
+        "their own words.\n\n"
         f"## Your subtask\n\n{node['subtask']}\n\n"
         "Do this subtask and nothing else. Other nodes are building the rest of "
         "the app, some of them in this folder right now.\n\n"
