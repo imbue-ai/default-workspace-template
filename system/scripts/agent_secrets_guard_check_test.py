@@ -53,12 +53,11 @@ _ALLOWED_COMMANDS = [
     # A command that never names the directory is not this guard's business.
     "cat data/.state/apps.toml",
     "echo secrets are in .secrets",
-    # mcpc reaches its own store; naming the variable without expanding it is not a read.
+    # mcpc reaches its own store.
     "mcpc",
     "mcpc @example tools-call search query:=invoices",
     "python3 system/scripts/with_secrets.py data/.secrets/example.env -- mcpc connect mcp-servers.json:example @example",
     "ls -la ~/.mcpc",
-    "grep -n MCPC_HOME_DIR .mngr/settings.toml",
 ]
 
 _BLOCKED_COMMANDS = [
@@ -85,11 +84,9 @@ _BLOCKED_COMMANDS = [
     "python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c 'cat data/.secrets/svc.env'",
     # A read inside an unparseable command is refused rather than waved through.
     "cat data/.secrets/svc.env 'unbalanced",
-    # mcpc's store is under the directory, whichever name reaches it.
+    # mcpc's store is under the directory, by either path.
     "cat ~/.mcpc/credentials.json",
     "jq . /home/user/.mcpc/credentials.json",
-    'cat "$MCPC_HOME_DIR/credentials.json"',
-    "cat ${MCPC_HOME_DIR}/credentials.json",
     "cd ~/.mcpc && cat credentials.json",
     "cat data/.secrets/mcpc/credentials.json",
 ]

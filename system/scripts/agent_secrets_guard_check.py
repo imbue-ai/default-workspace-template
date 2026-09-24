@@ -7,8 +7,8 @@ guiding stderr message to BLOCK. See the wrapper for the why.
 
 Two halves, one rule (policy P9): a value stored under ``data/.secrets/`` may
 reach a process only through ``with_secrets.py``. mcpc's store is
-``data/.secrets/mcpc/``, which ``~/.mcpc`` and ``$MCPC_HOME_DIR`` also name, so a
-mention of either counts as a mention of the directory.
+``data/.secrets/mcpc/``, which its ``~/.mcpc`` link also names, so a mention of
+the link counts as a mention of the directory.
 
 * A **shell** command (claude's and codex's ``Bash``, pi's ``bash``, the
   ``Bash`` payload the agy shim synthesises) is tokenized with the shared
@@ -50,12 +50,11 @@ from tk_command_parsing.parser import parse_command
 SECRETS_DIRECTORY = "data/.secrets"
 # The one file under the directory that holds no secret.
 _README_NAME = "README.md"
-# mcpc's store, under the directory, by the names that do not spell it out: the
-# ~/.mcpc link and the variable mcpc reads it from.
-MCPC_HOME_VARIABLE = "MCPC_HOME_DIR"
-_MCPC_STORE_RE = re.compile(r"(?:^|/)\.mcpc(?:/|$)|\$\{?" + MCPC_HOME_VARIABLE + r"\b")
+# mcpc's store, under the directory, by the name that does not spell it out: the
+# ~/.mcpc link.
+_MCPC_STORE_RE = re.compile(r"(?:^|/)\.mcpc(?:/|$)")
 # Substrings one of which every refused command contains, for the cheap early return.
-_STORE_MARKERS = (SECRETS_DIRECTORY, ".mcpc", MCPC_HOME_VARIABLE)
+_STORE_MARKERS = (SECRETS_DIRECTORY, ".mcpc")
 
 # The programs a shell segment may run while naming the directory. The wrapper is
 # how a value reaches a process; the request script names the directory in the
@@ -278,7 +277,7 @@ def _block_message(reason: str) -> str:
         "  python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>\n\n"
         "Listing the directory (`ls`) and deleting a file (`rm`) are allowed. To change "
         "a value, request it again with request_secret.py rather than editing the file. "
-        "mcpc's store (~/.mcpc, $MCPC_HOME_DIR) is data/.secrets/mcpc/: reach it only "
+        "mcpc's store (~/.mcpc) is data/.secrets/mcpc/: reach it only "
         "through the mcpc command (`mcpc` lists sessions, `mcpc @<name> logs` shows one's log). "
         "See the connect-external-service skill.\n"
     )

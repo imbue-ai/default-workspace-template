@@ -41,9 +41,9 @@ app, and from a scheduled job.
   holding one is named by its path.
 - **A session per server**, named `@<name>` after its entry. mcpc keeps it in a
   background process and brings it back on the next call after a restart.
-- **`MCPC_HOME_DIR`** points at `data/.secrets/mcpc/`, where mcpc keeps its
-  sessions, the OAuth sign-ins it holds, and the headers it sends. The secrets
-  guard covers the directory; reach it only through `mcpc`.
+- **`~/.mcpc`** links to `data/.secrets/mcpc/`, where mcpc keeps its sessions,
+  the OAuth sign-ins it holds, and the headers it sends. The secrets guard
+  covers the directory; reach it only through `mcpc`.
 
 **Check what is already connected first:** `mcpc` with no arguments lists every
 session and its state (`live`, `crashed`, `unauthorized`, ...). A `live` or

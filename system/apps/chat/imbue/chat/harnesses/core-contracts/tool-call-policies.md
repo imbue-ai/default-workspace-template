@@ -143,8 +143,8 @@ on such a file puts the value into a tool call, which defeats the point. The one
 reader is `system/scripts/with_secrets.py`, which puts the file's variables into a child
 process's environment and execs the command; `ls` and `rm` on the directory are allowed, and so
 is the request script, whose output names the path it will write. The directory's README is not
-a secret. mcpc's store is `data/.secrets/mcpc/`, so a mention of `~/.mcpc` (its link) or
-`$MCPC_HOME_DIR` counts as a mention of the directory.
+a secret. mcpc's store is `data/.secrets/mcpc/`, so a mention of `~/.mcpc` (its link) counts
+as a mention of the directory.
 
 Two halves: the shell half tokenises the command (a quoted rationale that mentions the
 directory stays inside one token) and unwraps `bash -c "..."`, so a supervisord program that

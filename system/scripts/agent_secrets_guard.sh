@@ -10,7 +10,7 @@
 # request script, whose output names the path it will write. Everything else that
 # names the directory -- `cat`, `source`, `sed`, `python3 -c`, a redirect, a Read
 # or Edit tool call on a file there -- is refused with the reason on stderr. mcpc's
-# store is data/.secrets/mcpc/, so ~/.mcpc and $MCPC_HOME_DIR name it too.
+# store is data/.secrets/mcpc/, so ~/.mcpc (its link) names it too.
 #
 # Unlike the shell-only guards, this one also polices the file tools, because a
 # `Read` of the file defeats the rule as surely as a `cat`. The whole hook payload
@@ -26,9 +26,9 @@ set -euo pipefail
 input=$(cat)
 
 # Cheap guard: every refused call names the directory (or mcpc's store inside it,
-# as ~/.mcpc or $MCPC_HOME_DIR) somewhere in its payload, so the overwhelming
-# majority of calls never pay for the checker.
-[[ "$input" == *".secrets"* || "$input" == *".mcpc"* || "$input" == *"MCPC_HOME_DIR"* ]] || exit 0
+# as ~/.mcpc) somewhere in its payload, so the overwhelming majority of calls
+# never pay for the checker.
+[[ "$input" == *".secrets"* || "$input" == *".mcpc"* ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 exec python3 "$script_dir/agent_secrets_guard_check.py" <<<"$input"

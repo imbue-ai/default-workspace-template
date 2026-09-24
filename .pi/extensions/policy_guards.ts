@@ -34,8 +34,8 @@ interface Checker {
 // claude and codex refuse: the host path or the request script for a filing, the
 // `tk`/`ticket` word for a step transition (`ticket` does not contain `tk`, so a
 // substring test would miss the spelling the checker and the shared parser both
-// accept), and the secrets directory (or mcpc's store in it, as `~/.mcpc` or
-// `$MCPC_HOME_DIR`) for a direct read of a secret file. A payload checker's `match`
+// accept), and the secrets directory (or mcpc's store in it, as `~/.mcpc`) for a
+// direct read of a secret file. A payload checker's `match`
 // runs against the serialized payload, a command checker's against the command.
 const CHECKERS: Checker[] = [
   {
@@ -44,7 +44,7 @@ const CHECKERS: Checker[] = [
     input: "command",
   },
   { script: join(SCRIPTS, "agent_tk_standalone_check.py"), match: /\b(tk|ticket)\b/, input: "command" },
-  { script: join(SCRIPTS, "agent_secrets_guard_check.py"), match: /\.secrets|\.mcpc|MCPC_HOME_DIR/, input: "payload" },
+  { script: join(SCRIPTS, "agent_secrets_guard_check.py"), match: /\.secrets|\.mcpc/, input: "payload" },
 ];
 
 /** Run one checker and return its refusal reason, or null when it allows the call.
