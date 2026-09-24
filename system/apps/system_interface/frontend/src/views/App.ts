@@ -47,6 +47,7 @@ import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog
 import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
+import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
@@ -557,8 +558,8 @@ export function App(): m.Component<AppAttrs> {
       desktop,
       wallpapers,
       isDeleting: dialog.isDeleting,
-      onSave: async (name, color, glyph, sharing, wallpaper) => {
-        await current.updateDesktopSettings(desktop.id, name, color, glyph, sharing);
+      onSave: async (name, color, glyph, wallpaper) => {
+        await current.updateDesktopSettings(desktop.id, name, color, glyph);
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
         settingsDialog = null;
       },
@@ -569,6 +570,16 @@ export function App(): m.Component<AppAttrs> {
       onCancel: () => {
         settingsDialog = null;
       },
+    });
+  }
+
+  function replacedDesktopNotice(current: DesktopStore): m.Children {
+    const replaced = current.getReplacedDesktop();
+    if (replaced === null) return null;
+    return m(ReplacedDesktopNotice, {
+      replacedDesktopName: replaced.replacedName,
+      seededDesktopName: replaced.seededName,
+      onDismiss: () => current.dismissReplacedDesktopNotice(),
     });
   }
 
@@ -791,6 +802,7 @@ export function App(): m.Component<AppAttrs> {
         }),
         menuRows === null ? null : menu.view(menuRows),
         settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+        replacedDesktopNotice(current),
         avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
       ]);
     },

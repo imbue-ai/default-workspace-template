@@ -19,3 +19,7 @@ in the mngr repo, `just pin-template-mngr` resolves a merged mngr commit to its
 public-mirror commit and rewrites every `rev` under `[tool.uv.sources]` here (all of
 them carry the same commit; `uv` refuses to mix commits across packages from one
 repo), relocks, and commits.
+
+A defect found in mngr is different from a change the template's own work needs:
+it goes in the report POST in `.agents/shared/references/report-built-in-issues.md`,
+per AGENTS.md's rule on built-in defects, since a ticket here never reaches mngr.

@@ -267,12 +267,11 @@ BODY_EOF
 
 Clear the previous pass's worker, which Step 6 leaves *stopped* (its transcript
 stays reachable for bug reports). A worker of that name in state `STOPPED` or
-`DONE` is destroyed (its `mngr/update-self` branch survives); one in any other
-state is still running -- a genuine conflict, resolved per the lease check in
-Step 1, never forced past. Plain `mngr` commands on purpose: this prose runs
-from the target's copy but launches with the workspace's own, possibly older,
-`create_worker.py` (`scripts/launcher_contract_test.py` pins what it may ask
-of it):
+`DONE` is destroyed; one in any other state is still running -- a genuine
+conflict, resolved per the lease check in Step 1, never forced past. Plain
+`mngr` and `git` commands on purpose: this prose runs from the target's copy
+but launches with the workspace's own, possibly older, `create_worker.py`
+(`scripts/launcher_contract_test.py` pins what it may ask of it):
 
 ```bash
 mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
@@ -280,6 +279,35 @@ mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
 
 ```bash
 mngr destroy update-self --force
+```
+
+Then clear the previous pass's `mngr/update-self` branch, whether or not a
+worker was listed: destroying a worker leaves its branch behind, and the launch
+below cannot create the worker while a branch of that name exists. First ask
+whether `HEAD` already has it -- exit 0 yes, 1 no, and a `Not a valid object
+name` error means there is no such branch and nothing to clear:
+
+```bash
+git merge-base --is-ancestor refs/heads/mngr/update-self HEAD
+```
+
+After a landed pass it does (a rollback is a revert commit on top of the
+merge), so delete it. `-D`, because that check is the safety check: `-d` asks
+the branch's pushed copy instead of `HEAD` once GitHub sync has pushed it:
+
+```bash
+git branch -D mngr/update-self
+```
+
+Exit 1 means the branch holds commits `HEAD` does not have. Keep them under an
+archive name instead (note the name it prints). The results message then
+carries a plain caveat that unfinished work from an earlier update attempt was
+set aside and kept, and can be recovered on request; the archive name itself
+goes in the tracking ticket's close summary, not the message:
+
+```bash
+ARCHIVE="archive/update-self-$(date +%Y%m%d-%H%M%S)"
+git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
@@ -497,6 +525,17 @@ resumes), and how to honor a rollback request are in
 - **Rebuild-only flags** -- surface as needing a workspace recreate; never
   imply they are live.
 
+### 5d. Escalate the built-in defects this pass found
+
+Before composing the results message, collect every finding the worker labelled
+a `submit-upstream-changes` candidate, plus any other defect in built-in code
+you hit this pass (a failing built-in test, a step of this flow that broke and
+had to be worked around). Escalate them together as AGENTS.md's "Updates"
+section describes -- one report via
+`.agents/shared/references/report-built-in-issues.md`, or
+`submit-upstream-changes` for a template fix -- or name each in the results
+message with the submission offered.
+
 Then compose the results message per `references/results-message.md`.
 
 ## Migration-required updates
@@ -559,7 +598,8 @@ Release the leases and close the ticket last, each as its own tool call: `tk
 close` the `editing service system_interface` lease if 5b took one, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
-merged and applied."`.
+merged and applied."`, adding the `archive/update-self-<timestamp>` name when
+Step 3b set a previous branch aside.
 
 ## To push local improvements back upstream
 

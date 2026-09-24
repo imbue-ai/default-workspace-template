@@ -324,10 +324,15 @@ def make_two_member_chat_record(first_id: str, second_id: str, first_event_count
 
 
 def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
-    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's."""
+    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's.
+
+    One line per invocation, whatever the arguments hold: a newline inside an argument (a
+    ``--message`` carrying a whole conversation) is written as a space, so a reader can still
+    count the calls and split a line into its tokens.
+    """
     log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
-    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
+    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
     script.chmod(0o755)
     return str(script), log_path
 
@@ -716,7 +721,13 @@ class RunningWorkspace(FrozenModel):
 
 
 def seed_failed_chat(
-    agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1", message: str = ""
+    agent_manager: AgentManager,
+    chat_id: ChatId,
+    name: str,
+    account_id: str = "acct-1",
+    message: str = "",
+    labels: Mapping[str, str] | None = None,
+    is_installation_check_skipped: bool = False,
 ) -> ProvisionalChat:
     """Plant a provisional chat whose create failed, as the manager holds one after ``mngr create`` exits non-zero:
     what the page's "Try again" relaunches under its id."""
@@ -725,6 +736,8 @@ def seed_failed_chat(
         name=name,
         account_id=account_id,
         message=message,
+        labels=dict(labels or {}),
+        is_installation_check_skipped=is_installation_check_skipped,
         phase=ProvisionalChatPhase.FAILED,
         error="mngr create exited with code 3",
     )
