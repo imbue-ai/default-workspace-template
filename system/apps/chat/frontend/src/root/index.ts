@@ -1,17 +1,17 @@
 /**
  * The chat root: the chat list beside an inner frame of the selected chat, served by the chat
- * app at ``/`` (``/?chat=<id>`` selects) and ``/new`` (the ``new`` launch path: a chat just
- * created and selected). See docs/system/blueprint/desktop-interface/plan-desktop-interface.md
- * section 9.1.
+ * app at ``/`` (``/?chat=<id>`` selects). See docs/system/blueprint/desktop-interface/plan-desktop-interface.md
+ * section 9.1 and docs/system/blueprint/post-launch-paths/plan-post-launch-paths.md section 3.6.
  *
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
- * title as its location, handles ``shell:navigate`` by changing the selection (a ``draft`` in the
- * path goes, unsent, into a chat's composer; the ``send`` launch path opens the picker over the
- * chats and sends the text to the one picked), and drives its
- * inner pages directly (they share an origin) with the shell's handshake and its shown and
- * hidden states, so each page's presence reports key on the chat it shows. The inner pages'
- * own ``minds:``, ``shell:focused``, and sub-agent ``shell:open`` messages go up through
- * ``relay.ts``; a page asking for a sibling chat is answered here, by selecting it.
+ * title as its location, handles ``shell:navigate`` by changing the selection, applies the
+ * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
+ * chat through the picker, or a first message that launches a chat through the provider
+ * chooser) exactly once and then reports the selection alone, and drives its inner pages
+ * directly (they share an origin) with the shell's handshake and its shown and hidden states,
+ * so each page's presence reports key on the chat it shows. The inner pages' own ``minds:``,
+ * ``shell:focused``, and sub-agent ``shell:open`` messages go up through ``relay.ts``; a page
+ * asking for a sibling chat is answered here, by selecting it.
  */
 
 import m from "mithril";
@@ -21,14 +21,20 @@ import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/ap
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import {
+  PendingIntakeGoneError,
   addChatsUpdatedListener,
-  removeChatsUpdatedListener,
+  applyPendingIntake,
   createChat,
+  discardPendingIntake,
+  fetchPendingIntake,
   getChatById,
   getChats,
   getProvisionalChats,
   initChats,
+  launchChat,
+  removeChatsUpdatedListener,
 } from "../models/Chats";
+import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   closeProviderChooser,
   getSelectedAccount,
@@ -37,24 +43,15 @@ import {
   openProviderChooser,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
-import { sendMessage } from "../models/Response";
 import { ChatRail } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
-import { SendPicker, pickableRows } from "./SendPicker";
+import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
-import { groupedRows, mostRecentChatId, rowsFromSnapshots } from "./rows";
+import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
-import {
-  draftFromSearch,
-  isNewChatPath,
-  isSendPath,
-  newChatParamsFromSearch,
-  rootPathFor,
-  selectionFromSearch,
-  sendTextFromSearch,
-} from "./selection";
+import { intakeTokenFromSearch, rootPathFor, selectionFromSearch } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
@@ -67,8 +64,8 @@ let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
 let isRootShown = true;
 let pool: InnerFramePool | null = null;
-// The text the ``send`` launch path handed the root, while its picker is open; null otherwise.
-let pendingSendText: string | null = null;
+// A held intake whose chat the user has to pick, while its picker is open; null otherwise.
+let pendingPick: { token: string; intake: PendingIntake } | null = null;
 // The chats started from this root: on top of the list until their first message.
 const startedHere = new Set<string>();
 const compactQuery = window.matchMedia(`(max-width: ${COMPACT_MAX_WIDTH_PX}px)`);
@@ -105,27 +102,24 @@ function select(chatId: string | null): void {
   m.redraw();
 }
 
-async function createAndSelect(accountId: string, message: string, then: (chatId: string) => void): Promise<void> {
+async function createAndSelect(accountId: string): Promise<void> {
   try {
-    const created = await createChat("", accountId, message);
+    const created = await createChat("", accountId);
     startedHere.add(created.chatId);
     select(created.chatId);
-    then(created.chatId);
   } catch (error) {
     alert(`Failed to create chat: ${(error as Error).message}`);
   }
 }
 
-/** Start a new chat: on the account the user picked, or after a sign-in when nothing is signed in; ``then`` runs
- *  with the chat once it is selected. */
-function startNewChat(accountId: string, message: string, then: (chatId: string) => void = () => undefined): void {
-  if (accountId !== "" || getSelectedAccount() !== null) {
-    void createAndSelect(accountId !== "" ? accountId : (getSelectedAccount()?.id ?? ""), message, then);
+/** The New chat button: a chat on the selected account, or after a sign-in when nothing is signed in. */
+function startNewChat(): void {
+  const account = getSelectedAccount();
+  if (account !== null) {
+    void createAndSelect(account.id);
     return;
   }
-  openProviderChooser({
-    onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId, message, then),
-  });
+  openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
 }
 
 /** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
@@ -135,66 +129,82 @@ function draftInto(chatId: string, text: string): void {
   prependToComposer(chatId, text);
 }
 
-/** The root's ``draft`` param (the desktop's "Design your own..."): the text goes to the composer of the chat the
- *  URL selects, else the shown one, else the most recently active one, else a chat created for it; the chat is
- *  selected and shown, and nothing is sent. The URL the root then reports carries the selection alone, so a reload
- *  does not draft again. */
-function takeDraft(text: string, requestedChatId: string | null): void {
-  // The shell holds the draft path as this window's location until the root reports another, so the
-  // selection goes up even when it is the one already reported.
-  reportedLocation = null;
-  const rows = rowsFromSnapshots(getChats(), getProvisionalChats());
-  const listed = new Set(rows.map((row) => row.chatId));
-  const chatId =
-    requestedChatId !== null && listed.has(requestedChatId)
-      ? requestedChatId
-      : selectedChatId !== null && listed.has(selectedChatId)
-        ? selectedChatId
-        : mostRecentChatId(rows, startedHere);
-  if (chatId === null) {
-    startNewChat("", "", (created) => draftInto(created, text));
+/** Launch a chat awaiting its first send with ``text`` (an intake that arrived with nothing signed in): on the
+ *  signed-in account when one has appeared meanwhile, else through the provider chooser; a dismissed chooser
+ *  leaves the text in the composer, where the next send offers the chooser again. */
+function launchWithFirstMessage(chatId: string, text: string): void {
+  const account = getSelectedAccount();
+  if (account !== null) {
+    launchChat(chatId, account.id, text).catch((error: unknown) => {
+      alert(`Failed to start the chat: ${(error as Error).message}`);
+      draftInto(chatId, text);
+    });
     return;
   }
-  select(chatId);
-  draftInto(chatId, text);
-}
-
-/** The ``send`` launch path (launcher-and-getting-started plan section 4.5): with one chat to send to, the text goes
- *  there at once; with more, the picker opens over the list with the text, and picking a chat sends the text there
- *  through the ordinary send and selects it, while dismissing reports the selection alone. With no chat at all the
- *  text starts a new one, and an empty text is a no-op that reports the selection. Either way the window's stored
- *  path goes back to the selection, so a reload sends nothing again. */
-function takeSend(text: string): void {
-  reportedLocation = null;
-  if (text === "") {
-    select(selectedChatId);
-    return;
-  }
-  const targets = pickableRows(rowsFromSnapshots(getChats(), getProvisionalChats()), "");
-  if (targets.length === 0) {
-    startNewChat("", text);
-    return;
-  }
-  pendingSendText = text;
-  if (targets.length === 1) {
-    sendPendingTo(targets[0].chatId);
-    return;
-  }
-  m.redraw();
-}
-
-function sendPendingTo(chatId: string): void {
-  const text = pendingSendText;
-  pendingSendText = null;
-  if (text === null) return;
-  select(chatId);
-  sendMessage(chatId, text).catch((error: unknown) => {
-    alert(`Failed to send the message: ${(error as Error).message}`);
+  openProviderChooser({
+    onSignedIn: (accountId) =>
+      void launchChat(chatId, accountId, text).catch((error: unknown) => {
+        alert(`Failed to start the chat: ${(error as Error).message}`);
+        draftInto(chatId, text);
+      }),
+    onDismissed: () => draftInto(chatId, text),
   });
 }
 
-function dismissSend(): void {
-  pendingSendText = null;
+/** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
+ *  goes into its composer, a first message launches it. */
+function takeApplied(applied: AppliedIntake): void {
+  startedHere.add(applied.chatId);
+  select(applied.chatId);
+  if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
+  if (applied.firstMessage !== null) launchWithFirstMessage(applied.chatId, applied.firstMessage);
+}
+
+/** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client
+ *  applied it, or it expired) leaves the selection as it stands. */
+async function applyIntake(token: string, pickedChatId: string | null): Promise<void> {
+  try {
+    takeApplied(await applyPendingIntake(token, pickedChatId));
+  } catch (error) {
+    if (!(error instanceof PendingIntakeGoneError)) alert(`Could not take the message: ${(error as Error).message}`);
+    select(selectedChatId);
+  }
+}
+
+/** The ``intake`` the root's URL carries: fetched, then applied at once, or offered through the picker when the
+ *  chat is the user's to choose. Whatever happens, the root reports the selection alone afterwards, so the
+ *  window's stored path drops the token and a reload applies nothing again. */
+async function takeIntake(token: string, requestedChatId: string | null): Promise<void> {
+  // The shell holds the token path as this window's location until the root reports another, so the selection
+  // goes up even when it is the one already reported.
+  reportedLocation = null;
+  let intake: PendingIntake;
+  try {
+    intake = await fetchPendingIntake(token);
+  } catch (error) {
+    if (!(error instanceof PendingIntakeGoneError)) alert(`Could not read the message: ${(error as Error).message}`);
+    select(requestedChatId);
+    return;
+  }
+  if (intake.needsPick) {
+    pendingPick = { token, intake };
+    select(requestedChatId);
+    return;
+  }
+  await applyIntake(token, null);
+}
+
+function pickFor(chatId: string): void {
+  const pick = pendingPick;
+  pendingPick = null;
+  if (pick === null) return;
+  void applyIntake(pick.token, chatId);
+}
+
+function dismissPick(): void {
+  const pick = pendingPick;
+  pendingPick = null;
+  if (pick !== null) void discardPendingIntake(pick.token);
   select(selectedChatId);
 }
 
@@ -262,9 +272,9 @@ const ChatRoot: m.Component = {
                 : null,
             ]),
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
-        pendingSendText === null
+        pendingPick === null
           ? null
-          : m(SendPicker, { rows, text: pendingSendText, onPick: sendPendingTo, onDismiss: dismissSend }),
+          : m(SendPicker, { rows, text: pendingPick.intake.message, onPick: pickFor, onDismiss: dismissPick }),
       ],
     );
   },
@@ -276,11 +286,21 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     selectedChatId,
     isCompact,
     onPick: (chatId: string) => select(chatId),
-    onNew: () => startNewChat("", ""),
+    onNew: () => startNewChat(),
   };
 }
 
-function connectRootToShell(): void {
+/** Run ``take`` once the chats have arrived (which chat an intake lands on is decided against them) and the
+ *  accounts have loaded (a launch before they load would run on none). */
+function onceListedAndSignedIn(accountsLoaded: Promise<void>, take: () => void): void {
+  const onceListed = (): void => {
+    removeChatsUpdatedListener(onceListed);
+    void accountsLoaded.then(take);
+  };
+  addChatsUpdatedListener(onceListed);
+}
+
+function connectRootToShell(accountsLoaded: Promise<void>): void {
   connection = connectToShell({
     capabilities: { navigation: true },
     onHandshake: (received) => {
@@ -305,21 +325,13 @@ function connectRootToShell(): void {
     },
     onNavigate: (path) => {
       const target = new URL(path, window.location.origin);
-      if (isNewChatPath(target.pathname, "")) {
-        const params = newChatParamsFromSearch(target.search);
-        startNewChat(params.accountId, params.message);
+      const token = intakeTokenFromSearch(target.search);
+      const requested = selectionFromSearch(target.search);
+      if (token !== null) {
+        void accountsLoaded.then(() => takeIntake(token, requested));
         return;
       }
-      if (isSendPath(target.pathname, "")) {
-        takeSend(sendTextFromSearch(target.search));
-        return;
-      }
-      const draft = draftFromSearch(target.search);
-      if (draft !== "") {
-        takeDraft(draft, selectionFromSearch(target.search));
-        return;
-      }
-      select(selectionFromSearch(target.search));
+      select(requested);
     },
   });
   // Hidden until the shell says shown: the root can load into a background tab.
@@ -333,44 +345,20 @@ function bootstrap(): void {
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
   compactQuery.addEventListener("change", () => m.redraw());
-  connectRootToShell();
+  connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     (chatId) => select(chatId),
   );
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
-  const isNew = isNewChatPath(window.location.pathname, getBasePath());
-  const isSend = isSendPath(window.location.pathname, getBasePath());
-  selectedChatId = isNew || isSend ? null : selectionFromSearch(window.location.search);
+  selectedChatId = selectionFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
   reportLocation();
-  if (isNew) {
-    const params = newChatParamsFromSearch(window.location.search);
-    // Accounts decide where the chat starts; a create before they load would run on none.
-    void accountsLoaded.then(() => startNewChat(params.accountId, params.message));
-    return;
-  }
-  if (isSend) {
-    // The chats decide where the text goes (opened before they load, the picker would offer nothing), and with none
-    // the new chat it starts needs the accounts, as a create does.
-    const text = sendTextFromSearch(window.location.search);
-    const onceListedForSend = (): void => {
-      removeChatsUpdatedListener(onceListedForSend);
-      void accountsLoaded.then(() => takeSend(text));
-    };
-    addChatsUpdatedListener(onceListedForSend);
-    return;
-  }
-  const draft = draftFromSearch(window.location.search);
-  if (draft !== "") {
-    // The chats decide which composer takes it; a draft before they load would always start a new chat.
+  const token = intakeTokenFromSearch(window.location.search);
+  if (token !== null) {
     const requested = selectedChatId;
-    const onceListed = (): void => {
-      removeChatsUpdatedListener(onceListed);
-      void accountsLoaded.then(() => takeDraft(draft, requested));
-    };
-    addChatsUpdatedListener(onceListed);
+    onceListedAndSignedIn(accountsLoaded, () => void takeIntake(token, requested));
   }
 }
 

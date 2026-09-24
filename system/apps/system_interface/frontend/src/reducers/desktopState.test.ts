@@ -144,7 +144,7 @@ describe("the window verbs", () => {
 
 describe("opens and closes this client made", () => {
   it("adds the window to the desktop and places it on top without dirtying the layout", () => {
-    const opened = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const opened = windowRecord("win-3", "docs", "/new");
     const state = reduceDesktopState(loaded(), {
       type: "window_opened_here",
       desktopId: "home",
@@ -163,7 +163,7 @@ describe("opens and closes this client made", () => {
   });
 
   it("keeps the stored placement when the shell's layout landed before the open's answer", () => {
-    const opened = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const opened = windowRecord("win-3", "docs", "/new");
     const stored = placementRecord("win-3", { frame: cascadeFrame(1) });
     const before = reduceDesktopState(loaded(), {
       type: "layout_loaded",

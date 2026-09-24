@@ -1,8 +1,9 @@
 /**
- * The send picker (launcher-and-getting-started plan section 4.5): what the ``send`` launch path opens over the
- * chat root's list. A typeahead over every chat's title with one row highlighted: Enter or a click sends the text
- * to that chat (the root's business, reported through ``onPick``), Escape or a press outside drops it. A chat that
- * is not an agent yet cannot take a message, so it is not offered.
+ * The send picker (post-launch-paths plan section 3.6): what the chat root opens over its list for a held intake
+ * whose chat is the user's to choose (the launcher's "Send to chat..." with several chats). A typeahead over every
+ * chat's title with one row highlighted: Enter or a click applies the intake on that chat (the root's business,
+ * reported through ``onPick``), Escape or a press outside drops it. A chat that is not an agent yet cannot take a
+ * message, so it is not offered.
  */
 
 import m from "mithril";

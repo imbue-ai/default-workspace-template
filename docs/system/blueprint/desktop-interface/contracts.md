@@ -29,7 +29,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `priority` | string | no | `"user"` | A memory band name or `user`. |
 | `program` | string | no | `name` | The supervisord program. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
-| `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?, text_param?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `params` is an optional array of `{name, label, required}` naming query parameters the shell may append; `text_param` optionally names one of them as the param the launcher fills with typed text, which makes the launch path a free-text row of the launcher (launcher-and-getting-started plan section 3.1). |
+| `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, method?, params?, presets?, text_param?, draft_param?}`; `path` is rooted with one slash (never `//`), at most 2048 characters, carries no query string or fragment, and holds nothing a URL would escape (RFC 3986 path characters only: alphanumerics, `-._~`, the sub-delimiters, `:@`, and `/`); `method` is `GET` (the default: the page itself, with the params as its query) or `POST` (the shell posts the params and answers with the page to open; post-launch-paths plan section 3); `params` is an optional array of `{name, label, required}` naming the parameters; `presets` is an optional table of fixed string name-value pairs sent with every launch, whose names may not repeat a param's; `text_param` optionally names one of the params as the one the launcher fills with typed text, and `draft_param` as the one it fills with text to be drafted, either of which makes the launch path a free-text row of the launcher (launcher-and-getting-started plan section 3.1); at most one of the two. The names `client_id`, `desktop_id`, and `window_path` are the shell's envelope and are refused as param or preset names. |
 | `default_shortcut` | table | no | absent | `{launch = "<id>", mode = "focus" \| "new"}`; `launch` names a declared launch path, or `open` when the app declares none. |
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
 | `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
@@ -45,12 +45,12 @@ Built-in manifests:
 | App | `critical` | `priority` | `launcher_rank` | `default_shortcut` | `launch_paths` |
 |---|---|---|---|---|---|
 | `system_interface` | true | `system_interface` | | none | none; `internal = true` |
-| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, params `draft` optional); `new` ("New Chat", `/new`, params `account_id` optional, `message` optional, `text_param = "message"`); `send` ("Send to chat...", `/send`, param `message` optional, `text_param = "message"`) |
+| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, no params); `new` ("New Chat", POST `/api/chats/intake`, params `account_id` optional, `message` optional, presets `target = "new_chat"`, `text_param = "message"`); `send` ("Send to chat...", POST `/api/chats/intake`, param `message` optional, presets `target = "chat_selector"`, `text_param = "message"`); `draft` ("Draft into chat", POST `/api/chats/intake`, param `message` optional, presets `target = "current_chat"`, `is_draft = "true"`, `draft_param = "message"`) |
 | `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
-| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", `/new`, params `workdir` optional) |
+| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", POST `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, params `path` optional) |
-| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", `/new`, params `url` optional) |
+| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
 The critical built-ins declare their `[preview]` tables (the workspace app model's contracts section 2 tabulates them): the shell boots `system-interface --preview --state-dir {copy:state}` over a copy of `data/.state/system_interface` with `MINDS_APPS_FILE = "{registry}"`; the chat `chat-app --secondary` over a copy of `data/.apps/chat` (`CHAT_DATA_DIR`), opening on `/?chat={key}`; the terminal `terminal-app --no-register` over a copy of `data/.apps/terminal` and a `{scratch}` state dir with `MINDS_APPS_FILE = "{registry}"`, booted `--with terminal-pty`; and the pty `terminal-pty --no-register` over a `{scratch}` state dir, probed at `/`. Getting Started, though not critical, declares one too, since its entry point registers itself: `getting-started --no-register --state-dir {scratch}/state`, which registers nothing and opens no first-visit window.
@@ -58,7 +58,7 @@ The critical built-ins declare their `[preview]` tables (the workspace app model
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, params?, text_param?}` with `params` as the array of names), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?}` with `params` as the array of names, `method` written only when it is `POST`, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -82,7 +82,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
         {"target": {"kind": "launch", "app": "chat", "launch": "new"}, "mode": "new", "cell": {"column": 0, "row": 0}}
       ],
       "windows": [
-        {"id": "win-0123456789abcdef", "app": "chat", "path": "/?chat=agent-3f2a", "title": "Plan the launch", "opened_at": "2026-09-19T14:11:02.824Z", "is_settling": false, "is_pinned": false, "scope": "linked"}
+        {"id": "win-0123456789abcdef", "app": "chat", "path": "/?chat=agent-3f2a", "title": "Plan the launch", "opened_at": "2026-09-19T14:11:02.824Z", "is_pinned": false, "scope": "linked"}
       ]
     }
   ]
@@ -92,8 +92,8 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 - `desktops` is in creation order; the first is the fallback desktop.
 - `color` is `#RRGGBB`; `glyph` is `0..9`; `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
 - `shortcuts`: `target.kind` is `launch` (the only V1 kind); at most one shortcut per `(app, launch)`; `cell.column` and `cell.row` are integers at least 0.
-- `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_settling` is true from an open at a launch path until the first location report, and false for an open at an explicit path; `is_pinned` (default `false`) marks the app's pinned window, and `scope` (default `linked`) is `linked` or `independent` (pinned-taskbar-entries plan section 3.2). An independent window's `path` stays its home path.
-- A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read. A desktop that still carries the retired `sharing` key is read with the key dropped.
+- `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_pinned` (default `false`) marks the app's pinned window, and `scope` (default `linked`) is `linked` or `independent` (pinned-taskbar-entries plan section 3.2). An independent window's `path` stays its home path.
+- A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read. A desktop that still carries the retired `sharing` key is read with the key dropped, and so is a window that still carries the retired `is_settling` key.
 
 ### 4.2 `placements/<desktop_id>/<client_id>.json`
 
@@ -173,13 +173,13 @@ A preview shell (`system-interface --preview`, booted by `preview_app.py` over a
 
 | Route | Request | Response |
 |---|---|---|
-| `POST /api/desktops/<id>/windows` | `{"app", "path", "client_id", "if_present": "focus" \| "new", "launch": "<launch path id>"?}` | `201 {"window", "is_new": true}` for an open; `200 {"window", "is_new": false}` when `if_present` is `focus` and a window of that app at that path exists on the desktop; `400` for an unregistered app or a bad path. `launch` marks the path as a launch path, which sets `is_settling` |
+| `POST /api/desktops/<id>/windows` | `{"app", "path", "client_id", "if_present": "focus" \| "new"}` | `201 {"window", "is_new": true}` for an open; `200 {"window", "is_new": false}` when `if_present` is `focus` and a window of that app at that path exists on the desktop; `400` for an unregistered app or a bad path |
+| `POST /api/desktops/<id>/launch` | `{"app", "launch", "params"?, "client_id", "target": {"kind": "new" \| "focus" \| "window", "window_id"?}, "minimized"?}` | Runs a launch path (post-launch-paths plan section 5): the page is the launch path with its presets and `params` as the query for a GET, and for a POST what the app answers to `{presets..., params..., "client_id", "desktop_id", "window_path"}` posted to it. `new` and `focus` then open as the windows route does (`201`/`200 {"window", "path", "is_new"}`); `window` points the named window at the page as a location report for `client_id` would (`200`, `is_new` false), with the window's path as that client sees it as `window_path`. `400` for an unregistered app, an unknown launch path, an undeclared param, a window of another app, or a launch the app refused (a 4xx from it: `<app> refused the launch: <detail>`); `502` when the app could not be asked or answered no path |
 | `POST /api/desktops/<id>/windows/<window_id>/close` | | `204`; idempotent; `409` for a pinned window |
 | `POST /api/desktops/<id>/windows/<window_id>/location` | `{"path", "title", "client_id"}` | `200 window`; `404` unknown window; `400` bad path or title. For an independent window the report is stored for `client_id` alone and the answer's `path` and `title` are that client's |
 
 An open with `is_new` writes the requesting client's placement (section 10, cascade) on top of its stack and broadcasts `placements_updated` for that client, and `desktops_updated` for everyone.
 An open answered with `is_new: false` restores and raises the existing window in the requesting client's layout, writes it, and broadcasts `placements_updated` for that client.
-A location report on a settling window clears `is_settling`.
 A close drops the window from every layout file of the desktop and broadcasts `desktops_updated` and one `placements_updated` per rewritten layout.
 After that, when the window's app registered a `window_closed_path`, the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's `url` plus that path from a thread of its own, with a 2 second timeout, and neither waits for nor acts on the answer; a deleted desktop's windows are posted the same way. An app may take the posted `path` as proof that a window showed the resource it names (the terminal and the browser mark it window-seen before sweeping), while reading what is shown now from `GET /api/desktops`.
 A location that changes nothing writes and broadcasts nothing.
@@ -209,7 +209,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...], "text_param"}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`, and each launch path's `text_param` the declared param name or `null`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "method", "params": [name, ...], "presets": {name: value, ...}, "text_param", "draft_param"}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`, and each launch path's `text_param` and `draft_param` the declared param name or `null`.
 
 The arrival is what a shell page posts first, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2). The page then reads `GET /api/inventory` once, taking the desktops (the seeded one among them), the apps, and its own client record from that one answer, so it knows every app before it draws a shortcut and needs nothing from the socket to show a complete desktop; the socket's `apps_updated` and `desktops_updated` (section 6) carry every change from then on. Until the inventory answers, a shortcut whose app the page cannot look up draws as connecting (`data-connecting="true"`) and running it says the page is still connecting, rather than that the app is not registered.
 `desktop_id` is where the client lands (`null` while the workspace has no desktop): for the owner and for a request with no `user_id`, the client's stored desktop when it exists, else the first desktop (section 4.3); for a visiting user (`owner` false with a `user_id`), the desktop made for them.
@@ -261,7 +261,6 @@ Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavig
 
 Following rule: after every `desktops_updated`, for every live page of a window whose stored `path` differs from that page's last reported path, the shell sends `shell:navigate` when the page declared navigation, else reassigns the iframe `src`, and records the stored path as that page's last report at once, so a second broadcast before the page lands does not navigate it again.
 A page's own report never navigates it.
-A client other than the opener creates no page for a window while `is_settling` is true.
 
 Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, re-posts the inner page's `shell:focused` as its own, and forwards the inner page's `shell:open` of a sub-agent view, from one module named in `test_embed_ratchets.py`'s allowlist.
 A `shell:open` whose path is the root's own (`/` or `/?chat=<id>`) it answers itself, by selecting that chat in place, rather than asking the shell for a second root window.
@@ -279,7 +278,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `context` | | read-only; every client's recent activity (`{"ok", "clients"}`) |
 | `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
-| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the launch path (`launch`, else the app's `default_shortcut.launch`, else its first) with `params` as the query string; a window of the app at that path is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
+| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the page of the launch path (`launch`, else the app's `default_shortcut.launch`, else its first): a GET launch path with `params` as the query string, a POST launch path posted `params` for the page it answers (section 5.3, with the targeted client as `client_id`, or none when the open is unplaced); a window of the app at that page is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
 | `place` | `window`, `zone` (`left`, `right`, `maximized`) or `frame` (`x,y,width,height`) | set the state, or the frame with state `NORMAL` |
@@ -297,7 +296,7 @@ Exit codes are `0`, `1`, `3`.
 
 ## 9. Deep links
 
-Honoured by the shell on page load for the requesting client, then stripped: `?desktop=<id>` switches to it; `&open=<app>:<path>` opens (or focuses) a window there; `&launch=<app>:<launch_id>` runs a launch path.
+Honoured by the shell on page load for the requesting client, then stripped: `?desktop=<id>` switches to it; `&open=<app>:<path>` opens (or focuses) a window there; `&launch=<app>:<launch_id>` runs a launch path through the launch route (section 5.3) with a `new` target.
 Unknown or stale targets are ignored silently.
 
 ## 10. Geometry rules and constants

@@ -30,7 +30,6 @@ const DESKTOP_WIRE = {
       path: "/?doc=1",
       title: "Plan",
       opened_at: "2026-09-19T14:11:02.824Z",
-      is_settling: false,
     },
   ],
 };

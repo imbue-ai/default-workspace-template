@@ -17,7 +17,9 @@ format. In brief:
 - An **app** is a supervised program with a manifest (`app.toml`), a row in
   the registry (`data/.state/apps.toml`), and its own browser origin. It is the
   unit you install, stop, start, and share. Its manifest declares **launch
-  paths** (`new` at `/new`, say, with documented query params); an app that
+  paths** with documented params: a GET launch path is a page opened with
+  the params as its query, a POST launch path (`new` at `/new`, say) is
+  posted the params by the shell and answers the page to open; an app that
   declares none offers `open` at its root.
 - A **desktop** is a named, shared collection of windows and shortcuts over a
   wallpaper, with a colour and a glyph. Everyone sees the same desktops and
@@ -226,7 +228,7 @@ arrival the shell makes them a desktop named after them (their profile's
 display name, else the email's local part, else `Guest`, made unique; the
 profile is resolved before the arrival takes the state lock), seeded from the first
 desktop: its shortcuts, its wallpaper, and a new window at the path of each
-settled window open there (one still mid-launch is skipped). It is remembered
+window open there. It is remembered
 in `users.json`, every later client of that user lands on it, a returning
 client keeps the desktop it was on (when it last arrived as that same user),
 and if it has been deleted the next arrival seeds another and says so. Every
@@ -252,13 +254,17 @@ non-internal app, the apps that declare a `launcher_rank` in their manifest
 first in rank order and the rest after them; while typing, one per window of
 every desktop (by title, the active desktop's first; choosing one switches
 desktop and raises it); and at the foot the free-text rows, one per launch
-path that names a `text_param`, which run that launch path with the typed text
-as the param (`model/launch.ts`). The first free-text row is the primary
-action (Enter with no other row highlighted) and the second the secondary
-(Ctrl+Enter, Cmd+Enter on macOS); a free-text row of an app with an
-independent pinned window points this client's view of that window at the
-path rather than opening a new one, and a text whose encoded path would pass
-the window path bound is disabled with its reason. One row is always
+path that names a `text_param` or a `draft_param`, which run that launch path
+through the shell's launch route (`POST /api/desktops/<id>/launch`) with the
+typed text as the param (`model/launch.ts`): a GET launch path opens at its
+path with the params as the query, a POST one is posted the params (and the
+client id, desktop id, and window path as its envelope) and opens at the page
+it answers. The first free-text row is the primary action (Enter with no other
+row highlighted) and the second the secondary (Ctrl+Enter, Cmd+Enter on
+macOS); a free-text row of an app with a pinned window points that window at
+the page rather than opening a new one (this client's view alone when the
+window is independent), and a text whose encoded GET path would pass the
+window path bound is disabled with its reason. One row is always
 highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
@@ -321,7 +327,8 @@ Every op targets exactly one client (`--client <id>`, else the client that last
 messaged the requesting agent, else the one connected client; refused with the
 clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
-(`--launch`, `--param`; a bare URL is the browser's `new`), minimized with
+(`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path
+is posted the params for the page it answers), minimized with
 `--minimized`, and prints the window's id; an `open` with no client to target
 still writes the window, unplaced. A close is posted to the app's registered
 `window_closed_path`, when it has one, so an app whose resources live as long

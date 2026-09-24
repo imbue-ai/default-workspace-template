@@ -31,10 +31,11 @@ Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 * ``POST /browsers/{name}/stop`` / ``.../start`` -- end a browser's Chromium while keeping the
   browser, its profile, and its tabs; relaunch it on them (the viewer's Start button).
 
-The workspace shell opens a browser as a window at ``GET /new[?url=]``, the manifest's
-``new`` launch path (system/apps/browser/app.toml): the same answer as a nameless
-``POST /browsers``, as a redirect to the browser's viewer page ``/?session=<name>``; ``url``
-is opened as a new tab in a browser already up.
+The workspace shell opens a browser as a window through ``POST /new``, the manifest's
+``new`` launch path (system/apps/browser/app.toml, a POST launch path of
+docs/system/blueprint/post-launch-paths/): the same answer as a nameless ``POST /browsers``,
+answered as ``{"path": "/?session=<name>"}``, the viewer page the shell opens a window at;
+``url`` is opened as a new tab in a browser already up.
 
 The service does NOT drive browsers. Agents drive with ``@playwright/cli`` over the
 gated CDP endpoint in cdp_proxy.py, which enforces the ownership lease per frame.
@@ -61,7 +62,7 @@ from typing import Any
 
 from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
 from app_manifest.shell_windows import shell_base_url
-from flask import Flask, Response, jsonify, redirect, request, send_file
+from flask import Flask, Response, jsonify, request, send_file
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
@@ -102,9 +103,9 @@ NEW_PATH = "/new"
 # Where the shell posts a closed window of ours (the manifest's ``window_closed_path``): a sweep runs at once.
 WINDOW_CLOSED_PATH = "/api/window-closed"
 HTTP_NO_CONTENT = 204
-# The launch path's one parameter (the manifest's ``params``): the start page.
+# The launch path's one parameter (the manifest's ``params``): the start page. The shell posts it
+# in a JSON object beside its own envelope fields, which are ignored here.
 START_URL_PARAM = "url"
-HTTP_FOUND = 302
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # CDP failures surface as these built-ins.
@@ -301,15 +302,22 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Resp
 
 
 def new_browser() -> Response:
-    """``GET /new[?url=]``, the ``new`` launch path: the browser, as a redirect to its viewer page.
+    """``POST /new``, the ``new`` launch path: the browser, as the path of its viewer page.
 
-    The same answer as ``POST /browsers`` with no name, as a redirect so a window opened at
-    the launch path lands on the browser and reports that path as its own.
+    The same answer as ``POST /browsers`` with no name, answered as ``{"path"}`` so the shell
+    opens a window at the browser's page. The body is a JSON object with an optional ``url``;
+    anything else in it (the shell's envelope) is ignored, and a body that is not an object is 400.
     """
-    started = _start_browser(None, request.args.get(START_URL_PARAM))
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return _error({"error": "the launch body must be a JSON object"}, 400)
+    raw_url = body.get(START_URL_PARAM)
+    if raw_url is not None and not isinstance(raw_url, str):
+        return _error({"error": "url: must be a string"}, 400)
+    started = _start_browser(None, raw_url)
     if isinstance(started, Response):
         return started
-    return redirect(browser_page_path(BrowserName(started.browser_id)), code=HTTP_FOUND)
+    return jsonify({"path": browser_page_path(BrowserName(started.browser_id))})
 
 
 def health() -> Response:
@@ -835,7 +843,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=app_contract, methods=["GET"])
-    application.add_url_rule(NEW_PATH, view_func=new_browser, methods=["GET"])
+    application.add_url_rule(NEW_PATH, view_func=new_browser, methods=["POST"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
     )

@@ -3227,14 +3227,10 @@ def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManag
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
     state_dir = agent_manager._get_agent_state_dir(agent_id)
-    assert agent_manager._list_model_state_paths() == {
-        agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)
-    }
+    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)}
 
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
-    assert agent_manager._list_model_state_paths() == {
-        agent_id: get_model_state_path(HarnessType.CODEX, state_dir)
-    }
+    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CODEX, state_dir)}
 
 
 def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
@@ -4670,3 +4666,63 @@ def test_status_mapping_follows_the_chat_row(
     lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
+
+
+# Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)
+
+
+def test_mint_awaiting_chat_lists_a_provisional_chat_with_a_minted_name_and_no_seed(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    _tracked_chat(agent_manager, "agent-1", "Chat-1", display_name="Chat 1")
+    q = broadcaster.register()
+
+    minted = agent_manager.mint_awaiting_chat("acct-1")
+
+    assert minted.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    assert minted.is_seeded is False
+    assert minted.name == "Chat 2"
+    assert minted.account_id == "acct-1"
+    assert minted.message == ""
+    assert agent_manager.get_provisional_chat(minted.chat_id) == minted
+    assert agent_manager.knows_chat(minted.chat_id)
+    raw = q.get_nowait()
+    assert raw is not None
+    broadcast = json.loads(raw)
+    assert broadcast["type"] == "provisional_chat_created"
+    assert broadcast["chat_id"] == minted.chat_id
+    assert broadcast["phase"] == "awaiting_first_send"
+
+
+def test_an_awaiting_chat_is_launched_by_its_first_message_under_its_own_id(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        (signed_in,) = read_index().accounts
+        minted = manager.mint_awaiting_chat(signed_in.id)
+        launched = manager.create_chat("", chat_id=minted.chat_id, account_id=signed_in.id, message="Let's go")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(minted.chat_id) is None, 10, "the provisional chat's completion"
+        )
+    finally:
+        manager.stop()
+
+    assert launched.chat_id == minted.chat_id
+    assert launched.display_name == minted.name
+    (argv_line,) = argv_log.read_text().splitlines()
+    argv = argv_line.split()
+    assert f"--id {minted.chat_id}" in argv_line
+    assert [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"] == ["chat", "fast"]
+    assert "Let's" in argv_line and "/welcome" not in argv_line
+
+
+def test_discarding_an_awaiting_chat_drops_it(agent_manager: AgentManager) -> None:
+    minted = agent_manager.mint_awaiting_chat("")
+
+    assert agent_manager.discard_provisional_chat(minted.chat_id) is True
+    assert agent_manager.get_provisional_chat(minted.chat_id) is None
+    assert agent_manager.knows_chat(minted.chat_id) is False

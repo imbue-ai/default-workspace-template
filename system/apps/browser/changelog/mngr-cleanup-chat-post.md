@@ -1,0 +1,1 @@
+The `new` launch path is a POST: the shell posts `url` to `/new` and the browser answers `{"path": "/?session=<name>"}` after starting the fleet's browser (and opening the URL as a tab), so a reload of a browser window starts nothing. A `GET /new` answers 405.

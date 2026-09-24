@@ -58,7 +58,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "critical = false\n"
         'priority = "files"\n'
         'default_shortcut = {launch = "new", mode = "focus"}\n'
-        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}]\n'
+        'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
@@ -80,6 +80,13 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     ] == [
         ("new", "New File Viewer", "/", ("path",), "path"),
         ("recent", "Recent", "/recent", (), None),
+        ("draft", "Draft", "/api/intake", ("message",), None),
+    ]
+    # A row from before launch paths had a method reads as the GET launch path it was.
+    assert [(launch_path.method.value, launch_path.presets, launch_path.draft_param) for launch_path in row.launch_paths] == [
+        ("GET", {}, None),
+        ("GET", {}, None),
+        ("POST", {"target": "current_chat"}, "message"),
     ]
     assert row.launcher_rank == 20
     assert row.pin is not None
