@@ -2,4 +2,4 @@ Hourly backups on remote workspaces no longer re-read the whole home tree. resti
 
 Every restic command also runs with `GOMAXPROCS=1` and `RESTIC_READ_CONCURRENCY=1`, so a backup or prune uses one core and reads one file at a time instead of competing with the workspace's agents and UI. `nice` cannot do this on remote workspaces: gVisor accepts scheduling priorities but ignores them.
 
-Restoring a snapshot taken after this change needs a minds app that knows the new layout (it restores from `<snapshot>:/`). An older app reports that the snapshot "does not contain a machine". Snapshots taken before the change restore as before.
+Restoring a snapshot taken after this change needs a minds app that knows the new layout (it restores from `<snapshot>:/`). An older app reports that the snapshot "does not contain a machine". Snapshots taken before the change restore as before. Downloading a new snapshot likewise gives a zip with the home tree (`workspace/`, ...) at its top level, rather than nested under the snapshot path it was read from.
