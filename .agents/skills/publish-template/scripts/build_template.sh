@@ -679,7 +679,7 @@ cat > "$THUMBNAIL" <<THUMB_EOF
 </svg>
 THUMB_EOF
 
-# 8.5 overwrite README.md to describe the template
+# 8. overwrite README.md to describe the template
 
 # The clean base's README describes the generic default-workspace-template.
 # That is wrong for a published template: the repo's landing page -- the
@@ -747,7 +747,7 @@ machine-readable half (recipe, requirements, and the environment it needs
 installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
 README_EOF
 
-# 8.6 remove the version history so it never ships in a template
+# 8.5 remove the version history so it never ships in a template
 
 # docs/VERSION_HISTORY.md is WORKSPACE-only, never part of a template: it records
 # where a mind came from and every template it has published (slugs, repo
