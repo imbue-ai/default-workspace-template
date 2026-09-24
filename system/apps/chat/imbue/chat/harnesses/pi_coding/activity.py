@@ -7,8 +7,16 @@ mtime bounds transcript staleness.
 """
 
 from typing import ClassVar
+from typing import Final
 
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
+from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
+
+# Written by mngr's pi lifecycle extension on session start and left in place across launches, so
+# a stale one is told apart by the process-started marker's mtime.
+PI_STARTUP_READY_MARKER: Final[StartupReadyMarker] = StartupReadyMarker(
+    filename="pi_session_started", is_deleted_at_launch=False
+)
 
 
 class PiActivityTracker(ClaudeActivityTracker):

@@ -34,6 +34,7 @@ from imbue.chat.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.chat.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
+from imbue.chat.harnesses.claude.activity import CLAUDE_STARTUP_READY_MARKER
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
@@ -60,6 +61,7 @@ from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
 from imbue.chat.harnesses.pi_coding.account_binding import PiAccountBinding
+from imbue.chat.harnesses.pi_coding.activity import PI_STARTUP_READY_MARKER
 from imbue.chat.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.chat.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -333,8 +335,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=ClaudeTranscriptLoader,
         tracker_class=ClaudeActivityTracker,
         process_started_marker_filename=ClaudeActivityTracker.marker_filename,
-        # Written by claude's SessionStart hook; mngr's launch command deletes it first.
-        startup_ready_marker=StartupReadyMarker(filename="session_started", is_deleted_at_launch=True),
+        startup_ready_marker=CLAUDE_STARTUP_READY_MARKER,
         binding_class=ClaudeAccountBinding,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
@@ -401,9 +402,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=PiTranscriptLoader,
         tracker_class=PiActivityTracker,
         process_started_marker_filename=PiActivityTracker.marker_filename,
-        # Written by mngr's pi lifecycle extension on session start, and left in place across
-        # launches, so a stale one is told apart by the process-started marker's mtime.
-        startup_ready_marker=StartupReadyMarker(filename="pi_session_started", is_deleted_at_launch=False),
+        startup_ready_marker=PI_STARTUP_READY_MARKER,
         binding_class=PiAccountBinding,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
