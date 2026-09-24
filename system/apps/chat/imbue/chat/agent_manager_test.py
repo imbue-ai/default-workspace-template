@@ -2565,6 +2565,12 @@ def _plain_queued_wire(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{**entry, "display": None, "display_label": None, "display_body": None} for entry in snapshot]
 
 
+_QUEUED_BACKGROUND_TASK_REPORT = (
+    f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Wait for the worker (finished)</summary>\n"
+    f"Exit code: 0\n</{BACKGROUND_TASK_REPORT_TAG}>"
+)
+
+
 def test_update_queued_messages_caches_broadcasts_and_serializes(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -2605,21 +2611,18 @@ def test_a_queued_background_task_report_carries_its_notice_decision(
     (tmp_path / "agents" / "agent-1").mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
     agent_manager._ensure_activity_tracking("agent-1")
-    report = (
-        f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Wait for the worker (finished)</summary>\n"
-        f"Exit code: 0\n</{BACKGROUND_TASK_REPORT_TAG}>"
-    )
 
     listener = broadcaster.register()
     try:
         agent_manager.update_queued_messages(
-            "agent-1", [{"queued_id": "q1", "content": report, "timestamp": "2026-08-07T00:00:01.000Z"}]
+            "agent-1",
+            [{"queued_id": "q1", "content": _QUEUED_BACKGROUND_TASK_REPORT, "timestamp": "2026-08-07T00:00:01.000Z"}],
         )
 
         latest = _last_chats_updated(_drain(listener))
         assert latest is not None
         [queued] = latest["chats"][0]["active_agent"]["queued_messages"]
-        assert queued["content"] == report
+        assert queued["content"] == _QUEUED_BACKGROUND_TASK_REPORT
         assert queued["display"] == DisplayKind.NOTICE.value
         assert queued["display_label"] == "Background task"
         assert queued["display_body"] == "Wait for the worker (finished)"
@@ -2635,11 +2638,9 @@ def test_a_queued_report_keeps_its_notice_decision_through_an_idle_sweep_that_ke
     (tmp_path / "agents" / "agent-1").mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
     agent_manager._ensure_activity_tracking("agent-1")
-    report = (
-        f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Wait for the worker (finished)</summary>\n"
-        f"Exit code: 0\n</{BACKGROUND_TASK_REPORT_TAG}>"
-    )
-    snapshot = [{"queued_id": "q1", "content": report, "timestamp": "2026-08-07T00:00:01.000Z"}]
+    snapshot = [
+        {"queued_id": "q1", "content": _QUEUED_BACKGROUND_TASK_REPORT, "timestamp": "2026-08-07T00:00:01.000Z"}
+    ]
     idle_calls: list[bool] = []
 
     def _keep_queue_handler() -> list[dict[str, Any]]:
