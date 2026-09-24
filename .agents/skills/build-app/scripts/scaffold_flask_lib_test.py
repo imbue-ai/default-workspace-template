@@ -175,9 +175,8 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
         main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM,
     )
 
-    taken_port = _scaffold(root, "news", "--port", "8080")
-    assert taken_port.returncode != 0
-    assert "already in use" in taken_port.stderr
+    with pytest.raises(SystemExit, match="8080 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8080, _nothing_bound)
 
     taken_name = _scaffold(root, "dashboard")
     assert taken_name.returncode != 0
@@ -221,6 +220,9 @@ def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
 
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
+
+    with pytest.raises(SystemExit, match="8081 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8081, _nothing_bound)
 
     result = _scaffold(root, "news", "--port", "8081")
 
