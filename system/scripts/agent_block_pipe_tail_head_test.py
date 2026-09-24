@@ -18,6 +18,7 @@ def _run(command: str) -> int:
         "cat a.md b.md 2>&1 | head -120",
         "cat log.txt|tail",
         "  cat out.txt | tail -n 20 > /tmp/last.txt",
+        "cat build.log | tail -50 &>/tmp/last.txt",
     ],
 )
 def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
@@ -40,6 +41,8 @@ def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
         # The exemption covers a whole command, never one pipeline inside a compound one.
         "cd /tmp && cat out.txt | tail -20",
         "cat f | head; pytest | tail -5",
+        "cat f && pytest | tail -20",
+        "cat f & pytest | tail -20",
         # The escaped `>` leaves `&` a background operator, not part of a `>&` redirect.
         "cat x\\>& pytest | tail -20",
         "cat f | head -5 | tail -2",
