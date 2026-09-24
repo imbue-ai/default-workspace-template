@@ -6,15 +6,17 @@
  * window's content box (``placePage`` re-places one page per pointer move of a drag or resize,
  * with no redraw), in the same stacking context as the window chrome so a window's edges and
  * shield stay clickable over a cross-origin page. Every page but the focused one is inert
- * (``pointer-events: none``), and every page is inert while a gesture runs.
+ * (``pointer-events: none``), and every page is inert for the length of a press on a handle,
+ * which is longer than the drag it may become: the pixels a press spends reaching the drag
+ * threshold have to be ones the shell can see.
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
  * desktop change, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
  * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
- * ``shell:capabilities``, ``shell:location``, ``shell:focused``, and ``shell:open``. Messages cross
- * through ``relay.ts``.
+ * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, and
+ * ``shell:start-with-text``. Messages cross through ``relay.ts``.
  */
 
 import {
@@ -27,6 +29,7 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_SHOWN,
+  SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageUrl } from "../model/pageUrl";
@@ -118,6 +121,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_LOCATION, (frame, payload) => this.takeLocation(frame, payload));
     setChildFrameMessageHandler(SHELL_FOCUSED, (frame) => this.takeFocused(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
+    setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     this.store.setPageDriver(this);
   }
 
@@ -126,7 +130,8 @@ export class LivePagesLayer implements PageDriver {
     return this.pages.has(windowId);
   }
 
-  /** Make every page inert for the length of a gesture, and give the focused one its pointer back after. */
+  /** Make every page inert for the length of a press on a handle (the drag it may become begins
+   *  partway through), and give the focused one its pointer back after. */
   setGestureActive(isActive: boolean): void {
     if (this.isGestureActive === isActive) return;
     this.isGestureActive = isActive;
@@ -441,6 +446,18 @@ export class LivePagesLayer implements PageDriver {
   private takeFocused(frame: HTMLIFrameElement): void {
     const page = this.pageOfFrame(frame);
     if (page !== undefined) this.store.raiseWindow(page.windowId);
+  }
+
+  /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
+   *  desktop (a page can only be pressed there); the frame has to be one the shell created. */
+  private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    if (this.pageOfFrame(frame) === undefined) return;
+    const text = payload.text;
+    if (typeof text !== "string") {
+      console.warn(`[si] shell:start-with-text ignored: it carried no text (${JSON.stringify(payload)})`);
+      return;
+    }
+    void this.store.startWithText(text);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

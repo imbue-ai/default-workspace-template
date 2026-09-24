@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   draftFromSearch,
   isNewChatPath,
+  isSendPath,
   newChatParamsFromSearch,
   rootPathFor,
   selectionFromSearch,
+  sendTextFromSearch,
 } from "./selection";
 
 describe("selection", () => {
@@ -34,5 +36,13 @@ describe("selection", () => {
       message: "hello there",
     });
     expect(newChatParamsFromSearch("")).toEqual({ accountId: "", message: "" });
+  });
+
+  it("recognizes the send launch path under a base path and reads its text", () => {
+    expect(isSendPath("/send", "")).toBe(true);
+    expect(isSendPath("/prefix/send/", "/prefix")).toBe(true);
+    expect(isSendPath("/new", "")).toBe(false);
+    expect(sendTextFromSearch("?message=hello%20there")).toBe("hello there");
+    expect(sendTextFromSearch("")).toBe("");
   });
 });

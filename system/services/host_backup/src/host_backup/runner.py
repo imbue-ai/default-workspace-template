@@ -29,7 +29,12 @@ from host_backup.config import (
     missing_required_restic_keys,
     publish_service_events_dir,
 )
-from host_backup.events import BackupEventType, make_event, write_event
+from host_backup.events import (
+    BackupEventType,
+    make_event,
+    rotate_events_log_if_over,
+    write_event,
+)
 from host_backup.restic import (
     RESTORE_MARKER_TAGS,
     extract_snapshot_id_from_backup_output,
@@ -235,6 +240,8 @@ def _run_one_tick(
     backup_mtime = _safe_mtime(BACKUP_TOML_PATH) or 0.0
     env_mtime = _safe_mtime(RESTIC_ENV_PATH)
 
+    # Only here, so a tick's events never span two files.
+    rotate_events_log_if_over(state.events_dir)
     write_event(
         state.events_dir,
         make_event(

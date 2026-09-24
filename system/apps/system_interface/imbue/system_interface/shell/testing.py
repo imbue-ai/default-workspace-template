@@ -21,9 +21,10 @@ from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import cascade_frame
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
@@ -53,9 +54,11 @@ def registry_row_toml(
     display_name: str | None = None,
     label: str = "",
     launcher_rank: int | None = None,
-    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id.
+    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id, and
+    # ``launch_text_params`` the param of each that takes typed text.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
+    launch_text_params: Mapping[str, str] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
@@ -92,6 +95,9 @@ def registry_row_toml(
         params = (launch_params or {}).get(launch_id, ())
         if params:
             lines.append("params = [" + ", ".join(f'"{param}"' for param in params) + "]")
+        text_param = (launch_text_params or {}).get(launch_id)
+        if text_param is not None:
+            lines.append(f'text_param = "{text_param}"')
     return "\n".join(lines) + "\n"
 
 
@@ -179,6 +185,11 @@ def recording_app(received: list[dict[str, Any]]) -> Flask:
     return app
 
 
+def identity_headers(identity: RequestIdentity) -> dict[str, str]:
+    """The ``X-Imbue-Identity`` header a share gateway stamps on a request, as a test client sends it."""
+    return {IDENTITY_HEADER: identity.model_dump_json()}
+
+
 def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:
     """Every message a registered fake client has been sent so far, parsed."""
     messages: list[dict[str, Any]] = []
@@ -225,7 +236,6 @@ def desktop_with_windows(*windows: Window) -> Desktop:
         name="Home",
         color="#2f6b4f",
         glyph=0,
-        sharing=SharingMode.SHARED,
         wallpaper=None,
         shortcuts=(),
         windows=windows,

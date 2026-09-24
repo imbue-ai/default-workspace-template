@@ -527,7 +527,7 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
         return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
     # The shell's bundle is served by every tree the workspace ever ran, manifest or not;
-    # only the chat's depends on the restored tree carrying the chat frontend.
+    # every other bundle depends on the restored tree carrying its app's frontend.
     served = tuple(
         bundle
         for bundle in FRONTEND_BUNDLES
@@ -549,6 +549,17 @@ def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> No
         unserved_static = repo_root / bundle.static_dir
         if bundle not in frontend.bundles and unserved_static.exists():
             shutil.rmtree(unserved_static)
+
+
+def _are_npm_dependencies_missing(npm_root: Path) -> bool:
+    """Whether ``npm_root`` lacks a finished npm install, so a build there may have no tsc or vite.
+
+    The node_modules directory standing is no sign of one: ``npm ci`` empties it but
+    keeps the directory, so one that died leaves it empty or half-filled. npm writes
+    ``node_modules/.package-lock.json`` only once an install completes, and ``npm ci``
+    deletes it along with everything else first.
+    """
+    return not (npm_root / "node_modules" / ".package-lock.json").is_file()
 
 
 def _is_recovery_npm_ci_needed(
@@ -616,9 +627,12 @@ def _recover_running_state(
             bundle.snapshot_name not in restored for bundle in frontend.bundles
         ):
             # No copy to put back: compile from source. node_modules likewise
-            # has to match the restored lockfile when its own copy is gone.
-            if plan.frontend_manifest and _is_recovery_npm_ci_needed(
-                frontend, restored
+            # has to match the restored lockfile when its own copy is gone, and
+            # has to be installed at all: a forward pass that installed a worker
+            # bundle never ran `npm ci`, and one whose `npm ci` died emptied it.
+            if _are_npm_dependencies_missing(frontend.npm_root) or (
+                plan.frontend_manifest
+                and _is_recovery_npm_ci_needed(frontend, restored)
             ):
                 run_checked(runner, ["npm", "ci"], frontend.npm_root, "npm ci")
             run_checked(
@@ -635,7 +649,11 @@ def _recover_running_state(
         destinations = resolve_tool_destinations(plan, runner)
         if plan.backend_manifest and not BACKEND_SNAPSHOT_NAMES <= restored:
             refresh_backend_dependencies(
-                repo_root, runner, keep_protected, destinations
+                repo_root,
+                runner,
+                keep_protected,
+                destinations,
+                is_mngr_source_required=False,
             )
         rebuildable_app_tools = _app_tools_to_rebuild(
             plan.app_tools, restored, repo_root
@@ -976,7 +994,7 @@ def apply_update(
         if marker.worker_bundles is not None:
             # All or nothing: the bundles are built together from one tree, and a
             # live build emits them all, so one that cannot be installed means a
-            # live build for both.
+            # live build for all of them.
             rejections = {
                 bundle.app: _worker_bundle_reject_reason(
                     marker.worker_bundles.get(bundle.app),
@@ -1003,7 +1021,19 @@ def apply_update(
         )
         _advance(PHASE_SNAPSHOTTED)
 
-        if plan.frontend_manifest and usable_worker_bundles is None:
+        # Whether the npm manifest *changed* says nothing about whether the
+        # dependencies are *installed*: a merge that touches neither
+        # package.json nor package-lock.json still has to build, and a tree with
+        # no finished install has no tsc or vite to build with. Either is reason
+        # enough to refresh. The bundle-copy shortcut still wins over both:
+        # installing a verified worker bundle needs no node_modules.
+        if usable_worker_bundles is None and (
+            plan.frontend_manifest
+            or (
+                plan.frontend
+                and _are_npm_dependencies_missing(repo_root / NPM_ROOT_DIR)
+            )
+        ):
             run_checked(
                 runner,
                 expend(["npm", "ci"]),
@@ -1387,9 +1417,10 @@ def _touched_critical_apps(
     under its directory, when the bundle it owns was rebuilt, when the apply reinstalled
     its tool environment (a shared backend manifest moves every tool's closure, so
     ``plan.app_tools`` then names every app), or, for the shell, when anything the
-    shell's process runs changed. A frontend apply replaces both bundles, so include
-    both owners even if one app's source was unchanged. An extra restart is acceptable;
-    rollback targeting does not need to compare installed and kept source stamps.
+    shell's process runs changed. A frontend apply replaces every bundle, so include
+    each critical owner even if that app's source was unchanged. An extra restart is
+    acceptable; rollback targeting does not need to compare installed and kept source
+    stamps.
     """
     paths = [path for _, path in name_status]
     apps_dir = repo_root / APPS_DIR

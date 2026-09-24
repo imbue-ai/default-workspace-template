@@ -19,7 +19,12 @@ from types import ModuleType
 
 import pytest
 from app_manifest.errors import InvalidManifestValueError
-from app_manifest.primitives import DisplayName, describe_app_name_problem
+from app_manifest.primitives import (
+    RESERVED_APP_NAME_PREFIXES,
+    RESERVED_APP_NAMES,
+    DisplayName,
+    describe_app_name_problem,
+)
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
 
@@ -591,10 +596,38 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
     return module
 
 
+def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
+    """Drift guard: three places in this repo carry the reserved-name set, because
+    two of them cannot import the one that owns it -- ``forward_port.py`` is
+    stdlib-only by contract, and ``layout.py`` is an agent-facing script run from
+    any cwd. Comparing the sets is what makes the copies safe; sampling names
+    cannot, since any name absent from the sample is free to diverge. Every
+    carrier this repo owns belongs here: one left out is one free to drift,
+    which is the state this guard was written to end.
+
+    A fourth carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
+    ``apps/minds_evals/imbue/minds_evals/data_types.py``, copied from
+    ``validate_service_name`` here so a seeded app's name can be checked before the
+    workspace sees it. It lives outside this tree, so only a fix in mngr reaches it.
+    """
+    forward_port = _load_module("_forward_port_set_drift_check", _SCRIPT)
+    layout = _load_module("_layout_set_drift_check", _SCRIPT.parent / "layout.py")
+
+    assert forward_port.RESERVED_NAMES == RESERVED_APP_NAMES
+    assert forward_port.RESERVED_NAMES == layout._RESERVED_APP_NAMES
+    assert forward_port.RESERVED_NAME_PREFIXES == RESERVED_APP_NAME_PREFIXES
+    assert forward_port.RESERVED_NAME_PREFIXES == layout._RESERVED_APP_NAME_PREFIXES
+
+
 def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:
     """Drift guard: the app_manifest library validates names on read with its
     own copy of this script's rule (the script is stdlib-only and cannot import
-    the library). The two must accept and reject exactly the same names."""
+    the library). The two must accept and reject exactly the same names.
+
+    The reserved sets are compared wholesale in the test above; these samples
+    cover the rest of the rule -- pattern, length, prefixes -- where there is no
+    finite set to compare.
+    """
     forward_port = _load_module("_forward_port_manifest_drift_check", _SCRIPT)
     names = (
         "web",
@@ -676,18 +709,17 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
         "trail-",
         "UPPER",
         "under_score",
+        *sorted(forward_port.RESERVED_NAMES),
     )
     for name in names:
-        is_scaffold_accepted = (
-            bool(scaffold.KEBAB_RE.match(name))
-            and not any(
-                name.startswith(prefix) for prefix in scaffold.RESERVED_NAME_PREFIXES
-            )
-            and name not in scaffold.RESERVED_NAMES
-            and scaffold._kebab_to_snake(name) not in scaffold.RESERVED_NAMES
-        )
-        if is_scaffold_accepted:
-            assert forward_port.validate_service_name(name) is None, name
+        # Run the scaffold's real check rather than a restatement of it: a
+        # restatement goes stale the moment the check changes, which is the
+        # failure this guard exists to catch.
+        try:
+            scaffold._validate_name(name)
+        except SystemExit:
+            continue
+        assert forward_port.validate_service_name(name) is None, name
 
 
 # manifests
@@ -721,6 +753,7 @@ id = "new"
 label = "New File Viewer"
 path = "/"
 params = [{name = "path", label = "Path", required = false}]
+text_param = "path"
 
 [[launch_paths]]
 id = "recent"
@@ -763,10 +796,10 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
     assert "actions" not in row
-    # The row carries each launch path's param NAMES (the launcher reads them), and no ``params``
+    # The row carries each launch path's param NAMES (the launcher reads them) and its text_param, and neither
     # key at all for a launch path that declares none.
     assert row["launch_paths"] == [
-        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"]},
+        {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"], "text_param": "path"},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
     ]
     assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
@@ -801,6 +834,11 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
             '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\nparams = [{label = "Path"}]\n',
             "every launch path param needs a string 'name'",
             id="launch-path-param-without-a-name",
+        ),
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\ntext_param = 3\n',
+            "a launch path's text_param must be a string",
+            id="launch-path-text-param-not-a-string",
         ),
         pytest.param(
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',

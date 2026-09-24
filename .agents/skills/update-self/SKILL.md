@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Mind app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the release the running Mind app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -26,9 +26,9 @@ still wait for the user: an `--override` past the version ceiling (asked at
 launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
-The default target is the **latest stable `minds-v*` tag**, never newer than
-the Mind app driving this workspace (the template ships the code that app
-talks to); see `references/version-ceiling.md`. Once the target is resolved,
+The default target is **the release the Mind app driving this workspace was
+built against**, and only that one: the template ships the code that app talks
+to, and no other pairing was verified. See `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, so fixes
@@ -118,19 +118,24 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 `--local-tags` reads the tags the fetch just landed. To honor a user override,
 append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
-`kind`, `ceiling`, `exceeds_ceiling`, `latest_available` and
-`held_back_by_ceiling`; `main` resolves to `upstream/main`. Tell the user which
-version you are updating to.
+`kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
+Tell the user which version you are updating to, and never mention a release
+above `ceiling` that they did not ask for by name: the Mind app announces its
+own updates.
 
-**If the command exits non-zero, stop -- nothing is wrong with the workspace.**
-Its single `error:` line says why no target could be chosen (the Mind app
-could not be reached or is too old to report its version; every release is
-newer than the app; the workspace is already on the release it may take).
-Relay that line in plain terms and offer the next step; never resolve a ref by
-hand. Record the verdict first: `run-status verdict ALREADY_CURRENT` when the
-error says the workspace is current, else `run-status verdict REFUSED --detail
-"<the error line, in plain terms>"` (with `--in-place-compatible-ref` when the
-error names a release the workspace could still take).
+**If the command exits non-zero, stop.** Its single `error:` line says why no
+target could be chosen. Relay it in plain terms, offer the next step, and
+record the verdict it calls for -- never resolve a ref by hand:
+
+- **Already on the release it may take.** Nothing is wrong with the workspace:
+  `run-status verdict ALREADY_CURRENT`.
+- **A fault**: the app could not be reached, is too old to report its version,
+  named a release the upstream does not carry, or named none at all. Say so
+  plainly and record `run-status verdict STUCK --detail "<the error line, in
+  plain terms>"`. Do **not** pick another release; only a version the user
+  names becomes an `--override`, as an operator testing a dev build would.
+- **Anything else**: `run-status verdict REFUSED --detail "<the error line, in
+  plain terms>"`.
 
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it
@@ -183,12 +188,18 @@ cat /tmp/update-self-recheck.json
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
-`exceeds_ceiling` is `true` here and the user has not already confirmed an
-over-ceiling override, take that confirmation now as in Step 2, offering the
-capped ref (re-run without `--override` to learn it). If they take the capped
-ref, set `$REF` to it and **re-run §2a** before dispatching (the staged copy
-must match the target). If they decline every option, record `run-status
-verdict REFUSED --detail "..."` as in Step 2.
+`exceeds_ceiling` is `true` here, it matters who chose `$REF`.
+
+**Step 2 chose it, without `--override`:** the user never asked for it. Do not
+name it. Set `$REF` to the capped ref (re-run without `--override` to learn it;
+an error there is handled as in Step 2), tell the user that version is the one
+you are updating to -- an initiator too old to know the ceiling has already
+announced the other -- and **re-run §2a** before dispatching, so the staged copy
+matches the target.
+
+**The user named it:** take the confirmation now as in Step 2, offering the
+capped ref; if they take it, set `$REF` to it and re-run §2a the same way. If
+they decline every option, record `run-status verdict REFUSED --detail "..."`.
 
 ### 3b. Launch
 
@@ -256,12 +267,11 @@ BODY_EOF
 
 Clear the previous pass's worker, which Step 6 leaves *stopped* (its transcript
 stays reachable for bug reports). A worker of that name in state `STOPPED` or
-`DONE` is destroyed (its `mngr/update-self` branch survives); one in any other
-state is still running -- a genuine conflict, resolved per the lease check in
-Step 1, never forced past. Plain `mngr` commands on purpose: this prose runs
-from the target's copy but launches with the workspace's own, possibly older,
-`create_worker.py` (`scripts/launcher_contract_test.py` pins what it may ask
-of it):
+`DONE` is destroyed; one in any other state is still running -- a genuine
+conflict, resolved per the lease check in Step 1, never forced past. Plain
+`mngr` and `git` commands on purpose: this prose runs from the target's copy
+but launches with the workspace's own, possibly older, `create_worker.py`
+(`scripts/launcher_contract_test.py` pins what it may ask of it):
 
 ```bash
 mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
@@ -269,6 +279,35 @@ mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
 
 ```bash
 mngr destroy update-self --force
+```
+
+Then clear the previous pass's `mngr/update-self` branch, whether or not a
+worker was listed: destroying a worker leaves its branch behind, and the launch
+below cannot create the worker while a branch of that name exists. First ask
+whether `HEAD` already has it -- exit 0 yes, 1 no, and a `Not a valid object
+name` error means there is no such branch and nothing to clear:
+
+```bash
+git merge-base --is-ancestor refs/heads/mngr/update-self HEAD
+```
+
+After a landed pass it does (a rollback is a revert commit on top of the
+merge), so delete it. `-D`, because that check is the safety check: `-d` asks
+the branch's pushed copy instead of `HEAD` once GitHub sync has pushed it:
+
+```bash
+git branch -D mngr/update-self
+```
+
+Exit 1 means the branch holds commits `HEAD` does not have. Keep them under an
+archive name instead (note the name it prints). The results message then
+carries a plain caveat that unfinished work from an earlier update attempt was
+set aside and kept, and can be recovered on request; the archive name itself
+goes in the tracking ticket's close summary, not the message:
+
+```bash
+ARCHIVE="archive/update-self-$(date +%Y%m%d-%H%M%S)"
+git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
@@ -398,7 +437,8 @@ stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
 **When the update touches a critical app (`system/apps/system_interface/`,
-`system/apps/chat/`, `system/apps/terminal/`), `system/libs/workspace_ui/`, or
+`system/apps/chat/`, `system/apps/terminal/`), `system/apps/getting_started/frontend/`,
+`system/libs/workspace_ui/`, or
 `system/package.json` / `system/package-lock.json` at all** (the trees the
 critical bundles are built from, the same set the careful flow's freshness
 check names), also take the `editing critical apps` lease through the apply, as
@@ -419,10 +459,11 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/` and the chat app's), append `--worker-bundle system_interface=<path>
---worker-bundle chat=<path>` so the exact builds the worker validated are
-installed instead of a live build; the apply installs them only as a pair (one
-`npm run build` emits both), and builds live when either is missing or stale.
+`static/`, the chat app's, and the Getting Started app's), append
+`--worker-bundle system_interface=<path> --worker-bundle chat=<path>
+--worker-bundle getting_started=<path>` so the exact builds the worker validated
+are installed instead of a live build; the apply installs them only as a set (one
+`npm run build` emits them all), and builds live when any is missing or stale.
 
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the
@@ -474,6 +515,17 @@ resumes), and how to honor a rollback request are in
   image-level hunk needs a manual workspace rebuild -- say so.
 - **Rebuild-only flags** -- surface as needing a workspace recreate; never
   imply they are live.
+
+### 5d. Escalate the built-in defects this pass found
+
+Before composing the results message, collect every finding the worker labelled
+a `submit-upstream-changes` candidate, plus any other defect in built-in code
+you hit this pass (a failing built-in test, a step of this flow that broke and
+had to be worked around). Escalate them together as AGENTS.md's "Updates"
+section describes -- one report via
+`.agents/shared/references/report-built-in-issues.md`, or
+`submit-upstream-changes` for a template fix -- or name each in the results
+message with the submission offered.
 
 Then compose the results message per `references/results-message.md`.
 
@@ -537,7 +589,8 @@ Release the leases and close the ticket last, each as its own tool call: `tk
 close` the `editing service system_interface` lease if 5b took one, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
-merged and applied."`.
+merged and applied."`, adding the `archive/update-self-<timestamp>` name when
+Step 3b set a previous branch aside.
 
 ## To push local improvements back upstream
 

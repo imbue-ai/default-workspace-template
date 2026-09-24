@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "../testing/dom";
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AvatarChooserDialog, NO_DRAFT_TARGET_REASON } from "./AvatarChooserDialog";
