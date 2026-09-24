@@ -11,6 +11,7 @@ from imbue.chat.harnesses.claude.model import _CLAUDE_EFFORTS
 from imbue.chat.harnesses.claude.model import _get_agent_fast_mode_write_path
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
+from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import match_option
 
 
@@ -139,8 +140,15 @@ def _baked_catalog() -> dict[str, Any]:
     return json.loads(_BAKED_CATALOG_FIXTURE.read_text())
 
 
-def _baked_entry_by_id() -> dict[str, dict[str, Any]]:
-    return {entry["id"]: entry for entry in _baked_catalog()["models"]}
+def _options_with_baked_entry() -> list[tuple[ModelOption, dict[str, Any]]]:
+    # Only options whose key IS a baked entry: the family catch-alls (claude-opus-4) are
+    # prefixes invented here to absorb dated ids and deliberately have no entry of their own.
+    entries = {entry["id"]: entry for entry in _baked_catalog()["models"]}
+    return [
+        (option, entries[key])
+        for option in CLAUDE_CATALOG.options
+        if (key := option.harness_reported_model_id or option.id) in entries
+    ]
 
 
 def test_offered_options_track_the_binarys_alias_table() -> None:
@@ -161,16 +169,9 @@ def test_offered_options_track_the_binarys_alias_table() -> None:
 def test_every_option_label_is_the_binarys_display_name() -> None:
     # A label is what the user reads in the model bar, and the binary names each model in its
     # own `/model` picker from display_name -- so the two disagreeing means the chat calls a
-    # model something claude does not. Only options whose key IS a catalog entry are checked:
-    # the family catch-alls (claude-opus-4) are prefixes invented here to absorb dated ids and
-    # deliberately have no entry of their own.
-    entries = _baked_entry_by_id()
-    for option in CLAUDE_CATALOG.options:
-        key = option.harness_reported_model_id or option.id
-        if key in entries:
-            assert option.label == entries[key]["display_name"], (
-                f"{key} is {entries[key]['display_name']!r} in the binary"
-            )
+    # model something claude does not.
+    for option, entry in _options_with_baked_entry():
+        assert option.label == entry["display_name"], f"{entry['id']} is {entry['display_name']!r} in the binary"
 
 
 def test_supports_fast_is_the_binarys_fast_mode_capability() -> None:
@@ -179,11 +180,8 @@ def test_supports_fast_is_the_binarys_fast_mode_capability() -> None:
     # fast, and offering fast on a model that does not have it sends a /fast the session rejects.
     # The answer is in the binary's capability list, so take it from there rather than from the
     # release notes' prose.
-    entries = _baked_entry_by_id()
-    for option in CLAUDE_CATALOG.options:
-        key = option.harness_reported_model_id or option.id
-        if key in entries:
-            assert option.supports_fast == ("fast_mode" in entries[key]["capabilities"]), key
+    for option, entry in _options_with_baked_entry():
+        assert option.supports_fast == ("fast_mode" in entry["capabilities"]), entry["id"]
 
 
 # Every claude model id the pinned 2.1.280 binary carries, extracted from its strings
