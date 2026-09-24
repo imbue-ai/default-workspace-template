@@ -3980,7 +3980,7 @@ class AgentManager:
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
         if idle_handler is not None:
-            drained = tuple(QueuedMessageState.model_validate(entry) for entry in idle_handler())
+            drained = tuple(_queued_message_state(entry) for entry in idle_handler())
             with self._lock:
                 idle_agent_state = self._agents.get(agent_id)
                 if idle_agent_state is not None and idle_agent_state.queued_messages != drained:

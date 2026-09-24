@@ -2627,6 +2627,40 @@ def test_a_queued_background_task_report_carries_its_notice_decision(
         agent_manager.stop()
 
 
+def test_a_queued_report_keeps_its_notice_decision_through_an_idle_sweep_that_keeps_the_queue(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """agy's idle handler hands its queue back unchanged (it sends off-thread), so the swept
+    snapshot must carry the same decision the arriving one did."""
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    report = (
+        f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Wait for the worker (finished)</summary>\n"
+        f"Exit code: 0\n</{BACKGROUND_TASK_REPORT_TAG}>"
+    )
+    snapshot = [{"queued_id": "q1", "content": report, "timestamp": "2026-08-07T00:00:01.000Z"}]
+    idle_calls: list[bool] = []
+
+    def _keep_queue_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return snapshot
+
+    agent_manager.register_queue_idle_handler("agent-1", _keep_queue_handler)
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        assert idle_calls == [True]
+        latest = _last_chats_updated(_drain(listener))
+        assert latest is not None
+        [queued] = latest["chats"][0]["active_agent"]["queued_messages"]
+        assert queued["display"] == DisplayKind.NOTICE.value
+        assert queued["display_body"] == "Wait for the worker (finished)"
+    finally:
+        agent_manager.stop()
+
+
 def test_shoulder_tap_available_reflects_queue_and_send_in_flight(agent_manager: AgentManager, tmp_path: Path) -> None:
     """The derived ``shoulder_tap_available`` is true iff something is queued AND no send is in
     flight (contract Shoulder-tap), recomputed at each serialize from the two authoritative
