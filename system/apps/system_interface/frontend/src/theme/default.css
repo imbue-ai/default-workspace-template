@@ -38,11 +38,11 @@
   /* The icon tile's own elevation: a wide soft cast under a tight one, the pair the shortcuts
      want over a photograph -- lighter and further spread than the --shadow-raised the chrome uses. */
   --desk-icon-shadow:
-    0 1px 8px 0 rgb(0 0 0 / 0.2),
-    0 1px 2px 0 rgb(0 0 0 / 0.15);
+    0 3px 8px 0 rgb(0 0 0 / 0.15),
+    0 1px 1px 0 rgb(0 0 0 / 0.08);
   /* Drop shadows rather than a text-shadow: the name is clamped to two lines, so its own box
      clips anything painted inside it, and a filter draws the same silhouette from outside. */
-  --desk-shortcut-label-shadow: drop-shadow(0 1px 8px rgb(0 0 0 / 0.4)) drop-shadow(0 2px 2px rgb(0 0 0 / 0.5));
+  --desk-shortcut-label-shadow: drop-shadow(0 2px 4px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 0.5px rgb(0 0 0 / 0.4));
   --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;
