@@ -86,15 +86,13 @@ def test_references_are_read_off_mcp_config_and_supervisord_programs(
     tmp_path: Path,
 ) -> None:
     root = _tree(tmp_path)
-    (root / ".mcp.template.json").write_text(
-        '{"mcpServers": {"w": {"command": "python3", "args": ["system/scripts/with_secrets.py", "data/.secrets/widget.env", "--", "npx", "w"]}}}'
-    )
-    (root / ".mcp.json").write_text(
-        '{"mcpServers": {"x": {"args": ["data/.secrets/other.env"]}}}'
+    (root / "mcp-servers.json").write_text(
+        '{"mcpServers": {"w": {"command": "python3", "args": ["/home/user/workspace/system/scripts/with_secrets.py", "/home/user/workspace/data/.secrets/widget.env", "--", "npx", "w"]},'
+        ' "h": {"url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer ${HOSTED_KEY}"}, "secretsFile": "/home/user/workspace/data/.secrets/hosted.env"}}}'
     )
     assert writer.collect_references(root) == {
-        "widget": [".mcp.template.json", "system/supervisord.conf.d/widget-app.conf"],
-        "other": [".mcp.json"],
+        "widget": ["mcp-servers.json", "system/supervisord.conf.d/widget-app.conf"],
+        "hosted": ["mcp-servers.json"],
     }
 
 

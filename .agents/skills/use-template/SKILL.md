@@ -275,12 +275,14 @@ conversation:**
    `connect-external-service` skill's `request_secret.py` with the entry's
    `file` and `variables` (and its `note` in your rationale), each in a tool
    call of its own, then end the turn. When a `Secret stored:` message arrives
-   for an entry, merge that entry's servers from `.mcp.template.json` into the
-   workspace's `.mcp.json` (the file ships renamed so nothing starts before its
-   secret exists; a codex chat also needs the entry in its own config -- see the
-   skill's `references/mcp.md`) and start the programs that run under the file.
-   A `Secret declined:` message leaves that server and program out; the install
-   still completes, and you tell the user what stays unstarted and why. A legacy
+   for an entry, connect the `mcp-servers.json` servers that run under that
+   file (the wrapper in a local server's command, or a hosted server's
+   `secretsFile`) and start the programs that run under it. A `Secret
+   declined:` message leaves that server and program out; the install still
+   completes, and you tell the user what stays unstarted and why. Nothing in
+   `mcp-servers.json` connects on its own, so connect every other server in it
+   too: one that needs no credential right away, one that signs in once the
+   user has signed in (the skill's `references/mcp.md` covers each). A legacy
    entry with only a `name` is one bare variable: request it as a file named
    after the app. Then start the remaining services and get the app running
    against THEIR data.

@@ -53,6 +53,11 @@ _ALLOWED_COMMANDS = [
     # A command that never names the directory is not this guard's business.
     "cat data/.state/apps.toml",
     "echo secrets are in .secrets",
+    # mcpc reaches its own store.
+    "mcpc",
+    "mcpc @example tools-call search query:=invoices",
+    "python3 system/scripts/with_secrets.py data/.secrets/example.env -- mcpc connect mcp-servers.json:example @example",
+    "ls -la ~/.mcpc",
 ]
 
 _BLOCKED_COMMANDS = [
@@ -79,6 +84,11 @@ _BLOCKED_COMMANDS = [
     "python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c 'cat data/.secrets/svc.env'",
     # A read inside an unparseable command is refused rather than waved through.
     "cat data/.secrets/svc.env 'unbalanced",
+    # mcpc's store is under the directory, by either path.
+    "cat ~/.mcpc/credentials.json",
+    "jq . /home/user/.mcpc/credentials.json",
+    "cd ~/.mcpc && cat credentials.json",
+    "cat data/.secrets/mcpc/credentials.json",
 ]
 
 
@@ -179,6 +189,11 @@ def test_a_shell_call_under_another_harnesss_tool_name_is_judged_by_its_command(
             "tool_name": "find",
             "tool_input": {"pattern": "*.env", "path": "data/.secrets"},
         },
+        {
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/home/user/.mcpc/credentials.json"},
+        },
+        {"tool_name": "Glob", "tool_input": {"pattern": "~/.mcpc/**"}},
         # codex edits through a patch whose file lines name the target.
         {
             "tool_name": "apply_patch",

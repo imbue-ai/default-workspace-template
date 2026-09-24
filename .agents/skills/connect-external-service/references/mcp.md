@@ -27,120 +27,158 @@ claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in
 gateway for services latchkey *does* support; a server for a service it does not
 support bypasses nothing.
 
-A server gets its credential one of three ways: an API key, which goes through
-the secret card (below); nothing at all, for a server that needs none; or its
-own OAuth sign-in, whose consent screen needs a browser you hand to the user
-(last section). For the service's own server none of these outranks another; a
-community server takes a key or nothing, as above.
+## One client for the whole workspace: mcpc
 
-## The key goes through the secret card, and the server reads it through the wrapper
+Every MCP server is reached through `mcpc`, the workspace's MCP client, never
+through a harness's own MCP config (`.mcp.json`, codex's `config.toml`, and the
+like). A server wired into one harness reaches only that harness, loads only
+when its chat next starts, and keeps its sign-in in that harness's store; one
+connected through mcpc is usable at once, from any chat on any harness, from an
+app, and from a scheduled job.
 
-Never put a key in the config file. Request it, then wrap the server command:
+- **`mcp-servers.json`** at the repo root lists the servers, in the standard
+  `mcpServers` shape. It holds no secret: a key is named as `${VAR}`, and a file
+  holding one is named by its path.
+- **A session per server**, named `@<name>` after its entry. mcpc keeps it in a
+  background process and brings it back on the next call after a restart.
+- **`~/.mcpc`** links to `data/.secrets/mcpc/`, where mcpc keeps its sessions,
+  the OAuth sign-ins it holds, and the headers it sends. The secrets guard
+  covers the directory; reach it only through `mcpc`.
 
-```bash
-python3 .agents/skills/connect-external-service/scripts/request_secret.py \
-  --file example --var EXAMPLE_API_KEY --rationale "The Example MCP server needs your API key to read your projects."
-```
+**Check what is already connected first:** `mcpc` with no arguments lists every
+session and its state (`live`, `crashed`, `unauthorized`, ...). A `live` or
+`crashed` session for the service is ready to use as it is.
 
-End the turn; when `Secret stored: data/.secrets/example.env (EXAMPLE_API_KEY) ...`
-arrives, wire the server with `with_secrets.py` in front of it. The wrapper puts
-the file's variables into the server's environment and execs it, so the config
-names only the file and the variable, never the value. Do this on every harness:
-Claude expands `${VAR}` in `.mcp.json` from the harness process environment,
-which does not hold the secret, and codex's `env` table holds literal strings, so
-neither substitutes the value for you.
+## Adding a server
 
-## Per-harness wiring
+Add an entry to `mcp-servers.json` with your file-editing tool (a shell
+command that writes a `data/.secrets` path is refused by the guard). Paths are
+absolute: mcpc restarts a server from whatever directory the next caller runs
+in, so a relative path breaks the first time an app or job calls it.
 
-Wire the harness the chat runs on: the one whose config you are running under
-(`echo $CODEX_HOME` is set in a codex chat's shell and empty elsewhere; the
-chat's model bar names the harness too).
-
-**Claude Code** ([docs](https://code.claude.com/docs/en/mcp)): project-scope
-`.mcp.json` at the repo root. `.claude/settings.json` sets
-`enableAllProjectMcpServers`, so a server added here is approved without a prompt
-in the terminal pane; a new server is picked up when the chat's agent restarts
-(ask the user to restart the chat, or wait for the next one).
+A server that runs here, needing no credential:
 
 ```json
-{
-  "mcpServers": {
-    "example": {
-      "command": "python3",
-      "args": ["system/scripts/with_secrets.py", "data/.secrets/example.env", "--", "npx", "-y", "@example/mcp-server@1.2.3"]
-    }
-  }
+"example": {
+  "command": "npx",
+  "args": ["-y", "@example/mcp-server@1.2.3"]
 }
 ```
 
-**Codex** ([docs](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)):
-`config.toml` under the chat's `CODEX_HOME` (each codex agent runs with its own,
-under its agent state dir; `echo $CODEX_HOME` prints it). Add a
-`[mcp_servers.<name>]` table with `command` and `args` in the same wrapped shape;
-`env` values there are literal, which is why the wrapper carries the key.
-
-```toml
-[mcp_servers.example]
-command = "python3"
-args = ["system/scripts/with_secrets.py", "data/.secrets/example.env", "--", "npx", "-y", "@example/mcp-server@1.2.3"]
-```
-
-**pi** ([pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter)): pi has no
-built-in MCP client; the adapter (`pi install npm:pi-mcp-adapter`) reads the
-project's `.mcp.json`, so the Claude entry above serves pi too once the adapter is
-installed.
-
-**Antigravity** ([docs](https://antigravity.google/docs/mcp?tab=cli)): the
-workspace-local `.agents/mcp_config.json` (or `~/.gemini/config/mcp_config.json`),
-a `mcpServers` object of `command` / `args` / `env` in the same wrapped shape.
-
-**A hosted server** (a URL rather than a package) that needs no credential, or
-signs in with its own OAuth, is named by its URL, with nothing running here: in
-`.mcp.json`, `"example": {"type": "http", "url": "https://mcp.example.com/mcp"}`;
-in codex's `config.toml`, `url = "https://mcp.example.com/mcp"` in its
-`[mcp_servers.<name>]` table. The sign-in is the harness's own (last section).
-
-One that needs a key cannot take it that way, because the harness fills in the
-config from its own environment, which does not hold the secret. Wire it through
-[mcp-remote](https://github.com/geelen/mcp-remote), a bridge that runs here under
-the wrapper, pinned like any other server, and forwards to the URL:
+A server that runs here and needs a key: request the key through the secret card
+(below), then run the server under the wrapper, which puts the file's variables
+into the server's environment. mcpc hands a server only a minimal environment
+(`PATH`, `HOME`, ...); a non-secret variable it needs goes in the entry's `env`.
 
 ```json
-"args": ["system/scripts/with_secrets.py", "data/.secrets/example.env", "--", "npx", "-y", "mcp-remote@0.14.3", "https://mcp.example.com/mcp", "--header", "Authorization: Bearer ${EXAMPLE_API_KEY}"]
+"example": {
+  "command": "python3",
+  "args": ["/home/user/workspace/system/scripts/with_secrets.py", "/home/user/workspace/data/.secrets/example.env", "--", "npx", "-y", "@example/mcp-server@1.2.3"]
+}
 ```
 
-mcp-remote fills in `${EXAMPLE_API_KEY}` itself, from the environment the wrapper
-gives it. Claude Code leaves it as written because its own environment does not
-hold the variable (`claude mcp list` warns about that; the server still starts).
+A hosted server (a URL rather than a package) that needs no credential, or signs
+in with its own OAuth (sign in before connecting; see the last section):
 
-Wiring is built and tested only for the harnesses this workspace has an account
-for; do not write a config for a harness the user does not run.
+```json
+"example": {"url": "https://mcp.example.com/mcp"}
+```
+
+A hosted server that takes a key as a header names the variable, never the
+value; the value comes from the environment of the `connect` below. Its
+`secretsFile` is not mcpc's (mcpc ignores it): it records which file that connect
+runs under, so a published template declares the file and an adopting workspace
+asks for it.
+
+```json
+"example": {
+  "url": "https://mcp.example.com/mcp",
+  "headers": {"Authorization": "Bearer ${EXAMPLE_API_KEY}"},
+  "secretsFile": "/home/user/workspace/data/.secrets/example.env"
+}
+```
+
+Then open the session. From the repo root:
+
+```bash
+mcpc connect mcp-servers.json:example @example
+```
+
+For a hosted server with a header, run the connect under the wrapper, naming its
+`secretsFile`, so mcpc reads the variable; it stores the header with the session
+and sends it from then on:
+
+```bash
+python3 system/scripts/with_secrets.py data/.secrets/example.env -- mcpc connect mcp-servers.json:example @example
+```
+
+`connect` prints the server's tools. When it warns `Environment variable not
+found`, the connect ran without the wrapper and the header went out empty: close
+the session and connect again under the wrapper.
+
+## Using it
+
+```bash
+mcpc @example tools-list                           # the tools, one line each
+mcpc @example tools-get search                     # one tool's full input schema
+mcpc @example tools-call search query:="invoices"  # key:=value, JSON-typed
+mcpc --json @example tools-call search '{"query": "invoices", "limit": 5}'
+```
+
+`--json` prints the MCP result object, and exits non-zero when the call fails
+(a tool's own error comes back with `"isError": true`); that is the form an app
+or a scheduled job uses, from any language, by running the command. The
+server's tools are yours as soon as the connect returns: there is nothing to
+restart.
+
+A session mcpc keeps runs a background process of about 100 MB for as long as the
+session is open. Keep sessions for a service the user will keep using; close one
+you opened for a single task.
+
+## Changing or removing a server
+
+`connect` on a session that is already open changes nothing. To pick up a new
+key, a changed entry, or a new pin, run `mcpc @example close` and connect again
+(under the wrapper when the entry has a header). To remove a server, close its
+session, `mcpc logout <url>` if it signed in, and delete its entry. A session in
+the `unauthorized` state needs the sign-in again, then `mcpc @example restart`.
+
+## The key goes through the secret card
+
+Never put a key in `mcp-servers.json`, on an `mcpc` command line (`--header`
+with a value), or in a command you run. Request it:
+
+```bash
+python3 .agents/skills/connect-external-service/scripts/request_secret.py \
+  --file example --var EXAMPLE_API_KEY --rationale "The Example connector needs your API key to read your projects."
+```
+
+End the turn; when `Secret stored: data/.secrets/example.env (EXAMPLE_API_KEY) ...`
+arrives, add the entry and connect as above.
 
 ## An OAuth sign-in, in a browser the user can see
 
-A server that signs in through OAuth opens a consent page and listens on a
-`localhost` callback. That callback must resolve inside this workspace, so the
-browser has to run here too: start one with the `agentic-browser-fleet` skill,
-navigate to the consent URL, and `handoff` the browser so the user completes the
+`mcpc login <url>` signs mcpc in to a hosted server. It prints an
+`Authorization URL:` line and waits for the consent page to redirect to
+`127.0.0.1:13316` in this workspace, so the browser has to run here too. It
+also offers to read a pasted redirect from its input and gives up the moment
+that input closes, so keep the input open and run it in the background:
+
+```bash
+mkdir -p data/.tasks/mcp-login
+(sleep 900 | mcpc login https://mcp.example.com/mcp > data/.tasks/mcp-login/example.out 2>&1 &)
+```
+
+Read the URL from that file, start a browser with the `agentic-browser-fleet`
+skill, navigate to the URL, and `handoff` the browser so the user completes the
 sign-in themselves. Say what you are doing: "Example needs you to sign in once;
-I've opened a browser you can take over."
-
-For a hosted server the harness runs the sign-in. On Claude Code,
-`claude mcp login <name> --no-browser` prints the consent URL and waits for the
-callback, but refuses to run without a terminal, so start it in a tmux session of
-its own (`tmux new-session -d -s <name>-login 'claude mcp login <name> --no-browser'`)
-and read the URL with `tmux capture-pane -p -t <name>-login`. When the user
-hands the browser back, the callback has reached the waiting command and the
-harness holds the token. On codex the command is `codex mcp login <name>`.
-
-The server's tools arrive when the chat's agent next starts. Until then, do not
-reach the server some other way: never read the token out of the harness's
-credential store (`~/.claude/.credentials.json` and the like), which also holds
-the harness's own sign-in. Tell the user the connection is ready and that it
-takes effect in the chat's next session.
+I've opened a browser you can take over." The consent page names the requester
+as mcpc. When the user hands the browser back, the file ends with the login's
+result; then connect as above, and the session uses the saved sign-in and
+refreshes it itself.
 
 ## What to tell the user
 
-Which service's server you are wiring, that it needs a key (or a sign-in) and
-where it goes, and that the key stays on this workspace's disk for the server to
-use. Never the file path, the config file, or the word MCP, unless they ask.
+Which service you are connecting, that it needs a key (or a sign-in) and where it
+goes, and that the key stays in this workspace for the connection to use. Never
+the file path, the config file, mcpc, or the word MCP, unless they ask.

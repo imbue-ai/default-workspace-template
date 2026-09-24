@@ -1,0 +1,1 @@
+Policy P9 in the tool-call policies (`core-contracts/tool-call-policies.md`) now says that a mention of `~/.mcpc` counts as a mention of `data/.secrets/`, since that link names mcpc's store there, and the secrets guard refuses a read of the store by that name.

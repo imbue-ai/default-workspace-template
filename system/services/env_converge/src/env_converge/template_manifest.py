@@ -663,7 +663,7 @@ def check_markdown_agreement(
 # A secret file a snapshot's MCP config or supervisord program runs under: the same
 # reference the publish flow's writer aggregates from, read here off the assembled tree.
 SECRET_REFERENCE_PATTERN = re.compile(r"data/\.secrets/([a-z0-9][a-z0-9-]*)\.env")
-MCP_TEMPLATE_FILE_NAME = ".mcp.template.json"
+MCP_SERVERS_FILE_NAME = "mcp-servers.json"
 SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
 
 
@@ -678,7 +678,7 @@ def check_secret_references(
     declared = {
         item.file for item in manifest.requirements.secret if item.file is not None
     }
-    candidates = [repo_root / MCP_TEMPLATE_FILE_NAME, repo_root / ".mcp.json"]
+    candidates = [repo_root / MCP_SERVERS_FILE_NAME]
     dropins = repo_root / SUPERVISORD_DROPIN_DIRECTORY
     if dropins.is_dir():
         candidates.extend(sorted(dropins.glob("*.conf")))

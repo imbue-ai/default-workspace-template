@@ -6,7 +6,9 @@ as agent_secrets_guard.sh hands it over. Exits 0 to allow; exits 2 with a
 guiding stderr message to BLOCK. See the wrapper for the why.
 
 Two halves, one rule (policy P9): a value stored under ``data/.secrets/`` may
-reach a process only through ``with_secrets.py``.
+reach a process only through ``with_secrets.py``. mcpc's store is
+``data/.secrets/mcpc/``, which its ``~/.mcpc`` link also names, so a mention of
+the link counts as a mention of the directory.
 
 * A **shell** command (claude's and codex's ``Bash``, pi's ``bash``, the
   ``Bash`` payload the agy shim synthesises) is tokenized with the shared
@@ -48,6 +50,11 @@ from tk_command_parsing.parser import parse_command
 SECRETS_DIRECTORY = "data/.secrets"
 # The one file under the directory that holds no secret.
 _README_NAME = "README.md"
+# mcpc's store, under the directory, by the name that does not spell it out: the
+# ~/.mcpc link.
+_MCPC_STORE_RE = re.compile(r"(?:^|/)\.mcpc(?:/|$)")
+# Substrings one of which every refused command contains, for the cheap early return.
+_STORE_MARKERS = (SECRETS_DIRECTORY, ".mcpc")
 
 # The programs a shell segment may run while naming the directory. The wrapper is
 # how a value reaches a process; the request script names the directory in the
@@ -96,17 +103,20 @@ _PATCH_FILE_LINE_RE = re.compile(
     r"^\*\*\* (?:Add|Update|Delete) File: (.*)$", re.MULTILINE
 )
 
+_STORE_NAME = "data/.secrets/ (or mcpc's store, ~/.mcpc)"
 _SHELL_REASON = (
-    "it reads, writes, or otherwise touches a file under data/.secrets/ directly"
+    f"it reads, writes, or otherwise touches a file under {_STORE_NAME} directly"
 )
 _UNPARSEABLE_REASON = (
-    "it mentions data/.secrets/ and could not be parsed as a shell command"
+    f"it mentions {_STORE_NAME} and could not be parsed as a shell command"
 )
-_FILE_TOOL_REASON = "it opens a file under data/.secrets/"
+_FILE_TOOL_REASON = f"it opens a file under {_STORE_NAME}"
 
 
 def _is_secret_path_mention(word: str) -> bool:
     """Whether ``word`` names something under the secrets directory other than its README."""
+    if _MCPC_STORE_RE.search(word):
+        return True
     if SECRETS_DIRECTORY not in word:
         return False
     return not word.rstrip("/").endswith(f"{SECRETS_DIRECTORY}/{_README_NAME}")
@@ -197,7 +207,7 @@ def _segment_violation(words: Sequence[str]) -> str | None:
 
 def classify_command(command: str) -> str | None:
     """The reason a shell command is refused, or None when it is allowed."""
-    if SECRETS_DIRECTORY not in command:
+    if not any(marker in command for marker in _STORE_MARKERS):
         return None
     parsed = parse_command(command)
     if parsed is None:
@@ -267,6 +277,8 @@ def _block_message(reason: str) -> str:
         "  python3 system/scripts/with_secrets.py data/.secrets/<name>.env -- <command...>\n\n"
         "Listing the directory (`ls`) and deleting a file (`rm`) are allowed. To change "
         "a value, request it again with request_secret.py rather than editing the file. "
+        "mcpc's store (~/.mcpc) is data/.secrets/mcpc/: reach it only "
+        "through the mcpc command (`mcpc` lists sessions, `mcpc @<name> logs` shows one's log). "
         "See the connect-external-service skill.\n"
     )
 

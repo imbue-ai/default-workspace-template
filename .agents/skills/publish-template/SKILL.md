@@ -507,13 +507,11 @@ worktree to a clean template base and deletes gitignored state -- including
      lines in `template.md`) are **generated, not written**: the assembly
      aggregates every `[[secrets]]` in an included app's `app.toml` and every
      `secrets:` list in an included skill's SKILL.md front matter, plus every
-     `data/.secrets/<file>.env` the snapshot's `.mcp.template.json` and
+     `data/.secrets/<file>.env` the snapshot's `mcp-servers.json` and
      supervisord programs run under. It refuses to assemble when a referenced
      file has no declaration or a declared variable is missing from this
      workspace's own file -- fix the declaration at its source (the
-     `connect-external-service` skill documents the shapes) and re-run. An
-     included `.mcp.json` ships renamed to `.mcp.template.json`, so nothing
-     activates on adoption before its secrets exist.
+     `connect-external-service` skill documents the shapes) and re-run.
    - `[environment]` -- what the included code needs INSTALLED beyond the stock
      template. Derive it from the CODE, not from whatever happens to be
      installed on this machine: every binary it shells out to, every global

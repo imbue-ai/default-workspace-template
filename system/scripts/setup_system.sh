@@ -56,6 +56,7 @@ provision_drop_inherited_pins
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
 : "${LATCHKEY_VERSION:=3.9.0}"
+: "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Shared curl flags for the pinned-binary downloads below. --retry-all-errors
@@ -403,6 +404,17 @@ chmod 600 /root/.ssh/known_hosts
 
 # latchkey (gateway CLI) and modal (python tool).
 npm install -g "latchkey@${LATCHKEY_VERSION}"
+# mcpc: the one MCP client every harness, app, and scheduled job shares, so a
+# connected MCP server is reachable from all of them without per-harness config.
+npm install -g "@apify/mcpc@${MCPC_VERSION}"
+command -v mcpc >/dev/null
+# Remove mcpc's native keyring binding so it keeps sign-ins and stored headers
+# in its credentials file in ~/.mcpc (linked to data/.secrets/mcpc) on every
+# provider. With the binding present, a VM with a real kernel (lima) stores
+# them in the kernel keyring instead: in memory only, so a reboot loses them,
+# and outside the secrets guard and the backup. mcpc has no setting that picks
+# the file, and --omit=optional does not skip the binding on a global install.
+rm -rf "$(npm root -g)/@apify/mcpc/node_modules/@napi-rs/"keyring-*
 uv tool install "modal==${MODAL_VERSION}"
 
 # Secret-scanner binaries (betterleaks + kingfisher) for the publish-template

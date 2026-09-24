@@ -99,8 +99,8 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
 
     (source / "system/apps/demo").mkdir(parents=True)
     (source / "system/apps/demo/main.py").write_text("x = 1\n")
-    # An MCP server the app relies on: included, it must ship as .mcp.template.json.
-    (source / ".mcp.json").write_text(
+    # An MCP server the app relies on, included beside it.
+    (source / "mcp-servers.json").write_text(
         '{"mcpServers": {"demo": {"command": "demo-mcp", "args": []}}}\n'
     )
     _git("add", "-A", cwd=source)
@@ -191,7 +191,7 @@ def _assemble(
             "--include",
             "system/apps/demo",
             "--include",
-            ".mcp.json",
+            "mcp-servers.json",
             *extra,
         ],
         cwd=cwd,
@@ -232,14 +232,6 @@ def test_assembly_refuses_to_run_outside_a_throwaway_worktree(tmp_path: Path) ->
     assert completed.returncode == 2, completed.stdout + completed.stderr
     assert "MAIN worktree" in completed.stderr
     assert (source / "data/important.db").read_text() == "PRECIOUS USER DATA"
-
-
-@_needs_scanners
-def test_an_included_mcp_config_ships_renamed_so_nothing_activates_before_its_secrets(
-    built_snapshot: Path,
-) -> None:
-    assert not (built_snapshot / ".mcp.json").exists()
-    assert '"demo-mcp"' in (built_snapshot / ".mcp.template.json").read_text()
 
 
 @_needs_scanners
