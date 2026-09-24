@@ -1142,7 +1142,7 @@ describe("focus-chat", () => {
     return appRecord("buddy", {
       pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
       launch_paths: [
-        launchPathRecord({ id: "root", path: "/", params: ["draft"] }),
+        launchPathRecord({ id: "root", path: "/" }),
         launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
       ],
       ...overrides,
