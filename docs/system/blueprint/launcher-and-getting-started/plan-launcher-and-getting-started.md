@@ -62,11 +62,11 @@ text_param = "message"
 ```
 
 `text_param` is optional, names one of the launch path's declared params (a manifest naming an undeclared param fails to load), and marks the launch path as a free-text row.
-A launch path without it never receives typed text, whatever its params are called; the chat root's `draft` param is not a text param, so the "Chat" row is never a free-text row.
+A launch path without it never receives typed text, whatever its params are called; the chat's `root` declares no params, so the "Chat" row is never a free-text row. A `draft_param` (the post-launch-paths plan section 3.1) makes a free-text row too, one whose text is drafted rather than sent.
 
-The free-text rows of a machine are every launch path with a `text_param` of every registered, non-internal app, in the launcher's app order (`launcher_rank`, lowest first, then registry order) and within an app in manifest order.
+The free-text rows of a machine are every launch path with a `text_param` or a `draft_param` of every registered, non-internal app, in the launcher's app order (`launcher_rank`, lowest first, then registry order) and within an app in manifest order.
 The first is the primary text action, the second the secondary; any further ones are rows with no key binding.
-On a stock machine the chat declares two: `new` ("New Chat", primary) and `send` ("Send to chat...", secondary; section 9).
+On a stock machine the chat declares three: `new` ("New Chat", primary), `send` ("Send to chat...", secondary; section 9), and `draft` (a row with no key binding, the avatar dialog's draft).
 
 ### 3.2 Running a free-text row
 
@@ -281,7 +281,7 @@ Following the V1 layering:
 
 - `model/records.ts`: `text_param` on `LaunchPath` and its parser.
 - `model/search.ts` moves to `system/libs/workspace_ui/src/search.ts`: the launcher, the Getting Started page, and the chat's picker all match text the same way, so the shell imports it from the library like the other frontends.
-- `model/launch.ts`: `freeTextRowsOf(apps)` (section 3.1's order), one classifier `launchRowKindOf(app, launchPath)` answering `text`, `focus`, or `new` in that order (a launch path with a `text_param` is a free-text row whatever its path; only then does a path equal to the pin's home path make a focus row), and `textPathOf(launchPath, text)` with the 2048 bound answered as a disabled reason; `promptTargetOfTiles` and `MESSAGE_PARAM` go, since the text param is declared.
+- `model/launch.ts`: `freeTextRowsOf(apps)` (section 3.1's order), one classifier `launchRowKindOf(app, launchPath)` answering `text`, `focus`, or `new` in that order (a launch path with a `text_param` is a free-text row whatever its path; only then does a path equal to the pin's home path make a focus row), and `textRowDisabledReason(launchPath, text)` with the 2048 bound of a GET launch path answered as a disabled reason (a POST launch path's text rides in a body and is never bounded); `promptTargetOfTiles` and `MESSAGE_PARAM` go, since the text param is declared.
 - `reducers/launcherRows.ts`, new: the rows of section 3.5 and the highlight rule as pure functions over the state and the query, with `moveHighlight(rows, index, delta)`.
 - `store/DesktopStore.ts`: `runFreeTextRow(row, text)` (pinned-first, over `navigateOwnWindow` and `restoreWindow`, else `openLaunchPath`), `runLaunchRow(row)` (focus or new by section 3.3), and the handler for `shell:start-with-text`, which is `runFreeTextRow` on the primary action.
 - `views/LauncherField.ts`: the placeholder and the key handling of 4.8; the query and the highlight index stay transient state of `App.ts`, as the query is today.
