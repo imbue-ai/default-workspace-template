@@ -11,8 +11,9 @@
   --desk-title-bar-height: 36px;
   --desk-taskbar-height: 48px;
   --desk-cell-width: 96px;
-  --desk-cell-height: 112px;
+  --desk-cell-height: 96px;
   --desk-grid-inset: 16px;
+  --desk-cell-gap: 6px;
   --desk-window-min-width: 320px;
   --desk-window-min-height: 240px;
   --desk-title-min-visible: 120px;
@@ -27,7 +28,7 @@
   --desk-backdrop: var(--c-bg);
   --desk-default-wallpaper: url(/wallpapers/bundled/dawn);
   --desk-icon-size: 48px;
-  --desk-shortcut-label-shadow: 0 1px 2px rgb(0 0 0 / 0.6);
+  --desk-shortcut-label-shadow: 0 1px 1px rgb(0 0 0 / 0.85);
   --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;
@@ -41,7 +42,7 @@
 [data-compact] {
   --desk-taskbar-height: 56px;
   --desk-cell-width: 80px;
-  --desk-cell-height: 96px;
+  --desk-cell-height: 88px;
   --desk-grid-inset: 8px;
   --desk-window-radius: 0px;
   --desk-icon-size: 40px;

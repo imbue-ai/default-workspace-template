@@ -45,6 +45,31 @@ export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefi
 
 export const CONNECTING_TOOLTIP = "Connecting to the workspace...";
 
+/** The icon tile over the label: what a shortcut draws inside its cell, and what its drag ghost carries,
+ *  so the thing under the pointer is the thing that was lifted. */
+export function shortcutContent(app: AppRecord | undefined, label: string): m.Children {
+  return [
+    m(
+      "span",
+      {
+        class:
+          "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
+          "rounded-xl bg-surface p-2 shadow-raised [&>svg]:size-full",
+      },
+      m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
+    ),
+    m(
+      "span",
+      {
+        class:
+          "shortcut-label relative line-clamp-2 w-full rounded text-(length:--font-size-helper) leading-tight " +
+          "font-bold text-on-accent [text-shadow:var(--desk-shortcut-label-shadow)]",
+      },
+      label,
+    ),
+  ];
+}
+
 /** The hover text a shortcut owes: why it is faint, or nothing when it is ready. */
 export function shortcutTooltip(label: string, isStopped: boolean, isConnecting: boolean): string | null {
   if (isConnecting) return CONNECTING_TOOLTIP;
@@ -80,9 +105,8 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           "data-connecting": isConnecting ? "true" : null,
           "aria-pressed": isSelected ? "true" : "false",
           class:
-            "shortcut absolute flex flex-col items-center gap-1 rounded-lg p-1 text-center outline-none " +
-            "focus-visible:ring-2 focus-visible:ring-accent touch-none select-none " +
-            (isSelected ? "bg-fill-active " : "hover:bg-fill-hover ") +
+            "shortcut group absolute flex flex-col items-center justify-center gap-1 p-(--desk-cell-gap) " +
+            "text-center outline-none touch-none select-none " +
             (isLifted ? "opacity-40 " : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
           style: rectStyle(rect),
@@ -105,24 +129,15 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           },
         },
         [
-          m(
-            "span",
-            {
-              class:
-                "shortcut-icon flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center rounded-xl " +
-                "bg-surface shadow-raised [&>svg]:size-full",
-            },
-            m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
-          ),
-          m(
-            "span",
-            {
-              class:
-                "shortcut-label line-clamp-2 w-full rounded px-1 text-(length:--font-size-helper) leading-tight " +
-                "text-on-accent [text-shadow:var(--desk-shortcut-label-shadow)]",
-            },
-            label,
-          ),
+          // The tint hugs the icon and its label rather than the whole cell, so the gap the cell leaves
+          // around it reads as space between shortcuts. The drop target draws the same box.
+          m("span", {
+            class:
+              "shortcut-highlight pointer-events-none absolute inset-(--desk-cell-gap) rounded-lg " +
+              "group-focus-visible:ring-2 group-focus-visible:ring-accent " +
+              (isSelected ? "bg-fill-active" : "group-hover:bg-fill-hover"),
+          }),
+          shortcutContent(app, label),
         ],
       );
     },

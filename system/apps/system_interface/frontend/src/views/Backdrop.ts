@@ -16,11 +16,10 @@ import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { FloatingEntries } from "./FloatingEntries";
 import { rectStyle } from "./pixelStyle";
-import { ICON_MARKUP_SIZE, ShortcutIcon } from "./ShortcutIcon";
+import { ShortcutIcon, shortcutContent } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
 import type { WindowControl } from "./TitleBar";
-import { appGlyph } from "./glyphs";
 
 export interface BackdropAttrs {
   readonly store: DesktopStore;
@@ -147,7 +146,12 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           }),
           m(SnapPreview, { rect: snapRect }),
           gesture?.kind === "shortcut"
-            ? shortcutGhost(gesture.iconPosition, cellRect(gesture.targetCell, metrics), appByName(state, gesture.app))
+            ? shortcutGhost(
+                { ...gesture.iconPosition, width: metrics.cellWidth, height: metrics.cellHeight },
+                cellRect(gesture.targetCell, metrics),
+                appByName(state, gesture.app),
+                gesture.app,
+              )
             : null,
         ],
       );
@@ -155,24 +159,34 @@ export function Backdrop(): m.Component<BackdropAttrs> {
   };
 }
 
-/** The lifted shortcut's icon under the pointer, and the outline of the cell it would drop into. */
-function shortcutGhost(position: PixelPoint, target: PixelRect, app: AppRecord | undefined): m.Children {
+/** The lifted shortcut under the pointer, drawn as the shortcut itself, and the outline of the cell it
+ *  would drop into, drawn as the box that shortcut's own highlight would take there. */
+function shortcutGhost(
+  ghostRect: PixelRect,
+  target: PixelRect,
+  app: AppRecord | undefined,
+  appName: string,
+): m.Children {
   return [
-    m("div", {
-      "data-drop-cell": "",
-      class: "pointer-events-none absolute z-(--z-sticky) rounded-lg border-2 border-dashed border-accent",
-      style: rectStyle(target),
-    }),
+    m(
+      "div",
+      {
+        "data-drop-cell": "",
+        class: "pointer-events-none absolute z-(--z-sticky)",
+        style: rectStyle(target),
+      },
+      m("div", { class: "absolute inset-(--desk-cell-gap) rounded-lg border-2 border-dashed border-accent" }),
+    ),
     m(
       "div",
       {
         "data-shortcut-ghost": "",
         class:
-          "pointer-events-none absolute z-(--z-sticky) flex h-(--desk-icon-size) w-(--desk-icon-size) items-center " +
-          "justify-center rounded-xl bg-surface opacity-80 shadow-overlay [&>svg]:size-full",
-        style: { left: `${position.x}px`, top: `${position.y}px` },
+          "pointer-events-none absolute z-(--z-sticky) flex flex-col items-center justify-center gap-1 " +
+          "p-(--desk-cell-gap) text-center",
+        style: rectStyle(ghostRect),
       },
-      m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
+      shortcutContent(app, app?.display_name ?? appName),
     ),
   ];
 }

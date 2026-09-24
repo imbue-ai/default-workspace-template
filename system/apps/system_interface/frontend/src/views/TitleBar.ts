@@ -79,7 +79,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
         },
         [
           m("span", { class: "flex shrink-0 items-center text-secondary" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
-          m("span", { class: "window-title min-w-0 truncate pl-1 text-(length:--font-size-row) font-medium" }, title),
+          m("span", { class: "window-title min-w-0 truncate text-(length:--font-size-row) font-medium" }, title),
           control("menu", "Window menu", glyph("kebab", CONTROL_GLYPH_SIZE), isMenuOpen, onControl),
           m("span", { class: "flex-1" }),
           control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
