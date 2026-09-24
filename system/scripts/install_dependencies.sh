@@ -24,6 +24,11 @@ fi
 
 REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 
+# The lockfile's mngr packages may come from the private mngr repo; use the
+# credential delivered to this build, if any (see _mngr_git_auth.sh).
+. "$(dirname "$0")/_mngr_git_auth.sh"
+mngr_git_auth_export
+
 # Python and JavaScript dependency installs are independent and could run in
 # parallel; kept sequential for now (clarity), structured so parallelizing is a
 # drop-in later.

@@ -16,6 +16,12 @@ export DEBIAN_FRONTEND=noninteractive
 . "$(dirname "$0")/_tool_env.sh"
 tool_env_pin
 
+# The pin may name the private mngr repo; use the credential delivered to this
+# build, if any (see _mngr_git_auth.sh). Exported here so every uv tool install
+# below, the venv sync, and the asset fetch the frontend build runs all see it.
+. "$(dirname "$0")/_mngr_git_auth.sh"
+mngr_git_auth_export
+
 # NOTE: intentionally NOT guarded by the provisioning skip cache -- this produces
 # in-repo outputs (frontend dist, .venv) that the create's git-mirror landing does
 # not carry, so it must run on every create to regenerate them (fast via the baked

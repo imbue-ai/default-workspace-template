@@ -77,6 +77,13 @@ in that app's folder and is named `<app>-<role>`.
   from mngr (the embed contract and service icons the UI bundles, the style
   guide), fetched at build time from the mngr commit `pyproject.toml` pins.
   mngr itself is installed as packages from that same commit, not vendored.
+  The pin names the public mngr mirror for every release. A branch iterating
+  on a paired mngr change may pin the private mngr-internal repo instead; such
+  a build needs a credential, delivered by whoever runs the build to
+  `/run/secrets/mngr_internal_git_token` (a BuildKit secret on docker, an
+  uploaded file on lima/modal) and picked up by `system/scripts/_mngr_git_auth.sh`.
+  This repo's own CI holds no such credential, so it is red while the pin is
+  private, and a `minds-v*` tag never carries one (`release-pin-gate.yml`).
 - `system/vendor/tk/` - A vendored copy of the
   [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script
   (also callable as `tk`) manages tickets stored as markdown. We point

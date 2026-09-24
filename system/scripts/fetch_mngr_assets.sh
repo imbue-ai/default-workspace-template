@@ -17,6 +17,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ASSETS_DIR="$REPO_ROOT/system/vendor/mngr-assets"
+
+# The pin may name the private mngr repo; use the credential delivered to this
+# build, if any (see _mngr_git_auth.sh). Run by hand, git's own credential
+# helper applies as before.
+. "$REPO_ROOT/system/scripts/_mngr_git_auth.sh"
+mngr_git_auth_export
 ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
     style_guide.md

@@ -638,7 +638,7 @@ extra_provision_command__extend = [
 provider = "docker"
 target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
-build_arg__extend = ["--file=system/Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "."]
 # Security hardening for `docker run`: block privilege escalation via setuid
 # binaries. `--cap-add=SYS_PTRACE` was removed deliberately -- gVisor is the
 # isolation boundary now, and the extra capability widened the container's
@@ -727,6 +727,10 @@ extra_provision_command__extend = [
     # this runs `mngr start system-services` in the VM (mngr is installed by
     # build_workspace.sh above).
     "bash /home/user/workspace/system/scripts/minds_lima_autostart.sh",
+    # The creator uploads a credential for a private mngr pin to this path before
+    # the commands above run (build_workspace.sh reads it); drop it now that the
+    # build is done so it never outlives provisioning. A no-op for a public pin.
+    "rm -f /run/secrets/mngr_internal_git_token",
 ]
 
 # template for the Modal sandbox provider (the "modal" compute provider).
@@ -773,6 +777,8 @@ extra_provision_command__extend = [
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
+    # Same credential cleanup as the lima template.
+    "rm -f /run/secrets/mngr_internal_git_token",
 ]
 
 # Short-timeout overlay for the workspaces an eval run creates. Always stacked on top
@@ -799,7 +805,7 @@ target_path = "/home/user/workspace/"
 # imbue_cloud-pool create lands in the same place; CLI users who want
 # a different region can still override per-invocation with
 # ``-b --vps-region=<other>``.
-build_arg__extend = ["--file=system/Dockerfile", "--vps-plan=vc2-2c-4gb", "--vps-region=sjc", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "--vps-plan=vc2-2c-4gb", "--vps-region=sjc", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
@@ -958,7 +964,7 @@ target_path = "/home/user/workspace/"
 # invocation -- the OVH backend appends ``-b --vps-datacenter=<region>`` (plan
 # defaults from ``OvhProviderConfig.default_plan``), the slice backend passes the
 # box address + per-slice carve sizing via ``-S providers.imbue_cloud_slice.*``.
-build_arg__extend = ["--file=system/Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
@@ -1128,7 +1134,7 @@ target_path = "/home/user/workspace/"
 # type is baked in: the region comes from the provider block's `default_region`
 # (and the matching `-b --aws-region=` minds passes), the instance type from
 # `AwsProviderConfig.default_instance_type`.
-build_arg__extend = ["--file=system/Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # AWS provider's `auto_shutdown_seconds` max-lifetime cap is also left unset
 # (the minds-written provider blocks don't set it), so the EC2 instance stays
@@ -1286,7 +1292,7 @@ systemctl restart --no-block minds-autostart.service
 # plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` minds passes.
 [create_templates.gcp]
 target_path = "/home/user/workspace/"
-build_arg__extend = ["--file=system/Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown; the
 # machine is up for the whole user session (see the aws template's comment).
 idle_mode = "disabled"
@@ -1439,7 +1445,7 @@ systemctl restart --no-block minds-autostart.service
 # plus the matching `-b --azure-region=` / `-b --azure-vm-size=` minds passes.
 [create_templates.azure]
 target_path = "/home/user/workspace/"
-build_arg__extend = ["--file=system/Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown; the
 # machine is up for the whole user session (see the aws template's comment).
 idle_mode = "disabled"
@@ -1606,7 +1612,7 @@ target_path = "/home/user/workspace/"
 # container and rebuilds it from this Dockerfile). The FAST path adopts the
 # pre-baked image and ignores these (the imbue_cloud provider treats them as
 # pass-through and only the slow path consumes them). Mirrors the ovh template.
-build_arg__extend = ["--file=system/Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "."]
 # `--restart=unless-stopped` on the inner agent container so a slow-path rebuild
 # (which recreates the container) comes back after a pool-VM reboot, matching the
 # baked container from the pool_host template. The fast (adopt) path reuses the

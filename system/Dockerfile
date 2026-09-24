@@ -92,8 +92,18 @@ COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/cha
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
+# Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).
+#
+# The mngr packages in the lockfile may come from the private mngr repo, in which
+# case the creator hands the build a token as the BuildKit secret
+# `mngr_internal_git_token` (see .mngr/settings.toml's build_arg). The mount is
+# optional: a public pin builds with no secret at all, and an unset creator-side
+# env var mounts an empty file, which the auth helper treats as absent. The
+# secret never lands in a layer.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
-RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
+COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
+RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
+    chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
 # ============================================================================
 # End pre-COPY manifest layer. Source-changing layers begin below.
@@ -103,7 +113,10 @@ RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && d
 COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.
-RUN bash /home/user/workspace/system/scripts/build_workspace.sh
+# Same optional secret mount as the dependency install above: the tool installs
+# fetch mngr from the pin.
+RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
+    bash /home/user/workspace/system/scripts/build_workspace.sh
 
 # Move the baked workspace off the volume mount path so the shipped
 # image has /home/user/workspace/ EMPTY. At runtime, /home/user is a persistent

@@ -70,6 +70,20 @@ jobs:
         with:
           version: "latest"
 
+      # A branch iterating on a paired mngr change may pin mngr from the private
+      # mngr-internal repo (see docs/system/workspace-internals.md). This repo's CI
+      # deliberately holds no credential for it, so every step below that resolves
+      # the pin would fail with git's own auth error. Say why up front instead.
+      - name: Refuse a private mngr pin (this CI has no credential for it, by design)
+        run: |
+          set -euo pipefail
+          kind="$(python3 system/scripts/list_mngr_plugins.py --kind)"
+          if [ "$kind" = "internal" ]; then
+            echo "::error::the template pins mngr from mngr-internal; this repo's CI has no credential for it by design, so its tests stay red until the pin is rewritten to the public mirror (just dwt-mngr-pin in the mngr repo)"
+            exit 1
+          fi
+          echo "mngr pin kind: $kind"
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
