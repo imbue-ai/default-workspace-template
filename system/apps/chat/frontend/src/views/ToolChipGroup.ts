@@ -150,6 +150,31 @@ const CHIP_LABEL_CLASS = "tool-chip-label min-w-0 truncate";
  *  the row's own `-ml-1` for this one child. */
 const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-1 basis-[calc(100%-0.25rem)] rounded-md border px-3 py-1.5";
 
+/** The panel's header, which stays put while the panel's own content scrolls under it.
+ *
+ *  What it buys: an output long enough to fill the screen leaves its chip far above,
+ *  so without this a reader scrolling through one has nothing on screen saying which
+ *  call they are reading, and no way out that is not a scroll back up.
+ *
+ *  It sticks within the PANEL, not the transcript -- a sticky element's containing
+ *  block is its offset parent, so it rides down with the panel's top edge and leaves
+ *  with its bottom one, rather than hanging over the messages either side.
+ *
+ *  The negative margins undo the panel's own padding so the header spans its full
+ *  width and meets its rounded top corners; the fill is what makes content scroll
+ *  UNDER it rather than through it, so it has to be the transcript's own background
+ *  (the panel is deliberately unfilled). z-[1]: design-system-exception -- the z scale
+ *  starts above this, at `--z-sticky` for things that float over a whole pane, and
+ *  this only has to beat its own siblings. */
+const DETAIL_HEADER_CLASS =
+  "tool-chip-detail-header sticky top-0 z-[1] -mx-3 -mt-1.5 mb-1.5 flex items-center gap-1.5 " +
+  "rounded-t-md border-b bg-chat px-3 py-1.5 text-(length:--font-size-helper) leading-normal";
+
+/** The close control: the same ghost treatment as a chip, squared off for an icon. */
+const DETAIL_CLOSE_CLASS =
+  "tool-chip-detail-close -mr-1 ml-auto flex cursor-pointer appearance-none items-center rounded border-0 " +
+  "bg-transparent p-1 text-faint transition-colors duration-(--dur-base) hover:bg-fill-hover hover:text-primary";
+
 /** The code itself adds only how it wraps; the pane around it sets the face. */
 const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
 
@@ -237,6 +262,79 @@ function renderPaneNote(marker: string, state: "loading" | "unavailable", extra 
   );
 }
 
+/** How much of a long output the panel shows before asking. Enough that most calls
+ *  are unaffected and a long one still opens with its shape visible, short enough
+ *  that a thousand-line log does not bury the rest of the transcript when a chip is
+ *  opened by mistake. */
+const OUTPUT_CLAMP_LINES = 20;
+
+/** Where the "showing all of it" state lives -- its own key, so it does not survive
+ *  as the chip's open state does: reopening a chip starts clamped again. */
+function outputKey(call: ToolCall): string {
+  return `chip-output:${call.tool_call_id}`;
+}
+
+/** A text button under the clamped pane; sized and toned like a chip, since it is
+ *  the same kind of thing (a small control the reader may ignore). `-ml-1` cancels
+ *  its own padding so its ink starts on the pane's, as the chip row's does. */
+const OUTPUT_TOGGLE_CLASS =
+  "tool-call-output-toggle -ml-1 mt-1 cursor-pointer appearance-none rounded border-0 bg-transparent px-1 " +
+  "py-[2px] text-(length:--font-size-helper) leading-normal text-secondary transition-colors " +
+  "duration-(--dur-base) hover:bg-fill-hover hover:text-primary";
+
+/** The lines of an output, without the empty one a trailing newline leaves behind --
+ *  otherwise a 20-line log that ends in a newline reports itself as 21. */
+function outputLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/** The output pane, clamped when it is long enough to be worth asking about. */
+function renderOutput(call: ToolCall, text: string): m.Vnode {
+  const lines = outputLines(text);
+  if (lines.length <= OUTPUT_CLAMP_LINES) return renderPane("tool-call-output", text);
+  const showingAll = isBlockExpanded(outputKey(call));
+  return m("div", [
+    renderPane("tool-call-output", showingAll ? text : lines.slice(0, OUTPUT_CLAMP_LINES).join("\n")),
+    m(
+      "button",
+      {
+        type: "button",
+        class: OUTPUT_TOGGLE_CLASS,
+        onclick: () => setBlockExpanded(outputKey(call), !showingAll),
+      },
+      showingAll ? "Show less" : `View all ${lines.length} lines`,
+    ),
+  ]);
+}
+
+/** The panel's own title bar: which call this is, and the way out of it. */
+function renderDetailHeader(chip: ChipCall): m.Vnode {
+  return m("div", { class: DETAIL_HEADER_CLASS }, [
+    m.trust(
+      icon(toolIcon(chip.call.tool_name), { size: 13, strokeWidth: 1.75, className: "tool-chip-icon shrink-0" }),
+    ),
+    // The chip's own phrase, repeated here for the reader who has scrolled past it.
+    m(
+      "span",
+      { class: "tool-chip-detail-title min-w-0 truncate text-secondary", title: chip.call.tool_name },
+      chipTitle(chipText(chip.call)),
+    ),
+    m(
+      "button",
+      {
+        type: "button",
+        class: DETAIL_CLOSE_CLASS,
+        "aria-label": "Close",
+        title: "Close",
+        onclick: () => setBlockExpanded(chipKey(chip.call), false),
+      },
+      m.trust(icon("close", { size: 14, strokeWidth: 1.75 })),
+    ),
+  ]);
+}
+
 function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId: string): m.Vnode {
   const { inputText, inputState, outputText, outputState, requestPayloads } = resolveToolPayloads(
     chip.call,
@@ -269,7 +367,7 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     sections.push(renderPaneNote("tool-call-input", inputState));
   }
   if (outputState === "loaded") {
-    if (outputText) sections.push(renderPane("tool-call-output", outputText));
+    if (outputText) sections.push(renderOutput(chip.call, outputText));
   } else {
     sections.push(renderPaneNote("tool-call-output", outputState));
   }
@@ -293,7 +391,10 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     // Keyed because its siblings in the row are: mithril rejects a fragment
     // that mixes keyed and unkeyed children.
     { class: DETAIL_CLASS, key: `detail-${chip.call.tool_call_id}` },
-    sections.map((section, i) => (i === 0 ? section : m("div", { class: "mt-1.5 border-t pt-1.5" }, section))),
+    [
+      renderDetailHeader(chip),
+      ...sections.map((section, i) => (i === 0 ? section : m("div", { class: "mt-1.5 border-t pt-1.5" }, section))),
+    ],
   );
 }
 
