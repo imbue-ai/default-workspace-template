@@ -1587,8 +1587,8 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
 
 
 def test_chat_create_argv_carries_a_seeded_first_message_only_when_given() -> None:
-    """The seeded message rides the create as ``--message`` (delivered once the harness is ready,
-    like ``/welcome``); a plain chat's argv carries no ``--message`` at all."""
+    """The seeded message rides the create as ``--message`` (delivered once the harness is ready);
+    a plain chat's argv carries no ``--message`` at all."""
     seeded = _chat_create_argv(initial_message="/use-template https://github.com/example/a-template")
     assert_mngr_argv_valid(seeded)
     assert seeded[seeded.index("--message") + 1] == "/use-template https://github.com/example/a-template"
