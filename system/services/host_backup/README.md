@@ -84,12 +84,11 @@ an encrypted restic repo on cheaper object storage.
   snapshot stores that tree at its root. restic only skips re-reading an
   unchanged file when the previous snapshot holds it at the same path inside
   the snapshot, and `outer_trigger` reads every tick from a new timestamped
-  path: with an absolute source, every tick re-read and re-hashed the whole
-  home tree. `--group-by ''` makes the newest snapshot the parent (the
-  recorded path still changes every tick), and `--ignore-inode` compares files
-  by size and mtime only. A restore reads the tree from `<snapshot>:/`;
-  snapshots taken before this change hold it under their recorded absolute
-  path instead.
+  path, so an absolute source would never match and every tick would re-read
+  the whole home tree. `--group-by ''` makes the newest snapshot the parent
+  (the recorded path still changes every tick), and `--ignore-inode` compares
+  files by size and mtime only. A restore reads the tree from `<snapshot>:/`;
+  older snapshots hold it under their recorded absolute path instead.
 - Every restic command runs with `GOMAXPROCS=1` and
   `RESTIC_READ_CONCURRENCY=1`, so a backup or prune uses one core and reads
   one file at a time. This is the only lever that works everywhere: gVisor
