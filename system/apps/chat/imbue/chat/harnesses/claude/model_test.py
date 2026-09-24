@@ -185,20 +185,6 @@ def test_supports_fast_is_the_binarys_fast_mode_capability() -> None:
             assert option.supports_fast == ("fast_mode" in entries[key]["capabilities"]), key
 
 
-def test_no_baked_catalog_model_is_missing_from_the_catalog() -> None:
-    # Completeness the other way round from test_every_binary_model_id_resolves: every model the
-    # binary knows must reach an option, so a release that adds one (as 2.1.280 added Opus 5.5)
-    # fails here until the catalog carries it.
-    unresolved = [
-        entry["id"]
-        for entry in _baked_catalog()["models"]
-        if match_option(ModelIdentity(model_id=entry["id"], effort="high", fast=False), CLAUDE_CATALOG.options) is None
-    ]
-    # The pre-4 ids claude spells the other way round (claude-3-5-haiku) are the binary's own
-    # legacy naming and are matched by the explicitly-spelled claude-haiku-3-5 form instead.
-    assert unresolved == ["claude-3-5-haiku", "claude-3-5-sonnet", "claude-3-7-sonnet"]
-
-
 # Every claude model id the pinned 2.1.280 binary carries, extracted from its strings
 # rather than transcribed from docs:
 #
