@@ -14,7 +14,7 @@ const TOOL_CALL_PREFIX = "Tool call: ";
 export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
   const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true });
-  unlinkWorkspacePaths(fragment);
+  rewritePathLinks(fragment);
   // The fragment belongs to DOMPurify's inert document. Serializing it through a live-document
   // element would adopt its <img>s into the page, and an adopted image starts fetching.
   const container = fragment.ownerDocument.createElement("div");
@@ -32,7 +32,7 @@ export function renderMarkdown(source: string): string {
  * fragment, ``file:``) has nothing to open it yet, so it is unwrapped to its text.
  * A dotted "scheme" is a file name with a line number (``q4.md:12``), not a URL.
  */
-function unlinkWorkspacePaths(root: DocumentFragment): void {
+function rewritePathLinks(root: DocumentFragment): void {
   for (const anchor of Array.from(root.querySelectorAll("a"))) {
     const href = anchor.getAttribute("href") ?? "";
     const isWebLink = /^[a-z][a-z\d+-]*:/i.test(href) && !/^file:/i.test(href);
