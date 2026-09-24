@@ -162,8 +162,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
   };
 }
 
-/** The lifted shortcut under the pointer, drawn as the shortcut itself, and the outline of the cell it
- *  would drop into, drawn as the box that shortcut's own highlight would take there. */
+/** The lifted shortcut under the pointer, drawn as the shortcut itself, and the outline of the cell
+ *  it would drop into, inset from that cell by the same gap the shortcuts leave each other. */
 function shortcutGhost(
   ghostRect: PixelRect,
   target: PixelRect,

@@ -2,7 +2,7 @@
  * A window's title bar (concepts.md section 2.7), left to right: the app icon, the title,
  * Refresh, the window menu (three dots, right after it), then at the right edge minimize,
  * maximize (restore when maximized), and close. Resting on the maximize control opens the
- * window's size menu, which the window menu offers as its first section too.
+ * window's size menu, which the window menu opens under Move and resize too.
  * It is the drag handle (``data-drag-handle``);
  * a double click toggles maximize. The maximize and restore controls are hidden in compact mode,
  * where every window renders maximized. A pinned window keeps its close control too, so the
@@ -87,9 +87,8 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
         "div",
         {
           "data-drag-handle": "",
-          // No gap of its own: the leading cluster spells out its own spacing (4px from the app's
-          // icon to the name, 8px on to Refresh, 2px on to the menu), and the controls at the far
-          // end keep the 4px they had.
+          // No gap of its own: the spacing between the leading items is uneven, so each carries
+          // its own leading margin.
           class:
             "title-bar pointer-events-auto flex h-(--desk-title-bar-height) shrink-0 items-center border-b " +
             "border-default pr-1 pl-2 touch-none select-none " +

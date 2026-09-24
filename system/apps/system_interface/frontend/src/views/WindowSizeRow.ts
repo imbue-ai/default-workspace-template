@@ -28,9 +28,8 @@ import { zoneGlyph } from "./glyphs";
 /** The pictogram's box inside its tile, which leaves the tile 4px of its own around the drawing. */
 const ZONE_GLYPH_SIZE = 20;
 
-/** What the submenu holding the grid is set to: five 28px tiles, the 4px between each pair, the 4px
- *  the grid is inset by on either side, and the card's own border. A submenu sized for rows of text
- *  would stand a third wider than the only thing in it. */
+/** The submenu's width: a submenu left to the default width rows of text are cut for would stand a
+ *  third wider than the grid, which is the only thing in it. */
 const ZONE_GRID_WIDTH = 5 * 28 + 4 * 4 + 2 * 4 + 2;
 
 export interface WindowSizeActions {
@@ -40,7 +39,7 @@ export interface WindowSizeActions {
   readonly setFrame: (frame: Frame) => void;
 }
 
-/** One tile: what it looks like, what it reads, and what it does. */
+/** One tile of the grid. */
 interface WindowZone {
   readonly key: string;
   readonly label: string;
@@ -68,8 +67,7 @@ function placeIn(zone: WindowZone, actions: WindowSizeActions): void {
 }
 
 /** The grid alone: five tiles to a line, so the whole-and-halves and the quarters each read as
- *  their own line. Tighter than a menu row's own slab, which is an indent cut for text rather than
- *  for a grid whose hover boxes are what a card's edge should be read against. */
+ *  their own line. Inset less than a menu row's own slab, whose indent is cut for text. */
 function zoneGrid(actions: WindowSizeActions, onPlaced: () => void): m.Vnode {
   return m(
     "div",

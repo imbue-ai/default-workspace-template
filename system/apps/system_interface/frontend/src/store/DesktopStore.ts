@@ -1193,9 +1193,8 @@ export class DesktopStore {
     this.updateShortcutDrag(pointer);
     const settled = this.gesture;
     this.gesture = null;
-    // The move goes in BEFORE the redraw: with the gesture gone and the shortcut still recorded in
-    // the cell it was lifted from, a redraw here would put the icon back where it started for as
-    // long as the move takes, which reads as the drop bouncing.
+    // The move goes in BEFORE the redraw: with the gesture gone and the shortcut still recorded
+    // in the cell it was lifted from, a redraw here draws the icon back where it started.
     if (settled !== null && settled.kind === "shortcut") {
       void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
     }

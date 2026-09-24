@@ -52,8 +52,8 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
     m(
       "span",
       {
-        // The hover is the tile growing, not a tint behind it: the tint is what says SELECTED, and
-        // one look cannot say both. A transform moves nothing around it.
+        // The hover is the tile growing: a tint behind it is what says selected, and one look
+        // cannot say both. A transform moves nothing around it.
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
           "rounded-(--desk-icon-radius) bg-surface p-2 shadow-(--desk-icon-shadow) transition-transform " +
@@ -137,10 +137,9 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             onContextMenu(event.clientX, event.clientY);
           },
         },
-        // The selection box wraps the icon and the name rather than filling the cell, so it clears
-        // each by the same 4px, and it starts at the cell's top rather than centring in it: every
-        // icon then sits on one line across the grid, and every name starts on one, whatever wraps
-        // to a second line. The room the cell leaves under it is the gap between shortcuts.
+        // The box wraps the icon and the name, and starts at the cell's top: every icon then sits
+        // on one line across the grid and every name starts on one, whatever wraps to a second
+        // line. What the cell leaves under it is the gap to the shortcut below.
         m(
           "span",
           {
