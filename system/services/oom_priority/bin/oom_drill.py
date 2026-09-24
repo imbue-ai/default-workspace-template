@@ -151,17 +151,29 @@ class Snapshot(NamedTuple):
     samples: list[ProcessSample]
 
 
-def last_snapshot_with(pid: int, snapshots: "deque[Snapshot]") -> Snapshot | None:
-    """The newest snapshot in which ``pid`` still held memory: the state just
-    before earlyoom killed it. A later snapshot either lacks it or has it as an
-    unreaped zombie, which has no VmRSS."""
-    for snapshot in reversed(snapshots):
-        if any(
-            sample.pid == pid and sample.vm_rss_kib is not None
-            for sample in snapshot.samples
-        ):
-            return snapshot
-    return None
+def last_snapshot_with(
+    pid: int, snapshots: "deque[Snapshot]", tolerance_kib: int
+) -> Snapshot | None:
+    """The newest snapshot in which ``pid`` still held its memory: the state
+    just before earlyoom killed it.
+
+    A kill only shrinks its victim. Later snapshots can still list it, first
+    with part or all of its memory already released (earlyoom calls
+    process_mrelease right after the signal), then as an unreaped zombie with
+    no VmRSS. So the pre-kill state is the newest snapshot where the victim's
+    RSS was within ``tolerance_kib`` of the most it held in any snapshot."""
+    held = [
+        (snapshot, sample.vm_rss_kib)
+        for snapshot in snapshots
+        for sample in snapshot.samples
+        if sample.pid == pid and sample.vm_rss_kib is not None
+    ]
+    if not held:
+        return None
+    peak = max(rss for _, rss in held)
+    return next(
+        snapshot for snapshot, rss in reversed(held) if rss >= peak - tolerance_kib
+    )
 
 
 def judge_kill(
@@ -327,7 +339,7 @@ def _judge_record(
     the same pair of snapshots, and the second must not be judged against the
     first victim."""
     pid = int(record.get("pid", 0))
-    snapshot = last_snapshot_with(pid, snapshots)
+    snapshot = last_snapshot_with(pid, snapshots, tolerance_kib)
     samples = snapshot.samples if snapshot is not None else snapshots[-1].samples
     judgement = judge_kill(
         pid, predict_ranking(samples, total_kib, avoid_regex, excluded), tolerance_kib
