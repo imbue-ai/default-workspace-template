@@ -85,12 +85,16 @@ in with its own OAuth (sign in before connecting; see the last section):
 ```
 
 A hosted server that takes a key as a header names the variable, never the
-value; the value comes from the environment of the `connect` below:
+value; the value comes from the environment of the `connect` below. Its
+`secretsFile` is not mcpc's (mcpc ignores it): it records which file that connect
+runs under, so a published template declares the file and an adopting workspace
+asks for it.
 
 ```json
 "example": {
   "url": "https://mcp.example.com/mcp",
-  "headers": {"Authorization": "Bearer ${EXAMPLE_API_KEY}"}
+  "headers": {"Authorization": "Bearer ${EXAMPLE_API_KEY}"},
+  "secretsFile": "/home/user/workspace/data/.secrets/example.env"
 }
 ```
 
@@ -100,8 +104,8 @@ Then open the session. From the repo root:
 mcpc connect mcp-servers.json:example @example
 ```
 
-For a hosted server with a header, run the connect under the wrapper, so mcpc
-reads the variable; it stores the header with the session and sends it from then
+For a hosted server with a header, run the connect under the wrapper, naming its
+`secretsFile`, so mcpc reads the variable; it stores the header with the session and sends it from then
 on:
 
 ```bash

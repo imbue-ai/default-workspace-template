@@ -276,7 +276,9 @@ conversation:**
    `file` and `variables` (and its `note` in your rationale), each in a tool
    call of its own, then end the turn. When a `Secret stored:` message arrives
    for an entry, connect the `mcp-servers.json` servers that run under that
-   file (nothing connects on its own; see the skill's `references/mcp.md`) and
+   file (the wrapper in a local server's command, or a hosted server's
+   `secretsFile`; nothing connects on its own; see the skill's
+   `references/mcp.md`) and
    start the programs that run under it. A `Secret declined:` message leaves
    that server and program out; the install still completes, and you tell the
    user what stays unstarted and why. A server in `mcp-servers.json` that signs

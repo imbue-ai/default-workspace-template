@@ -17,6 +17,16 @@ if [ ! -e /home/user/.cache ] && [ ! -L /home/user/.cache ]; then
     ln -s /var/cache/user /home/user/.cache
 fi
 
+# mcpc, the workspace's shared MCP client, keeps its sessions and sign-ins in
+# ~/.mcpc unless MCPC_HOME_DIR names another place. Point ~/.mcpc at the same
+# guarded directory, so a process started without that variable shares the one
+# store rather than starting a second, unguarded one.
+mkdir -p /home/user/workspace/data/.secrets/mcpc
+chmod 700 /home/user/workspace/data/.secrets/mcpc
+if [ ! -e /home/user/.mcpc ] && [ ! -L /home/user/.mcpc ]; then
+    ln -s /home/user/workspace/data/.secrets/mcpc /home/user/.mcpc
+fi
+
 # Root's interactive shells read $HOME/.bashrc, which lives on the volume now;
 # seed the PATH + mngr-env lines the image used to keep in /root/.bashrc.
 if [ ! -e /home/user/.bashrc ]; then
