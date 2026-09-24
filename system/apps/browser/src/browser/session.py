@@ -1811,8 +1811,8 @@ class LiveBrowser(MutableModel):
 def closed_window_browser(hint_body: object) -> str | None:
     """The browser a closed window showed, from the ``path`` of the shell's close hint.
 
-    None for a window at a launch path (``/new?...`` names no browser) or a body of another shape than the
-    shell posts.
+    None for a path with no browser (the root, or one naming something that is not a browser name), or a body of
+    another shape than the shell posts.
     """
     if not isinstance(hint_body, dict):
         return None
