@@ -5,6 +5,20 @@ pressure: that earlyoom sheds the most-expendable work first, the kill is
 recorded, and a shed agent is told it was paused when it comes back. Run it on a
 real container (not macOS -- the tagging needs `/proc`).
 
+To check the shed *order* itself, run the automated drill,
+`system/services/oom_priority/bin/oom_drill.py`. It starts one memory-holding
+sleeper per band you name, grows a hog at `oom_score_adj` -1000 until the last
+sleeper is shed, and checks each kill against a prediction of earlyoom's
+badness taken just before it; it prints a JSON verdict and exits non-zero on the
+first wrong victim. It is stdlib-only, so it can be streamed in:
+
+```bash
+mngr exec <agent> 'python3 - --bands 1000,900,600,300,75,25' < system/services/oom_priority/bin/oom_drill.py
+```
+
+Stop the browser and every chat first, so the drill's sleepers are what earlyoom
+has to choose from.
+
 ## 0. Confirm earlyoom is running
 
 ```bash
@@ -45,7 +59,9 @@ Watch earlyoom act:
 
 ```bash
 supervisorctl tail -f earlyoom stderr
-# expect: sending SIGTERM to process <pid> ... "python3": oom_score ...
+# expect: sending SIGTERM to process <pid> ... "python3": oom_score 0, oom_score_adj 900,
+#         badness ... KiB, VmRSS ... MiB, ordering kernel_badness, ...
+# (gVisor serves every oom_score as 0; earlyoom ranks by the badness instead.)
 ```
 
 ## 3. Confirm the kill was recorded
