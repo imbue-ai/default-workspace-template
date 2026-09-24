@@ -1592,15 +1592,16 @@ def _apply_pending_intake(token: str) -> Response:
         return _chat_not_found_response(str(chat_id))
     intake = pending.request
     provisional: ProvisionalChat | None = agent_manager.get_provisional_chat(str(chat_id))
+    is_awaiting = provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     is_agent = _agent_chat_snapshot(agent_manager, chat_id) is not None
     composer_text: str | None = None
     first_message: str | None = None
-    if intake.is_draft or (not is_agent and provisional is None):
+    # Section 3.6.1's three outcomes: a draft, or a text for a chat that can neither take a message nor be launched
+    # by one, goes to the composer; a chat awaiting its first send is launched with the text; an agent is sent it.
+    if intake.is_draft or (not is_agent and not is_awaiting):
         composer_text = intake.message
-    elif provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
+    elif is_awaiting:
         first_message = intake.message
-    elif not is_agent:
-        composer_text = intake.message
     elif intake.message:
         _deliver_intake_send_in_background(state, chat_id, intake)
     else:
