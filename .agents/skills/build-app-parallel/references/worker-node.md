@@ -6,6 +6,13 @@ this one build. Your task file names your subtask and gives you the reports of
 the nodes you depend on, and its frontmatter names its own path and where your
 report goes. This document is the rest of your task.
 
+Read `.agents/skills/build-app-parallel/references/worker-workspace-rules.md`
+too. It is the subset of the workspace's `AGENTS.md` that applies to a worker --
+`AGENTS.md` itself is loaded into your context automatically and is written for
+the agent holding the chat with the user, so where the two differ, that file is
+the one that applies to you. This document says how to work as a node; that one
+says how the workspace works.
+
 ## Do only your subtask
 
 Your subtask is the whole of your job. The rest of the app is other nodes' work:
@@ -76,18 +83,32 @@ One command, and only one: whatever proves the files you wrote load. For Python
 that is importing the module you added (`uv run python -c "import <module>"`);
 for a page or a static asset it is that the file parses. Then report.
 
-**Do not build anything to check with.** No test suite, no throwaway script that
-drives your piece, no serving the app and loading it with curl or Playwright,
-and none of the full test suite, coverage, ratchets, `/autofix` or any review
-gate, even where `CLAUDE.md` asks for them. In a build this instruction used to
-ask for a served check, and four of five workers answered it by writing their own
-`check_*.py` -- between a third and two thirds of each worker's time, which found
-nothing that mattered.
+**Build nothing to check with unless your subtask asks you to.** No test suite,
+no throwaway script that drives your piece, no serving the app and loading it
+with curl or Playwright, and none of the full test suite, coverage, ratchets,
+`/autofix` or any review gate, even where `CLAUDE.md` asks for them. In a build
+this instruction used to ask every node for a served check, and four of five
+workers answered it by writing their own `check_*.py` -- between a third and two
+thirds of each worker's time, which found nothing that mattered.
 
 What that check would have caught is already caught, later and in one place: the
 orchestrator serves a preview of the whole app at each review, in front of the
 user, and one hardening pass runs the real tests once everything is built. Your
 job is to hand over a piece that loads and a report that says what you built.
+
+**Unless checking is the subtask.** A plan can name a node whose whole job is to
+verify -- that the app serves and renders, that a behaviour holds, sometimes
+that there are tests for it -- and to diagnose what that turns up. If that is
+your task file, the rules above do not apply to it: do the checking, because it
+is the work. Write and run the tests your subtask asks for and no others, to the
+conventions in `worker-workspace-rules.md` ("When coding" and "Test fixture
+discovery"). The full suite, coverage, ratchets and the review gates stay with
+the hardening pass at the end, whatever your subtask is.
+
+A node that drives the app drives it headlessly, the way
+`worker-workspace-rules.md` describes under "Important commands and
+conventions". Never the browser fleet: it streams a browser to a pane for the
+user to watch and take over, and that is a conversation the orchestrator owns.
 
 ## Two hooks that will refuse your commands
 
