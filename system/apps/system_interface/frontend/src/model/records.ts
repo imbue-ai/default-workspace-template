@@ -66,7 +66,6 @@ export interface WindowRecord {
   /** What the page last reported; "" means "show the app's display name". */
   readonly title: string;
   readonly opened_at: string;
-  readonly is_settling: boolean;
   /** The app's pinned window on this desktop: permanent, never closed. */
   readonly is_pinned: boolean;
   readonly scope: LocationScope;
@@ -109,14 +108,24 @@ export const EMPTY_LAYOUT: Layout = Object.freeze({
   window_paths: Object.freeze({}),
 });
 
+/** How the shell runs a launch path: opens a window at the path, or posts to it for the path of the page to open
+ *  (post-launch-paths plan section 3.1). */
+export type LaunchPathMethod = "GET" | "POST";
+
 export interface LaunchPath {
   readonly id: string;
   readonly label: string;
   readonly path: string;
-  /** The names of the query parameters the shell may append. */
+  readonly method: LaunchPathMethod;
+  /** The names of the params a caller may supply. */
   readonly params: readonly string[];
+  /** The fixed name-value pairs the shell sends with every launch of the path. */
+  readonly presets: Readonly<Record<string, string>>;
   /** The param the launcher fills with typed text, which makes this a free-text row; null for none. */
   readonly text_param: string | null;
+  /** The param the shell fills with text to be drafted rather than sent (a free-text row too, and what the avatar
+   *  dialog's draft goes through); null for none. */
+  readonly draft_param: string | null;
 }
 
 export interface DefaultShortcut {
@@ -337,7 +346,6 @@ export function parseWindow(raw: unknown): WindowRecord {
     path: asString(record.path, "window.path"),
     title: asString(record.title, "window.title"),
     opened_at: asString(record.opened_at, "window.opened_at"),
-    is_settling: asBoolean(record.is_settling, "window.is_settling"),
     is_pinned: record.is_pinned === undefined ? false : asBoolean(record.is_pinned, "window.is_pinned"),
     scope: record.scope === undefined ? "linked" : asOneOf(record.scope, ["linked", "independent"], "window.scope"),
   };
@@ -392,14 +400,25 @@ export function parseLayout(raw: unknown): Layout {
   };
 }
 
+function parsePresets(raw: unknown): Record<string, string> {
+  if (raw === undefined || raw === null) return {};
+  const record = asObject(raw, "launch_path.presets");
+  return Object.fromEntries(
+    Object.entries(record).map(([name, value]) => [name, asString(value, `launch_path.presets.${name}`)]),
+  );
+}
+
 function parseLaunchPath(raw: unknown): LaunchPath {
   const record = asObject(raw, "launch path");
   return {
     id: asString(record.id, "launch_path.id"),
     label: asString(record.label, "launch_path.label"),
     path: asString(record.path, "launch_path.path"),
+    method: record.method === undefined ? "GET" : asOneOf(record.method, ["GET", "POST"], "launch_path.method"),
     params: asArray(record.params ?? [], "launch_path.params").map((param) => asString(param, "launch_path.param")),
+    presets: parsePresets(record.presets),
     text_param: asOptionalString(record.text_param, "launch_path.text_param"),
+    draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
   };
 }
 
