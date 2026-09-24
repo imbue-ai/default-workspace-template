@@ -7,10 +7,18 @@ the small amount of Python that *steers* and *records* it.
 
 ## How it fits together
 
-earlyoom picks its victim by reading `/proc/*/oom_score`, the kernel "badness"
-value -- which already folds in each process's `oom_score_adj`. So the whole
-priority scheme is just: set each process's `oom_score_adj` once, at startup,
-into one of a few bands.
+The workspace runs the [imbue-ai fork of earlyoom](https://github.com/imbue-ai/earlyoom)
+(installed by `system/scripts/install_earlyoom.sh`), which picks its victim by
+the kernel's "badness", computed from each process's `oom_score_adj` and memory:
+
+    VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal) / 1000
+
+Upstream earlyoom reads `/proc/*/oom_score` instead, which gVisor serves as 0
+for every process, so under gVisor it shed the largest process whatever its
+band. On a Linux kernel (runc) the fork's order is the kernel's own. So the
+whole priority scheme is just: set each process's `oom_score_adj` once, at
+startup, into one of a few bands; one band point is worth MemTotal/1000 of
+memory.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
@@ -231,7 +239,10 @@ a protected one.
 - **Shed ledger** (`data/.state/oom_priority/events/shed.jsonl`): append-only,
   written by `system/services/oom_priority/bin/earlyoom_record_shed.py` (earlyoom's `-N` after-kill hook).
   One `process_shed` line per kill, carrying the agent name only when an agent's
-  *own* process was shed. Read by the revival-notice hook
+  *own* process was shed, plus why earlyoom picked the victim (`oom_score_adj`,
+  `badness_kib`, `vm_rss_kib`, and the `ordering`: `kernel_badness`, or
+  `rss_fallback` if earlyoom's startup self-check could not read those inputs;
+  null when earlyoom did not report them). Read by the revival-notice hook
   (`system/services/oom_priority/bin/claude_shed_notice_hook.py`) and the launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
   by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.
@@ -254,10 +265,10 @@ Two things here are best-effort, not hard guarantees:
   needs `CAP_SYS_RESOURCE`, which the container does not grant -- a deferred
   follow-up.
 - **The service ordering can be reordered by memory usage.** earlyoom picks the
-  highest `/proc/*/oom_score`, which adds each process's live memory badness on
-  top of its `oom_score_adj`. The service bands are only ~10 apart, so a service
-  using enough more memory than the one below it can outweigh the band gap and be
-  shed first. The bands guarantee the ordering only when memory usage is
+  highest badness, which adds each process's live memory on top of its
+  `oom_score_adj` (one band point is worth MemTotal/1000 of memory). The service
+  bands are only ~10 apart, so a service using enough more memory than the one
+  below it can outweigh the band gap and be shed first. The bands guarantee the ordering only when memory usage is
   comparable; in the common case the services are lightweight and the order
   holds. Widening the gaps would need to push the top service bands past the
   agent bands, which would defeat the "services outlive agents" goal, so the
