@@ -171,9 +171,10 @@ class LaunchPath(FrozenModel):
                 raise InvalidManifestValueError(
                     f"preset {str(preset_name)!r} is also one of the launch path's params; a name is one or the other"
                 )
-        for reserved in sorted(RESERVED_LAUNCH_PARAM_NAMES.intersection([*param_names, *map(str, self.presets)])):
+        reserved = sorted(RESERVED_LAUNCH_PARAM_NAMES.intersection([*param_names, *map(str, self.presets)]))
+        if reserved:
             raise InvalidManifestValueError(
-                f"{reserved!r} is reserved for the shell's launch envelope and cannot be a param or a preset"
+                f"{reserved[0]!r} is reserved for the shell's launch envelope and cannot be a param or a preset"
             )
         return self
 
