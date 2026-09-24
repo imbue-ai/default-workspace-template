@@ -11,7 +11,7 @@
   --desk-title-bar-height: 36px;
   --desk-taskbar-height: 48px;
   --desk-cell-width: 96px;
-  --desk-cell-height: 104px;
+  --desk-cell-height: 112px;
   --desk-grid-inset: 16px;
   --desk-cell-gap: 4px;
   --desk-window-min-width: 320px;
@@ -56,7 +56,7 @@
 [data-compact] {
   --desk-taskbar-height: 56px;
   --desk-cell-width: 80px;
-  --desk-cell-height: 96px;
+  --desk-cell-height: 104px;
   --desk-grid-inset: 8px;
   --desk-window-radius: 0px;
   --desk-icon-size: 40px;

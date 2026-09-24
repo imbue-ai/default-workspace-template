@@ -145,7 +145,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           "span",
           {
             class:
-              "shortcut-highlight flex w-full flex-col items-center gap-1 rounded-lg p-1 " +
+              "shortcut-highlight flex w-full flex-col items-center gap-3 rounded-lg p-1 " +
               "group-focus-visible:outline-2 group-focus-visible:outline-accent " +
               (isSelected ? "bg-accent/15 outline-1 outline-accent" : ""),
           },

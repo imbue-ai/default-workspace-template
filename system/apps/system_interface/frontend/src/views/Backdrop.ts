@@ -185,7 +185,7 @@ function shortcutGhost(
       {
         "data-shortcut-ghost": "",
         class:
-          "pointer-events-none absolute z-(--z-sticky) flex flex-col items-center justify-start gap-1 " +
+          "pointer-events-none absolute z-(--z-sticky) flex flex-col items-center justify-start gap-3 " +
           "px-(--desk-cell-gap) py-1 text-center",
         style: rectStyle(ghostRect),
       },
