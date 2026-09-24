@@ -2735,6 +2735,28 @@ class AgentManager:
         self._auto_open.request_open(chat_id)
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
+    def mint_awaiting_chat(self, account_id: str) -> ProvisionalChat:
+        """Mint a chat with no seed that waits for its first send (post-launch-paths plan section 3.7).
+
+        What an intake falls back to when it cannot launch a new chat at once: a draft into a new
+        chat, or a first message with nothing signed in. The chat is listed as provisional in the
+        ``awaiting_first_send`` phase under a minted "Chat N" name, with the account the intake
+        resolved (or none), and its page shows an empty conversation with the composer; the first
+        send launches it through ``create_chat`` by ``chat_id``. It has no record, so a restart of
+        this app drops it.
+        """
+        chat_id = ChatId(str(AgentId()))
+        with self._lock:
+            provisional = ProvisionalChat(
+                chat_id=chat_id,
+                name=self._mint_display_name_locked(""),
+                account_id=account_id,
+                phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
+            )
+            self._provisional_chats[chat_id] = provisional
+        self._broadcaster.broadcast_provisional_chat_created(provisional)
+        return provisional
+
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
         """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
@@ -2894,6 +2916,11 @@ class AgentManager:
                         )
                     else:
                         message = provisional.message
+                elif provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
+                    # An unseeded chat awaiting its first send (an intake that could not launch at once,
+                    # ``chat_intakes.py``) is launched by whatever its launch brings: the first message, or
+                    # nothing, for an intake that arrived with no text and no account.
+                    pass
                 elif message:
                     raise AgentCreationError(
                         f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
