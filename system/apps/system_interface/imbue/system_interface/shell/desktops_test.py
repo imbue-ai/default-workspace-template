@@ -191,6 +191,18 @@ def test_a_desktops_file_carrying_the_retired_sharing_key_still_reads(tmp_path: 
     assert "sharing" not in json.loads((tmp_path / "desktops.json").read_text())["desktops"][0]
 
 
+def test_a_desktops_file_carrying_the_retired_window_settling_key_still_reads(tmp_path: Path) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    store.ensure_default(lambda: ())
+    opened = store.open_window("home", window_record(_WIN_1, "chat", "/"))
+    raw = json.loads((tmp_path / "desktops.json").read_text())
+    raw["desktops"][0]["windows"][0]["is_settling"] = True
+    (tmp_path / "desktops.json").write_text(json.dumps(raw))
+    assert store.list_desktops() == [opened]
+    store.update_settings("home", "Home", "#2f6b4f", 1)
+    assert "is_settling" not in json.loads((tmp_path / "desktops.json").read_text())["desktops"][0]["windows"][0]
+
+
 def test_a_users_desktop_is_named_after_them_and_made_unique() -> None:
     home = default_desktop(())
     assert desktop_name_for_user("Alice", "alice@example.com", [home]) == "Alice"
