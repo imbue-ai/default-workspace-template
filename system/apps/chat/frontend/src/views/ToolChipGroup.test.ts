@@ -191,10 +191,8 @@ describe("the tool chip row", () => {
     setBlockExpanded("chip:c-kept", false);
   });
 
-  // Tailwind v4 emits nothing for a utility that does not resolve, so the
-  // collapse is asserted on the class the group actually carries: at the edges
-  // of a message its own margin has to give way to the message's, or the seam
-  // between two messages ends up wider than every other seam.
+  // Asserted on the class rather than a computed style: Tailwind v4 emits
+  // nothing for a utility that does not resolve, and jsdom has no layout.
   it("gives up its own margin at the edges of the message it sits in", () => {
     mount([chip(read)]);
     const group = root.querySelector(".tool-chip-group")!;
@@ -212,9 +210,8 @@ describe("the tool chip row", () => {
     expect(group.className).toContain("mb-5");
   });
 
-  // Deliberately unmarked. Whatever a failed call means, the agent says in prose
-  // a line or two below, which is the form a reader can act on -- so the chip
-  // reads like any other and the transcript's alarm colour keeps its meaning.
+  // Deliberately unmarked -- the agent explains a failure in prose below it, so
+  // the chip reads like any other.
   it("leaves a failed call looking like every other chip", () => {
     // The expansion store outlives a test, and an open chip has a tone of its
     // own; closing both is what leaves the failure as the only difference.

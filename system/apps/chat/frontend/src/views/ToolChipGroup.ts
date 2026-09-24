@@ -104,12 +104,8 @@ function chipKey(call: ToolCall): string {
  *
  *  At the edges of a message they would instead add to the message's own
  *  margin, making that seam wider than every other seam in the transcript -- so
- *  there they collapse and the message rhythm alone does the spacing. Same
- *  reason, and the same shape, as the `p:last-child` rules the markdown blocks
- *  carry. That collapse is also why the uneven pair is easy to miss: a
- *  top-level run ends its message, so `mb` is dropped and the row's own gap
- *  shows through. It is the runs INSIDE a timeline, where prose follows in the
- *  same container, that render the bottom margin at all. */
+ *  there they collapse and the message rhythm alone does the spacing, the same
+ *  shape as the `p:last-child` rules the markdown blocks carry. */
 const GROUP_CLASS = "tool-chip-group mt-1.5 mb-5 first:mt-0 last:mb-0";
 
 /** `-ml-1` cancels the first chip's own left padding, so the row's ink starts
@@ -152,15 +148,11 @@ const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-1 basis-[calc(100%-0.25rem
 
 /** The panel's header: which call this is, and the way out of it.
  *
- *  It does NOT stick. It was sticky, and the pinning read as erratic against a
- *  transcript that is virtualized and scroll-anchored -- a header holding still
- *  while everything around it moves under its own rules.
- *
- *  What the header is for without that is room: a chip caps its phrase at 20rem and
- *  truncates, so the full text of what a call did had nowhere to be said. Here it
- *  has the panel's whole width, and wraps rather than truncating when even that is
- *  not enough. `items-start` is what keeps the glyph and the close control on the
- *  first line when it does.
+ *  What it is for is room. A chip caps its phrase at 20rem and truncates, so the
+ *  full text of what a call did had nowhere to be said; here it has the panel's
+ *  whole width, and wraps rather than truncating when even that is not enough.
+ *  `items-start` keeps the glyph and the close control on the first line when it
+ *  does.
  *
  *  The negative margins undo the panel's own padding, so the header spans its full
  *  width and meets its rounded top corners. */
@@ -435,13 +427,10 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
         chips.flatMap((chip) => {
           const isOpen = open !== null && open.call.tool_call_id === chip.call.tool_call_id;
           const text = chipText(chip.call);
-          // A failed call is NOT marked here, and that is deliberate. A call that
-          // fails is followed by the agent saying what it means and what it did
-          // next -- in prose, which is the form a reader can actually act on. The
-          // chip's red said the same thing worse and earlier, and spending the
-          // transcript's one alarm colour on something already answered two lines
-          // down is how a reader learns to discount it. Colour is left to say the
-          // one thing nothing else does: which chip is open.
+          // A failed call is NOT marked here: the agent says what it means, in
+          // prose, a line or two below, which is the form a reader can act on.
+          // Colour is left to say the one thing nothing else does -- which chip
+          // is open.
           const tone = isOpen ? "text-primary" : "text-faint";
           const fill = isOpen ? "tool-chip--selected bg-fill-active" : "bg-transparent";
           const button = m(
