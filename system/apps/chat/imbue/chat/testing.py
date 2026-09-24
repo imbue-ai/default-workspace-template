@@ -716,7 +716,13 @@ class RunningWorkspace(FrozenModel):
 
 
 def seed_failed_chat(
-    agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1", message: str = ""
+    agent_manager: AgentManager,
+    chat_id: ChatId,
+    name: str,
+    account_id: str = "acct-1",
+    message: str = "",
+    labels: Mapping[str, str] | None = None,
+    is_installation_check_skipped: bool = False,
 ) -> ProvisionalChat:
     """Plant a provisional chat whose create failed, as the manager holds one after ``mngr create`` exits non-zero:
     what the page's "Try again" relaunches under its id."""
@@ -725,6 +731,8 @@ def seed_failed_chat(
         name=name,
         account_id=account_id,
         message=message,
+        labels=dict(labels or {}),
+        is_installation_check_skipped=is_installation_check_skipped,
         phase=ProvisionalChatPhase.FAILED,
         error="mngr create exited with code 3",
     )
