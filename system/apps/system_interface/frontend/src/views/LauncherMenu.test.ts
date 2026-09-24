@@ -3,7 +3,15 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appRecord, chatLikeAppRecord, desktopRecord, launchPathRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  chatLikeAppRecord,
+  desktopRecord,
+  getFreeTextAppRecord,
+  launchPathRecord,
+  windowRecord,
+} from "../testing/records";
+import { desktopStateWithApps } from "../testing/states";
 import { initialDesktopState, reduceDesktopState } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
 import { defaultHighlightIndex, launcherRowsOf } from "../reducers/launcherRows";
@@ -110,21 +118,7 @@ describe("the launcher menu", () => {
     expect(attrs.onHighlight).toHaveBeenCalledWith(2);
     unmountViews();
     // A GET free-text row over the path bound is the disabled row; the chat-like app's POST rows never are.
-    let bounded = initialDesktopState("client-1", { isCompact: false, isTouch: false });
-    bounded = reduceDesktopState(bounded, {
-      type: "apps_updated",
-      apps: [
-        appRecord("noting", {
-          launcher_rank: 1,
-          launch_paths: [
-            launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
-            launchPathRecord({ id: "send", path: "/send", params: ["message"], text_param: "message" }),
-          ],
-        }),
-      ],
-    });
-    bounded = reduceDesktopState(bounded, { type: "desktops_updated", desktops: [desktopRecord("home")] });
-    bounded = reduceDesktopState(bounded, { type: "desktop_activated", desktopId: "home" });
+    const bounded = desktopStateWithApps([getFreeTextAppRecord("noting", ["new", "send"])]);
     const tooLong = render(launcherRowsOf(bounded, "x".repeat(2100)));
     const disabled = tooLong.root.querySelector('[data-text-action="secondary"]') as HTMLElement;
     expect(disabled.getAttribute("data-disabled")).toBe("true");
