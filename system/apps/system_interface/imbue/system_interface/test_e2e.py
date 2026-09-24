@@ -103,7 +103,7 @@ _PINNED_TEXT_PARAM = "message"
 
 # The metrics of the default theme (frontend/src/theme/default.css), for driving gestures by pixel.
 _CELL_WIDTH = 96
-_CELL_HEIGHT = 96
+_CELL_HEIGHT = 104
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
 _GEOMETRY_TOLERANCE_PX = 4

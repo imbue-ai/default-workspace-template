@@ -34,7 +34,7 @@ const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-title-bar-height": "36px",
   "--desk-taskbar-height": "48px",
   "--desk-cell-width": "96px",
-  "--desk-cell-height": "96px",
+  "--desk-cell-height": "104px",
   "--desk-grid-inset": "16px",
   "--desk-window-min-width": "320px",
   "--desk-window-min-height": "240px",
@@ -58,7 +58,7 @@ describe("the theme file", () => {
     const compact = THEME_CSS.slice(THEME_CSS.indexOf("[data-compact]"), THEME_CSS.indexOf("[data-touch]"));
     expect(compact).toContain("--desk-taskbar-height: 56px");
     expect(compact).toContain("--desk-cell-width: 80px");
-    expect(compact).toContain("--desk-cell-height: 88px");
+    expect(compact).toContain("--desk-cell-height: 96px");
     expect(compact).toContain("--desk-grid-inset: 8px");
     expect(compact).toContain("--desk-window-radius: 0px");
     const touch = THEME_CSS.slice(THEME_CSS.indexOf("[data-touch]"));

@@ -186,7 +186,7 @@ function shortcutGhost(
         "data-shortcut-ghost": "",
         class:
           "pointer-events-none absolute z-(--z-sticky) flex flex-col items-center justify-start gap-1 " +
-          "p-(--desk-cell-gap) text-center",
+          "px-(--desk-cell-gap) py-1 text-center",
         style: rectStyle(ghostRect),
       },
       shortcutContent(app, app?.display_name ?? appName),
