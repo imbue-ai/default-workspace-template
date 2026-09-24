@@ -7,6 +7,7 @@ import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
 import { PointerGestureSource } from "./gestures/pointerGestures";
+import { startPresenceHeartbeat } from "./model/Presence";
 import { initEmbedderRelay } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
@@ -52,6 +53,8 @@ function bootstrap(): void {
   if (store === null) throw new Error("the render modes never reported");
   const desktopStore: DesktopStore = store;
   const gestures = new PointerGestureSource();
+  // Say this window is here (and learn who it is) for as long as it stays visible.
+  startPresenceHeartbeat();
   // The child-frame boundary: the minds relay for the framed pages' `minds:` messages, and the
   // shell side of the app contract.
   initEmbedderRelay();
@@ -74,8 +77,9 @@ function bootstrap(): void {
   }
   const started = desktopStore.start(takeDeepLinkFromLocation());
   // Announced once the page can act on what the embedder held, not merely once a handler is
-  // registered: a focus-chat ask needs the desktops ``start`` reads and the apps the socket
-  // delivers, and the embedder sends it the moment this announcement lands.
+  // registered: a focus-chat ask needs the desktops and the apps. ``start`` reads both from the
+  // inventory, but one whose inventory read failed returns without them, and the apps then land
+  // with the socket's first ``apps_updated``; the embedder sends the ask the moment this lands.
   void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
 }
 

@@ -41,6 +41,8 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
@@ -122,6 +124,14 @@ class E2EServer(FrozenModel):
 
 def _get_json(url: str) -> Any:
     with urllib.request.urlopen(url, timeout=5) as response:
+        return json.loads(response.read())
+
+
+def _post_json(url: str, payload: dict[str, Any]) -> Any:
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
         return json.loads(response.read())
 
 
@@ -398,20 +408,12 @@ def _wait_for_window_count(base_url: str, count: int, desktop_id: str = _HOME_DE
 def _broadcast_op(base_url: str, op: str, args: dict[str, Any]) -> dict[str, Any]:
     """POST an op to ``/api/layout/broadcast`` the way ``system/scripts/layout.py`` does, retrying while the shell
     has not yet registered the client the op names (a 404 or 412)."""
-    payload = json.dumps({"op": op, "args": args, "requester": None}).encode()
     answer: dict[str, Any] = {}
 
     def _attempt() -> bool:
-        request = urllib.request.Request(
-            f"{base_url}/api/layout/broadcast",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                answer.update(json.loads(response.read()))
-                return True
+            answer.update(_post_json(f"{base_url}/api/layout/broadcast", {"op": op, "args": args, "requester": None}))
+            return True
         except urllib.error.HTTPError as e:
             if e.code in (404, 412):
                 return False
@@ -429,11 +431,14 @@ def _client_id(page: Page) -> str:
     return client_id
 
 
-def _land(page: Page, server: E2EServer, query: str = "") -> None:
-    """Open the shell and wait for the home desktop's backdrop and its seeded shortcut."""
+def _land(page: Page, server: E2EServer, query: str = "", desktop_id: str = _HOME_DESKTOP_ID) -> None:
+    """Open the shell and wait for the desktop's backdrop (home's unless said otherwise) and the seeded shortcut,
+    which every desktop seeded from home carries too."""
     page.goto(f"{server.base_url}/{query}")
-    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
-    expect(page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{desktop_id}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{desktop_id}"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible(
+        timeout=15000
+    )
 
 
 def _window(page: Page, window_id: str) -> Locator:
@@ -575,12 +580,15 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
 
 
 @contextlib.contextmanager
-def _second_client(page: Page, e2e_server: E2EServer, **context_args: Any) -> Generator[Page, None, None]:
-    """A page of a second browser context (its own client id), landed on the shell and closed with the context."""
+def _second_client(
+    page: Page, e2e_server: E2EServer, desktop_id: str = _HOME_DESKTOP_ID, **context_args: Any
+) -> Generator[Page, None, None]:
+    """A page of a second browser context (its own client id), landed on the shell (on ``desktop_id``) and closed
+    with the context."""
     context = _second_context(page, **context_args)
     try:
         other_page = context.new_page()
-        _land(other_page, e2e_server)
+        _land(other_page, e2e_server, desktop_id=desktop_id)
         yield other_page
     finally:
         context.close()
@@ -591,8 +599,8 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     e2e_server: E2EServer, page: Page
 ) -> None:
     """A fresh browser lands on the home desktop over the bundled wallpaper: the seeded shortcut sits in the first
-    cell, nothing is open, the taskbar carries the launcher field and both tray widgets, and the shell soon knows
-    the client with home as its active desktop."""
+    cell, nothing is open, the taskbar carries the launcher field and the Desktops tray widget, and the shell soon
+    knows the client with home as its active desktop."""
     _land(page, e2e_server)
     expect(page).to_have_title("System Interface")
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
@@ -1770,6 +1778,60 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
         expect(_window(phone_page, phone_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
         expect(_taskbar_entry(page, phone_window)).to_have_attribute("data-minimized", "true", timeout=15000)
         expect(_window(page, laptop_window)).to_have_attribute("data-focused", "true")
+
+
+def _visiting_client(
+    page: Page, e2e_server: E2EServer, user_id: str, email_local_part: str, desktop_id: str
+) -> contextlib.AbstractContextManager[Page]:
+    """A second client whose every request carries a visitor's identity, landed on the visitor's own desktop
+    rather than on Home (the shell makes one for a first-time visitor, named after their email here: the e2e
+    shell can reach no connector for a profile)."""
+    visitor = RequestIdentity(owner=False, user_id=user_id, email=f"{email_local_part}@example.com")
+    return _second_client(page, e2e_server, desktop_id, extra_http_headers=identity_headers(visitor))
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_server: E2EServer, page: Page) -> None:
+    """A signed-in visitor's first page load gets a desktop named after them, holding Home's shortcut and a window at
+    each of Home's settled windows, and leaves Home as it was; a second client of theirs lands there too; and when
+    that desktop is deleted, their next load seeds another and says so."""
+    _land(page, e2e_server)
+    home_window = _open_via_shortcut(page, e2e_server)
+    expect(_window(page, home_window)).to_be_visible(timeout=15000)
+    # Only a settled window is copied, and the window settles when its page reports its location, after the frame
+    # the line above waits for; the visitor must arrive after that report, not race it.
+    wait_for(
+        lambda: not _windows(e2e_server.base_url)[0]["is_settling"],
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message="Home's window never settled (its page never reported its location)",
+    )
+
+    with _visiting_client(page, e2e_server, "user-alice", "alice", "alice") as visitor:
+        desktops = _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]
+        (alice,) = [desktop for desktop in desktops if desktop["id"] == "alice"]
+        assert alice["name"] == "alice"
+        (copied,) = alice["windows"]
+        assert copied["id"] != home_window and copied["app"] == _STUB_APP_NAME
+        # The copy is hers to arrange: it starts minimized in her taskbar, and Home's window is untouched.
+        expect(_taskbar_entry(visitor, copied["id"])).to_be_visible(timeout=15000)
+        assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
+        expect(page.locator('[data-desktop-switch="alice"]')).to_be_visible(timeout=15000)
+        expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
+
+        with _visiting_client(page, e2e_server, "user-alice", "alice", "alice"):
+            pass
+        assert [desktop["id"] for desktop in _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]] == [
+            _HOME_DESKTOP_ID,
+            "alice",
+        ]
+
+        _post_json(f"{e2e_server.base_url}/api/desktops/alice/delete", {})
+        visitor.reload()
+        expect(visitor.locator('[data-replaced-desktop-notice="alice"]')).to_be_visible(timeout=15000)
+        expect(visitor.locator('[data-desktop-id="alice"]')).to_be_visible()
+        visitor.locator(".replaced-desktop-dismiss").click()
+        expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)
