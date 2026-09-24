@@ -64,7 +64,9 @@ from app_manifest.registry import APP_CONTRACT_ROUTE, SHELL_APP_CONTRACT_PATH
 from app_manifest.shell_windows import shell_base_url
 from flask import Flask, Response, jsonify, request, send_file
 from flask_sock import Sock
+from imbue.imbue_common.frozen_model import FrozenModel
 from loguru import logger
+from pydantic import Field
 from simple_websocket import ConnectionClosed
 
 from browser import mediastream, telemetry
@@ -268,7 +270,15 @@ def app_contract() -> Response:
     return send_file(SHELL_APP_CONTRACT_PATH.absolute(), mimetype="text/javascript")
 
 
-def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Response":
+class _StartRefusal(FrozenModel):
+    """Why a browser could not be answered, with the status the route answers it under; each route shapes the
+    body for its own reader (``error`` for the fleet API, ``detail`` for the shell's launch route)."""
+
+    reason: str = Field(description="What was wrong, in words for the caller")
+    status: int = Field(description="The HTTP status: 400 for a bad request, 409 for a conflict, 503 while unable")
+
+
+def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | _StartRefusal":
     """The browser a nameless request means (the one that exists, started again if stopped, else a new one),
     or the named create; answered at once (a Chromium launch runs in the background), or the refusal.
 
@@ -280,25 +290,31 @@ def _start_browser(name: str | None, raw_url: str | None) -> "LiveBrowser | Resp
     """
     ready, reason = deferred_install_ready()
     if not ready:
-        return _error({"error": reason}, 503)
+        return _StartRefusal(reason=reason, status=503)
     start_url: str | None = None
     if raw_url:
         try:
             start_url = str(AbsoluteHttpUrl(raw_url))
         except InvalidStartUrlError as e:
-            return _error({"error": f"url: {e}"}, 400)
+            return _StartRefusal(reason=f"url: {e}", status=400)
     try:
         # Returns fast: registers init + spawns the serialized launch on the loop.
         if name is None:
             return bridge.run(manager.ensure_browser(start_url), timeout=_ROUTE_TIMEOUT)
         return bridge.run(manager.create(name, start_url), timeout=_ROUTE_TIMEOUT)
     except InvalidBrowserNameError as e:
-        return _error({"error": str(e)}, 400)
+        return _StartRefusal(reason=str(e), status=400)
     except (DuplicateBrowserNameError, FleetFullError) as e:
-        return _error({"error": str(e)}, 409)
+        return _StartRefusal(reason=str(e), status=409)
     except _STARTUP_ERRORS as e:
         logger.error("failed to register browser: {}", e)
-        return _error({"error": f"Could not start browser: {e}"}, 503)
+        return _StartRefusal(reason=f"Could not start browser: {e}", status=503)
+
+
+def _launch_refusal(reason: str, status: int) -> Response:
+    """A refusal of the ``new`` launch path, as the shell's launch route reads one: a 4xx whose ``detail`` is passed
+    on to the caller as the app's own reason (post-launch-paths plan section 3.2)."""
+    return _error({"detail": reason}, status)
 
 
 def new_browser() -> Response:
@@ -306,17 +322,19 @@ def new_browser() -> Response:
 
     The same answer as ``POST /browsers`` with no name, answered as ``{"path"}`` so the shell
     opens a window at the browser's page. The body is a JSON object with an optional ``url``;
-    anything else in it (the shell's envelope) is ignored, and a body that is not an object is 400.
+    anything else in it (the shell's envelope) is ignored. A refusal (a body that is not an
+    object, a ``url`` that is not an absolute http(s) URL, Chromium not installed) is answered
+    with its reason under ``detail``, the key the shell's launch route passes on.
     """
     body = request.get_json(force=True, silent=True)
     if not isinstance(body, dict):
-        return _error({"error": "the launch body must be a JSON object"}, 400)
+        return _launch_refusal("the launch body must be a JSON object", 400)
     raw_url = body.get(START_URL_PARAM)
     if raw_url is not None and not isinstance(raw_url, str):
-        return _error({"error": "url: must be a string"}, 400)
+        return _launch_refusal("url: must be a string", 400)
     started = _start_browser(None, raw_url)
-    if isinstance(started, Response):
-        return started
+    if isinstance(started, _StartRefusal):
+        return _launch_refusal(started.reason, started.status)
     return jsonify({"path": browser_page_path(BrowserName(started.browser_id))})
 
 
@@ -396,8 +414,8 @@ def create_browser() -> Response:
     body = _body()
     raw_url = body.get("url")
     started = _start_browser(body.get("name"), None if raw_url is None else str(raw_url))
-    if isinstance(started, Response):
-        return started
+    if isinstance(started, _StartRefusal):
+        return _error({"error": started.reason}, started.status)
     return jsonify({"name": started.browser_id})
 
 
