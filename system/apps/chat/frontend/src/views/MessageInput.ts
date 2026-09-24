@@ -573,9 +573,8 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
        * names one (an intake's), else the signed-in one when there is one, else whatever the
        * provider chooser produces, or null when it is dismissed instead.
        */
-      function chooseAccountForFirstSend(provisional: ProvisionalChat | undefined): Promise<string | null> {
-        const minted = provisional === undefined ? null : accountForAgent(provisional.account_id);
-        const account = minted ?? getSelectedAccount();
+      function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
+        const account = accountForAgent(provisional.account_id) ?? getSelectedAccount();
         if (account !== null) {
           return Promise.resolve(account.id);
         }
