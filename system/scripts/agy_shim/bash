@@ -130,10 +130,19 @@ done
 # way round for a soft policy. Best effort throughout: a reminder never costs a command.
 TURN_STAMP="${MNGR_AGENT_STATE_DIR:-/tmp}/agy_shim_turn"
 TURN_REARM_SECONDS=900
-TURN_KEY=$(PATH="$SAFE_PATH" stat -c %i "${MNGR_AGENT_STATE_DIR:-}/active" 2>/dev/null || echo "")
+# `stat -c` is GNU; BSD stat (macOS) spells the same fields `-f`. The workspace is Linux,
+# but an agent reading a red suite on a laptop cannot tell an unportable probe from a
+# broken guard, so ask both rather than going quiet on one of them.
+stat_field() {
+    PATH="$SAFE_PATH" stat -c "$1" "$3" 2>/dev/null \
+        || PATH="$SAFE_PATH" stat -f "$2" "$3" 2>/dev/null \
+        || echo ""
+}
+TURN_KEY=$(stat_field %i %i "${MNGR_AGENT_STATE_DIR:-}/active")
 if [ -n "$TURN_KEY" ]; then
     stamped=$(cat "$TURN_STAMP" 2>/dev/null || echo "")
-    stamp_age=$(( $(date +%s) - $(PATH="$SAFE_PATH" stat -c %Y "$TURN_STAMP" 2>/dev/null || echo 0) ))
+    stamp_mtime=$(stat_field %Y %m "$TURN_STAMP")
+    stamp_age=$(( $(date +%s) - ${stamp_mtime:-0} ))
     if [ "$TURN_KEY" != "$stamped" ] || [ "$stamp_age" -ge "$TURN_REARM_SECONDS" ]; then
         printf '%s' "$TURN_KEY" >"$TURN_STAMP" 2>/dev/null || true
         reminder=$(PATH="$SAFE_PATH" "$REAL_BASH" "$SCRIPTS_DIR/agent_open_tickets_reminder.sh" </dev/null 2>/dev/null) || reminder=""
