@@ -353,14 +353,13 @@ def without_window(desktop: Desktop, window_id: WindowId) -> Desktop:
 
 @pure
 def with_window_location(desktop: Desktop, window_id: WindowId, path: WindowPath, title: WindowTitle) -> Desktop:
-    """The desktop with the window's path and title replaced and its settling over; the same object when nothing changes."""
+    """The desktop with the window's path and title replaced; the same object when nothing changes."""
     window = require_window(desktop, window_id)
-    if window.path == path and window.title == title and not window.is_settling:
+    if window.path == path and window.title == title:
         return desktop
     updated = window.model_copy_update(
         to_update(window.field_ref().path, path),
         to_update(window.field_ref().title, title),
-        to_update(window.field_ref().is_settling, False),
     )
     return desktop.model_copy_update(
         to_update(
@@ -380,14 +379,13 @@ def pinned_apps(rows: Sequence[RegistryRow]) -> tuple[AppPin, ...]:
 
 
 def pinned_window(app_pin: AppPin, now: datetime) -> Window:
-    """The record an ensure creates: the pin's home path, an empty title, settled, pinned, with the pin's scope."""
+    """The record an ensure creates: the pin's home path, an empty title, pinned, with the pin's scope."""
     return Window(
         id=mint_window_id(),
         app=app_pin.app,
         path=WindowPath(str(app_pin.pin.path)),
         title=WindowTitle(""),
         opened_at=now,
-        is_settling=False,
         is_pinned=True,
         scope=app_pin.pin.scope,
     )
@@ -395,24 +393,17 @@ def pinned_window(app_pin: AppPin, now: datetime) -> Window:
 
 @pure
 def _as_pinned(window: Window, app_pin: AppPin) -> Window:
-    """The window adopted as the app's pinned window: marked, settled (it has no launch path to finish), given the
-    pin's scope, and, when independent, its shared path and title set to the home path and nothing (each client
-    keeps its own from then on; the shared record carries the home path at all times)."""
+    """The window adopted as the app's pinned window: marked, given the pin's scope, and, when independent, its
+    shared path and title set to the home path and nothing (each client keeps its own from then on; the shared
+    record carries the home path at all times)."""
     scope = app_pin.pin.scope
     is_independent = scope is LocationScope.INDEPENDENT
     path = WindowPath(str(app_pin.pin.path)) if is_independent else window.path
     title = WindowTitle("") if is_independent else window.title
-    if (
-        window.is_pinned
-        and not window.is_settling
-        and window.scope is scope
-        and window.path == path
-        and window.title == title
-    ):
+    if window.is_pinned and window.scope is scope and window.path == path and window.title == title:
         return window
     return window.model_copy_update(
         to_update(window.field_ref().is_pinned, True),
-        to_update(window.field_ref().is_settling, False),
         to_update(window.field_ref().scope, scope),
         to_update(window.field_ref().path, path),
         to_update(window.field_ref().title, title),
@@ -553,29 +544,22 @@ def default_launch_path_id(row: RegistryRow) -> LaunchPathId | None:
 
 
 @pure
-def settled_windows(desktop: Desktop) -> tuple[Window, ...]:
-    """The windows whose pages have reported where they are; a settling one is mid-launch and is not copied."""
-    return tuple(window for window in desktop.windows if not window.is_settling)
-
-
-@pure
 def desktop_seeded_from(
     source: Desktop,
     desktop_id: DesktopId,
     name: str,
     color: str,
     glyph: int,
-    # One fresh id per settled window of ``source``, in that order.
+    # One fresh id per window of ``source``, in that order.
     window_ids: Sequence[WindowId],
     opened_at: datetime,
 ) -> Desktop:
-    """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its settled windows' paths
-    (desktop plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A
-    pinned window comes over pinned, with its scope, so the pinned-window ensure that runs on every read finds it and
-    mints no second one."""
-    settled = settled_windows(source)
-    if len(window_ids) != len(settled):
-        raise InvalidShellValueError(f"seeding needs {len(settled)} window id(s), got {len(window_ids)}")
+    """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its windows' paths (desktop
+    plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A pinned
+    window comes over pinned, with its scope, so the pinned-window ensure that runs on every read finds it and mints
+    no second one."""
+    if len(window_ids) != len(source.windows):
+        raise InvalidShellValueError(f"seeding needs {len(source.windows)} window id(s), got {len(window_ids)}")
     return Desktop(
         id=desktop_id,
         name=name,
@@ -590,11 +574,10 @@ def desktop_seeded_from(
                 path=window.path,
                 title=window.title,
                 opened_at=opened_at,
-                is_settling=False,
                 is_pinned=window.is_pinned,
                 scope=window.scope,
             )
-            for window, window_id in zip(settled, window_ids, strict=True)
+            for window, window_id in zip(source.windows, window_ids, strict=True)
         ),
     )
 

@@ -1900,7 +1900,7 @@ def test_sweep_marks_browsers_a_window_shows_and_stops_the_ones_it_showed_once(m
 
     monkeypatch.setattr(bsession.LiveBrowser, "stop", fake_stop)
 
-    # A window shows browser-1; one is still settling at the launch path and shows nothing.
+    # A window shows browser-1; one is at a path naming no browser and shows nothing.
     assert asyncio.run(mgr.sweep_windows(["/?session=browser-1", "/new?url=https%3A%2F%2Fx"])) == []
     assert (shown_once._is_window_seen, never_shown._is_window_seen) == (True, False)
     assert stops == []

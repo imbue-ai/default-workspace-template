@@ -9,7 +9,13 @@
  */
 
 import type { AppRecord, LaunchPath, WindowRecord } from "../model/records";
-import { appLaunchesOf, freeTextRowsOf, launchRowKindOf, orderAppLaunches, textPathOf } from "../model/launch";
+import {
+  appLaunchesOf,
+  freeTextRowsOf,
+  launchRowKindOf,
+  orderAppLaunches,
+  textRowDisabledReason,
+} from "../model/launch";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import { activePlacements, appByName, effectiveWindowTitle, isWindowMinimized, openableApps } from "./desktopState";
 import type { DesktopState } from "./desktopState";
@@ -53,7 +59,7 @@ export interface TextRow {
   readonly label: string;
   /** The trimmed text the row would send. */
   readonly text: string;
-  /** Why the row stands down (the text over the path bound), or null while it can run. */
+  /** Why the row stands down (the text over a GET launch path's path bound), or null while it can run. */
   readonly disabledReason: string | null;
 }
 
@@ -132,7 +138,6 @@ function textRowsOf(apps: readonly AppRecord[], text: string): TextRow[] {
   const offered = text === "" ? freeTextRowsOf(apps).slice(0, 1) : freeTextRowsOf(apps);
   return offered.map(({ app, launchPath }, index) => {
     const textAction: TextAction | null = index === 0 ? "primary" : index === 1 ? "secondary" : null;
-    const target = textPathOf(launchPath, text);
     return {
       kind: "text",
       key: launchRowKey("text", app.name, launchPath.id),
@@ -141,7 +146,7 @@ function textRowsOf(apps: readonly AppRecord[], text: string): TextRow[] {
       textAction,
       label: launchPath.label,
       text,
-      disabledReason: target.kind === "disabled" ? target.reason : null,
+      disabledReason: textRowDisabledReason(launchPath, text),
     };
   });
 }

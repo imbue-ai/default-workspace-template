@@ -25,7 +25,7 @@ import type {
 } from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
 import type { UpdateNotice } from "../model/UpdateNotice";
-import { DRAFT_PARAM, freeTextRowsOf, isPathShowingChat } from "../model/launch";
+import { freeTextRowsOf, isPathShowingChat } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -305,9 +305,9 @@ export function openableApps(state: DesktopState): AppRecord[] {
   return state.apps.filter((app) => !app.internal);
 }
 
-/** Where a draft goes (pinned-taskbar-entries plan section 4.7): a pinned window on the active desktop whose app
- *  declares, at the pin's home path, a launch path taking ``draft``; the path to navigate the window to is that
- *  launch path's with the text. Null when no pinned app takes a draft. */
+/** Where a draft goes (pinned-taskbar-entries plan section 4.7, the post-launch-paths plan section 4.3): a pinned
+ *  window on the active desktop whose app declares a launch path with a ``draft_param``; the launch is run into
+ *  that window with the text as the draft param. Null when no pinned app takes a draft. */
 export interface DraftTarget {
   readonly window: WindowRecord;
   readonly launchPath: LaunchPath;
@@ -317,10 +317,7 @@ export function draftTargetOf(state: DesktopState): DraftTarget | null {
   for (const window of activeDesktop(state)?.windows ?? []) {
     if (!window.is_pinned) continue;
     const app = appByName(state, window.app);
-    const pinPath = app?.pin?.path;
-    const launchPath = app?.launch_paths.find(
-      (candidate) => candidate.path === pinPath && candidate.params.includes(DRAFT_PARAM),
-    );
+    const launchPath = app?.launch_paths.find((candidate) => candidate.draft_param !== null);
     if (launchPath !== undefined) return { window, launchPath };
   }
   return null;
@@ -340,9 +337,9 @@ export function findWindow(state: DesktopState, windowId: string): { desktop: De
   return null;
 }
 
-/** The app that holds chats: the one that can start one from typed text, which is the one whose
- *  launch path declares a ``text_param`` (the launcher's primary free-text row). The shell names no
- *  app. Null when this machine has no such app. */
+/** The app that holds chats: the one that can start one from typed text, which is the app of the
+ *  launcher's primary free-text row (the first launch path declaring a ``text_param`` or a
+ *  ``draft_param``). The shell names no app. Null when this machine has no such app. */
 export function chatApp(state: DesktopState): AppRecord | null {
   return freeTextRowsOf(state.apps)[0]?.app ?? null;
 }
