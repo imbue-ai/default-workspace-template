@@ -58,14 +58,20 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
       },
       m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
     ),
+    // The shadow is the wrapper's filter rather than the text's own: clamping the name to two
+    // lines makes its box clip what overflows, and a text-shadow inside that box is cut off at
+    // its edges. A filter paints the same silhouette from outside the clip.
     m(
       "span",
-      {
-        class:
-          "shortcut-label relative line-clamp-2 w-full rounded text-(length:--font-size-body) leading-tight " +
-          "font-bold text-on-accent [text-shadow:var(--desk-shortcut-label-shadow)]",
-      },
-      label,
+      { class: "shortcut-label relative w-full [filter:var(--desk-shortcut-label-shadow)]" },
+      m(
+        "span",
+        {
+          class:
+            "line-clamp-2 rounded text-(length:--font-size-body) leading-tight font-bold text-on-accent",
+        },
+        label,
+      ),
     ),
   ];
 }
