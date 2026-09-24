@@ -64,6 +64,10 @@ let connection: ShellConnection | null = null;
 let handshake: ShellHandshake | null = null;
 let isRootShown = true;
 let pool: InnerFramePool | null = null;
+// The intake the root's URL named and has not yet applied or given up (waiting for the chats, fetched, offered
+// through the picker); null otherwise. While one is pending the shell holds the window at the token path it put it
+// at, and the root reports no other location, so a reload or another client finds the token too.
+let pendingToken: string | null = null;
 // A held intake whose chat the user has to pick, while its picker is open; null otherwise.
 let pendingPick: { token: string; intake: PendingIntake } | null = null;
 // The chats started from this root: on top of the list until their first message.
@@ -84,6 +88,7 @@ interface ReportedLocation {
 let reportedLocation: ReportedLocation | null = null;
 
 function reportLocation(): void {
+  if (pendingToken !== null) return;
   const path = rootPathFor(selectedChatId);
   const title = selectedTitle();
   if (reportedLocation !== null && reportedLocation.path === path && reportedLocation.title === title) return;
@@ -122,6 +127,15 @@ function startNewChat(): void {
   openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
 }
 
+/** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
+ *  reported before the token path: the shell holds that path as this window's location until the root reports
+ *  another. */
+function settleIntake(chatId: string | null): void {
+  pendingToken = null;
+  reportedLocation = null;
+  select(chatId);
+}
+
 /** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
  *  its persisted draft on mount. */
 function draftInto(chatId: string, text: string): void {
@@ -151,19 +165,20 @@ function launchWithFirstMessage(chatId: string, text: string): void {
  *  goes into its composer, a first message launches it. */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
-  select(applied.chatId);
+  settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) launchWithFirstMessage(applied.chatId, applied.firstMessage);
 }
 
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client
- *  applied it, or it expired) leaves the selection as it stands. */
+ *  applied it, or it expired) leaves the chat shown as it stands, which for a token path naming a chat is that
+ *  chat. */
 async function applyIntake(token: string, pickedChatId: string | null): Promise<void> {
   try {
     takeApplied(await applyPendingIntake(token, pickedChatId));
   } catch (error) {
     if (!(error instanceof PendingIntakeGoneError)) alert(`Could not take the message: ${(error as Error).message}`);
-    select(selectedChatId);
+    settleIntake(selectedChatId);
   }
 }
 
@@ -171,16 +186,13 @@ async function applyIntake(token: string, pickedChatId: string | null): Promise<
  *  chat is the user's to choose. Once applied or given up (a pick, a dismissal, a token already gone), the root
  *  reports the selection alone, so the window's stored path drops the token and a reload applies nothing again;
  *  while the picker is open the selection and the token path stand as they are. */
-async function takeIntake(token: string, requestedChatId: string | null): Promise<void> {
-  // The shell holds the token path as this window's location until the root reports another, so the selection
-  // goes up even when it is the one already reported.
-  reportedLocation = null;
+async function takeIntake(token: string): Promise<void> {
   let intake: PendingIntake;
   try {
     intake = await fetchPendingIntake(token);
   } catch (error) {
     if (!(error instanceof PendingIntakeGoneError)) alert(`Could not read the message: ${(error as Error).message}`);
-    select(requestedChatId);
+    settleIntake(selectedChatId);
     return;
   }
   if (intake.needsPick) {
@@ -202,7 +214,7 @@ function dismissPick(): void {
   const pick = pendingPick;
   pendingPick = null;
   if (pick !== null) void discardPendingIntake(pick.token);
-  select(selectedChatId);
+  settleIntake(selectedChatId);
 }
 
 function onChatsUpdated(): void {
@@ -325,7 +337,10 @@ function connectRootToShell(accountsLoaded: Promise<void>): void {
       const token = intakeTokenFromSearch(target.search);
       const requested = selectionFromSearch(target.search);
       if (token !== null) {
-        void accountsLoaded.then(() => takeIntake(token, requested));
+        // The window is at the chat's path already; a picker path names none and leaves the shown chat standing.
+        pendingToken = token;
+        if (requested !== null) select(requested);
+        void accountsLoaded.then(() => takeIntake(token));
         return;
       }
       select(requested);
@@ -350,13 +365,11 @@ function bootstrap(): void {
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   selectedChatId = selectionFromSearch(window.location.search);
+  pendingToken = intakeTokenFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
   reportLocation();
-  const token = intakeTokenFromSearch(window.location.search);
-  if (token !== null) {
-    const requested = selectedChatId;
-    onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token, requested));
-  }
+  const token = pendingToken;
+  if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
 }
 
 window.addEventListener("load", bootstrap);
