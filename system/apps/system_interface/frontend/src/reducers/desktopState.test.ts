@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
-import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  layoutRecord,
+  placementRecord,
+  windowRecord,
+} from "../testing/records";
 import {
   activeFocusedWindowId,
   activePlacements,
   barEntries,
+  draftTargetOf,
   effectiveWindow,
   effectiveWindowTitle,
   entryLook,
@@ -144,7 +152,7 @@ describe("the window verbs", () => {
 
 describe("opens and closes this client made", () => {
   it("adds the window to the desktop and places it on top without dirtying the layout", () => {
-    const opened = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const opened = windowRecord("win-3", "docs", "/new");
     const state = reduceDesktopState(loaded(), {
       type: "window_opened_here",
       desktopId: "home",
@@ -163,7 +171,7 @@ describe("opens and closes this client made", () => {
   });
 
   it("keeps the stored placement when the shell's layout landed before the open's answer", () => {
-    const opened = windowRecord("win-3", "docs", "/new", { is_settling: true });
+    const opened = windowRecord("win-3", "docs", "/new");
     const stored = placementRecord("win-3", { frame: cascadeFrame(1) });
     const before = reduceDesktopState(loaded(), {
       type: "layout_loaded",
@@ -322,6 +330,31 @@ describe("pinned entries", () => {
     expect(floatingEntries(compact)).toEqual([]);
     expect(barEntries(compact).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
     expect(entryLook(compact, pinned, pinnedApp)?.mode).toBe("floating");
+  });
+
+  it("find the draft target in a pinned app's launch path declaring a draft param, and none otherwise", () => {
+    const draftPath = launchPathRecord({
+      id: "draft",
+      path: "/api/intake",
+      method: "POST",
+      params: ["message"],
+      presets: { target: "current_chat", is_draft: "true" },
+      draft_param: "message",
+    });
+    const drafting = appRecord("buddy", {
+      pin: pinnedApp.pin,
+      launch_paths: [launchPathRecord({ id: "root", path: "/" }), draftPath],
+    });
+    const state = reduceDesktopState(withPinned(), {
+      type: "apps_updated",
+      apps: [appRecord("docs"), appRecord("notes"), drafting],
+    });
+    expect(draftTargetOf(state)).toEqual({ window: pinned, launchPath: draftPath });
+    // The pinned apps here (notes at win-2, buddy at win-9) declare no draft param: no target.
+    expect(draftTargetOf(withPinned())).toBeNull();
+    // A draft launch path on an app with no pinned window on the active desktop: no target either.
+    const unpinned = reduceDesktopState(state, { type: "desktops_updated", desktops: [home, work] });
+    expect(draftTargetOf(unpinned)).toBeNull();
   });
 });
 

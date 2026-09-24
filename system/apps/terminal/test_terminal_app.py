@@ -209,16 +209,16 @@ def test_terminal_app_registers_serves_pages_and_sessions_and_stops_on_sigterm(
         assert [(row.name, row.url) for row in rows] == [(app.app_name, f"http://localhost:{app.pages_port}")]
         assert [launch_path.path for launch_path in rows[0].launch_paths] == ["/new"]
 
-        # The wrapper pages: the session page frames the pty by the path the dispatch reads, ``/new``
-        # allocates the lowest free name (the agent's session is not a terminal) and redirects, and the
-        # new session runs the tagged login shell in the workdir.
+        # The wrapper pages: the session page frames the pty by the path the dispatch reads, ``POST /new``
+        # allocates the lowest free name (the agent's session is not a terminal) and answers its page's path,
+        # and the new session runs the tagged login shell in the workdir.
         pages_url = f"http://{LOOPBACK_HOST}:{app.pages_port}"
         page = httpx.get(f"{pages_url}/?session=terminal-2", timeout=5.0)
         assert page.status_code == 200
         assert "<title>Terminal 2</title>" in page.text
-        allocated = httpx.get(f"{pages_url}/new", timeout=5.0, follow_redirects=False)
-        assert allocated.status_code == 302
-        assert allocated.headers["location"] == "/?session=terminal-1"
+        allocated = httpx.post(f"{pages_url}/new", json={}, timeout=5.0)
+        assert allocated.status_code == 200
+        assert allocated.json() == {"path": "/?session=terminal-1"}
         assert [session.name for session in fake_tmux.sessions()] == ["terminal-2", "mngr-alice", "terminal-1"]
         create_call = fake_tmux.creates()[0]
         assert create_call[:6] == ["new-session", "-d", "-s", "terminal-1", "-c", os.getcwd()]

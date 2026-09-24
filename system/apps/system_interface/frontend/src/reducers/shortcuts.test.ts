@@ -34,18 +34,8 @@ describe("resolveLaunchRun", () => {
 
   it("a focus shortcut with nothing to focus, and a new shortcut always, open at the launch path", () => {
     const state = stateWith();
-    expect(resolveLaunchRun(state, "notes", "new", "focus")).toEqual({
-      kind: "open",
-      app: "notes",
-      path: "/new",
-      launch: "new",
-    });
-    expect(resolveLaunchRun(state, "docs", "new", "new")).toEqual({
-      kind: "open",
-      app: "docs",
-      path: "/new",
-      launch: "new",
-    });
+    expect(resolveLaunchRun(state, "notes", "new", "focus")).toEqual({ kind: "open", app: "notes", launch: "new" });
+    expect(resolveLaunchRun(state, "docs", "new", "new")).toEqual({ kind: "open", app: "docs", launch: "new" });
   });
 
   it("says why a shortcut cannot run", () => {

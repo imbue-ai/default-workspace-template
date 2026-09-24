@@ -760,6 +760,15 @@ id = "recent"
 label = "Recent files"
 path = "/recent"
 
+[[launch_paths]]
+id = "draft"
+label = "Draft into a note"
+path = "/api/intake"
+method = "POST"
+params = [{name = "message", label = "Draft", required = false}]
+presets = {target = "current_note", is_draft = "true"}
+draft_param = "message"
+
 [pin]
 path = "/"
 style = "avatar"
@@ -796,11 +805,20 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["launcher_rank"] == 20
     assert row["window_closed_path"] == "/api/window-closed"
     assert "actions" not in row
-    # The row carries each launch path's param NAMES (the launcher reads them) and its text_param, and neither
-    # key at all for a launch path that declares none.
+    # The row carries each launch path's param NAMES (the launcher reads them), its presets, and its method, text
+    # and draft params, and none of those keys at all for a launch path that declares none of them.
     assert row["launch_paths"] == [
         {"id": "new", "label": "New File Viewer", "path": "/", "params": ["path"], "text_param": "path"},
         {"id": "recent", "label": "Recent files", "path": "/recent"},
+        {
+            "id": "draft",
+            "label": "Draft into a note",
+            "path": "/api/intake",
+            "method": "POST",
+            "draft_param": "message",
+            "params": ["message"],
+            "presets": {"target": "current_note", "is_draft": "true"},
+        },
     ]
     assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
 
@@ -839,6 +857,16 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
             '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\ntext_param = 3\n',
             "a launch path's text_param must be a string",
             id="launch-path-text-param-not-a-string",
+        ),
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\nmethod = 3\n',
+            "a launch path's method must be a string",
+            id="launch-path-method-not-a-string",
+        ),
+        pytest.param(
+            '[[launch_paths]]\nid = "new"\nlabel = "New"\npath = "/new"\npresets = {target = 3}\n',
+            "a launch path's presets must be a table of strings",
+            id="launch-path-preset-not-a-string",
         ),
         pytest.param(
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',
@@ -1148,6 +1176,35 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
                 {"id": "other", "label": "Other", "path": "/other"},
             ],
             "launcher_rank": 10,
+        },
+    ]
+
+    rendered = forward_port.dump_registry(apps)
+
+    assert tomllib.loads(rendered)["apps"] == apps
+
+
+def test_the_writer_round_trips_a_preset_whose_name_is_not_a_bare_key() -> None:
+    forward_port = _load_module("_forward_port_preset_writer_check", _SCRIPT)
+    apps = [
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-abcd1234",
+            "launch_paths": [
+                {
+                    "id": "new",
+                    "label": "New",
+                    "path": "/api/intake",
+                    "method": "POST",
+                    "presets": {
+                        "target": "new_chat",
+                        "a.b": "dotted",
+                        'say "hi"': "quoted",
+                        "with space": "true",
+                    },
+                }
+            ],
         },
     ]
 

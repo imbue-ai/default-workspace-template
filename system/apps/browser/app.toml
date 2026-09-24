@@ -16,6 +16,7 @@ mode = "focus"
 id = "new"
 label = "Browser"
 path = "/new"
+method = "POST"
 params = [{name = "url", label = "Start page", required = false}]
 
 # Xvfb exists only to give Chromium a display; it is the browser's wiring.

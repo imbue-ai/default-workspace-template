@@ -1,9 +1,9 @@
 /**
  * One taskbar entry (plan section 4.10): a window of the active desktop, the app's icon and the
- * title (icon only in compact mode), dimmed while minimized or while settling on another
- * client's open, the focused one marked. A click restores and raises, minimizes the focused
- * window, or raises; a right click or long press opens the entry's menu. A pinned entry in the
- * ``avatar`` style draws the workspace's avatar in place of the icon, wearing the current mood.
+ * title (icon only in compact mode), dimmed while minimized, the focused one marked. A click
+ * restores and raises, minimizes the focused window, or raises; a right click or long press opens
+ * the entry's menu. A pinned entry in the ``avatar`` style draws the workspace's avatar in place of
+ * the icon, wearing the current mood.
  */
 
 import m from "mithril";
@@ -25,7 +25,7 @@ export interface TaskbarEntryAttrs {
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
     const { entry, avatar, isCompact, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
-    const isDimmed = entry.isMinimized || entry.window.is_settling;
+    const isDimmed = entry.isMinimized;
     const look = entry.look;
     const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_SIZE, "size-7");
     return m(
@@ -40,7 +40,6 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         ...attrs,
         "data-minimized": entry.isMinimized ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
-        "data-settling": entry.window.is_settling ? "true" : "false",
         "aria-pressed": entry.isFocused ? "true" : "false",
         // Icon only in compact mode, so the title names the button there.
         "aria-label": isCompact ? entry.title : undefined,

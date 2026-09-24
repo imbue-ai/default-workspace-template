@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 from typing import Final
-from urllib.parse import urlencode
 
 from app_manifest.manifest import ShortcutMode
 from app_manifest.manifest import describe_validation_error
@@ -31,6 +30,7 @@ from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
 from imbue.system_interface.shell.data_types import GridCell
+from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import ShortcutTarget
 from imbue.system_interface.shell.data_types import Wallpaper
@@ -252,6 +252,19 @@ def report_window_location(desktop_id: str, window_id: str) -> ResponseReturnVal
     return jsonify(_shell().window_wire_json(window))
 
 
+def launch(desktop_id: str) -> ResponseReturnValue:
+    """``POST /api/desktops/<id>/launch`` (post-launch-paths plan section 5.3): run a launch path for a client and
+    answer the window showing its page, the page's path, and whether the window was opened."""
+    body = parse_request_body(LaunchRequest)
+    outcome = _shell().launch(desktop_id, body)
+    return (
+        jsonify(
+            {"window": _shell().window_wire_json(outcome.window), "path": str(outcome.path), "is_new": outcome.is_new}
+        ),
+        HTTP_CREATED if outcome.is_new else HTTP_OK,
+    )
+
+
 # Section 5.4: placements
 
 
@@ -398,6 +411,9 @@ def register_desktop_routes(application: Flask) -> None:
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/windows", view_func=open_window, methods=["POST"], endpoint="open_window"
+    )
+    application.add_url_rule(
+        "/api/desktops/<desktop_id>/launch", view_func=launch, methods=["POST"], endpoint="launch"
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/windows/<window_id>/close",
@@ -555,46 +571,43 @@ def _parse_cell(raw: str) -> GridCell:
         raise LayoutOpError(f"a cell is 'column,row' with both at least zero: {e}") from e
 
 
-@pure
-def _launch_query(params: Mapping[str, str]) -> str:
-    return f"?{urlencode(dict(params))}" if params else ""
-
-
 class _OpenTarget(FrozenModel):
-    """What an ``open`` op opens, before any client is involved."""
+    """What an ``open`` op opens: the app and the page path, resolved from an explicit path or a launch path."""
 
     app: AppName = Field(description="The app")
-    path: WindowPath = Field(description="The explicit path, or the launch path with its params as the query")
-    launch: LaunchPathId | None = Field(description="The launch path the path was built from, when it was")
+    path: WindowPath = Field(description="The explicit path, or the page the launch path resolved to")
 
 
-def _open_target(shell: ShellState, arguments: DesktopOpArguments) -> _OpenTarget:
-    """What an ``open`` op opens: an explicit path, else the launch path it names, the app's default, or its first,
-    with the params as the query string."""
+def _open_target(
+    shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId | None, desktop_id: DesktopId | None
+) -> _OpenTarget:
+    """What an ``open`` op opens: an explicit path, else the page of the launch path it names (the app's default, or
+    its first), resolved as the launch route resolves one (a GET launch path with its params as the query, a POST one
+    asked for its page with the client and its desktop as the envelope, or no envelope for an open with no client)."""
     app = _app_name_or_raise(arguments.app, "app")
     entry = shell.require_app_entry(str(app))
     if arguments.path:
         if arguments.launch is not None or arguments.params:
             raise LayoutOpError("an open names a path or a launch path, not both")
-        return _OpenTarget(app=app, path=WindowPath(arguments.path), launch=None)
-    offered = effective_launch_paths(entry.row)
+        return _OpenTarget(app=app, path=WindowPath(arguments.path))
     default_launch = default_launch_path_id(entry.row)
+    offered = effective_launch_paths(entry.row)
     launch_id = (
         arguments.launch
         if arguments.launch is not None
         else (default_launch if default_launch is not None else offered[0].id)
     )
-    launch = next((candidate for candidate in offered if candidate.id == launch_id), None)
-    if launch is None:
-        raise LayoutOpError(f"App {str(app)!r} declares no launch path {str(launch_id)!r}")
-    return _OpenTarget(app=app, path=WindowPath(f"{launch.path}{_launch_query(arguments.params)}"), launch=launch.id)
-
-
-def _open_request(shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId) -> WindowOpenRequest:
-    target = _open_target(shell, arguments)
-    return WindowOpenRequest(
-        app=target.app, path=target.path, client_id=client_id, if_present=arguments.if_present, launch=target.launch
+    launch_path = shell.require_launch_path(entry, launch_id)
+    return _OpenTarget(
+        app=app, path=shell.launch_destination(entry, launch_path, arguments.params, client_id, desktop_id, None)
     )
+
+
+def _open_request(
+    shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId, desktop_id: DesktopId
+) -> WindowOpenRequest:
+    target = _open_target(shell, arguments, client_id, desktop_id)
+    return WindowOpenRequest(app=target.app, path=target.path, client_id=client_id, if_present=arguments.if_present)
 
 
 def _open_unplaced(
@@ -612,8 +625,8 @@ def _open_unplaced(
         desktop = desktops[0]
     else:
         raise LayoutOpError("there is no desktop to open on yet")
-    target = _open_target(shell, arguments)
-    outcome = shell.open_window_unplaced(desktop.id, target.app, target.path, target.launch, arguments.if_present)
+    target = _open_target(shell, arguments, None, None)
+    outcome = shell.open_window_unplaced(desktop.id, target.app, target.path, arguments.if_present)
     logger.info("layout op=open requester={} desktop={} client=none args={}", requester, desktop.id, args_raw)
     return jsonify(
         {
@@ -770,7 +783,9 @@ def dispatch_desktop_op(
             pass
         case "open":
             window_id = shell.open_window(
-                target.desktop.id, _open_request(shell, arguments, target.client_id), arguments.minimized
+                target.desktop.id,
+                _open_request(shell, arguments, target.client_id, target.desktop.id),
+                arguments.minimized,
             ).window.id
         case "refresh":
             return _refresh_window(shell, arguments, target, requester)

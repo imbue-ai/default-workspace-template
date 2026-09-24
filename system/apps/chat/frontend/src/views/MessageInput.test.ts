@@ -173,6 +173,8 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
   getSelectedAccount: () => mocks.selectedAccount,
+  // The seeded chats these tests launch name no account of their own, so the selected one decides.
+  accountForAgent: () => null,
 }));
 
 import { handoffStateFixture } from "../models/chatSnapshotFixture";

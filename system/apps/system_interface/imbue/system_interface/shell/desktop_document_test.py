@@ -49,7 +49,6 @@ from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import place_shortcuts
 from imbue.system_interface.shell.desktop_document import reading_order_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
-from imbue.system_interface.shell.desktop_document import settled_windows
 from imbue.system_interface.shell.desktop_document import snap_zone_for_release
 from imbue.system_interface.shell.desktop_document import unsnap_frame
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
@@ -247,11 +246,11 @@ def test_a_window_is_found_by_app_and_exact_path_and_a_marker_in_a_segment_or_qu
     assert path_carries_marker(WindowPath("/?chat=agent-10"), "agent-1") is False
 
 
-def test_a_location_report_replaces_the_path_and_title_and_ends_settling_only_when_something_changes() -> None:
-    desktop = desktop_with_windows(window_record(_WIN_1, "chat", "/new?message=hi", is_settling=True))
+def test_a_location_report_replaces_the_path_and_title_only_when_something_changes() -> None:
+    desktop = desktop_with_windows(window_record(_WIN_1, "chat", "/"))
     landed = with_window_location(desktop, _WIN_1, WindowPath("/?chat=agent-9"), WindowTitle("Plan"))
     assert landed.windows[0].path == "/?chat=agent-9"
-    assert landed.windows[0].title == "Plan" and landed.windows[0].is_settling is False
+    assert landed.windows[0].title == "Plan"
     assert with_window_location(landed, _WIN_1, WindowPath("/?chat=agent-9"), WindowTitle("Plan")) is landed
     with pytest.raises(WindowNotFoundError):
         with_window_location(desktop, _WIN_2, WindowPath("/"), WindowTitle(""))
@@ -274,9 +273,7 @@ def test_a_fresh_desktop_gets_one_pinned_window_per_pinned_app_and_a_second_ensu
         ("chat", "/", True, ""),
         ("notes", "/inbox", True, ""),
     ]
-    assert all(
-        window.is_settling is False and window.scope is LocationScope.LINKED for window in ensured.desktop.windows
-    )
+    assert all(window.scope is LocationScope.LINKED for window in ensured.desktop.windows)
     again = with_pinned_windows_ensured(ensured.desktop, [_pin("chat"), _pin("notes", "/inbox")], TEST_NOW)
     assert again.is_written is False and again.desktop is ensured.desktop
     # No pins: nothing to ensure, and the same object answers.
@@ -296,10 +293,6 @@ def test_the_earliest_window_at_the_home_path_is_adopted_and_an_independent_pin_
     adopted = independent.desktop.windows[1]
     assert adopted.id == _WIN_2 and adopted.is_pinned is True
     assert adopted.scope is LocationScope.INDEPENDENT and adopted.title == ""
-    # A window still settling at the home path is adopted settled: a pinned window has no launch path to finish.
-    settling = desktop_with_windows(window_record(_WIN_1, "chat", "/", is_settling=True))
-    (adopted_settling,) = with_pinned_windows_ensured(settling, [_pin("chat")], TEST_NOW).desktop.windows
-    assert adopted_settling.id == _WIN_1 and adopted_settling.is_pinned and adopted_settling.is_settling is False
     # A window at another path is not adopted: a pinned window is created beside it.
     drifted_only = desktop_with_windows(window_record(_WIN_1, "chat", "/?chat=agent-1"))
     created = with_pinned_windows_ensured(drifted_only, [_pin("chat")], TEST_NOW).desktop
@@ -491,13 +484,12 @@ def test_the_verbs_edit_one_placement_and_the_stack() -> None:
     assert absent.placements == (placement_record(_WIN_1),)
 
 
-def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_settled_windows_as_new_windows() -> None:
+def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_windows_as_new_windows() -> None:
     settled = window_record(WindowId("win-000000000000000a"), "terminal", "/?session=terminal-1")
-    settling = window_record(WindowId("win-000000000000000b"), "files", "/new", is_settling=True)
     pinned = window_record(
         WindowId("win-000000000000000c"), "chat", "/", is_pinned=True, scope=LocationScope.INDEPENDENT
     )
-    bare = desktop_with_windows(settled, settling, pinned)
+    bare = desktop_with_windows(settled, pinned)
     source = bare.model_copy_update(
         to_update(
             bare.field_ref().shortcuts,
@@ -511,7 +503,6 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_settle
         ),
         to_update(bare.field_ref().wallpaper, Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dunes"))),
     )
-    assert [window.id for window in settled_windows(source)] == [settled.id, pinned.id]
     later = TEST_NOW + timedelta(hours=1)
     seeded = desktop_seeded_from(
         source,
@@ -526,7 +517,7 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_settle
     assert seeded.shortcuts == source.shortcuts and seeded.wallpaper == source.wallpaper
     copied, copied_pinned = seeded.windows
     assert (copied.id, copied.app, copied.path, copied.title) == ("win-00000000000000ff", "terminal", settled.path, "")
-    assert copied.opened_at == later and copied.is_settling is False
+    assert copied.opened_at == later
     assert (copied.is_pinned, copied.scope) == (False, LocationScope.LINKED)
     # The pinned window comes over as the app's pinned window of the new desktop, so the ensure that runs on every
     # read finds it and mints no second one.

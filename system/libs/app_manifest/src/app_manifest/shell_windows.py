@@ -86,7 +86,8 @@ def window_paths_of_app(document: Any, app: AppName) -> list[str] | None:
 def window_query_value(path: str, name: str) -> str | None:
     """The first value of the query parameter ``name`` in a window path, or None when it carries none.
 
-    A settling window still sits at its launch path (``/new?workdir=...``), which names no resource.
+    A window path without the parameter (an app's root, or a page of another kind) names no resource, so the
+    callers that sweep resources by window treat None as a window showing nothing.
     """
     values = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query).get(name)
     return values[0] if values else None

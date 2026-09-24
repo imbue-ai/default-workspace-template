@@ -3,11 +3,13 @@ import {
   appRecord,
   chatLikeAppRecord,
   desktopRecord,
+  getMethodFreeTextAppRecord,
   launchPathRecord,
   layoutRecord,
   placementRecord,
   windowRecord,
 } from "../testing/records";
+import { desktopStateWithApps } from "../testing/states";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 import {
@@ -75,13 +77,13 @@ describe("the launcher's rows", () => {
     expect(isMessageText("plan\nthe launch")).toBe(true);
     expect(isMessageText("plan the launch")).toBe(false);
     const menu = launcherRowsOf(state(), "term\nand more");
-    expect(keys(menu.rows)).toEqual(["text:chatty:new", "text:chatty:send"]);
+    expect(keys(menu.rows)).toEqual(["text:chatty:new", "text:chatty:send", "text:chatty:draft"]);
     expect(menu.isNoMatch).toBe(false);
     expect(menu.textRows[0].text).toBe("term\nand more");
     expect(defaultHighlightIndex(menu.rows)).toBe(0);
     // The break just typed, with nothing after it yet, already makes the message; the rows send the trimmed text.
     const justBroken = launcherRowsOf(state(), "term\n");
-    expect(keys(justBroken.rows)).toEqual(["text:chatty:new", "text:chatty:send"]);
+    expect(keys(justBroken.rows)).toEqual(["text:chatty:new", "text:chatty:send", "text:chatty:draft"]);
     expect(justBroken.isNoMatch).toBe(false);
     expect(justBroken.textRows[0].text).toBe("term");
   });
@@ -94,6 +96,7 @@ describe("the launcher's rows", () => {
       "window:win-3",
       "text:chatty:new",
       "text:chatty:send",
+      "text:chatty:draft",
     ]);
     expect(menu.windowRows[0].isMinimized).toBe(true);
     expect(menu.windowRows[0].isOnActiveDesktop).toBe(true);
@@ -108,18 +111,25 @@ describe("the launcher's rows", () => {
   it("with no match highlights the primary text action, whose text is what was typed", () => {
     const menu = launcherRowsOf(state(), "  new chat  ");
     expect(menu.isNoMatch).toBe(true);
-    expect(keys(menu.rows)).toEqual(["text:chatty:new", "text:chatty:send"]);
+    expect(keys(menu.rows)).toEqual(["text:chatty:new", "text:chatty:send", "text:chatty:draft"]);
     expect(defaultHighlightIndex(menu.rows)).toBe(0);
     expect(menu.rows[0]).toMatchObject({ kind: "text", text: "new chat" });
     expect(secondaryTextRow(menu.rows)?.key).toBe("text:chatty:send");
+    // The third free-text row (the draft) has no key binding.
+    expect(menu.textRows[2].textAction).toBeNull();
   });
 
-  it("stands a free-text row down over the path bound, and has no secondary with nothing typed", () => {
-    const menu = launcherRowsOf(state(), "x".repeat(2100));
+  it("stands a GET free-text row down over the path bound, never a POST one, and has no secondary with nothing typed", () => {
+    const posted = launcherRowsOf(state(), "x".repeat(2100));
+    // The chat-like app's rows are POST launch paths: the text rides in a body, so nothing stands down.
+    expect(posted.textRows.every((row) => row.disabledReason === null)).toBe(true);
+    expect(secondaryTextRow(launcherRowsOf(state(), "").rows)).toBeNull();
+    // A GET free-text row is bounded by the page path it would open at.
+    const gettable = desktopStateWithApps([getMethodFreeTextAppRecord("noting", ["new"])]);
+    const menu = launcherRowsOf(gettable, "x".repeat(2100));
     expect(menu.textRows.every((row) => row.disabledReason === "Too long to send from here")).toBe(true);
     expect(defaultHighlightIndex(menu.rows)).toBe(-1);
     expect(secondaryTextRow(menu.rows)).toBeNull();
-    expect(secondaryTextRow(launcherRowsOf(state(), "").rows)).toBeNull();
     expect(moveHighlight(menu.rows, 0, 1)).toBe(-1);
   });
 

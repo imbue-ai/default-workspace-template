@@ -80,6 +80,9 @@ FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
 # CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_unlocked`` around late November 2026, once every
 # workspace has rewritten its desktops.json without the key (the first write after this release does).
 _RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
+# CLEANUP: drop ``_RETIRED_WINDOW_KEYS`` and its strip in ``_without_retired_keys`` around late December 2026, once
+# every workspace has rewritten its desktops.json without the key (the first write after this release does).
+_RETIRED_WINDOW_KEYS: Final[frozenset[str]] = frozenset({"is_settling"})
 
 _COLOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}")
 _SLUG_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
@@ -179,15 +182,33 @@ def default_desktop(shortcuts: Sequence[DesktopShortcut]) -> Desktop:
 
 
 @pure
+def _without_retired_window_keys(desktop: dict[str, Any]) -> dict[str, Any]:
+    windows = desktop.get("windows")
+    if not isinstance(windows, list):
+        return desktop
+    return {
+        **desktop,
+        "windows": [
+            {key: value for key, value in window.items() if key not in _RETIRED_WINDOW_KEYS}
+            if isinstance(window, dict)
+            else window
+            for window in windows
+        ],
+    }
+
+
+@pure
 def _without_retired_keys(raw: dict[str, Any]) -> dict[str, Any]:
-    """The raw desktops document with the keys this version no longer stores dropped from every desktop."""
+    """The raw desktops document with the keys this version no longer stores dropped from every desktop and window."""
     desktops = raw.get("desktops")
     if not isinstance(desktops, list):
         return raw
     return {
         **raw,
         "desktops": [
-            {key: value for key, value in desktop.items() if key not in _RETIRED_DESKTOP_KEYS}
+            _without_retired_window_keys(
+                {key: value for key, value in desktop.items() if key not in _RETIRED_DESKTOP_KEYS}
+            )
             if isinstance(desktop, dict)
             else desktop
             for desktop in desktops

@@ -12,10 +12,10 @@ const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests")
 
 let root: HTMLElement | null = null;
 
-function mount(attrs: { onPick: (chatId: string) => void; onDismiss: () => void }): HTMLElement {
+function mount(attrs: { onPick: (chatId: string) => void; onDismiss: () => void; isDraft?: boolean }): HTMLElement {
   root = document.createElement("div");
   document.body.appendChild(root);
-  m.mount(root, { view: () => m(SendPicker, { rows: ROWS, text: "hello there", ...attrs }) });
+  m.mount(root, { view: () => m(SendPicker, { rows: ROWS, text: "hello there", isDraft: false, ...attrs }) });
   return root;
 }
 
@@ -40,6 +40,7 @@ describe("SendPicker", () => {
     const onPick = vi.fn();
     const picker = mount({ onPick, onDismiss: vi.fn() });
     expect(picker.querySelector(".send-picker-text")!.textContent).toBe("“hello there”");
+    expect(picker.querySelector("[data-send-picker]")!.getAttribute("aria-label")).toBe("Send to which chat?");
     const targets = Array.from(picker.querySelectorAll("[data-send-target]"));
     expect(targets.map((target) => target.getAttribute("data-send-target"))).toEqual(["agent-1", "agent-2"]);
     expect(targets[0].getAttribute("aria-selected")).toBe("true");
@@ -64,6 +65,11 @@ describe("SendPicker", () => {
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     m.redraw.sync();
     expect(picker.querySelector(".send-picker-no-match")).not.toBeNull();
+  });
+
+  it("says the pick drafts the text when the intake is a draft", () => {
+    const picker = mount({ onPick: vi.fn(), onDismiss: vi.fn(), isDraft: true });
+    expect(picker.querySelector("[data-send-picker]")!.getAttribute("aria-label")).toBe("Draft into which chat?");
   });
 
   it("dismisses on Escape", () => {

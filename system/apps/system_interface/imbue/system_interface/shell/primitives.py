@@ -195,3 +195,12 @@ class ShortcutTargetKind(LowerCaseStrEnum):
     """What a desktop shortcut runs; V1 has one kind, a launch path (a wire value)."""
 
     LAUNCH = auto()
+
+
+class LaunchTargetKind(LowerCaseStrEnum):
+    """Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at that path
+    (else a new one), or a named window this client points at it (a wire value)."""
+
+    NEW = auto()
+    FOCUS = auto()
+    WINDOW = auto()

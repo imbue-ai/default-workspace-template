@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from flask.testing import FlaskClient
 
 from terminal_app.pages import (
@@ -12,6 +13,7 @@ from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
+    DEFAULT_TEST_WORKDIR,
     TEST_APP_CONTRACT_SOURCE,
     TEST_PTY_LABEL,
     FakeTmux,
@@ -88,28 +90,59 @@ def test_a_name_that_cannot_be_a_session_is_not_found(pages_client: FlaskClient)
     assert "no terminal has the name" in response.json["detail"]
 
 
-def test_new_allocates_a_terminal_and_redirects_to_its_page(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
+def test_new_allocates_a_terminal_in_the_posted_workdir_and_answers_its_page_path(
+    pages_client: FlaskClient, fake_tmux: FakeTmux
+) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$1")])
 
-    response = pages_client.get("/new?workdir=/srv")
+    # The shell's envelope fields ride beside the param and are ignored.
+    response = pages_client.post(
+        "/new", json={"workdir": "/srv", "client_id": "client-1", "desktop_id": "home", "window_path": "/"}
+    )
 
-    assert response.status_code == 302
-    assert response.headers["Location"] == "/?session=terminal-2"
+    assert response.status_code == 200
+    assert response.json == {"path": "/?session=terminal-2"}
     assert fake_tmux.session_names() == ["terminal-1", "terminal-2"]
     assert fake_tmux.creates()[0][:6] == ["new-session", "-d", "-s", "terminal-2", "-c", "/srv"]
 
 
+@pytest.mark.parametrize("body", [{}, {"workdir": ""}], ids=["absent", "empty"])
+def test_new_without_a_workdir_starts_in_the_default_one(
+    pages_client: FlaskClient, fake_tmux: FakeTmux, body: dict[str, str]
+) -> None:
+    response = pages_client.post("/new", json=body)
+
+    assert response.status_code == 200
+    assert response.json == {"path": "/?session=terminal-1"}
+    assert fake_tmux.creates()[0][:6] == ["new-session", "-d", "-s", "terminal-1", "-c", DEFAULT_TEST_WORKDIR]
+
+
 def test_new_refuses_a_bad_workdir_with_a_detail_body(pages_client: FlaskClient) -> None:
-    response = pages_client.get("/new?workdir=" + "x" * 2000)
+    response = pages_client.post("/new", json={"workdir": "x" * 2000})
 
     assert response.status_code == 400
     assert "workdir" in response.json["detail"]
 
 
+@pytest.mark.parametrize("body", [[], "text", None], ids=["array", "string", "nothing"])
+def test_new_refuses_a_body_that_is_not_a_json_object(pages_client: FlaskClient, body: object) -> None:
+    response = pages_client.post("/new", json=body) if body is not None else pages_client.post("/new", data="")
+
+    assert response.status_code == 400
+    assert "JSON object" in response.json["detail"]
+
+
+def test_new_is_a_post_and_a_get_of_it_is_refused(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
+    response = pages_client.get("/new")
+
+    assert response.status_code == 405
+    assert fake_tmux.creates() == []
+
+
 def test_new_answers_a_detail_body_when_tmux_refuses(pages_client: FlaskClient, fake_tmux: FakeTmux) -> None:
     fake_tmux.refuse_creates()
 
-    response = pages_client.get("/new")
+    response = pages_client.post("/new", json={})
 
     assert response.status_code == 500
     assert "could not create session" in response.json["detail"]
@@ -149,9 +182,9 @@ def test_a_window_closed_post_names_the_terminal_the_window_showed_and_answers_n
 def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     pages_client: FlaskClient, window_closed_posts: list[TmuxSessionName | None]
 ) -> None:
-    # A window still settling at its launch path, a path naming something no session can be called, a body of
-    # another shape, and no JSON at all: each brings a sweep and marks nothing.
-    settling = pages_client.post(
+    # A path naming no session, a path naming something no session can be called, a body of another shape, and
+    # no JSON at all: each brings a sweep and marks nothing.
+    nameless = pages_client.post(
         "/api/window-closed", json={"path": "/new?workdir=%2Fsrv", "window_id": "win-1", "desktop_id": "home"}
     )
     odd_name = pages_client.post(
@@ -160,7 +193,7 @@ def test_a_window_closed_post_that_names_no_terminal_still_asks_for_a_sweep(
     odd_shape = pages_client.post("/api/window-closed", json=["/?session=terminal-1"])
     not_json = pages_client.post("/api/window-closed", data="terminal-1", content_type="text/plain")
 
-    assert [r.status_code for r in (settling, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
+    assert [r.status_code for r in (nameless, odd_name, odd_shape, not_json)] == [204, 204, 204, 204]
     assert window_closed_posts == [None, None, None, None]
 
 

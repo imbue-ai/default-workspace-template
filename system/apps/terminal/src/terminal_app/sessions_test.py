@@ -663,7 +663,7 @@ def test_sweep_marks_terminals_a_window_shows_and_collects_the_ones_it_showed_on
         session_store.save_record(make_terminal_record(f"terminal-{number}", None, "/srv", session_id=f"${number}"))
         write_session_id_file(terminal_paths.sessions_dir, f"terminal-{number}", f"${number}")
 
-    # Windows show terminal-1 and terminal-2; one is still settling at its launch path and shows nothing.
+    # Windows show terminal-1 and terminal-2; one is at a path naming no session and shows nothing.
     first = session_source.sweep_windows(["/?session=terminal-1", "/?session=terminal-2", "/new?workdir=%2Fsrv"])
 
     assert first == []

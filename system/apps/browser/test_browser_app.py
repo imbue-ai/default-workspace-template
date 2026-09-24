@@ -51,7 +51,7 @@ def test_the_app_contract_module_is_the_shells_build_output_served_from_this_ori
     assert served.text == source
 
 
-def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_new_creates_a_browser_and_answers_its_page_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
     # The launch is captured rather than run, so the test stays Chromium-free; what matters
     # here is that the create registered the browser and asked for its start page.
@@ -62,22 +62,41 @@ def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.Mon
         lambda self, session, restore_tabs=None, **k: launched.append((session, restore_tabs)),
     )
 
-    response = runner.application.test_client().get("/new?url=https://example.com", follow_redirects=False)
+    # The shell's envelope fields ride beside the param and are ignored.
+    response = runner.application.test_client().post(
+        "/new", json={"url": "https://example.com", "client_id": "client-1", "desktop_id": "home"}
+    )
 
-    assert response.status_code == 302, response.text
-    name = response.headers["Location"].removeprefix("/?session=")
+    assert response.status_code == 200, response.text
+    name = response.get_json()["path"].removeprefix("/?session=")
     assert name in runner.manager._browsers
-    assert response.headers["Location"] == f"/?session={name}"
+    assert response.get_json() == {"path": f"/?session={name}"}
     assert launched == [(runner.manager._browsers[name], ["https://example.com"])]
 
 
 def test_new_refuses_a_start_page_that_is_not_http(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
 
-    response = runner.application.test_client().get("/new?url=ftp://example.com", follow_redirects=False)
+    response = runner.application.test_client().post("/new", json={"url": "ftp://example.com"})
 
+    # The reason rides under ``detail``, the key the shell's launch route passes on as the app's refusal.
     assert response.status_code == 400
-    assert "url" in response.get_json()["error"]
+    assert "url" in response.get_json()["detail"]
+    assert "error" not in response.get_json()
+
+
+def test_new_refuses_a_body_that_is_not_a_json_object_and_a_get(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    client = runner.application.test_client()
+
+    not_an_object = client.post("/new", json=["https://example.com"])
+    assert not_an_object.status_code == 400
+    assert "JSON object" in not_an_object.get_json()["detail"]
+    assert client.post("/new", data="").status_code == 400
+    not_a_string = client.post("/new", json={"url": 3})
+    assert not_a_string.status_code == 400
+    assert "url" in not_a_string.get_json()["detail"]
+    assert client.get("/new").status_code == 405
 
 
 def test_new_answers_the_browser_already_up_without_another_launch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,11 +109,11 @@ def test_new_answers_the_browser_already_up_without_another_launch(monkeypatch: 
     up._lifecycle = "running"
     runner.manager._browsers["browser-1"] = up
 
-    redirected = runner.application.test_client().get("/new", follow_redirects=False)
+    launched_path = runner.application.test_client().post("/new", json={})
     created = runner.application.test_client().post("/browsers", json={})
 
-    assert redirected.status_code == 302, redirected.text
-    assert redirected.headers["Location"] == "/?session=browser-1"
+    assert launched_path.status_code == 200, launched_path.text
+    assert launched_path.get_json() == {"path": "/?session=browser-1"}
     assert created.get_json() == {"name": "browser-1"}
     assert launched == []
 

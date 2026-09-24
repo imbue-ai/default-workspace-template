@@ -159,12 +159,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     assert window_id.startswith("win-")
     assert f"opened window {window_id} ({PIPELINE_STUB_APP_NAME} at /)" in opened.stderr
     (window,) = _windows(layout_server, sandbox)
-    assert (window["id"], window["app"], window["path"], window["is_settling"]) == (
-        window_id,
-        PIPELINE_STUB_APP_NAME,
-        "/",
-        True,
-    )
+    assert (window["id"], window["app"], window["path"]) == (window_id, PIPELINE_STUB_APP_NAME, "/")
     assert [entry["id"] for entry in _listing(layout_server, sandbox)[PIPELINE_STUB_APP_NAME]["windows"]] == [
         window_id
     ]
@@ -204,7 +199,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
 def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
-    """``open chat --path /?chat=<id>`` opens the page itself (no launch path, not settling); ``self`` resolves
+    """``open chat --path /?chat=<id>`` opens the page itself (no launch path); ``self`` resolves
     to the window of the requester's chat; ``navigate`` points a window elsewhere; a second window of the app
     is reached by the app's name."""
     sandbox = _sandbox(tmp_path)
@@ -214,7 +209,7 @@ def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
     assert opened.returncode == 0, f"stderr={opened.stderr!r}"
     own_window_id = opened.stdout.strip()
     (window,) = _windows(layout_server, sandbox)
-    assert (window["path"], window["is_settling"]) == (own_path, False)
+    assert window["path"] == own_path
 
     focused = _run_layout_script(["focus", "self"], layout_server, sandbox)
     assert focused.returncode == 0, f"stderr={focused.stderr!r}"
