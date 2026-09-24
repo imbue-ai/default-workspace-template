@@ -77,7 +77,7 @@ describe("the words for a chat changing account in place", () => {
 });
 
 describe("the held-send bubbles", () => {
-  it("renders every held message from the snapshot, faded like any send", () => {
+  it("renders every held message from the snapshot, solid like any send", () => {
     chats.set(
       "agent-1",
       chatSnapshotFixture("agent-1", {
@@ -95,11 +95,13 @@ describe("the held-send bubbles", () => {
     const text = JSON.stringify(bubbles);
     expect(text).toContain("Carry on in Codex");
     expect(text).toContain("and this");
-    // The switch's progress is the handoff node's to tell, not the bubbles', and a not-yet-real
-    // message carries no caption at all: the fading is what says it has not landed.
+    // The switch's progress is the handoff node's to tell, not the bubbles': a held message is
+    // drawn as an ordinary send, with no caption and no fading.
     expect(text).not.toContain("Sending…");
     expect(text).not.toContain("Claude Code is writing a summary…");
-    expect(bubbles.every((bubble) => rowClassOf(bubble).includes("opacity-60"))).toBe(true);
+    expect(
+      bubbles.every((bubble) => rowClassOf(bubble).includes("message-user") && !/opacity-/.test(rowClassOf(bubble))),
+    ).toBe(true);
   });
 
   it("stands the confirming message down once the switch marker carrying it is on the transcript", () => {
@@ -145,7 +147,9 @@ describe("the held-send bubbles", () => {
     const text = JSON.stringify(bubbles);
     expect(text).toContain("Carry on on the other account");
     expect(text).not.toContain("Sending…");
-    expect(bubbles.every((bubble) => rowClassOf(bubble).includes("opacity-60"))).toBe(true);
+    expect(
+      bubbles.every((bubble) => rowClassOf(bubble).includes("message-user") && !/opacity-/.test(rowClassOf(bubble))),
+    ).toBe(true);
   });
 
   it("renders nothing for a chat that is not switching", () => {

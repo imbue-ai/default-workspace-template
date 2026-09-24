@@ -118,7 +118,7 @@ export interface QueuedMessage {
   content: string;
   timestamp: string;
   // True while the backend is actively re-sending this chip (a codex shoulder-tap's
-  // interrupt+resend): it renders as the faded not-yet-real bubble rather than as a plain queued chip.
+  // interrupt+resend): it renders as an ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
 }
 

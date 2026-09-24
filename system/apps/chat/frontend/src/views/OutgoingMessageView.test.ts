@@ -4,9 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import { addOutgoing } from "../models/OutgoingMessages";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { USER_BUBBLE_CLASS } from "./user-message-display";
 
 describe("the optimistic outgoing bubble", () => {
-  it("shows the sent text faded, with no caption under it", () => {
+  it("shows the sent text as a delivered user bubble at once: solid, with no caption", () => {
     const chatId = `agent-${Math.random().toString(36).slice(2)}`;
     addOutgoing(chatId, "hello there");
     const root = document.createElement("div");
@@ -14,7 +15,8 @@ describe("the optimistic outgoing bubble", () => {
     m.render(root, renderOutgoingMessages(chatId));
 
     const row = root.querySelector(".outgoing-message");
-    expect(row?.getAttribute("class")).toContain("opacity-60");
+    expect(row?.getAttribute("class")).not.toMatch(/opacity-/);
+    expect(row?.querySelector(".message-user-bubble")?.getAttribute("class")).toBe(USER_BUBBLE_CLASS);
     expect(row?.textContent).toBe("hello there");
   });
 
