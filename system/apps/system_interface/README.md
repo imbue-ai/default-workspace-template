@@ -226,13 +226,13 @@ desktop, else the first. A signed-in visitor would otherwise land on the
 owner's desktop and open and close the owner's windows, so on their first
 arrival the shell makes them a desktop named after them (their profile's
 display name, else the email's local part, else `Guest`, made unique; the
-profile is resolved before the arrival takes the state lock), seeded from the first
-desktop: its shortcuts, its wallpaper, and a new window at the path of each
-window open there. It is remembered
-in `users.json`, every later client of that user lands on it, a returning
-client keeps the desktop it was on (when it last arrived as that same user),
-and if it has been deleted the next arrival seeds another and says so. Every
-desktop stays shared and in everyone's switcher; there is no private mode.
+profile is resolved before the arrival takes the state lock), seeded from the
+first desktop: its shortcuts, its wallpaper, and a new window at the path of
+each window open there. It is remembered in `users.json`, every later client
+of that user lands on it, a returning client keeps the desktop it was on (when
+it last arrived as that same user), and if it has been deleted the next
+arrival seeds another and says so. Every desktop stays shared and in
+everyone's switcher; there is no private mode.
 
 ### The desktop, the taskbar, and the launcher
 
