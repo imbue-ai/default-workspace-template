@@ -23,9 +23,13 @@ command has exited, and ``runner.log``, the detached process's own record of the
 A caller that needs the result mid-turn, before the message can reach it, reads the first
 two.
 
-The detached process starts a session of its own, so it outlives the caller's tool call,
-its process group, and a stop of the caller's agent (the chat app revives a stopped agent
-to take the message). A send that fails is retried with backoff for hours, since the
+The detached process starts a session of its own, so it outlives the caller's tool call and
+its process group. It also drops the caller's ``MNGR_AGENT_ID`` from its own environment:
+``mngr stop`` (and a handoff retiring the agent, or a restart after a shed) kills every
+process whose environment carries the agent's id, and the runner must outlive that to
+report (the chat app revives a stopped agent to take the message). The command gets the
+id back, so it is still the agent's work and ends with a stop, which the report then says.
+A send that fails is retried with backoff for hours, since the
 chat may be mid-handoff or its agent shed for memory until its lead restarts it; only a
 chat that no longer exists ends the retries at once. The command keeps the caller's OOM
 band, so a command shed for memory is reported like any other exit; the detached process
@@ -62,6 +66,9 @@ RUNNER_LOG_FILE_NAME = "runner.log"
 
 MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
 
+# The variable mngr tags an agent's processes with and kills them by on a stop.
+AGENT_ID_ENV = "MNGR_AGENT_ID"
+
 # ``mngr message``'s exit codes, which ``message_chat.py`` passes through.
 EXIT_DELIVERED = 0
 EXIT_DELIVERED_BUT_BLOCKED = 7
@@ -97,7 +104,7 @@ class RepoRootNotFoundError(Exception):
 def own_chat_id(environ: Mapping[str, str]) -> str:
     """The caller's chat: ``MINDS_CHAT_ID`` from the chat app that created the agent, else the agent's
     own id (an agent that is its own chat), else empty outside an agent."""
-    return environ.get("MINDS_CHAT_ID", "") or environ.get("MNGR_AGENT_ID", "")
+    return environ.get("MINDS_CHAT_ID", "") or environ.get(AGENT_ID_ENV, "")
 
 
 def script_repo_root() -> Path:
@@ -236,11 +243,14 @@ def _run_messenger(argv: list[str]) -> int:
         return 1
 
 
-def _run_command(command: Sequence[str], output_path: Path) -> int:
+def _run_command(
+    command: Sequence[str], output_path: Path, environ: Mapping[str, str]
+) -> int:
     with output_path.open("wb") as output:
         try:
             process: subprocess.Popen[bytes] | None = subprocess.Popen(
                 list(command),
+                env=dict(environ),
                 stdin=subprocess.DEVNULL,
                 stdout=output,
                 stderr=subprocess.STDOUT,
@@ -256,13 +266,17 @@ def _run_command(command: Sequence[str], output_path: Path) -> int:
 
 
 def run_and_deliver(
-    task_dir: Path, description: str, chat_id: str, command: Sequence[str]
+    task_dir: Path,
+    description: str,
+    chat_id: str,
+    command: Sequence[str],
+    command_environ: Mapping[str, str],
 ) -> int:
-    """Run the command to completion here, then send its report to the chat."""
+    """Run the command to completion here, in ``command_environ``, then send its report to the chat."""
     output_path = task_dir / OUTPUT_FILE_NAME
     _log(f"Running {shlex.join(command)}")
     started_at = time.monotonic()
-    returncode = _run_command(command, output_path)
+    returncode = _run_command(command, output_path, command_environ)
     (task_dir / EXIT_CODE_FILE_NAME).write_text(f"{returncode}\n")
     _log(
         f"Command exited with code {returncode} after {time.monotonic() - started_at:.0f}s"
@@ -290,10 +304,16 @@ def run_and_deliver(
 
 
 def _start_detached(
-    task_dir: Path, description: str, chat_id: str, command: Sequence[str]
+    task_dir: Path,
+    description: str,
+    chat_id: str,
+    command: Sequence[str],
+    environ: Mapping[str, str],
 ) -> None:
     # A session of its own, and no stdio shared with the caller, so nothing the caller's harness
-    # does to the tool call's processes reaches it and nothing waits on it.
+    # does to the tool call's processes reaches it and nothing waits on it; and no agent id in
+    # its environment, so mngr's stop of the caller's agent passes it by.
+    agent_id = environ.get(AGENT_ID_ENV, "")
     with (task_dir / RUNNER_LOG_FILE_NAME).open("ab") as runner_log:
         subprocess.Popen(
             [
@@ -306,9 +326,11 @@ def _start_detached(
                 chat_id,
                 "--description",
                 description,
+                *(["--agent-id", agent_id] if agent_id else []),
                 "--",
                 *command,
             ],
+            env={key: value for key, value in environ.items() if key != AGENT_ID_ENV},
             stdin=subprocess.DEVNULL,
             stdout=runner_log,
             stderr=subprocess.STDOUT,
@@ -348,6 +370,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run the command in this process and deliver its result when it exits, instead of "
         "detaching (what the detached copy runs).",
     )
+    parser.add_argument(
+        "--agent-id",
+        default=None,
+        help="Give the command this $MNGR_AGENT_ID (what the detached copy is passed, having "
+        "dropped the caller's from its own environment).",
+    )
     return parser
 
 
@@ -366,7 +394,8 @@ def main(
     if not command:
         parser.error("no command after `--`")
 
-    chat_id = args.chat_id or own_chat_id(os.environ if environ is None else environ)
+    resolved_environ = os.environ if environ is None else environ
+    chat_id = args.chat_id or own_chat_id(resolved_environ)
     if not chat_id:
         print(
             "run_in_background.py: neither MINDS_CHAT_ID nor MNGR_AGENT_ID is set, so there is no "
@@ -380,8 +409,13 @@ def main(
     # A reused directory's exit code belongs to the previous command, not this one.
     (task_dir / EXIT_CODE_FILE_NAME).unlink(missing_ok=True)
     if args.foreground:
-        return run_and_deliver(task_dir, args.description, chat_id, command)
-    _start_detached(task_dir, args.description, chat_id, command)
+        command_environ = dict(resolved_environ)
+        if args.agent_id:
+            command_environ[AGENT_ID_ENV] = args.agent_id
+        return run_and_deliver(
+            task_dir, args.description, chat_id, command, command_environ
+        )
+    _start_detached(task_dir, args.description, chat_id, command, resolved_environ)
     print(
         f"Started in the background as task {task_dir.name}. When the command exits, its exit "
         "code and output arrive in this chat as a message, and that message starts your next "

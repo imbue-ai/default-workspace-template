@@ -8,6 +8,7 @@ reaches the ``fake_mngr`` fixture, never the real ``mngr``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import signal
@@ -169,6 +170,55 @@ def test_the_report_still_arrives_after_the_callers_whole_process_group_is_kille
     assert "survived" in body["message"]
 
 
+def _kill_processes_tagged_with_agent_id(agent_id: str) -> None:
+    """What ``mngr stop`` does to an agent's processes: kill every one whose environment
+    carries ``MNGR_AGENT_ID=<agent_id>``, wherever it was reparented to."""
+    marker = f"MNGR_AGENT_ID={agent_id}".encode()
+    for environ_path in Path("/proc").glob("[0-9]*/environ"):
+        pid = int(environ_path.parent.name)
+        if pid == os.getpid():
+            continue
+        try:
+            records = environ_path.read_bytes().split(b"\0")
+        except OSError:
+            # A process that exited mid-scan, or one of another user's.
+            continue
+        if marker in records:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/environ").exists(),
+    reason="needs Linux's /proc/<pid>/environ, which mngr's stop scans",
+)
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_stop_of_the_callers_agent_ends_the_command_but_not_its_report(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    """A handoff retiring the caller's agent, or a restart after a shed, stops it with mngr, which
+    kills every process tagged with the agent's id. The command is the agent's work and ends
+    with it; the runner holds the report and must survive to deliver how the command ended."""
+    command = _python_command(
+        "import os, time; print('agent', os.environ.get('MNGR_AGENT_ID'), flush=True); time.sleep(60)"
+    )
+    started = _start_runner(
+        tmp_path, _agent_env(MNGR_AGENT_ID=_CHAT_ID), "Outlive a stop", *command
+    )
+    assert started.returncode == 0, started.stderr
+    output_log = _task_dir_from(started.stdout, tmp_path) / "output.log"
+    deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS
+    while "agent" not in (output_log.read_text() if output_log.exists() else ""):
+        assert time.monotonic() < deadline, "the command never started"
+        time.sleep(0.1)
+
+    _kill_processes_tagged_with_agent_id(_CHAT_ID)
+
+    [(_, body)] = _wait_for_posts(fake_chat_app, 1)
+    assert "<summary>Outlive a stop (killed by signal 9)</summary>" in body["message"]
+    assert f"agent {_CHAT_ID}" in body["message"]
+
+
 @pytest.mark.usefixtures("fake_mngr")
 def test_a_reused_task_dir_shows_no_exit_code_until_the_new_command_exits(
     fake_chat_app: Any, tmp_path: Path
@@ -287,7 +337,9 @@ def test_a_landed_send_is_never_repeated(exit_code: int) -> None:
 def test_a_failed_send_is_retried_with_a_growing_wait_until_it_lands() -> None:
     initial = run_in_background.DELIVERY_RETRY_INITIAL_SECONDS
 
-    is_delivered, attempts, clock = _deliver([1, 1, 1, run_in_background.EXIT_DELIVERED])
+    is_delivered, attempts, clock = _deliver(
+        [1, 1, 1, run_in_background.EXIT_DELIVERED]
+    )
 
     assert is_delivered
     assert attempts == 4
@@ -302,7 +354,9 @@ def test_a_gone_chat_ends_the_retries_at_once() -> None:
     assert clock.slept == [run_in_background.DELIVERY_RETRY_INITIAL_SECONDS]
 
 
-def test_a_send_that_keeps_failing_is_retried_for_hours_at_a_capped_interval_then_given_up() -> None:
+def test_a_send_that_keeps_failing_is_retried_for_hours_at_a_capped_interval_then_given_up() -> (
+    None
+):
     """A worker shed for memory refuses its reports until its lead restarts it, which can take
     far longer than a mid-handoff refusal."""
     is_delivered, attempts, clock = _deliver([1])
@@ -337,7 +391,9 @@ def test_a_report_for_a_chat_that_no_longer_exists_is_given_up_on_the_first_send
     runner_log = _task_dir_from(started.stdout, tmp_path) / "runner.log"
     # The messenger's own 404 window runs first, in real time.
     deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS + 10
-    while "Gave up delivering" not in (runner_log.read_text() if runner_log.exists() else ""):
+    while "Gave up delivering" not in (
+        runner_log.read_text() if runner_log.exists() else ""
+    ):
         assert time.monotonic() < deadline, "the runner never gave up"
         time.sleep(0.2)
     log = runner_log.read_text()
