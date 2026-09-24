@@ -52,9 +52,12 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
     m(
       "span",
       {
+        // The hover is the tile growing, not a tint behind it: the tint is what says SELECTED, and
+        // one look cannot say both. A transform moves nothing around it.
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
-          "rounded-(--desk-icon-radius) bg-surface p-2 shadow-raised [&>svg]:size-full",
+          "rounded-(--desk-icon-radius) bg-surface p-2 shadow-raised transition-transform " +
+          "group-hover:scale-110 [&>svg]:size-full",
       },
       m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
     ),
@@ -111,7 +114,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           "data-connecting": isConnecting ? "true" : null,
           "aria-pressed": isSelected ? "true" : "false",
           class:
-            "shortcut group absolute flex flex-col items-center justify-start gap-1 p-(--desk-cell-gap) " +
+            "shortcut group absolute flex flex-col items-center justify-start px-(--desk-cell-gap) " +
             "text-center outline-none touch-none select-none " +
             (isLifted ? "opacity-40 " : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
@@ -134,19 +137,20 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             onContextMenu(event.clientX, event.clientY);
           },
         },
-        [
-          // The tint hugs the icon and its label rather than the whole cell, so the gap the cell leaves
-          // around it reads as space between shortcuts. The drop target draws the same box.
-          // Its contents start at its top rather than centring: every icon then sits on the same line
-          // across the grid, and every name starts on the same line, whatever wraps to a second one.
-          m("span", {
+        // The selection box wraps the icon and the name rather than filling the cell, so it clears
+        // each by the same 4px, and it starts at the cell's top rather than centring in it: every
+        // icon then sits on one line across the grid, and every name starts on one, whatever wraps
+        // to a second line. The room the cell leaves under it is the gap between shortcuts.
+        m(
+          "span",
+          {
             class:
-              "shortcut-highlight pointer-events-none absolute inset-(--desk-cell-gap) rounded-lg " +
-              "group-focus-visible:ring-2 group-focus-visible:ring-accent " +
-              (isSelected ? "bg-fill-active" : "group-hover:bg-fill-hover"),
-          }),
+              "shortcut-highlight flex w-full flex-col items-center gap-1 rounded-lg p-1 " +
+              "group-focus-visible:outline-2 group-focus-visible:outline-accent " +
+              (isSelected ? "bg-accent/15 outline-1 outline-accent" : ""),
+          },
           shortcutContent(app, label),
-        ],
+        ),
       );
     },
   };
