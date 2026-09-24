@@ -755,125 +755,126 @@ export function App(): m.Component<AppAttrs> {
           style: wallpaperStyle,
         },
         [
-        m(UpdateStalenessBanner),
-        m(UpdateNoticeBanner, { store: current }),
-        m(
-          "div",
-          {
-            "data-backdrop-area": "",
-            class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
-            oncreate: (created: m.VnodeDOM) => {
-              backdropArea = created.dom as HTMLElement;
-              const measure = (): void => {
-                const box = backdropArea?.getBoundingClientRect();
-                if (box !== undefined) current.setBackdropSize({ width: box.width, height: box.height });
-              };
-              resizeObserver = new ResizeObserver(measure);
-              resizeObserver.observe(backdropArea);
-              measure();
+          m(UpdateStalenessBanner),
+          m(UpdateNoticeBanner, { store: current }),
+          m(
+            "div",
+            {
+              "data-backdrop-area": "",
+              class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
+              oncreate: (created: m.VnodeDOM) => {
+                backdropArea = created.dom as HTMLElement;
+                const measure = (): void => {
+                  const box = backdropArea?.getBoundingClientRect();
+                  if (box !== undefined) current.setBackdropSize({ width: box.width, height: box.height });
+                };
+                resizeObserver = new ResizeObserver(measure);
+                resizeObserver.observe(backdropArea);
+                measure();
+              },
             },
-          },
-          [
-            desktop === null
-              ? m(
-                  "div",
-                  { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
-                  state.isDesktopsLoaded ? "No desktop yet." : "Loading…",
-                )
-              : m(Backdrop, {
-                  store: current,
-                  desktop,
-                  placements,
-                  focusedWindowId: focused,
-                  selectedShortcutKey,
-                  openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
-                  floatingEntries: floatingEntries(state),
-                  openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
-                  sizeMenuTrigger,
-                  onEntryClick,
-                  onEntryContextMenu,
-                  isOverlayOpen: openMenu !== null || isLauncherOpen,
-                  onSelectShortcut: (key) => {
-                    selectedShortcutKey = key;
-                  },
-                  onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
-                  onShortcutContextMenu: (shortcut, point) => {
-                    openMenuAt({ kind: "shortcut", shortcut }, anchorForPoint(point.x, point.y));
-                  },
-                  onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
-                  onPagesHostCreated: (host) => {
-                    pages = new LivePagesLayer(host, current, {
-                      host: vnode.attrs.host,
-                      protocol: vnode.attrs.protocol,
-                    });
-                    pages.start();
-                    // The render that made the host is over (the window chrome is in the DOM), and when every
-                    // load had already landed no further redraw follows it: the pages are placed now.
-                    pages.reconcile();
-                  },
-                }),
-            isLauncherOpen
-              ? m(LauncherMenu, {
-                  menu: launcher,
-                  highlightIndex: launcherHighlightIndex(launcher.rows),
-                  isCompact: state.modes.isCompact,
-                  isApplePlatform: isApplePlatform(),
-                  bottomOffsetPx: launcherFieldRise,
-                  onRun: (row) => runLauncherRow(current, row),
-                  onHighlight: (index) => {
-                    launcherHighlight = index;
-                  },
-                })
-              : null,
-          ],
-        ),
-        m(Taskbar, {
-          entries: barEntries(state),
-          avatar: state.avatar,
-          isCompact: state.modes.isCompact,
-          openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
-          launcher: {
-            query: launcherQuery,
-            isOpen: isLauncherOpen,
+            [
+              desktop === null
+                ? m(
+                    "div",
+                    { class: "flex h-full items-center justify-center text-(length:--font-size-row) text-faint" },
+                    state.isDesktopsLoaded ? "No desktop yet." : "Loading…",
+                  )
+                : m(Backdrop, {
+                    store: current,
+                    desktop,
+                    placements,
+                    focusedWindowId: focused,
+                    selectedShortcutKey,
+                    openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
+                    floatingEntries: floatingEntries(state),
+                    openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
+                    sizeMenuTrigger,
+                    onEntryClick,
+                    onEntryContextMenu,
+                    isOverlayOpen: openMenu !== null || isLauncherOpen,
+                    onSelectShortcut: (key) => {
+                      selectedShortcutKey = key;
+                    },
+                    onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
+                    onShortcutContextMenu: (shortcut, point) => {
+                      openMenuAt({ kind: "shortcut", shortcut }, anchorForPoint(point.x, point.y));
+                    },
+                    onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
+                    onPagesHostCreated: (host) => {
+                      pages = new LivePagesLayer(host, current, {
+                        host: vnode.attrs.host,
+                        protocol: vnode.attrs.protocol,
+                      });
+                      pages.start();
+                      // The render that made the host is over (the window chrome is in the DOM), and when every
+                      // load had already landed no further redraw follows it: the pages are placed now.
+                      pages.reconcile();
+                    },
+                  }),
+              isLauncherOpen
+                ? m(LauncherMenu, {
+                    menu: launcher,
+                    highlightIndex: launcherHighlightIndex(launcher.rows),
+                    isCompact: state.modes.isCompact,
+                    isApplePlatform: isApplePlatform(),
+                    bottomOffsetPx: launcherFieldRise,
+                    onRun: (row) => runLauncherRow(current, row),
+                    onHighlight: (index) => {
+                      launcherHighlight = index;
+                    },
+                  })
+                : null,
+            ],
+          ),
+          m(Taskbar, {
+            entries: barEntries(state),
+            avatar: state.avatar,
             isCompact: state.modes.isCompact,
-            onOpen: () => current.openLauncher(),
-            onClose: closeLauncher,
-            onQuery: (query) => {
-              launcherQuery = query;
-              launcherHighlight = null;
+            openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
+            launcher: {
+              query: launcherQuery,
+              isOpen: isLauncherOpen,
+              isCompact: state.modes.isCompact,
+              onOpen: () => current.openLauncher(),
+              onClose: closeLauncher,
+              onQuery: (query) => {
+                launcherQuery = query;
+                launcherHighlight = null;
+              },
+              onMoveHighlight: (delta) => {
+                const { rows } = launcherMenu(current);
+                launcherHighlight = moveHighlight(rows, launcherHighlightIndex(rows), delta);
+              },
+              onRunHighlight: () => runHighlightedRow(current),
+              onRunSecondary: () => runSecondaryRow(current),
+              onRise: (rise) => {
+                launcherFieldRise = rise;
+                m.redraw();
+              },
             },
-            onMoveHighlight: (delta) => {
-              const { rows } = launcherMenu(current);
-              launcherHighlight = moveHighlight(rows, launcherHighlightIndex(rows), delta);
+            tray: {
+              desktops: state.desktops,
+              activeDesktopId: state.activeDesktopId,
+              isDesktopsMenuOpen: openMenu?.kind === "desktops",
+              onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
+              onOpenDesktopsMenu: (event) => {
+                if (openMenu?.kind === "desktops") menu.close();
+                else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
+              },
+              onDesktopContextMenu: (desktopId, x, y) => {
+                openMenuAt({ kind: "desktop", desktopId }, anchorForPoint(x, y));
+              },
             },
-            onRunHighlight: () => runHighlightedRow(current),
-            onRunSecondary: () => runSecondaryRow(current),
-            onRise: (rise) => {
-              launcherFieldRise = rise;
-              m.redraw();
-            },
-          },
-          tray: {
-            desktops: state.desktops,
-            activeDesktopId: state.activeDesktopId,
-            isDesktopsMenuOpen: openMenu?.kind === "desktops",
-            onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
-            onOpenDesktopsMenu: (event) => {
-              if (openMenu?.kind === "desktops") menu.close();
-              else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
-            },
-            onDesktopContextMenu: (desktopId, x, y) => {
-              openMenuAt({ kind: "desktop", desktopId }, anchorForPoint(x, y));
-            },
-          },
-          onEntryClick,
-          onEntryContextMenu,
-        }),
-        menuRows === null ? null : menu.view(menuRows),
-        settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
-        replacedDesktopNotice(current),
-        avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
-      ]);
+            onEntryClick,
+            onEntryContextMenu,
+          }),
+          menuRows === null ? null : menu.view(menuRows),
+          settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+          replacedDesktopNotice(current),
+          avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
+        ],
+      );
     },
   };
 }
