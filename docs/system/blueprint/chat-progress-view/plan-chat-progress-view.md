@@ -151,10 +151,11 @@
   notice counts as one). No timestamps, no hook coordination, and no auto-close
   are involved.
 - Two boundaries back to back (two messages sent together, two notices, a
-  verdict followed by a message) leave a section the agent did nothing in. That
-  section drops its carried-over nodes, since the next section re-opens them, so
-  the step shows once, under the later boundary, rather than also as an empty
-  node between them.
+  verdict followed by a message, a message followed by a fresh start on another
+  agent) leave a section the agent did nothing in. That section drops its
+  carried-over nodes, since the next section re-opens them, so the step shows
+  once, under the later boundary, rather than also as an empty node between
+  them.
 - This makes the design *simpler*, not just more capable: because steps carry
   over on their own, there is **no auto-close/redeclare mechanism** — no
   stop-hook auto-close, no runtime record file, no reminder rewrite. The existing
