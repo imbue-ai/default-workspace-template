@@ -73,7 +73,9 @@ export function windowSizeRow(actions: WindowSizeActions, onPlaced: () => void):
       // off their hover boxes rather than at the indent a row of text is cut for. The 4px above and
       // below is the card's own padding, so only the sides are spelled out here.
       m("div", { class: "mx-1 flex flex-col gap-1" }, [
-        m("span", { class: "text-(length:--font-size-helper) text-primary" }, "Move and resize"),
+        // Indented by a menu row's own `px-2`, which is where every other label in a menu starts --
+        // and, near enough, where the pictograms' outlines start inside their hover boxes.
+        m("span", { class: "px-2 text-(length:--font-size-helper) text-primary" }, "Move and resize"),
         m(
           "div",
           { class: "grid w-max grid-cols-5 gap-1" },
