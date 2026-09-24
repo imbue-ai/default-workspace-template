@@ -31,11 +31,13 @@ from werkzeug.exceptions import NotFound
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import latchkey_endpoints
+from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import start_agent
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import CHAT_CREATION_WAIT_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
@@ -461,11 +463,17 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # only as the correlation token the committed item echoes back.
     agent_manager = state.agent_manager
     session = agent_manager.get_or_create_session(agent_info)
-    outcome = session.send(text, message_id)
-    if outcome is SendOutcome.NOT_READY:
-        outcome = _revive_and_retry_send(
-            agent_info, agent_manager, session, SendMessageRequest(message=text, message_id=message_id), message_id
-        )
+    # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
+    # harness still starting -- reads as Connecting on the chat until it resolves.
+    with agent_manager.track_connecting_send(agent_info.id, message_id) as mark_connecting:
+        if is_lifecycle_dead(agent_info.state) or session.is_starting_up():
+            mark_connecting()
+        outcome = session.send(text, message_id)
+        if outcome is SendOutcome.NOT_READY:
+            mark_connecting()
+            outcome = _revive_and_retry_send(
+                agent_info, agent_manager, session, SendMessageRequest(message=text, message_id=message_id), message_id
+            )
     # A delivered send means the agent is up: mngr's own send auto-starts a stopped
     # file-harness agent (``is_start_desired``), and the observe stream would not see that
     # revival for minutes. Reflect it now, as the codex revive above does, so the UI's
@@ -1253,6 +1261,13 @@ def _run_create_chat() -> CreatedChat | Response:
     agent's own children). ``project_id`` rides beside the request model rather
     than inside it for that reason: it is a label on the created agent, not part
     of the chat's identity.
+
+    With ``should_wait`` the answer comes once the create has finished: the chat's identity
+    as before when it landed, a 500 carrying the create's own reason when it failed, and a
+    504 when it is still running at the wait's ceiling. That is how a caller outside the
+    workspace (the Minds app's assist and update chats, through
+    ``system/scripts/message_chat.py --create``) holds its "starting..." state until the
+    chat exists, without polling.
     """
     agent_manager: AgentManager = get_state().agent_manager
     body = parse_json_object_body()
@@ -1263,7 +1278,7 @@ def _run_create_chat() -> CreatedChat | Response:
 
     try:
         create_request = CreateChatRequest.model_validate(request_fields)
-        return agent_manager.create_chat(
+        created = agent_manager.create_chat(
             create_request.name,
             # A client asks for no templates: the manager adds `welcome` and `fast` itself,
             # from the message and the workspace's fast-mode limit (``launch_role_templates``).
@@ -1272,6 +1287,8 @@ def _run_create_chat() -> CreatedChat | Response:
             account_id=create_request.account_id,
             chat_id=create_request.chat_id,
             message=create_request.message,
+            labels=create_request.labels,
+            is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
         )
     except AgentNameConflictError as e:
@@ -1279,6 +1296,16 @@ def _run_create_chat() -> CreatedChat | Response:
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
         return json_response(error.model_dump(), status_code=400)
+    if not create_request.should_wait:
+        return created
+    outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
+    if outcome is None:
+        detail = f"Chat {created.display_name!r} is still being created; its window will show how that ends"
+        return json_response(ErrorResponse(detail=detail).model_dump(), status_code=504)
+    if not outcome.is_created:
+        detail = outcome.error or f"Creating chat {created.display_name!r} failed"
+        return json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
+    return created
 
 
 def _create_chat() -> Response:

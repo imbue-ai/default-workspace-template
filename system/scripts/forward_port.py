@@ -124,7 +124,7 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # the first label of every standalone supervisord program with a hyphen in
 # its name: an app named ``share`` would claim ``share-gateway`` as its
 # ``share-<role>`` sidecar when its footprint is computed.
-RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "agent"})
+RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
 # (icons in this repo run a few hundred bytes) while keeping apps.toml small:

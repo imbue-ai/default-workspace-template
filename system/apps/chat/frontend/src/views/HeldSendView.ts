@@ -2,9 +2,9 @@
  * The messages the chat app holds while the chat switches harness, at the tail of the transcript.
  *
  * They come from the chat's snapshot (``handoff.held_sends``), not from the page: the confirming
- * message first, then anything sent since. Each renders as the not-yet-real user bubble the
- * optimistic "Sending…" overlay uses, with the same caption: the switch's own progress is the
- * handoff node's to tell (``handoff-node.ts``). They stay until the snapshot stops listing them,
+ * message first, then anything sent since. Each renders as the user bubble the optimistic outgoing
+ * overlay uses, drawn as an ordinary send: the switch's own progress is the handoff node's to tell
+ * (``handoff-node.ts``). They stay until the snapshot stops listing them,
  * so a reloaded page shows them too; the confirming message stands down earlier, once the switch
  * marker that carries it is on the transcript (the successor's opening turn is its real form).
  */
@@ -19,11 +19,6 @@ export function renderHeldSends(chatId: string): m.Vnode[] {
   if (chat === undefined || chat.handoff === null) return [];
   const standing = chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id));
   return standing.map((held) =>
-    renderNotYetRealBubble({
-      key: `held-${held.message_id}`,
-      content: held.text,
-      caption: "Sending…",
-      extraRowClass: "held-send",
-    }),
+    renderNotYetRealBubble({ key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send" }),
   );
 }

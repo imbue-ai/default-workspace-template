@@ -28,6 +28,7 @@ export function chatSnapshotFixture(
       model_choice: null,
       queued_messages: [],
       shoulder_tap_available: false,
+      is_connecting: false,
       ...agentOverrides,
     },
   };
