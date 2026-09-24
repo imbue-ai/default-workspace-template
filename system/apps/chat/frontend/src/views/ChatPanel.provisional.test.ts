@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => {
     loadSnapshotWithStream: vi.fn(async (_chatId: string) => undefined),
     connectToStream: vi.fn(),
     noteLoadedArrivals: vi.fn(),
+    // The page's not-yet-real bubbles, as the outgoing view renders them.
+    outgoingBubbles: [] as unknown[],
   };
 });
 
@@ -74,12 +76,13 @@ vi.mock("./ActivityIndicator", () => ({ ActivityIndicator: { view: () => null } 
 vi.mock("./TerminalViewToggle", () => ({ TerminalViewToggle: { view: () => null } }));
 vi.mock("./EmptySlot", () => ({ EmptySlot: { view: () => null } }));
 vi.mock("./QueuedMessageView", () => ({ renderQueuedMessages: () => [] }));
-vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => [] }));
+vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => mocks.outgoingBubbles }));
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
+import { MESSAGE_LIST_CLASS } from "./conversation-rows";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown };
 
@@ -152,11 +155,56 @@ function failed(accountId: string, error: string): void {
   };
 }
 
+/** A chat whose create is running. */
+function creating(): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 1",
+    account_id: "acct-1",
+    phase: "creating",
+    error: null,
+    is_seeded: false,
+  };
+}
+
+/** The list the page's bubbles sit in: the child of the scroll area's content, by its class. */
+function bubbleListOf(tree: unknown): AnyVnode | undefined {
+  const wrapper = findByClass(tree, "message-list-wrapper");
+  return flatten(wrapper?.children).find((vnode) =>
+    [vnode.attrs?.class, vnode.attrs?.className].includes(MESSAGE_LIST_CLASS),
+  );
+}
+
 describe("ChatPanel over a provisional chat", () => {
   beforeEach(() => {
     mocks.launchChat.mockReset();
     mocks.launchChat.mockImplementation(async () => ({}));
     mocks.chat = undefined;
+    mocks.outgoingBubbles = [];
+  });
+
+  it("says the chat is starting while nothing has been sent to it", () => {
+    creating();
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).toContain("Starting the chat...");
+    expect(bubbleListOf(tree)).toBeUndefined();
+  });
+
+  it("keeps a message sent while the chat starts where the empty transcript after it puts the message", () => {
+    const bubble = { tag: "div", key: "outgoing-0", attrs: { class: "outgoing-message" }, children: [] };
+    mocks.outgoingBubbles = [bubble];
+    creating();
+    const render = mountPanel();
+
+    const starting = render();
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    const started = render();
+
+    expect(renderedText(starting)).not.toContain("Starting the chat...");
+    expect(bubbleListOf(starting)?.children).toEqual([bubble]);
+    expect(bubbleListOf(started)?.children).toEqual([bubble]);
   });
 
   it("shows a failed create's reason and retries it on the record's account", () => {

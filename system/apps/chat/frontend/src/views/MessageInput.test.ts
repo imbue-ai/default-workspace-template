@@ -62,6 +62,8 @@ const mocks = vi.hoisted(() => {
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
+    // Why a send cannot land: set for a chat whose create has failed.
+    failedCreateError: null as Error | null,
     // Whether the chat list names the chat; false for a seeded chat awaiting its first send.
     isChatRegistered: true,
     provisional: undefined as unknown,
@@ -167,6 +169,7 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getChatById: () =>
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
+  getFailedCreateError: () => mocks.failedCreateError,
   launchChat: (chatId: string, accountId: string, message?: string) => mocks.launchChat(chatId, accountId, message),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));
@@ -498,32 +501,35 @@ describe("MessageInput send to a chat still being created", () => {
   });
 
   afterEach(() => {
-    mocks.whenChatRegistered.mockImplementation(async (_chatId: string) => {});
+    mocks.isChatRegistered = true;
+    mocks.provisional = undefined;
+    mocks.failedCreateError = null;
   });
 
-  it("holds the send until the agent registers, then sends it", async () => {
-    let release: () => void = () => {};
-    mocks.whenChatRegistered.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
-    const sending = typeAndSend(MessageInput(), "agent-1", "hello");
-    await flushAsync();
-    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  it("sends at once, for the chat app to hold until the agent is up", async () => {
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-1",
+      name: "Chat 1",
+      account_id: "acct-1",
+      phase: "creating",
+      error: null,
+      is_seeded: false,
+    };
+    mocks.whenChatRegistered.mockClear();
 
-    release();
-    await sending;
+    await typeAndSend(MessageInput(), "agent-1", "hello");
 
+    expect(mocks.whenChatRegistered).not.toHaveBeenCalled();
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     const [calledChatId, calledText] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
     expect(calledChatId).toBe("agent-1");
     expect(calledText).toContain("hello");
   });
 
-  it("returns the message to the composer with the reason when the create fails", async () => {
-    mocks.whenChatRegistered.mockRejectedValueOnce("mngr create exited with code 3");
+  it("returns the message to the composer with the reason when the create has failed", async () => {
+    mocks.isChatRegistered = false;
+    mocks.failedCreateError = new Error("mngr create exited with code 3");
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
 

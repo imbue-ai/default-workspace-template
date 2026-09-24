@@ -151,6 +151,22 @@ describe("the provisional chats over the socket", () => {
     await expect(manager.whenChatRegistered("agent-1")).rejects.toThrow("mngr create exited with code 3");
   });
 
+  it("names a failed create's reason as why a send cannot land, and nothing for a chat still being created", () => {
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+    expect(manager.getFailedCreateError("agent-1")).toBeNull();
+
+    push({
+      type: "provisional_chat_completed",
+      chat_id: "agent-1",
+      success: false,
+      error: "mngr create exited with code 3",
+    });
+    expect(manager.getFailedCreateError("agent-1")?.message).toBe("mngr create exited with code 3");
+
+    push({ type: "chats_updated", chats: [chat("agent-1")] });
+    expect(manager.getFailedCreateError("agent-1")).toBeNull();
+  });
+
   it("keeps a held send waiting after a successful completion until the chat list names the chat", async () => {
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");

@@ -1,0 +1,3 @@
+A message sent while a new chat is still starting now stays where it was typed and goes to the agent as the chat's first message. Before, it sat at the bottom of the "Starting the chat..." screen, jumped to the top once the chat came up, and often showed as queued behind the chat's greeting.
+
+The chat app now holds a send made during a chat's create and delivers it once the agent is up, in the order the sends arrived; a create that fails refuses them, so the message goes back to the composer. A chat started with nothing to say is created silently and sent `/welcome` once it is up, unless the user already sent something while it started, in which case it is not greeted.

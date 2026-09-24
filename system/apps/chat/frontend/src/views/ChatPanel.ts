@@ -292,19 +292,21 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       });
   }
 
-  /** The page of a chat whose create is running: an empty transcript with the composer's held
-   *  "Sending" bubbles (a message typed now waits for the agent to land, see MessageInput), so
-   *  the message is visibly waiting rather than gone. */
+  /** The page of a chat whose create is running. A message typed now waits for the agent to
+   *  land (see MessageInput); its bubble is laid out exactly as the empty transcript that follows
+   *  lays it out, so it stays where it is when the chat comes up and its turn replaces it. */
   function renderStarting(chatId: string): m.Vnode {
     const outgoing = renderOutgoingMessages(chatId);
-    return m("div", { class: "message-list-creating flex flex-col h-full" }, [
-      m(
-        "div",
-        { class: "flex-1 flex items-center justify-center" },
-        m("p", { class: "text-secondary" }, "Starting the chat..."),
-      ),
-      outgoing.length > 0 ? m("div", { class: MESSAGE_LIST_CLASS }, outgoing) : null,
-    ]);
+    if (outgoing.length > 0) {
+      return m("div", { class: "message-list-wrapper message-list-creating" }, [
+        m("div", { class: MESSAGE_LIST_CLASS }, outgoing),
+      ]);
+    }
+    return m(
+      "div",
+      { class: "message-list-creating flex items-center justify-center h-full" },
+      m("p", { class: "text-secondary" }, "Starting the chat..."),
+    );
   }
 
   /** The page of a chat that is not an agent yet, by its phase. */
