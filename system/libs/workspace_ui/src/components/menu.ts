@@ -497,7 +497,8 @@ export function createMenu(options: MenuOptions): Menu {
       window.addEventListener("resize", onResize);
     }
     if (hoverTrigger === null && trigger !== null) window.addEventListener("pointerdown", onHoverPointerDown, true);
-    else if (hoverTrigger !== null && trigger === null) window.removeEventListener("pointerdown", onHoverPointerDown, true);
+    else if (hoverTrigger !== null && trigger === null)
+      window.removeEventListener("pointerdown", onHoverPointerDown, true);
     hoverTrigger = trigger;
     cancelHoverLeave();
     anchorElement = next instanceof HTMLElement ? next : null;

@@ -70,8 +70,7 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
       m(
         "span",
         {
-          class:
-            "line-clamp-2 rounded text-(length:--font-size-body) leading-tight font-bold text-on-accent",
+          class: "line-clamp-2 rounded text-(length:--font-size-body) leading-tight font-bold text-on-accent",
         },
         label,
       ),

@@ -89,7 +89,13 @@ describe("windowMenuRows", () => {
   it("offers only Move and resize and Close for a window of an app the shell no longer lists", () => {
     expect(
       keysOf(
-        windowMenuRows(undefined, { size, onSized: vi.fn(), share: vi.fn(), setAppLifecycle: vi.fn(), close: vi.fn() }),
+        windowMenuRows(undefined, {
+          size,
+          onSized: vi.fn(),
+          share: vi.fn(),
+          setAppLifecycle: vi.fn(),
+          close: vi.fn(),
+        }),
       ),
     ).toEqual(["size", "|", "close"]);
   });
