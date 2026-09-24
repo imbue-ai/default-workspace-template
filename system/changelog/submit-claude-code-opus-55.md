@@ -1,3 +1,5 @@
 Bump the pinned Claude Code version from 2.1.269 to 2.1.280 in both places that carry it -- the `CLAUDE_CODE_VERSION` default in `system/scripts/setup_system.sh` and the `[agent_types.claude].version` pin in `.mngr/settings.toml`.
 
 2.1.280 adds Claude Opus 5.5 (`claude-opus-5-5`) and makes it what the `opus` alias resolves to, so on this pin the chat's Opus entry reaches Opus 5.5 instead of Opus 5. It also removes the deprecated `TaskOutput` tool and stops running agent-type `PermissionRequest` hooks; neither affects this workspace, whose hooks are all `command` type and which names `TaskOutput` only in the read-only tool list `agent_require_steps_pretool.sh` exempts from its step check.
+
+The chat app's baked model catalog fixture is now tied to the pin: `system/test_workspace_claude_config.py` requires the one `baked_model_catalog_v*.json` to be the pinned version's, so a future bump that forgets to regenerate it fails instead of passing every catalog test against the old binary's models.
