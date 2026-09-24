@@ -68,9 +68,7 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
-    r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH)__"
-)
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH)__")
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <html lang="en">
@@ -221,27 +219,17 @@ _EMPTY_TITLE: Final[str] = "Terminal"
 class SessionPage(FrozenModel):
     """What the wrapper needs to frame one session; ``model_dump`` is what the page and its API read."""
 
-    name: TmuxSessionName = Field(
-        description="The session, which is the terminal's name"
-    )
+    name: TmuxSessionName = Field(description="The session, which is the terminal's name")
     title: TerminalTitle = Field(description="What the window is called")
-    pty_path: str = Field(
-        description="The path on the pty origin that attaches to the session"
-    )
-    pty_label: str = Field(
-        description='The pty\'s origin label, or "" while it is not registered'
-    )
+    pty_path: str = Field(description="The path on the pty origin that attaches to the session")
+    pty_label: str = Field(description="The pty's origin label, or \"\" while it is not registered")
 
 
 class PageConfig(FrozenModel):
     """Everything the wrapper's script reads off the document."""
 
-    session: TmuxSessionName | None = Field(
-        description="The session the page opened on; None for the bare root"
-    )
-    page: SessionPage | None = Field(
-        description="The session's page, when there is a session"
-    )
+    session: TmuxSessionName | None = Field(description="The session the page opened on; None for the bare root")
+    page: SessionPage | None = Field(description="The session's page, when there is a session")
 
 
 @pure
@@ -321,17 +309,12 @@ def build_pages_blueprint(
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
     def session_page(name: TmuxSessionName) -> SessionPage:
-        listed = next(
-            (terminal for terminal in source.list_terminals() if terminal.name == name),
-            None,
-        )
+        listed = next((terminal for terminal in source.list_terminals() if terminal.name == name), None)
         record = source.remembered_record(name)
         return SessionPage(
             name=name,
             title=listed.title if listed is not None else derive_terminal_title(name),
-            pty_path=pty_path_for_session(
-                name, record.workdir if record is not None else None
-            ),
+            pty_path=pty_path_for_session(name, record.workdir if record is not None else None),
             pty_label=read_origin_label(registry_path, PTY_APP_NAME),
         )
 
@@ -339,9 +322,7 @@ def build_pages_blueprint(
     def wrapper_page() -> ResponseReturnValue:
         raw_session = request.args.get(SESSION_QUERY_KEY, "")
         session = _session_name(raw_session) if raw_session != "" else None
-        config = PageConfig(
-            session=session, page=session_page(session) if session is not None else None
-        )
+        config = PageConfig(session=session, page=session_page(session) if session is not None else None)
         response = Response(render_page(config), mimetype="text/html")
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -370,11 +351,7 @@ def build_pages_blueprint(
     def app_contract() -> ResponseReturnValue:
         if not contract_path.is_file():
             return (
-                jsonify(
-                    {
-                        "detail": f"the workspace shell's frontend is not built: {contract_path} is missing"
-                    }
-                ),
+                jsonify({"detail": f"the workspace shell's frontend is not built: {contract_path} is missing"}),
                 HTTP_NOT_FOUND,
             )
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
