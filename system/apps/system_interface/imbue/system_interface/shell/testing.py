@@ -126,13 +126,19 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
 
 
 def shell_application(
-    tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster, is_preview: bool = False
+    tmp_path: Path,
+    inventory: AppInventory,
+    broadcaster: WebSocketBroadcaster,
+    is_preview: bool = False,
+    wallpaper_files_directory: Path | None = None,
 ) -> Flask:
     """The shell app over ``inventory``, its state under ``tmp_path/state`` and the update notice's workspace at
     ``tmp_path/repo``, sharing the inventory's broadcaster as in production.
 
     Its bundle directory is ``tmp_path / "static"``, empty until a test fills it, so no route answer depends
-    on whether the frontend has been built in the checkout.
+    on whether the frontend has been built in the checkout. ``wallpaper_files_directory`` is where the
+    workspace's own wallpapers are read from, absolute by default; a relative one names a place under
+    ``tmp_path/repo``, as the shipped default names one under the workspace root.
     """
     state = build_test_state(
         broadcaster=broadcaster,
@@ -141,6 +147,7 @@ def shell_application(
         is_preview=is_preview,
         repo_root=tmp_path / "repo",
         static_directory=tmp_path / "static",
+        wallpaper_files_directory=wallpaper_files_directory,
     )
     return create_application(state)
 

@@ -609,6 +609,17 @@ class ShellState(MutableModel):
         return outcome
 
 
+def _under_repo_root(directory: Path, repo_root: Path) -> Path:
+    """A configured directory as an absolute path, a relative one naming a place under the served tree.
+
+    Every consumer must agree on where a directory is. A relative path does not carry that
+    agreement: ``Path``'s own calls resolve it against the process's working directory, while
+    Flask's ``send_file`` resolves it against the app's root path, so a listing route and a
+    serve route reading one configured directory read two different places.
+    """
+    return directory if directory.is_absolute() else repo_root / directory
+
+
 def build_shell_state(
     state_directory: Path,
     registry_path: Path,
@@ -633,7 +644,7 @@ def build_shell_state(
         desktops=DesktopStore(state_directory=state_directory),
         placements=PlacementStore(state_directory=state_directory),
         window_paths=WindowPathStore(state_directory=state_directory),
-        wallpaper_files_directory=wallpaper_files_directory,
+        wallpaper_files_directory=_under_repo_root(wallpaper_files_directory, repo_root),
         clients=ClientStore(state_directory=state_directory),
         users=UserStore(state_directory=state_directory),
         profiles=profiles
@@ -643,7 +654,7 @@ def build_shell_state(
         ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
-        avatar_catalog=AvatarCatalogStore(directory=avatar_catalog_directory),
+        avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
