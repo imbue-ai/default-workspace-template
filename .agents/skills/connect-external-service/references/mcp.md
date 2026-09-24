@@ -94,9 +94,16 @@ installed.
 workspace-local `.agents/mcp_config.json` (or `~/.gemini/config/mcp_config.json`),
 a `mcpServers` object of `command` / `args` / `env` in the same wrapped shape.
 
-**A hosted server** (a URL rather than a package) is wired the same way, through
-[mcp-remote](https://github.com/geelen/mcp-remote), a bridge that runs here,
-pinned like any other server, and forwards to the URL:
+**A hosted server** (a URL rather than a package) that needs no credential is
+named by its URL, with nothing running here: in `.mcp.json`,
+`"example": {"type": "http", "url": "https://mcp.example.com/mcp"}`; in codex's
+`config.toml`, `url = "https://mcp.example.com/mcp"` in its `[mcp_servers.<name>]`
+table.
+
+One that needs a key cannot take it that way, because the harness fills in the
+config from its own environment, which does not hold the secret. Wire it through
+[mcp-remote](https://github.com/geelen/mcp-remote), a bridge that runs here under
+the wrapper, pinned like any other server, and forwards to the URL:
 
 ```json
 "args": ["system/scripts/with_secrets.py", "data/.secrets/example.env", "--", "npx", "-y", "mcp-remote@0.14.3", "https://mcp.example.com/mcp", "--header", "Authorization: Bearer ${EXAMPLE_API_KEY}"]
@@ -105,8 +112,8 @@ pinned like any other server, and forwards to the URL:
 mcp-remote fills in `${EXAMPLE_API_KEY}` itself, from the environment the wrapper
 gives it. Claude Code leaves it as written because its own environment does not
 hold the variable (`claude mcp list` warns about that; the server still starts).
-A hosted server that needs no key drops the wrapper and the `--header`; one with
-its own OAuth sign-in prints its consent URL through mcp-remote, as below.
+One with its own OAuth sign-in also goes through mcp-remote, without the wrapper
+or the `--header`: it prints the consent URL, as below.
 
 Wiring is built and tested only for the harnesses this workspace has an account
 for; do not write a config for a harness the user does not run.
