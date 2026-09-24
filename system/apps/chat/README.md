@@ -22,21 +22,16 @@ observe`, its own supervised service) writes, and serves:
   ordered by recency, with rename, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
-  params) serves the same document, and the root creates the chat and selects
-  it client-side; `GET /send` (the `send` launch path, `message` param) serves
-  it too, and the root sends the text through its ordinary send to the one chat
-  there is, or to the chat picked from a picker it opens over them when there
-  are more (with no chat it starts a new one with the text), selects that chat,
-  and reports the selection alone, so a reload sends nothing again. A `draft` query parameter on the root (the `root` launch
-  path's one param, what the desktop's "Design your own..." hands the pinned
-  chat window) puts its text, unsent, into the composer of the chat the URL
-  selects (else the shown one, else the most recently active one, else a chat
-  the root creates for it), and the root then reports the selection alone, so
-  a reload drafts nothing again. The root drives its inner frames through the
-  page's same-origin embed API (`frontend/src/embedApi.ts`) and forwards their
-  `minds:`, `shell:focused`, and `shell:open` messages through
-  `frontend/src/root/relay.ts`, the one module the embed ratchet allows.
+  chat's title. The page is pure: nothing is created or sent by loading it. An
+  `intake` query parameter names a pending intake (below) the root applies once
+  (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
+  unsent, a chat is picked from a picker the root opens over the list, or a chat
+  awaiting its first message is launched through the provider chooser; the root
+  then reports the selection alone, so a reload applies nothing again. The root
+  drives its inner frames through the page's same-origin embed API
+  (`frontend/src/embedApi.ts`) and forwards their `minds:`, `shell:focused`, and
+  `shell:open` messages through `frontend/src/root/relay.ts`, the one module the
+  embed ratchet allows.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -201,6 +196,31 @@ chat. A send that names no client (no `client_id` or `desktop_id`) posts no
 client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
+
+The intake route is how a text enters a chat from outside a chat page
+(`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
+text, how the receiving chat is chosen (`target`: `new_chat`, `current_chat` from
+the `window_path` the text was typed into, else the most recently messaged chat;
+`chat_selector`, the one chat there is or the user's pick; or `chat` with a
+`chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
+sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
+manifest declares the desktop's `new`, `send`, and `draft` launch paths as POSTs
+onto it with those fields preset, so the launcher's rows, the Getting Started
+tiles, the avatar dialog's "Design your own...", and `layout.py open chat
+--launch new --param message=...` all arrive here through the shell. The route
+answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
+a send or a create it finished on the server (a send is delivered in the
+background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a
+draft or a first message the page has to finish, and `/?intake=<token>` for a
+choice. A pending intake (`chat_intakes.py`) is held in memory under its one-time
+token for fifteen minutes: `GET /api/chats/intakes/<token>` says what the root has
+to do, `POST /api/chats/intakes/<token>/apply` (with the picked `chat_id` when a
+pick was needed) consumes it and answers the chat plus either `composer_text` or
+`first_message`, and `DELETE` drops it. A `new_chat` intake with nothing signed in,
+or a draft into a new chat, mints an unseeded provisional chat in the
+`awaiting_first_send` phase ("Chat N", the intake's account or none, no record, so a
+restart of this app drops it); its page shows an empty conversation over the
+composer, and its first send launches it as a seeded chat's does.
 
 The create route is likewise how a chat is made from outside the chat page:
 `message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist

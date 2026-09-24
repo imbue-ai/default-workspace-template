@@ -5,7 +5,13 @@
  */
 
 import type { DesktopApi } from "../store/DesktopStore";
-import type { PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
+import type {
+  LaunchOutcome,
+  LaunchRequest,
+  PlacementsSaveRequest,
+  WindowOpenOutcome,
+  WindowOpenRequest,
+} from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import type {
   AppRecord,
@@ -47,6 +53,8 @@ export class FakeDesktopApi implements DesktopApi {
   readonly calls: string[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
+  /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
+  postLaunchAnswer = "/launched";
   /** While set, the inventory, the client records, a layout, and the catalog answer only once this settles: a
    *  test holds those reads open. */
   readGate: Promise<void> | null = null;
@@ -201,9 +209,7 @@ export class FakeDesktopApi implements DesktopApi {
   }
 
   async openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome> {
-    this.calls.push(
-      `openWindow:${desktopId}:${request.app}:${request.path}:${request.ifPresent}:${request.launch ?? "-"}`,
-    );
+    this.calls.push(`openWindow:${desktopId}:${request.app}:${request.path}:${request.ifPresent}`);
     this.refuse();
     const desktop = this.desktop(desktopId);
     const existing = desktop.windows.find(
@@ -224,7 +230,6 @@ export class FakeDesktopApi implements DesktopApi {
       path: request.path,
       title: "",
       opened_at: this.stamp(),
-      is_settling: request.launch !== null,
       is_pinned: false,
       scope: "linked",
     };
@@ -235,6 +240,48 @@ export class FakeDesktopApi implements DesktopApi {
       withWindowPlacedOnOpen(this.layoutOf(desktopId, request.clientId), window.id),
     );
     return { window, isNew: true };
+  }
+
+  /** As the shell does: a GET launch path's page is its path with the presets and params as the query, a POST one's
+   *  is ``postLaunchAnswer``; then an open (``new``, ``focus``) or a location write (``window``). */
+  async launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome> {
+    const targetSpelling =
+      request.target.kind === "window" ? `window:${request.target.windowId}` : request.target.kind;
+    this.calls.push(
+      `launch:${desktopId}:${request.app}:${request.launch}:${JSON.stringify(request.params)}:${targetSpelling}`,
+    );
+    this.refuse();
+    const app = this.apps.find((candidate) => candidate.name === request.app);
+    const launchPath = app?.launch_paths.find((candidate) => candidate.id === request.launch);
+    if (app === undefined || launchPath === undefined) {
+      throw new Error(`App '${request.app}' declares no launch path '${request.launch}'`);
+    }
+    let path = this.postLaunchAnswer;
+    if (launchPath.method === "GET") {
+      const query = new URLSearchParams({ ...launchPath.presets, ...request.params }).toString();
+      path = query === "" ? launchPath.path : `${launchPath.path}?${query}`;
+    }
+    const target = request.target;
+    if (target.kind === "window") {
+      const desktop = this.desktop(desktopId);
+      const window = desktop.windows.find((candidate) => candidate.id === target.windowId);
+      if (window === undefined) throw new Error(`No window ${target.windowId}`);
+      // As the shell does (a 400): the launch lands only in a window of its own app.
+      if (window.app !== request.app) throw new Error(`Window ${target.windowId} is not a window of ${request.app}`);
+      const title =
+        window.scope === "independent"
+          ? (this.windowPaths.get(`${request.clientId}/${window.id}`)?.title ?? "")
+          : window.title;
+      const navigated = await this.reportWindowLocation(desktopId, window.id, request.clientId, path, title);
+      return { window: navigated, path, isNew: false };
+    }
+    const opened = await this.openWindow(desktopId, {
+      app: request.app,
+      path,
+      clientId: request.clientId,
+      ifPresent: target.kind,
+    });
+    return { window: opened.window, path, isNew: opened.isNew };
   }
 
   async closeWindow(desktopId: string, windowId: string): Promise<void> {
@@ -272,7 +319,7 @@ export class FakeDesktopApi implements DesktopApi {
       this.windowPaths.set(`${clientId}/${windowId}`, { path, title });
       return { ...window, path, title };
     }
-    const updated = { ...window, path, title, is_settling: false };
+    const updated = { ...window, path, title };
     this.replace({
       ...desktop,
       windows: desktop.windows.map((candidate) => (candidate.id === windowId ? updated : candidate)),
@@ -371,6 +418,12 @@ export class FakeDesktopSocket implements DesktopSocket {
     if (this.handlers === null) throw new Error("the store has not connected");
     return this.handlers;
   }
+}
+
+/** Offer ``apps`` as the shell's inventory would: to the store over the socket, and to the fake shell itself. */
+export function offerApps(api: FakeDesktopApi, socket: FakeDesktopSocket, apps: AppRecord[]): void {
+  api.apps = apps;
+  socket.deliver().onAppsUpdated(apps);
 }
 
 /** Resolve every promise queued so far (the store's awaits run in microtasks). */
