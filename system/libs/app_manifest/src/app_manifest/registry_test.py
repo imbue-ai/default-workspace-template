@@ -82,7 +82,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         ("recent", "Recent", "/recent", (), None),
         ("draft", "Draft", "/api/intake", ("message",), None),
     ]
-    # A row from before launch paths had a method reads as the GET launch path it was.
+    # A row without a method is a GET launch path.
     assert [(launch_path.method.value, launch_path.presets, launch_path.draft_param) for launch_path in row.launch_paths] == [
         ("GET", {}, None),
         ("GET", {}, None),

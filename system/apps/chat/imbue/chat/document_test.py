@@ -187,7 +187,7 @@ def test_the_root_serves_the_chat_root_document_and_the_retired_launch_paths_are
         assert "root</body>" in response.text
         assert CHAT_ID_META_NAME not in response.text
         assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="">' in response.text
-    # A page path never creates or sends anything (post-launch-paths plan section 3.9): the paths that did are gone.
+    # A page path never creates or sends anything (post-launch-paths plan section 3.9).
     assert client.get("/new?message=hello").status_code == 404
     assert client.get("/send?message=hello").status_code == 404
 

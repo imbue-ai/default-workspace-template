@@ -810,7 +810,7 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
         frame = _page_frame(page, pinned["id"])
         expect(frame.locator("#where")).to_have_text(new_page_path, timeout=15000)
-        # The text went in the post's body with the shell's envelope, not in any path.
+        # The text went in the post's body with the shell's envelope.
         (posted,) = _posted_launches(server.pinned_url)
         assert posted["path"] == f"/{_PINNED_NEW_LAUNCH_ID}"
         assert posted["body"] == {

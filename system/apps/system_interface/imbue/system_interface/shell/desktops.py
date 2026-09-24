@@ -80,7 +80,6 @@ FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
 # CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_unlocked`` around late November 2026, once every
 # workspace has rewritten its desktops.json without the key (the first write after this release does).
 _RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
-# The key every window carried while a window could settle at a launch path (the post-launch-paths plan removed it).
 # CLEANUP: drop ``_RETIRED_WINDOW_KEYS`` and its strip in ``_without_retired_keys`` around late December 2026, once
 # every workspace has rewritten its desktops.json without the key (the first write after this release does).
 _RETIRED_WINDOW_KEYS: Final[frozenset[str]] = frozenset({"is_settling"})
