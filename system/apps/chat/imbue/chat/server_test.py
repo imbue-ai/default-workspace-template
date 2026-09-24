@@ -110,9 +110,15 @@ def signed_in_account() -> str:
 
 
 @pytest.fixture
-def app(config: Config, signed_in_account: str, tmp_path: Path) -> Flask:
+def messenger() -> RecordingMngrMessenger:
+    """The messenger the shared app sends through: every send is recorded, none reaches mngr."""
+    return RecordingMngrMessenger()
+
+
+@pytest.fixture
+def app(config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger) -> Flask:
     # A create writes the chat's fast mode under this root; the default is this package's own data/.
-    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
     state = build_test_state(config=config, agent_manager=manager)
     state.agent_manager.note_agent_list_known()
     return create_application(state)
@@ -3336,14 +3342,11 @@ def test_intake_to_an_explicit_chat_the_app_does_not_list_is_not_found(client: F
 
 
 def test_intake_sends_to_the_named_chat_and_answers_its_path(
-    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A send an intake finishes on the server: the text reaches the agent through the ordinary send path (awaited
     here, so the answer says it landed) and the path is the chat's selection alone."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    agent_manager: AgentManager = state_of(app).agent_manager
-    messenger = RecordingMngrMessenger()
-    agent_manager._messenger = messenger
     _track_claude_agent(app, "agent-00000000000000000000000000000123", "test-agent", tmp_path / "claude_config")
 
     response = _intake(
@@ -3416,14 +3419,11 @@ def test_intake_current_chat_falls_back_to_the_most_recently_messaged_chat(
 
 
 def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picker(
-    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``chat_selector`` over two chats: the answer is the picker's path, the held intake says a pick is needed, a
     pick of nothing (or of a chat that cannot take a message) is refused, and a pick of a chat finishes the send."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    agent_manager: AgentManager = state_of(app).agent_manager
-    messenger = RecordingMngrMessenger()
-    agent_manager._messenger = messenger
     _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
     _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
 
@@ -3448,12 +3448,9 @@ def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picke
 
 
 def test_intake_with_one_chat_sends_to_it_without_a_pick(
-    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    agent_manager: AgentManager = state_of(app).agent_manager
-    messenger = RecordingMngrMessenger()
-    agent_manager._messenger = messenger
     _track_claude_agent(app, "agent-00000000000000000000000000000001", "only", tmp_path / "claude_config")
 
     response = _intake(client, message="Carry on", target="chat_selector", is_delivery_awaited=True)
@@ -3554,14 +3551,11 @@ def test_intake_new_chat_naming_an_unknown_account_is_refused(client: FlaskClien
 
 
 def test_intake_with_an_empty_message_answers_the_chat_and_sends_nothing(
-    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """No text is nothing to send, draft, or pick a chat for: the resolved chat's path comes back alone, and with
     several chats to choose from the root's."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    agent_manager: AgentManager = state_of(app).agent_manager
-    messenger = RecordingMngrMessenger()
-    agent_manager._messenger = messenger
     _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
 
     sent = _intake(
