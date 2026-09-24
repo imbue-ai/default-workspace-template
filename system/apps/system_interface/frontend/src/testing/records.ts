@@ -24,6 +24,17 @@ function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+/** An app ranked first whose free-text rows are GET launch paths, each at ``/<id>`` taking the typed text as
+ *  ``message``: what the page-path bound applies to, unlike the chat-like app's POST rows. */
+export function getFreeTextAppRecord(name: string, launchIds: readonly string[]): AppRecord {
+  return appRecord(name, {
+    launcher_rank: 1,
+    launch_paths: launchIds.map((id) =>
+      launchPathRecord({ id, path: `/${id}`, params: ["message"], text_param: "message" }),
+    ),
+  });
+}
+
 /** A GET launch path ``new`` at ``/new`` with no params and no presets. */
 export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPath {
   return {

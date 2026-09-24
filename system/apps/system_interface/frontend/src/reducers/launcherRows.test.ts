@@ -3,11 +3,13 @@ import {
   appRecord,
   chatLikeAppRecord,
   desktopRecord,
+  getFreeTextAppRecord,
   launchPathRecord,
   layoutRecord,
   placementRecord,
   windowRecord,
 } from "../testing/records";
+import { desktopStateWithApps } from "../testing/states";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 import {
@@ -123,14 +125,7 @@ describe("the launcher's rows", () => {
     expect(posted.textRows.every((row) => row.disabledReason === null)).toBe(true);
     expect(secondaryTextRow(launcherRowsOf(state(), "").rows)).toBeNull();
     // A GET free-text row is bounded by the page path it would open at.
-    const noting = appRecord("noting", {
-      launcher_rank: 1,
-      launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
-    });
-    let gettable = initialDesktopState("client-1", MODES);
-    gettable = reduceDesktopState(gettable, { type: "apps_updated", apps: [noting] });
-    gettable = reduceDesktopState(gettable, { type: "desktops_updated", desktops: [desktopRecord("home")] });
-    gettable = reduceDesktopState(gettable, { type: "desktop_activated", desktopId: "home" });
+    const gettable = desktopStateWithApps([getFreeTextAppRecord("noting", ["new"])]);
     const menu = launcherRowsOf(gettable, "x".repeat(2100));
     expect(menu.textRows.every((row) => row.disabledReason === "Too long to send from here")).toBe(true);
     expect(defaultHighlightIndex(menu.rows)).toBe(-1);
