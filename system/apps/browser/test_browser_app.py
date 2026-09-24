@@ -51,7 +51,7 @@ def test_the_app_contract_module_is_the_shells_build_output_served_from_this_ori
     assert served.text == source
 
 
-def test_new_creates_a_browser_and_redirects_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_new_creates_a_browser_and_answers_its_page_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
     # The launch is captured rather than run, so the test stays Chromium-free; what matters
     # here is that the create registered the browser and asked for its start page.
