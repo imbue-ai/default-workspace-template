@@ -182,7 +182,7 @@ class PermissionRequest(FrozenModel):
     body: str = Field(description="The object's verbatim JSON text, exactly as it appeared in the tool output")
 
 
-class SecretRequest(FrozenModel):
+class EchoedSecretRequest(FrozenModel):
     """A filed secret request found in a tool result."""
 
     details: dict[str, Any] = Field(description="The parsed request object the request script echoed")
@@ -257,13 +257,13 @@ def find_permission_request(content: str) -> PermissionRequest | None:
     return PermissionRequest(details=details, body=body)
 
 
-def find_secret_request(content: str) -> SecretRequest | None:
+def find_secret_request(content: str) -> EchoedSecretRequest | None:
     """Locate the filed request the secret request script echoed in ``content``."""
     found = _find_echoed_object(content, _is_secret_request)
     if found is None:
         return None
     details, body = found
-    return SecretRequest(details=details, body=body)
+    return EchoedSecretRequest(details=details, body=body)
 
 
 def stamp_echoed_requests(event: dict[str, Any], content: str) -> None:
