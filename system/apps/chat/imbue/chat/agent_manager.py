@@ -138,8 +138,6 @@ from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_name_conflict
-from imbue.chat.new_chat_sends import NewChatCreateFailedError
-from imbue.chat.new_chat_sends import NewChatSendGate
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
@@ -204,12 +202,6 @@ FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 # The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
 # fast mode (``chat_fast_mode.py``) calls for it: it launches the fast-capable harnesses in fast mode.
 FAST_ROLE_TEMPLATE: Final[str] = "fast"
-
-# What a chat that starts with nothing to say is sent once it is up (``.agents/skills/welcome``).
-WELCOME_MESSAGE: Final[str] = "/welcome"
-
-# Why a send to a chat whose create failed is refused: the page shows the create's own reason.
-CREATE_FAILED_SEND_DETAIL: Final[str] = "This chat could not be started, so the message was not sent."
 
 
 @pure
@@ -791,8 +783,6 @@ class AgentManager:
     _match_by_agent_id: dict[str, AgentMatch]
     # The chats minted here whose first agent mngr does not know yet, by chat id.
     _provisional_chats: dict[ChatId, ProvisionalChat]
-    # Per chat being created, the sends waiting for its agent; kept until the last of them has gone.
-    _new_chat_send_gate_by_chat_id: dict[ChatId, NewChatSendGate]
     # The records of the chats that have run on more than one agent, read from the store at
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
@@ -944,7 +934,6 @@ class AgentManager:
         manager._chat_record_store = chat_record_store if chat_record_store is not None else InMemoryChatRecordStore()
         manager._chat_record_by_id = manager._chat_record_store.read_all()
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
-        manager._new_chat_send_gate_by_chat_id = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
@@ -2796,9 +2785,8 @@ class AgentManager:
         provider chooser before it creates).
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
-        create --message`` after the harness signals readiness. A chat that starts with no
-        message is created silently and sent ``/welcome`` once it is up, unless a message was
-        sent to it while it was created: that one is its first instead. A chat minted
+        create --message`` after the harness signals readiness; a chat that starts with no
+        message sends none and waits for the user. A chat minted
         earlier keeps the message it was minted with, so a launch that names one beside
         ``chat_id`` is refused like a name; the exception is a seeded chat awaiting its first send, whose
         message is exactly what the launch brings.
@@ -2883,7 +2871,6 @@ class AgentManager:
                 is_seeded=seed_record is not None,
             )
             self._provisional_chats[launched_chat_id] = provisional
-            self._new_chat_send_gate_by_chat_id[launched_chat_id] = NewChatSendGate.build()
             fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
         agent_id = str(launched_chat_id) if record_entry is None else record_entry.agent_id
         membership_labels = (
@@ -2949,7 +2936,6 @@ class AgentManager:
             record_entry,
             model_pick,
             deferred_message,
-            is_silent_start=message == "",
         )
 
         return CreatedChat(chat_id=launched_chat_id, name=canonical_name, display_name=display_name)
@@ -2966,7 +2952,6 @@ class AgentManager:
         record_entry: ChatAgentEntry | None = None,
         model_pick: ModelPick | None = None,
         deferred_message: str = "",
-        is_silent_start: bool = False,
     ) -> None:
         """Start a background thread to run agent creation."""
         self._creation_cg.start_new_thread(
@@ -2982,7 +2967,6 @@ class AgentManager:
                 record_entry,
                 model_pick,
                 deferred_message,
-                is_silent_start,
             ),
             name=f"create-{agent_id[:8]}",
             is_checked=False,
@@ -3009,7 +2993,6 @@ class AgentManager:
         record_entry: ChatAgentEntry | None = None,
         model_pick: ModelPick | None = None,
         deferred_message: str = "",
-        is_silent_start: bool = False,
     ) -> None:
         """Run mngr create in the background and always settle the provisional chat.
 
@@ -3023,8 +3006,7 @@ class AgentManager:
         with its traceback, by the thread that runs this.
 
         ``model_pick`` and ``deferred_message`` follow a successful create, in that order: the
-        pick so the first turn runs on it, then the message the create was told to leave out, or
-        for a silent start the greeting. The sends that arrived during the create go after them.
+        pick so the first turn runs on it, then the message the create was told to leave out.
         ``record_entry`` is the agent's membership of a seeded chat, on the record since before
         the create (``create_chat``); a create that fails takes it back off, so the chat is
         seed-only again for the page's retry or its discard.
@@ -3099,34 +3081,24 @@ class AgentManager:
                 self._ensure_activity_tracking(agent_id)
                 self._ensure_model_tracking(agent_id)
                 self._broadcast_chats_updated()
-                self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message, is_silent_start)
+                self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
             else:
                 # The pages show what the record holds: the reason and the output behind it.
                 failed = self.get_provisional_chat(chat_id)
                 if failed is not None and failed.error is not None:
                     error = failed.error
         finally:
-            # A failed create has already refused its sends, and a retry may have put a new gate
-            # under the same id since.
-            if success:
-                self._open_new_chat_send_gate(chat_id)
             self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
 
-    def _settle_new_chat(
-        self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str, is_silent_start: bool
-    ) -> None:
+    def _settle_new_chat(self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str) -> None:
         """Put a just-created chat on its pick and hand it the message its create left out.
-
-        A silent start's message is the greeting, unless something was sent to the chat while it
-        was created or while its pick was applied: the user has already said something, and a
-        greeting would run first and leave their message queued behind it.
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
         what the user chose the switch by. The message goes through the send path a held send
         takes; a refusal is logged the same way.
         """
-        if model_pick is None and not message and not is_silent_start:
+        if model_pick is None and not message:
             return
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
@@ -3140,16 +3112,13 @@ class AgentManager:
                 self.apply_model_pick(agent_info, model_pick)
             except ModelApplyError as e:
                 _loguru_logger.warning("Chat {}: could not set model {}: {}", chat_id, model_pick.model_id, e)
-        # The chat is listed before the pick is applied, so a send made meanwhile counts too.
-        is_greeted = is_silent_start and not self._has_waiting_new_chat_sends(chat_id)
-        first_message = WELCOME_MESSAGE if is_greeted else message
-        if first_message:
+        if message:
             deliver_held_send(
                 capabilities.deliver,
                 agent_info,
                 HeldSend(
                     message_id=uuid4().hex,
-                    text=first_message,
+                    text=message,
                     origin=HeldSendOrigin.CLIENT,
                     received_at=datetime.now(timezone.utc),
                 ),
@@ -3158,11 +3127,7 @@ class AgentManager:
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
-        try again on the same account, and refuse the sends that were waiting for it. Must be
-        called with the lock held."""
-        gate = self._new_chat_send_gate_by_chat_id.pop(chat_id, None)
-        if gate is not None:
-            gate.fail(CREATE_FAILED_SEND_DETAIL)
+        try again on the same account. Must be called with the lock held."""
         provisional = self._provisional_chats.get(chat_id)
         if provisional is None:
             return
@@ -3170,50 +3135,6 @@ class AgentManager:
             to_update(provisional.field_ref().phase, ProvisionalChatPhase.FAILED),
             to_update(provisional.field_ref().error, error),
         )
-
-    @contextmanager
-    def new_chat_send_turn(self, chat_id: ChatId) -> Iterator[None]:
-        """Scope one send to a chat. While the chat is being created, the send waits until the
-        create has settled and every send before it has gone; afterwards it goes at once.
-
-        Raises ``NewChatCreateFailedError`` when the create fails, or has already failed: the send
-        is not delivered.
-        """
-        with self._lock:
-            gate = self._new_chat_send_gate_by_chat_id.get(chat_id)
-            turn = (gate, gate.take_ticket()) if gate is not None else None
-            provisional = self._provisional_chats.get(chat_id)
-        if turn is None and provisional is not None and provisional.phase is ProvisionalChatPhase.FAILED:
-            raise NewChatCreateFailedError(CREATE_FAILED_SEND_DETAIL)
-        if turn is None:
-            yield
-            return
-        waited_gate, ticket = turn
-        try:
-            waited_gate.wait_for_turn(ticket)
-            yield
-        finally:
-            waited_gate.finish_turn(ticket)
-            self._drop_drained_new_chat_send_gate(chat_id, waited_gate)
-
-    def _has_waiting_new_chat_sends(self, chat_id: ChatId) -> bool:
-        with self._lock:
-            gate = self._new_chat_send_gate_by_chat_id.get(chat_id)
-            return gate is not None and gate.has_issued_tickets()
-
-    def _open_new_chat_send_gate(self, chat_id: ChatId) -> None:
-        """Let the sends waiting for a created chat through."""
-        with self._lock:
-            gate = self._new_chat_send_gate_by_chat_id.get(chat_id)
-        if gate is None:
-            return
-        gate.open()
-        self._drop_drained_new_chat_send_gate(chat_id, gate)
-
-    def _drop_drained_new_chat_send_gate(self, chat_id: ChatId, gate: NewChatSendGate) -> None:
-        with self._lock:
-            if self._new_chat_send_gate_by_chat_id.get(chat_id) is gate and gate.is_drained():
-                del self._new_chat_send_gate_by_chat_id[chat_id]
 
     def _forget_chat(self, chat_id: ChatId) -> None:
         """Drop every per-chat record of a chat whose agent is gone: presence, stamps, the auto-open ledger entry."""

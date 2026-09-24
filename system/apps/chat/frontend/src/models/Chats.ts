@@ -165,8 +165,8 @@ let provisionalChats: ProvisionalChat[] = [];
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
 // is in flight: from the socket opening to the chat list that ends it. Null otherwise.
 let replayedProvisionalIds: Set<string> | null = null;
-// Who is waiting for a provisional chat to become an agent (a switch, a seeded chat's launch),
-// settled by the push that registers it or the one that fails it.
+// Who is waiting for a provisional chat to become an agent (a send typed while it was being
+// created), settled by the push that registers it or the one that fails it.
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
@@ -247,7 +247,7 @@ function handleEvent(event: WsEvent): void {
       if (replayedProvisionalIds !== null) {
         // The list ends a (re)connect's replay. A record the app did not replay is one it no
         // longer holds (it restarted while the create ran), so no push is coming for it: the
-        // record goes, and whatever waits on it proceeds to meet the backend's refusal.
+        // record goes, and a send held for it proceeds to report the backend's refusal.
         const replayed = replayedProvisionalIds;
         replayedProvisionalIds = null;
         provisionalChats = provisionalChats.filter((p) => replayed.has(p.chat_id));
@@ -278,7 +278,7 @@ function handleEvent(event: WsEvent): void {
     case "provisional_chat_created": {
       // Also how a chat moves between phases (a seeded chat launched, a failed one retried):
       // the backend pushes the whole record again. A reconnect replays every provisional chat
-      // this way too, so a failed record seen here settles whatever waits on it as the
+      // this way too, so a failed record seen here settles a send held for it as the
       // completion message would have.
       const { type: _type, ...provisional } = event;
       provisionalChats = [...provisionalChats.filter((p) => p.chat_id !== provisional.chat_id), provisional];
@@ -318,32 +318,23 @@ function settleRegistration(chatId: string, error: Error | null): void {
 }
 
 /**
- * The reason a send to ``chatId`` cannot land, for a chat whose create has failed: nothing but a
- * retry could ever start it. Null for any other chat, including one still being created, whose
- * sends the chat app holds until its agent is up.
- */
-export function getFailedCreateError(chatId: string): Error | null {
-  const provisional = getProvisionalChat(chatId);
-  if (getChatById(chatId) !== undefined || provisional?.phase !== "failed") return null;
-  return new Error(provisional.error ?? "The chat could not be started");
-}
-
-/**
  * Resolves once ``chatId`` is a chat the app lists: at once for one it already lists, and
  * for a chat still being created when its create lands. Rejects, with the reason, when the
  * create fails or the chat is discarded first -- at once for a chat whose create has already
- * failed, since nothing but a retry could ever land it. What a switch or a seeded chat's launch,
- * which need the agent itself, wait on.
+ * failed, since nothing but a retry could ever land it. What a send typed into a chat that
+ * does not exist yet waits on.
  *
  * A chat the app neither lists nor holds a provisional record for (destroyed while its page
  * was open, a stale URL) resolves at once too: no push is coming that could settle it, and the
- * request that follows reports the backend's refusal. A waiter is released the same way when a
+ * send itself reports the backend's refusal. A held send is released the same way when a
  * reconnect's replay turns out not to carry the chat's record any more.
  */
 export function whenChatRegistered(chatId: string): Promise<void> {
-  const createFailure = getFailedCreateError(chatId);
-  if (createFailure !== null) return Promise.reject(createFailure);
-  if (getChatById(chatId) !== undefined || getProvisionalChat(chatId) === undefined) return Promise.resolve();
+  const provisional = getProvisionalChat(chatId);
+  if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
+  if (provisional.phase === "failed") {
+    return Promise.reject(new Error(provisional.error ?? "The chat could not be started"));
+  }
   return new Promise((resolve, reject) => {
     const waiters = registrationWaiters.get(chatId) ?? [];
     waiters.push({ resolve, reject });

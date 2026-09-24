@@ -30,7 +30,6 @@ import {
 import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
   getChatById,
-  getFailedCreateError,
   getProvisionalChat,
   isHandoffCancellable,
   launchChat,
@@ -531,11 +530,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
             refocusAfterSend();
             return;
           }
-          // A chat still being created takes the send at once: the chat app holds it until the
-          // agent is up. A create that fails refuses it, and the message goes back to the
-          // composer like any failed send.
-          const createFailure = getFailedCreateError(chatId);
-          if (createFailure !== null) throw createFailure;
+          // A chat still being created has no agent to deliver to yet: the bubble stays
+          // "Sending…" until the create lands, and the send goes out then. A create that
+          // fails rejects here and the message goes back to the composer like any failed send.
+          await whenChatRegistered(chatId);
           await sendMessage(chatId, finalText, messageId);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
@@ -888,8 +886,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
         try {
-          const createFailure = getFailedCreateError(recovery.chatId);
-          if (createFailure !== null) throw createFailure;
+          await whenChatRegistered(recovery.chatId);
           await sendMessage(recovery.chatId, recovery.sentText, messageId);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);

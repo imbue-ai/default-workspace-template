@@ -116,7 +116,6 @@ from imbue.chat.models import StopAgentResponse
 from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
-from imbue.chat.new_chat_sends import NewChatCreateFailedError
 from imbue.chat.presence import PresenceReport
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import CHAT_APP_NAME
@@ -496,38 +495,19 @@ def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
 
 
 def _send_message_endpoint(chat_id: str) -> Response:
-    """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges.
-
-    A send to a chat still being created waits for the create and then goes to the new agent; a
-    create that fails, or has already failed, refuses it with 409.
-    """
-    agent_manager: AgentManager = get_state().agent_manager
+    """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges."""
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     # Until the first agent list has been read, an unknown id says nothing about the agent, so
     # the answer is "not ready" rather than 404: an in-workspace sender backs off to `mngr
     # message` on a 404 (`system/scripts/message_chat.py`), and a 404 during the seconds after
     # a chat-app boot would route messages around the app instead of waiting for it.
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
-    parsed_chat_id = parse_chat_ref(chat_id)
-    if parsed_chat_id is None:
-        return _chat_not_found_response(chat_id)
-    # Read before the wait: a send that cannot be read never counts as said to the new chat.
-    send_message_request = SendMessageRequest.model_validate(request.get_json())
-    # A chat still being created has no agent yet: the request waits for it, so the message
-    # reaches the new agent in the order it was sent, ahead of any greeting.
-    try:
-        with agent_manager.new_chat_send_turn(parsed_chat_id):
-            return _send_message_to_chat(chat_id, send_message_request)
-    except NewChatCreateFailedError as e:
-        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-
-
-def _send_message_to_chat(chat_id: str, send_message_request: SendMessageRequest) -> Response:
-    state = get_state()
-    agent_manager: AgentManager = state.agent_manager
     if _find_active_agent(chat_id) is None:
         return _chat_not_found_response(chat_id)
 
+    send_message_request = SendMessageRequest.model_validate(request.get_json())
     message_id = send_message_request.message_id or uuid4().hex
 
     # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,

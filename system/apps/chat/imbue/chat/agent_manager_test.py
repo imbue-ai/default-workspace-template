@@ -27,7 +27,6 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
-from imbue.chat.agent_manager import CREATE_FAILED_SEND_DETAIL
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import _SwitchTarget
@@ -88,13 +87,11 @@ from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.models import TransitionKind
-from imbue.chat.new_chat_sends import NewChatCreateFailedError
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
-from imbue.chat.testing import HookedMngrMessenger
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import drain_is_connecting_pushes
@@ -105,7 +102,6 @@ from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import observer_holding_the_lock
 from imbue.chat.testing import seed_agent_state
-from imbue.chat.testing import seed_creating_chat
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_recording_mngr_binary
@@ -390,11 +386,10 @@ def test_create_chat_refuses_a_message_beside_a_minted_id(agent_manager: AgentMa
     agent_manager.stop()
 
 
-def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
+def test_a_chat_created_with_a_message_starts_on_it(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """A chat created with its own first message carries it; ``/welcome`` is only for a chat
-    that starts with nothing to say (``_settle_new_chat``)."""
+    """A chat created with its own first message carries it on its provisional record."""
     q = broadcaster.register()
 
     seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
@@ -411,6 +406,27 @@ def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
 def test_launch_role_templates_follow_the_chats_fast_mode(is_fast: bool, expected: tuple[str, ...]) -> None:
     """A chat starts fast when its fast mode calls for it; nothing else rides the templates."""
     assert launch_role_templates(is_fast) == expected
+
+
+def test_a_chat_created_with_nothing_to_say_is_created_without_a_first_message(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No greeting rides a silent create: the chat waits for the user's first message."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created.chat_id) is None, 10, "the provisional chat's completion"
+        )
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert "--message" not in argv_line
+    assert "--template welcome" not in argv_line
 
 
 def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_folder(
@@ -438,25 +454,6 @@ def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_f
     assert "--template fast" not in argv_line
     assert read_fast_mode_state(tmp_path / "chats" / created.chat_id) == ChatFastModeState(mode=FastModeMode.OFF)
     assert manager.get_fast_mode_state(ChatId(created.chat_id)).mode is FastModeMode.OFF
-
-
-def test_a_chat_created_with_nothing_to_say_is_created_silently_and_then_greeted(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
-    delivered = _record_deliveries(manager)
-    try:
-        manager.create_chat("")
-        wait_until_true(lambda: len(delivered) > 0, 10, "the greeting's delivery")
-    finally:
-        manager.stop()
-
-    (argv_line,) = argv_log.read_text().splitlines()
-    assert "--message" not in argv_line
-    assert delivered == ["/welcome"]
 
 
 def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
@@ -1163,169 +1160,17 @@ def test_full_snapshot_replaces_agent_set(agent_manager: AgentManager, broadcast
     assert len(msg["chats"]) == 2
 
 
-def _record_deliveries(agent_manager: AgentManager) -> list[str]:
-    """Hand the manager a delivery that records each message's text, in the order it went."""
-    delivered: list[str] = []
-
-    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
-        delivered.append(text)
-        return SendOutcome.OK
-
-    agent_manager.set_handoff_capabilities(
-        HandoffCapabilities(
-            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
-            drain_to_composer=lambda agent_info: "",
-            deliver=deliver,
+def _seed_creating_chat(agent_manager: AgentManager, chat_id: ChatId, name: str) -> None:
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
         )
-    )
-    return delivered
-
-
-def _send_while_the_chat_is_created(
-    agent_manager: AgentManager, chat_id: ChatId, text: str, delivered: list[str], errors: list[str]
-) -> threading.Thread:
-    """A send to the chat, the way the message route makes it: it waits its turn, then delivers."""
-
-    def send() -> None:
-        try:
-            with agent_manager.new_chat_send_turn(chat_id):
-                delivered.append(text)
-        except NewChatCreateFailedError as e:
-            errors.append(str(e))
-
-    thread = threading.Thread(target=send, daemon=True)
-    thread.start()
-    wait_until_true(
-        lambda: agent_manager._has_waiting_new_chat_sends(chat_id), timeout_seconds=5.0, what="the send waiting"
-    )
-    return thread
-
-
-def test_a_message_sent_while_a_silent_chat_is_created_is_its_first_and_it_is_not_greeted(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
-    """The greeting would run first and leave the user's message queued behind it."""
-    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
-    delivered = _record_deliveries(agent_manager)
-    errors: list[str] = []
-    sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "hello", delivered, errors)
-    assert delivered == []
-
-    agent_manager._run_creation(
-        ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE, is_silent_start=True
-    )
-    sender.join(timeout=5.0)
-
-    assert delivered == ["hello"]
-    assert errors == []
-    with agent_manager._lock:
-        assert ChatId("test-id") not in agent_manager._new_chat_send_gate_by_chat_id
-
-
-def test_a_message_sent_while_a_silent_chats_pick_is_applied_is_its_first_and_it_is_not_greeted(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The chat is listed before its pick is applied, so the user can send while the pick goes in."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    created_id = str(MngrAgentId())
-    chat_id = ChatId(created_id)
-    errors: list[str] = []
-    senders: list[threading.Thread] = []
-
-    def send_once_the_pick_starts(message: str) -> None:
-        if not senders:
-            senders.append(_send_while_the_chat_is_created(manager, chat_id, "hello", delivered, errors))
-
-    messenger = HookedMngrMessenger(before_send=send_once_the_pick_starts)
-    manager = AgentManager.build(broadcaster, messenger=messenger, chat_files_root=tmp_path / "chats")
-    seed_creating_chat(manager, chat_id, "Chat 1")
-    delivered = _record_deliveries(manager)
-
-    manager._run_creation(
-        chat_id,
-        created_id,
-        "chat-1",
-        ["true"],
-        tmp_path,
-        {},
-        HarnessType.CLAUDE,
-        model_pick=ModelPick(model_id="haiku", effort="low"),
-        is_silent_start=True,
-    )
-    (sender,) = senders
-    sender.join(timeout=5.0)
-
-    assert [message for _agent, message in messenger.sent][0] == "/model haiku"
-    assert delivered == ["hello"]
-    assert errors == []
-
-
-def test_a_message_sent_while_a_chat_is_created_goes_after_the_message_the_create_left_out(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
-    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
-    delivered = _record_deliveries(agent_manager)
-    errors: list[str] = []
-    sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "and another thing", delivered, errors)
-
-    agent_manager._run_creation(
-        ChatId("test-id"),
-        "test-id",
-        "test-agent",
-        ["true"],
-        tmp_path,
-        {},
-        HarnessType.CLAUDE,
-        deferred_message="Teach me about Mind",
-    )
-    sender.join(timeout=5.0)
-
-    assert delivered == ["Teach me about Mind", "and another thing"]
-    assert errors == []
-
-
-def test_a_failed_create_refuses_the_messages_sent_while_it_ran(agent_manager: AgentManager, tmp_path: Path) -> None:
-    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
-    delivered = _record_deliveries(agent_manager)
-    errors: list[str] = []
-    sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "hello", delivered, errors)
-
-    agent_manager._run_creation(
-        ChatId("test-id"), "test-id", "test-agent", ["sh", "-c", "exit 3"], tmp_path, {}, HarnessType.CLAUDE
-    )
-    sender.join(timeout=5.0)
-
-    assert delivered == []
-    assert errors == [CREATE_FAILED_SEND_DETAIL]
-    with agent_manager._lock:
-        assert ChatId("test-id") not in agent_manager._new_chat_send_gate_by_chat_id
-
-
-def test_a_send_to_a_chat_whose_create_has_already_failed_is_refused(agent_manager: AgentManager) -> None:
-    """The page learns of the failure only from a later push, so a send can still arrive after the gate has gone."""
-    seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
-    delivered: list[str] = []
-
-    with pytest.raises(NewChatCreateFailedError, match=CREATE_FAILED_SEND_DETAIL):
-        with agent_manager.new_chat_send_turn(ChatId("failed-1")):
-            delivered.append("hello")
-
-    assert delivered == []
-
-
-def test_a_send_to_a_chat_that_is_not_being_created_goes_at_once(agent_manager: AgentManager) -> None:
-    delivered: list[str] = []
-    with agent_manager.new_chat_send_turn(ChatId("some-chat")):
-        delivered.append("hello")
-
-    assert delivered == ["hello"]
-    assert not agent_manager._has_waiting_new_chat_sends(ChatId("some-chat"))
 
 
 def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     q = broadcaster.register()
 
     agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
@@ -1349,7 +1194,7 @@ def test_a_created_chat_stays_listed_through_observe_events_that_predate_it(
     """The observe stream reports a new agent seconds after its create returns; every event before
     that rebuilds the tracked agents without it, which must not unlist the chat the create landed."""
     created_id = str(MngrAgentId())
-    seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
 
     agent_manager._handle_observe_event(make_agent_state_event(_agent_details("older-chat")))
@@ -1365,7 +1210,7 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     for good: the full snapshots are how the stream says what exists, so two of them without it end it."""
     created_id = str(MngrAgentId())
     (tmp_path / "agents" / created_id).mkdir(parents=True)
-    seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
     with agent_manager._lock:
         assert created_id in agent_manager._activity_tracked_agents
@@ -1387,7 +1232,7 @@ def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     created_id = MngrAgentId()
-    seed_creating_chat(agent_manager, ChatId(str(created_id)), "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId(str(created_id)), "Chat 1")
     agent_manager._run_creation(
         ChatId(str(created_id)), str(created_id), "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE
     )
@@ -1404,7 +1249,7 @@ def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails
 ) -> None:
     """The agent is up, so the create succeeded; a first message that could not be handed over is the
     settling step's problem and must not cost the waiting page its answer."""
-    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         raise OSError("the pane went away")
@@ -1444,7 +1289,7 @@ def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_t
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     """A failed create is not forgotten: the page shows why, and can try again on the same account."""
-    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     cmd = ["sh", "-c", "echo first line; echo the real reason >&2; exit 3"]
 
     agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)

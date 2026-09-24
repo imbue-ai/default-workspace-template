@@ -200,11 +200,7 @@ to `mngr message` only when the chat app cannot be reached or does not know the
 chat. A send that names no client (no `client_id` or `desktop_id`) posts no
 client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
-seconds is retried rather than mistaken for an unknown chat. A send to a chat
-still being created waits for its agent: once the create lands, the sends go
-in the order they arrived, after the message the chat was created with, if it
-has one; a create that fails refuses them with 409, as it does every send to
-the chat until it is tried again. See `docs/system/blueprint/chat-agent-split/`.
+seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
@@ -221,13 +217,9 @@ record as the seed's successor with the `chat_id` and `chat_seq` labels a
 handoff's successor carries. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
-A chat that starts with no message is created silently and greeted once it is
-up: the chat app sends it `/welcome`, and the skill varies what it says by how
-many times it has run (`system/scripts/welcome_count.py`). A chat the user sent
-a message to while it was starting is not greeted; that message is its first
-instead. Fast mode is a per-chat setting with three modes (`chat_fast_mode.py`,
-kept in the chat's folder as `fast_mode.json`,
-`GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+A chat that starts with no message sends nothing and waits for the user's
+first one. Fast mode is a per-chat setting with three modes
+(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 **off** (standard speed throughout), **auto** (fast for the first
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
 (fast throughout). A new chat starts in the workspace's default mode

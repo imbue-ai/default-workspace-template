@@ -73,7 +73,6 @@ from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
-from imbue.chat.new_chat_sends import NewChatSendGate
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -382,19 +381,6 @@ class RecordingMngrMessenger(MngrMessenger):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
         return self.press_succeeds
-
-
-class HookedMngrMessenger(RecordingMngrMessenger):
-    """A recording messenger that calls ``before_send`` with each message before recording it, for a test
-    that needs something to happen while the manager is messaging an agent."""
-
-    before_send: Callable[[str], None]
-
-    def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
-        self.before_send(message)
-        return super().send_to_agent(agent_id, message, known_locations)
 
 
 class SummaryWritingMngrMessenger(RecordingMngrMessenger):
@@ -751,16 +737,6 @@ class RunningWorkspace(FrozenModel):
     )
 
 
-def seed_creating_chat(agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1") -> None:
-    """Plant a provisional chat whose create is running, as ``create_chat`` leaves one: the record and the gate
-    that holds the sends made to it until the create settles."""
-    with agent_manager._lock:
-        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
-            chat_id=chat_id, name=name, account_id=account_id, phase=ProvisionalChatPhase.CREATING
-        )
-        agent_manager._new_chat_send_gate_by_chat_id[chat_id] = NewChatSendGate.build()
-
-
 def seed_failed_chat(
     agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1", message: str = ""
 ) -> ProvisionalChat:
@@ -804,8 +780,10 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
     # ``FAKE_MNGR_CREATE_EXIT_CODE`` makes it fail with that status.
     fake_mngr.write_text(
         '#!/bin/sh\ncase "$1" in create) sleep 2; '
-        'while [ -n "$FAKE_MNGR_CREATE_RELEASE_FILE" ] && [ ! -e "$FAKE_MNGR_CREATE_RELEASE_FILE" ]; do sleep 0.1; done; '
-        'echo "create failed on purpose" >&2; exit "${FAKE_MNGR_CREATE_EXIT_CODE:-0}" ;; esac\nexit 0\n'
+        'if [ -n "$FAKE_MNGR_CREATE_RELEASE_FILE" ]; then '
+        'while [ ! -e "$FAKE_MNGR_CREATE_RELEASE_FILE" ]; do sleep 0.1; done; fi; '
+        'echo "create failed on purpose" >&2; '
+        'exit "${FAKE_MNGR_CREATE_EXIT_CODE:-0}" ;; esac\nexit 0\n'
     )
     fake_mngr.chmod(0o755)
     return fake_bin_dir

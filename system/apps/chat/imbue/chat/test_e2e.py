@@ -824,8 +824,8 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A message typed while the chat is being created sits where the transcript will put it, and
-    stays there when the chat lands; it reaches the new agent as its first message, with no
-    greeting ahead of it to queue it behind."""
+    stays there when the chat lands; it reaches the new agent as its first message, with nothing
+    sent ahead of it."""
     release_create = tmp_path / "release-create"
     monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
     messenger = RecordingMngrMessenger()
@@ -837,13 +837,6 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
             chat.locator(".message-input-textbox").press("Enter")
             bubble = chat.locator(".outgoing-message")
             expect(bubble).to_be_visible(timeout=5000)
-            agent_manager = server.chat_state.agent_manager
-            (creating,) = agent_manager.get_provisional_chats()
-            wait_for(
-                lambda: agent_manager._has_waiting_new_chat_sends(creating.chat_id),
-                timeout=15.0,
-                error_message="the send never reached the chat app",
-            )
             assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
             box_while_starting = bubble.bounding_box()
             assert box_while_starting is not None
