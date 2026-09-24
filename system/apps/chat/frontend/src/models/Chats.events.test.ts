@@ -86,7 +86,7 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("creating");
   });
 
-  it("drops the record and releases a held send once the chat list names the chat", async () => {
+  it("drops the record and releases a registration waiter once the chat list names the chat", async () => {
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
     expect(await settledState(registered)).toBe("pending");
@@ -127,7 +127,7 @@ describe("the provisional chats over the socket", () => {
     await expect(manager.whenChatRegistered("agent-gone")).resolves.toBeUndefined();
   });
 
-  it("marks a failed create on its record and rejects a held send with the reason", async () => {
+  it("marks a failed create on its record and rejects a registration waiter with the reason", async () => {
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
@@ -167,7 +167,7 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getFailedCreateError("agent-1")).toBeNull();
   });
 
-  it("keeps a held send waiting after a successful completion until the chat list names the chat", async () => {
+  it("keeps a registration waiter waiting after a successful completion until the chat list names the chat", async () => {
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
@@ -190,7 +190,7 @@ describe("the provisional chats over the socket", () => {
     await expect(manager.whenChatRegistered("agent-1")).resolves.toBeUndefined();
   });
 
-  it("drops a discarded chat and rejects a held send", async () => {
+  it("drops a discarded chat and rejects a registration waiter", async () => {
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
@@ -234,7 +234,7 @@ describe("the provisional chats over the socket", () => {
     await expect(registered).resolves.toBeUndefined();
   });
 
-  it("rejects a held send when a reconnect replays the chat as failed", async () => {
+  it("rejects a registration waiter when a reconnect replays the chat as failed", async () => {
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
