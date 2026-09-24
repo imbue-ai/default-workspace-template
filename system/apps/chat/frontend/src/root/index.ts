@@ -145,7 +145,8 @@ function draftInto(chatId: string, text: string): void {
 
 /** Launch a chat awaiting its first send with ``text`` (an intake that arrived with nothing signed in): on the
  *  signed-in account when one has appeared meanwhile, else through the provider chooser; a dismissed chooser
- *  leaves the text in the composer, where the next send offers the chooser again. */
+ *  leaves the text in the composer, where the next send offers the chooser again. A chooser already open (for
+ *  the New chat button) takes no second intent, so the text goes to the composer at once. */
 function launchWithFirstMessage(chatId: string, text: string): void {
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
@@ -156,6 +157,10 @@ function launchWithFirstMessage(chatId: string, text: string): void {
   const account = getSelectedAccount();
   if (account !== null) {
     launchOrDraft(account.id);
+    return;
+  }
+  if (isProviderChooserOpen()) {
+    draftInto(chatId, text);
     return;
   }
   openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
