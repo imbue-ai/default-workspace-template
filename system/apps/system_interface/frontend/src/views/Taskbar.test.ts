@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 import "../testing/dom";
-import { mountView, unmountViews } from "../testing/mount";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appRecord, avatarStateRecord, desktopRecord, windowRecord } from "../testing/records";
+import { applyPresence, resetPresenceForTesting } from "../model/Presence";
+import { appRecord, avatarStateRecord, desktopRecord, presentUserRecord, windowRecord } from "../testing/records";
 import { Taskbar } from "./Taskbar";
 import type { TaskbarAttrs } from "./Taskbar";
 
-afterEach(unmountViews);
+afterEach(() => {
+  unmountViews();
+  resetPresenceForTesting();
+});
 
 function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
   const docs = appRecord("docs");
@@ -44,7 +48,18 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     ],
     isCompact: false,
     openEntryMenuWindowId: null,
-    launcher: { query: "", isOpen: false, isCompact: false, onOpen: vi.fn(), onClose: vi.fn(), onQuery: vi.fn() },
+    launcher: {
+      query: "",
+      isOpen: false,
+      isCompact: false,
+      onOpen: vi.fn(),
+      onClose: vi.fn(),
+      onQuery: vi.fn(),
+      onMoveHighlight: vi.fn(),
+      onRunHighlight: vi.fn(),
+      onRunSecondary: vi.fn(),
+      onRise: vi.fn(),
+    },
     tray: {
       desktops: [desktopRecord("home"), desktopRecord("work")],
       activeDesktopId: "home",
@@ -117,7 +132,7 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40);
   });
 
-  it("carries the launcher field and the two tray widgets, with a glyph per desktop and an icon per running app", () => {
+  it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {
     const onSwitchDesktop = vi.fn();
     const taskbar = render({
       tray: {
@@ -139,6 +154,19 @@ describe("Taskbar", () => {
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
   });
 
+  it("draws the Presence widget in front of Desktops once two users are connected", () => {
+    applyPresence([presentUserRecord("user-bob-4471"), presentUserRecord("user-owner-9c21", { owner: true })]);
+    const taskbar = render();
+    const tray = taskbar.querySelector("[data-system-tray]") as HTMLElement;
+    expect([...tray.children].map((widget) => widget.getAttribute("data-tray-widget"))).toEqual([
+      "presence",
+      "desktops",
+    ]);
+    expect(
+      [...tray.querySelectorAll("[data-presence-user]")].map((el) => el.getAttribute("data-presence-user")),
+    ).toEqual(["user-bob-4471", "user-owner-9c21"]);
+  });
+
   it("the launcher field's Escape clears a typed query first, and keeps the key from the document", () => {
     const onQuery = vi.fn();
     const onClose = vi.fn();
@@ -146,9 +174,20 @@ describe("Taskbar", () => {
     document.addEventListener("keydown", onDocumentKeyDown);
     try {
       const taskbar = render({
-        launcher: { query: "docs", isOpen: true, isCompact: false, onOpen: vi.fn(), onClose, onQuery },
+        launcher: {
+          query: "docs",
+          isOpen: true,
+          isCompact: false,
+          onOpen: vi.fn(),
+          onClose,
+          onQuery,
+          onMoveHighlight: vi.fn(),
+          onRunHighlight: vi.fn(),
+          onRunSecondary: vi.fn(),
+          onRise: vi.fn(),
+        },
       });
-      const input = taskbar.querySelector("[data-launcher-field] input") as HTMLInputElement;
+      const input = taskbar.querySelector("[data-launcher-field] textarea") as HTMLTextAreaElement;
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       expect(onQuery).toHaveBeenCalledWith("");
       expect(onClose).not.toHaveBeenCalled();

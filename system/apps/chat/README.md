@@ -13,8 +13,9 @@ The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 `chat-app`, the console script of this package, from its own uv tool environment
 (installed by `system/scripts/build_workspace.sh` with the mngr harness plugins
 `system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
-its manifest and port 8010 through `system/scripts/forward_port.py`, starts
-`mngr observe` for the workspace's agents, and serves:
+its manifest and port 8010 through `system/scripts/forward_port.py`, follows
+the agent lifecycle event file the workspace's `agent-observer` program (`mngr
+observe`, its own supervised service) writes, and serves:
 
 - `GET /`: the chat root, the built `root.html`: the chat list down the left
   (`frontend/src/root/`, grouped by the chat that started each helper and
@@ -23,7 +24,11 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
   params) serves the same document, and the root creates the chat and selects
-  it client-side. A `draft` query parameter on the root (the `root` launch
+  it client-side; `GET /send` (the `send` launch path, `message` param) serves
+  it too, and the root sends the text through its ordinary send to the one chat
+  there is, or to the chat picked from a picker it opens over them when there
+  are more (with no chat it starts a new one with the text), selects that chat,
+  and reports the selection alone, so a reload sends nothing again. A `draft` query parameter on the root (the `root` launch
   path's one param, what the desktop's "Design your own..." hands the pinned
   chat window) puts its text, unsent, into the composer of the chat the URL
   selects (else the shown one, else the most recently active one, else a chat
@@ -50,10 +55,25 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   its last message as `last_messaged_at`, which the chat root's list orders on)
   and the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`).
-- `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
-  polls on the `--preflight` boot and on every critical app after the restart.
+- `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
+  the update apply polls on the `--preflight` boot and on every critical app
+  after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
+  whether lifecycle events are actually reaching this instance; `status` stays
+  `ok` either way.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
+
+## The agent observer
+
+The chat does not run an observer of its own. `agent-observer`
+(`system/supervisord.conf.d/agent-observer.conf`) runs `mngr observe --quiet`
+from the primary agent's work dir, and every chat instance follows the event
+file it writes through mngr's `ObserveEventFollower`. supervisord starts the two in no
+guaranteed order, so the chat starts without the observer: its instances API
+answers `503` until the observer's first full snapshot is folded, and
+`/api/health` reports the outage. When the observer dies mid-run the chat keeps
+serving its last known list and reports degraded; the returning observer's
+opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
 (`shell:open`, `shell:focused`, the handshake); the shell never calls the chat.
@@ -114,17 +134,19 @@ A rebind (`chat_rebinds.py`) is how a chat changes account on its own harness
 and lane: the same route, dispatched on the target account's harness and lane
 (the answer's `kind` says which it was). The chat app drains the agent's queue
 as a handoff does, then stops the agent, repoints its binding in its own state
-dir (the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the
-chat's session files into the new account's folder so `claude --resume` and the
+dir (the harness's account binding, `harnesses/<harness>/account_binding.py`:
+the `CLAUDE_CONFIG_DIR` line of its env file for claude, after moving the chat's
+session files into the new account's folder so `claude --resume` and the
 watcher still find them; the credential symlink for codex, pi, and antigravity),
 rewrites its `account` label, starts it again with `mngr start --no-resume`,
-and delivers the held messages once it is up. The agent, its transcript, its tk
-steps, and its model settings stay; the record's `rebind` entry carries the
-state through a restart of the app, and a rebind on a one-agent chat drops the
-record again when it completes. There is no cancel (the agent restarts as soon
-as the armed switch's next message carries it out); a failed start leaves the
-chat in the `failed` phase, and the retry offers the accounts of the same
-harness and lane.
+applies the model picked for it if one was, and delivers the held messages once
+it is up. The agent, its transcript, its tk steps, and, unless another model was
+picked, its model settings stay; the record's `rebind` entry carries the state
+through a restart of the app, and a rebind on a one-agent chat drops the record
+again when it completes. There is no cancel (the agent restarts as soon as the
+armed switch's next message carries it out); a failed start or a model pick the
+agent cannot take leaves the chat in the `failed` phase, and the retry offers
+the accounts of the same harness and lane.
 `harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES` names the harnesses a chat
 may be rebound on; a same-lane target on any other harness is a handoff.
 
@@ -136,9 +158,11 @@ target, and the send button reads "Switch and send" and carries the switch out
 with the typed message as the first the chat sends after it, with no second
 confirmation. "Start a new chat" opens a chat on that account and model
 instead, with the draft moved over. Pressing an account on the chat's own
-harness and lane (a rebind) asks nothing: the agent keeps its conversation and
-its model, so the press arms the switch at once and the next message carries
-it out, with the strip offering Cancel but no Change. A chat that has had no
+harness and lane (a rebind) asks nothing: the agent keeps its conversation and,
+by default, its model, so the press arms the switch at once and the next
+message carries it out. The strip's Change (and the model bar's Model row)
+opens the dialog's rebind variant, whose picker starts from "Keep the current
+model", for changing account and model in one switch. A chat that has had no
 user turn skips the dialog too: it switches at once, with no summary and no
 handoff prompt, since there is nothing to hand over. Only a switch that will
 write a summary asks.
@@ -159,11 +183,15 @@ written for the user, which the page shows as is.
 
 A handoff's successor is created silent: its model pick is applied first
 (`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
-goes to it through the send path, then the held messages. A new chat created
-with a pick (`POST /api/chats/create` takes `model` too) is set up the same
-way. `GET /api/accounts/<account-id>/model-options` is what the dialog offers a
-successor's models from: the catalog for a static harness, the options the
-account's last agent was offered for codex.
+goes to it through the send path, then the held messages. A rebind's pick is
+applied the same way once the agent is back on the new account, retried for a
+while since `mngr start` does not wait for the harness to come up. A new chat
+created with a pick (`POST /api/chats/create` takes `model` too) is set up the
+same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
+gets the target account's models, for a handoff's successor and a rebound agent
+alike: the catalog for a static harness, for codex the options an agent of the
+account was last offered, and nothing for antigravity, whose model is changed
+from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -201,10 +229,10 @@ folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 at `data/.apps/chat/settings.json`; auto with a limit of 5 unless changed), and
 a chat whose mode calls for it launches through the `fast` create template, a
 handoff's successor included. The model picker's fast row states the chat's
-mode and opens a small chooser where the mode, auto's turn limit and the
-default for new chats are set; `/fast on` and `/fast off` typed in the
-composer choose the mode too. The first time auto switches a chat in a
-workspace, a one-time notice over the model bar explains it.
+mode and opens a submenu where the mode, auto's turn limit and the default for
+new chats are set; `/fast on` and `/fast off` typed in the composer choose the
+mode too. The first time auto switches a chat in a workspace, a one-time notice
+over the model bar explains it.
 
 ## Provider accounts
 
@@ -265,15 +293,25 @@ registry, for a throwaway boot on another port (`CHAT_PORT`).
 
 `--preflight` is the update apply's throwaway boot (`.agents/skills/update-self`):
 the app imports, builds, and serves `/api/health` but reconciles no accounts (the
-boot sweep reaps sign-in processes), starts no agent manager (so no `mngr observe`,
-session sweep, or memory prioritizer), and registers nothing.
-The apply boots the merged chat this way on a free port before restarting the live
+boot sweep reaps sign-in processes), starts no agent manager (so no follower of
+the observer, session sweep, or memory prioritizer), and registers nothing. The
+apply boots the merged chat this way on a free port before restarting the live
 services, since this is the process that imports mngr and the harness plugins, and
 refuses the update when it cannot come up.
 
+`--secondary` is a second chat beside the live one, the preview of a proposed
+change: it follows the same observer, reads the live accounts, and tracks every
+agent the live chat tracks, but reconciles no accounts, writes no memory scores,
+runs no automatic compaction, resumes no unfinished switch, opens no windows,
+reports no client activity to the shell, and registers nothing. Sends from it are
+real, but a switch to another account is refused, since it would write the chat's
+record into the scratch copy only. Point `CHAT_DATA_DIR` at a scratch copy of
+`data/.apps/chat/` so its writes (the message stamps, settings, and chat records)
+never land in the live chat's data.
+
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
-workspace both frontends belong to.
+workspace every frontend belongs to.
 
 ## Memory shedding
 
@@ -282,3 +320,10 @@ The chat app re-tags chat agents' `oom_score_adj` from live activity
 path, and keeps each chat's last-messaged stamp under `data/.apps/chat/` so a
 restart seeds the ranking from real history. The app itself runs in the `chat`
 band, just above the shell.
+
+It also keeps its own footprint down. Folding the agent stream is a continuous
+churn of short-lived allocations, and glibc keeps the freed pages in the
+per-thread arena they came from, so a long-lived chat app's RSS tracks the
+high-water mark of every arena at once rather than what it holds. The program's
+supervisord entry caps the arena count with `MALLOC_ARENA_MAX` so that
+high-water mark is summed over fewer arenas.

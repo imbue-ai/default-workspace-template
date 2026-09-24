@@ -124,10 +124,7 @@ def test_caddyfile_confines_auth_surface_to_the_dedicated_auth_label() -> None:
 def test_caddyfile_appends_frame_ancestors_allowing_own_family_and_chrome() -> None:
     rendered = _render()
 
-    assert (
-        f"header Content-Security-Policy \"frame-ancestors 'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}\""
-        in rendered
-    )
+    assert f"header Content-Security-Policy \"frame-ancestors 'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}\"" in rendered
 
 
 def test_caddyfile_frame_ancestors_omits_chrome_when_share_carries_none() -> None:
@@ -144,14 +141,12 @@ def test_caddyfile_routes_health_site_wide_and_unauthenticated() -> None:
     # behind forward_auth) so the chrome can probe any workspace origin it has.
     assert "handle /_health {" in rendered
     health_idx = rendered.index("handle /_health {")
-    forward_auth_idx = rendered.index("forward_auth")
+    forward_auth_idx = rendered.index("forward_auth 127.0.0.1:8791")
     assert health_idx < forward_auth_idx
 
 
 def test_build_frame_ancestors_policy_shapes() -> None:
-    assert build_frame_ancestors_policy(_DOMAIN, _CHROME_ORIGIN) == (
-        f"'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}"
-    )
+    assert build_frame_ancestors_policy(_DOMAIN, _CHROME_ORIGIN) == (f"'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}")
     assert build_frame_ancestors_policy(_DOMAIN, "") == f"'self' https://*.{_DOMAIN}"
 
 
@@ -168,9 +163,15 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     # Inbound copies of the gateway's identity headers are stripped before the
     # request reaches a backend, and only the verified /_auth/verify values are
     # injected -- so a client can never forge ownership or an email.
-    assert "request_header -X-Share-Owner" in rendered
-    assert "request_header -X-Share-Email" in rendered
-    assert "copy_headers X-Share-Filtered-Cookie>Cookie X-Share-Owner X-Share-Email" in rendered
+    assert "request_header -X-Imbue-Identity" in rendered
+    assert "X-Share-Owner" not in rendered
+    assert "copy_headers X-Share-Filtered-Cookie>Cookie X-Imbue-Identity" in rendered
+    # Textual position inside a handle block does NOT decide when the strip
+    # runs: caddy sorts directives by its own order, which puts forward_auth
+    # before request_header. Only the global order override makes the strip
+    # run first; test_caddy_adapt_runs_the_identity_strip_before_forward_auth
+    # proves the resulting handler order against the real binary.
+    assert "order request_header before forward_auth" in rendered
     assert "rewrite * /_auth/loading" in rendered
     assert "auto_https off" in rendered
     # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so

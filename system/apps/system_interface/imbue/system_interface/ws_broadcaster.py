@@ -168,6 +168,10 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast every desktop after a write of ``desktops.json`` (desktop contracts.md section 6)."""
         self.broadcast({"type": "desktops_updated", "desktops": desktops})
 
+    def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
+        """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
+        self.broadcast({"type": "presence_updated", "users": users})
+
     def broadcast_placements_updated(self, desktop_id: str, client_id: str, save_id: str) -> None:
         """A client's layout of a desktop was written (a browser's save or the shell's own edit); the owning windows refetch."""
         self.broadcast(
@@ -196,6 +200,10 @@ class WebSocketBroadcaster(MutableModel):
     def broadcast_active_desktop_changed(self, client_id: str, desktop_id: str) -> None:
         """A client's stored active desktop moved; its other windows switch to it."""
         self.broadcast({"type": "active_desktop_changed", "client_id": client_id, "desktop_id": desktop_id})
+
+    def broadcast_update_notice_changed(self, notice: Mapping[str, Any] | None) -> None:
+        """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""
+        self.broadcast({"type": "update_notice_changed", "notice": dict(notice) if notice is not None else None})
 
     def broadcast_layout_op(
         self,

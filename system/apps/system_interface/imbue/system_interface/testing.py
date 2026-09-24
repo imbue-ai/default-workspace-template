@@ -8,7 +8,6 @@ directory, mirroring `main.build_production_state` without ever starting the she
 
 from __future__ import annotations
 
-import json
 import os
 import socket
 import socketserver
@@ -20,12 +19,9 @@ import urllib.error
 import urllib.request
 import xmlrpc.client
 from collections.abc import Iterator
-from collections.abc import Mapping
-from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
@@ -39,10 +35,12 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
+from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
+from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.state import build_shell_state
-from imbue.system_interface.template_catalog import TemplateCatalogFetcherInterface
-from imbue.system_interface.template_catalog import build_template_catalog_store
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -170,94 +168,73 @@ def _fresh_shell_state_directory() -> Path:
     return Path(directory.name)
 
 
-class FakeTemplateCatalogFetcher(TemplateCatalogFetcherInterface):
-    """Answers each catalog URL from a table (None for one not in it) and records every fetch."""
-
-    body_by_url: dict[str, bytes] = Field(default_factory=dict, description="What each URL answers")
-    fetched_urls: list[str] = Field(default_factory=list, description="Every URL fetched, in order")
-
-    def fetch(self, url: str) -> bytes | None:
-        self.fetched_urls.append(url)
-        return self.body_by_url.get(url)
-
-
-def catalog_template_document(slug: str, **overrides: Any) -> dict[str, Any]:
-    """One template as a catalog lists it: the four required fields and a relative drawing, derived
-    from the slug, with ``overrides`` laid over them."""
-    document: dict[str, Any] = {
-        "slug": slug,
-        "title": slug.title(),
-        "description": f"What {slug} does.",
-        "repository_url": f"https://github.com/someone/{slug}",
-        "thumbnail": f"thumbnails/someone--{slug}.svg",
-    }
-    document.update(overrides)
-    return document
-
-
-def catalog_document(
-    *templates: Mapping[str, Any], shelves: Sequence[Mapping[str, Any]] = (), **overrides: Any
-) -> bytes:
-    """A format-1 catalog document as a fetcher answers it, holding ``templates`` and ``shelves``."""
-    document: dict[str, Any] = {
-        "format": 1,
-        "generated_at": "2026-09-07T00:00:00Z",
-        "templates": list(templates),
-        "shelves": list(shelves),
-    }
-    document.update(overrides)
-    return json.dumps(document).encode("utf-8")
-
-
 def build_test_state(
     *,
     config: Config | None = None,
     broadcaster: WebSocketBroadcaster | None = None,
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
-    template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
+    is_preview: bool = False,
+    repo_root: Path | None = None,
     static_directory: Path | None = None,
+    presence_directory: Path | None = None,
     agent_events_path: Path | None = None,
+    profiles: ProfileResolver | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
     The shell state is built but never started, so no registry watch or inventory sweep
     runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
-    and ``broadcaster`` the fan-out the inventory and the routes share. The template catalog
-    is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
-    the network for it; with one, the store fetches the config's URL through it.
-    ``static_directory`` replaces the package's built bundle directory (the frontend bundle
-    and the bundled wallpapers) with one the test fills itself. The avatar's catalog lives under the
-    state directory, and its mood is read from ``agent_events_path`` (a file under the state directory
-    by default, absent until a test writes it).
+    and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
+    the preview shell, which refuses the verbs that would reach the live workspace. ``repo_root`` is
+    where the update notice reads its record and finds the update-self script (a fresh temp
+    directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
+    package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
+    test fills itself. The avatar's catalog lives under the state directory, and its mood is read
+    from ``agent_events_path`` (a file under the state directory by default, absent until a test
+    writes it).
+    ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
+    the resolver that names and pictures each account (one that can reach no connector by default, so no test
+    fetches anything unless it says so).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
+    resolved_presence_directory = (
+        presence_directory if presence_directory is not None else _fresh_shell_state_directory() / "presence"
+    )
     resolved_config = config if config is not None else Config()
+    resolved_broadcaster = broadcaster if broadcaster is not None else WebSocketBroadcaster()
+    resolved_profiles = (
+        profiles
+        if profiles is not None
+        else ProfileResolver(
+            cache_directory=resolved_presence_directory / PROFILES_DIRECTORY_NAME,
+            share_env_path=resolved_presence_directory / "share.env",
+        )
+    )
+    presence = PresenceStore(directory=resolved_presence_directory)
     shell = build_shell_state(
         state_directory=state_directory,
         registry_path=registry_path(),
-        broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
+        broadcaster=resolved_broadcaster,
         inventory=inventory,
         wallpaper_files_directory=state_directory / "wallpapers",
         avatar_catalog_directory=state_directory / "avatars",
         agent_events_path=agent_events_path
         if agent_events_path is not None
         else state_directory / "agent-events.jsonl",
-    )
-    template_catalog = build_template_catalog_store(
-        catalog_url=resolved_config.system_interface_template_catalog_url
-        if template_catalog_fetcher is not None
-        else "",
-        state_directory=state_directory,
-        fetcher=template_catalog_fetcher,
+        repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
+        profiles=resolved_profiles,
     )
     resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,
-        template_catalog=template_catalog,
+        is_preview=is_preview,
         static_directory=resolved_static_directory,
+        presence=presence,
+        presence_sweep=build_presence_sweep(presence, resolved_profiles, resolved_broadcaster),
+        profiles=resolved_profiles,
     )
 
 

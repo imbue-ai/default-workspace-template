@@ -28,8 +28,8 @@ from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import SaveId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import ShortcutTargetKind
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -58,10 +58,27 @@ class ClientRecord(FrozenModel):
 
     id: ClientId = Field(description="The client's stored id")
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
-    last_seen: AwareDatetime = Field(description="When the client last reported")
+    last_seen: AwareDatetime = Field(description="When the client last arrived or reported")
+    user_id: UserId | None = Field(
+        default=None,
+        description="The signed-in visitor the client last arrived as; None for the owner or an anonymous client",
+    )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
+
+
+class UserRecord(FrozenModel):
+    """What the shell keeps about one signed-in visitor: the desktop made for them (desktop plan section 3.10)."""
+
+    user_id: UserId = Field(description="The account's user id, as the identity header carries it")
+    desktop_id: DesktopId = Field(description="The desktop made for the user, where their new clients land")
+    desktop_name: str = Field(
+        description="That desktop's name as of the user's last arrival, for the notice when it is gone"
+    )
+    email: str | None = Field(default=None, description="The verified email as of the user's last arrival")
+    display_name: str | None = Field(default=None, description="The display name as of the user's last arrival")
+    last_seen: AwareDatetime = Field(description="When a client of the user last arrived")
 
 
 class AppInventoryEntry(FrozenModel):
@@ -176,6 +193,7 @@ def launch_path_wire_json(launch_path: RegistryLaunchPath) -> dict[str, Any]:
         "label": str(launch_path.label),
         "path": str(launch_path.path),
         "params": [str(param) for param in launch_path.params],
+        "text_param": str(launch_path.text_param) if launch_path.text_param is not None else None,
     }
 
 
@@ -258,7 +276,6 @@ class Desktop(FrozenModel):
     name: str = Field(description="Free-form name shown in the UI")
     color: str = Field(description="Accent colour as a '#RRGGBB' string")
     glyph: int = Field(description="Index into the frontend's glyph table")
-    sharing: SharingMode = Field(description="Shared or personal; stored and shown, enforced by nothing in V1")
     wallpaper: Wallpaper | None = Field(description="The backdrop image; None draws the theme's default")
     shortcuts: tuple[DesktopShortcut, ...] = Field(description="At most one per (app, launch), in insertion order")
     windows: tuple[Window, ...] = Field(description="Every window on the desktop, in opening order")
@@ -357,6 +374,16 @@ class PlacementsEditOutcome(FrozenModel):
 
     layout: DesktopLayout = Field(description="The layout after the edit, stamped when it was written")
     is_written: bool = Field(description="Whether the edit changed the layout and was written")
+
+
+class ClientArrivalOutcome(FrozenModel):
+    """What a client's arrival came to: the desktop it lands on, and the desktop made for its user when one was."""
+
+    desktop_id: DesktopId = Field(description="Where the client lands")
+    created_desktop: Desktop | None = Field(description="The desktop seeded for a first-time user, else None")
+    replaced_desktop_name: str | None = Field(
+        description="The name of the user's earlier desktop when it had been deleted and a fresh one was seeded"
+    )
 
 
 class DesktopDeleteOutcome(FrozenModel):
