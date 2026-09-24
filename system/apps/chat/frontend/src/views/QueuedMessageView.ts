@@ -18,7 +18,7 @@
  *
  * A published entry is not necessarily a PARKED one: the backend flags an entry it is
  * about to type, or is typing, as ``is_sending``, and such an entry renders as the
- * faded not-yet-real bubble rather than a queued chip. A snapshot that is entirely ``is_sending``
+ * ordinary send's bubble rather than a queued chip. A snapshot that is entirely ``is_sending``
  * therefore gets no group chrome at all -- see ``renderQueuedMessages``.
  */
 
@@ -120,7 +120,7 @@ export function renderQueuedMessages(chatId: string): m.Vnode[] {
   // "Queued messages" header and the tap button over those tells the user a message is
   // WAITING when the backend is reporting the opposite -- and the header is the only
   // reason an idle send ever looked queued, since the bubbles themselves already render
-  // as not-yet-real sends. Bare bubbles, no group wrapper: identical markup to the optimistic
+  // as ordinary sends. Bare bubbles, no group wrapper: identical markup to the optimistic
   // ones they replace, so the handoff is invisible rather than a reflow.
   if (queued.every((message) => message.is_sending === true)) {
     return queued.map((message) => renderQueuedBubble(message, false));
