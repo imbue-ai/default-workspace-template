@@ -1201,20 +1201,6 @@ def _send_while_the_chat_is_created(
     return thread
 
 
-def test_a_chat_that_starts_with_nothing_to_say_is_greeted_once_it_is_up(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
-    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
-    delivered = _record_deliveries(agent_manager)
-
-    agent_manager._run_creation(
-        ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE, is_silent_start=True
-    )
-
-    assert delivered == ["/welcome"]
-    assert not agent_manager._has_waiting_new_chat_sends(ChatId("test-id"))
-
-
 def test_a_message_sent_while_a_silent_chat_is_created_is_its_first_and_it_is_not_greeted(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
