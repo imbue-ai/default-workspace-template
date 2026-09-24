@@ -1276,6 +1276,18 @@ def test_a_failed_create_refuses_the_messages_sent_while_it_ran(agent_manager: A
         assert ChatId("test-id") not in agent_manager._new_chat_send_gate_by_chat_id
 
 
+def test_a_send_to_a_chat_whose_create_has_already_failed_is_refused(agent_manager: AgentManager) -> None:
+    """The page learns of the failure only from a later push, so a send can still arrive after the gate has gone."""
+    seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
+    delivered: list[str] = []
+
+    with pytest.raises(NewChatCreateFailedError, match=CREATE_FAILED_SEND_DETAIL):
+        with agent_manager.new_chat_send_turn(ChatId("failed-1")):
+            delivered.append("hello")
+
+    assert delivered == []
+
+
 def test_a_send_to_a_chat_that_is_not_being_created_goes_at_once(agent_manager: AgentManager) -> None:
     delivered: list[str] = []
     with agent_manager.new_chat_send_turn(ChatId("some-chat")):

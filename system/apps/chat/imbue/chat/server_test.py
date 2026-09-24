@@ -604,6 +604,21 @@ def test_a_send_to_a_chat_whose_create_fails_is_refused_so_the_page_can_put_it_b
     assert messenger.sent == []
 
 
+def test_a_send_to_a_chat_whose_create_has_already_failed_is_refused_rather_than_not_found() -> None:
+    """A 404 would send an in-workspace sender around the chat app to ``mngr message``."""
+    agent_id = "agent-00000000000000000000000000000001"
+    manager, messenger = _manager_creating_chat(agent_id)
+    with manager._lock:
+        manager._mark_creation_failed_locked(ChatId(agent_id), "mngr create exited with code 3")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 409
+    assert response.get_json()["detail"] == CREATE_FAILED_SEND_DETAIL
+    assert messenger.sent == []
+
+
 def test_a_send_to_a_chat_being_created_that_cannot_be_read_is_refused_without_waiting_in_line() -> None:
     """A malformed send is not something said to the new chat: it neither waits for the create nor keeps the chat's greeting from it."""
     agent_id = "agent-00000000000000000000000000000001"

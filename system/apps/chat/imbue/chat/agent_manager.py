@@ -138,6 +138,7 @@ from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_name_conflict
+from imbue.chat.new_chat_sends import NewChatCreateFailedError
 from imbue.chat.new_chat_sends import NewChatSendGate
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
@@ -3174,11 +3175,15 @@ class AgentManager:
         """Scope one send to a chat. While the chat is being created, the send waits until the
         create has settled and every send before it has gone; afterwards it goes at once.
 
-        Raises ``NewChatCreateFailedError`` when the create fails: the send is not delivered.
+        Raises ``NewChatCreateFailedError`` when the create fails, or has already failed: the send
+        is not delivered.
         """
         with self._lock:
             gate = self._new_chat_send_gate_by_chat_id.get(chat_id)
             turn = (gate, gate.take_ticket()) if gate is not None else None
+            provisional = self._provisional_chats.get(chat_id)
+        if turn is None and provisional is not None and provisional.phase is ProvisionalChatPhase.FAILED:
+            raise NewChatCreateFailedError(CREATE_FAILED_SEND_DETAIL)
         if turn is None:
             yield
             return
