@@ -15,7 +15,9 @@ export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
   const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true });
   unlinkWorkspacePaths(fragment);
-  const container = document.createElement("div");
+  // The fragment belongs to DOMPurify's inert document. Serializing it through a live-document
+  // element would adopt its <img>s into the page, and an adopted image starts fetching.
+  const container = fragment.ownerDocument.createElement("div");
   container.append(fragment);
   return container.innerHTML;
 }
