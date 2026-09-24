@@ -316,12 +316,15 @@ def test_every_prose_await_is_started_through_the_harness_neutral_runner() -> No
 
 
 def test_no_prose_waits_through_a_harness_own_background_tool() -> None:
-    """A wait an agent must be woken from goes through ``run_in_background.py``: Claude's
-    ``run_in_background`` flag does not start a turn when its command finishes on most harnesses."""
+    """A wait an agent must be woken from goes through ``run_in_background.py``: the
+    ``run_in_background`` flag is claude's alone, and no other harness has a background tool
+    that starts a turn when its command finishes."""
     offenders = [
         f"{prose.relative_to(_REPO_ROOT)}:{number}: {line.strip()}"
         for prose in _prose_files()
-        for number, line in enumerate(prose.read_text(encoding="utf-8").splitlines(), start=1)
+        for number, line in enumerate(
+            prose.read_text(encoding="utf-8").splitlines(), start=1
+        )
         if re.search(r"run_in_background(?!\.py)\b", line)
     ]
     assert not offenders, "\n".join(offenders)
