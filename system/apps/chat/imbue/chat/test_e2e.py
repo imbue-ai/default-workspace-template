@@ -836,7 +836,9 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
     with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
         try:
             chat = _start_new_chat(page, server)
-            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
+            # The create is held until released below, so the long wait only covers the chat page's socket,
+            # which in CI has taken about twenty seconds to connect and bring the provisional record.
+            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=45000)
             chat.locator(".message-input-textbox").fill("hello")
             chat.locator(".message-input-textbox").press("Enter")
             bubble = chat.locator(".outgoing-message")
