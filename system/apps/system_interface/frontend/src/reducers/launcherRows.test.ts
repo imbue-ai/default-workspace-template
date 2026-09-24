@@ -3,7 +3,7 @@ import {
   appRecord,
   chatLikeAppRecord,
   desktopRecord,
-  getFreeTextAppRecord,
+  getMethodFreeTextAppRecord,
   launchPathRecord,
   layoutRecord,
   placementRecord,
@@ -125,7 +125,7 @@ describe("the launcher's rows", () => {
     expect(posted.textRows.every((row) => row.disabledReason === null)).toBe(true);
     expect(secondaryTextRow(launcherRowsOf(state(), "").rows)).toBeNull();
     // A GET free-text row is bounded by the page path it would open at.
-    const gettable = desktopStateWithApps([getFreeTextAppRecord("noting", ["new"])]);
+    const gettable = desktopStateWithApps([getMethodFreeTextAppRecord("noting", ["new"])]);
     const menu = launcherRowsOf(gettable, "x".repeat(2100));
     expect(menu.textRows.every((row) => row.disabledReason === "Too long to send from here")).toBe(true);
     expect(defaultHighlightIndex(menu.rows)).toBe(-1);

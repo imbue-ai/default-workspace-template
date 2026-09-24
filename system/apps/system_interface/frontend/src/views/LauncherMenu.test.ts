@@ -7,7 +7,7 @@ import {
   appRecord,
   chatLikeAppRecord,
   desktopRecord,
-  getFreeTextAppRecord,
+  getMethodFreeTextAppRecord,
   launchPathRecord,
   windowRecord,
 } from "../testing/records";
@@ -118,7 +118,7 @@ describe("the launcher menu", () => {
     expect(attrs.onHighlight).toHaveBeenCalledWith(2);
     unmountViews();
     // A GET free-text row over the path bound is the disabled row; the chat-like app's POST rows never are.
-    const bounded = desktopStateWithApps([getFreeTextAppRecord("noting", ["new", "send"])]);
+    const bounded = desktopStateWithApps([getMethodFreeTextAppRecord("noting", ["new", "send"])]);
     const tooLong = render(launcherRowsOf(bounded, "x".repeat(2100)));
     const disabled = tooLong.root.querySelector('[data-text-action="secondary"]') as HTMLElement;
     expect(disabled.getAttribute("data-disabled")).toBe("true");
