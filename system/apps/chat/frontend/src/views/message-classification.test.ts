@@ -3,11 +3,11 @@ import {
   classifyUserMessage,
   isHiddenUserMessage,
   isNonBoundaryUserMessage,
-  isTurnUserMessage,
   isNoticeUserMessage,
   isSkillExpansionUserMessage,
   isStatusUserMessage,
   isSystemChipUserMessage,
+  isTurnUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
 } from "./message-classification";
