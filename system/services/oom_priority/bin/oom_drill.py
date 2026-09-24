@@ -55,6 +55,8 @@ MEMINFO_FIELDS: Final[tuple[str, ...]] = (
     "Shmem",
     "Cached",
 )
+# How long after the last sleeper exits its shed-ledger line may still land.
+LEDGER_GRACE_SECONDS: Final[float] = 10.0
 
 _SLEEPER_CODE: Final[str] = """
 import signal, sys
@@ -438,6 +440,7 @@ def main() -> int:
         [Snapshot(time.time(), snapshot_processes())], maxlen=30
     )
     deadline = time.monotonic() + args.timeout
+    every_sleeper_gone_at: float | None = None
     try:
         while not failure and len(shed_sleepers) < len(sleepers):
             if time.monotonic() > deadline:
@@ -468,6 +471,14 @@ def main() -> int:
             if is_every_sleeper_gone:
                 # The last ledger line lands just after its sleeper dies.
                 hog.kill()
+                if every_sleeper_gone_at is None:
+                    every_sleeper_gone_at = time.monotonic()
+                elif time.monotonic() - every_sleeper_gone_at > LEDGER_GRACE_SECONDS:
+                    unrecorded = sorted(set(sleepers) - shed_sleepers)
+                    failure = (
+                        f"sleeper pid(s) {unrecorded} died without a shed-ledger record"
+                    )
+                    break
             elif hog.poll() is not None:
                 failure = "the hog died"
             elif records:
