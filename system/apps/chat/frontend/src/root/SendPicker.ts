@@ -3,7 +3,7 @@
  * whose chat is the user's to choose (the launcher's "Send to chat..." with several chats). A typeahead over every
  * chat's title with one row highlighted: Enter or a click applies the intake on that chat (the root's business,
  * reported through ``onPick``), Escape or a press outside drops it. A chat that is not an agent yet cannot take a
- * message, so it is not offered.
+ * message, so it is not offered. The title says what the pick does with the text: sends it, or drafts it.
  */
 
 import m from "mithril";
@@ -14,14 +14,17 @@ import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import type { ChatRow } from "./rows";
 
 const PICKER_WIDTH_PX = 440;
-const SEARCH_PLACEHOLDER = "Send to which chat?";
+const SEND_TITLE = "Send to which chat?";
+const DRAFT_TITLE = "Draft into which chat?";
 const NO_MATCH_MESSAGE = "No chat matches";
 
 export interface SendPickerAttrs {
   /** The chats in display order; provisional ones are left out. */
   rows: readonly ChatRow[];
-  /** The text to send, shown so the reader knows what goes where. */
+  /** The text to send or draft, shown so the reader knows what goes where. */
   text: string;
+  /** Whether the pick drafts the text into the chosen chat's composer rather than sending it. */
+  isDraft: boolean;
   onPick: (chatId: string) => void;
   onDismiss: () => void;
 }
@@ -41,7 +44,8 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
 
   return {
     view(vnode) {
-      const { rows, text, onPick, onDismiss } = vnode.attrs;
+      const { rows, text, isDraft, onPick, onDismiss } = vnode.attrs;
+      const title = isDraft ? DRAFT_TITLE : SEND_TITLE;
       const shown = pickableRows(rows, query);
       const highlightedRow = highlighted(shown);
       return m(
@@ -50,15 +54,15 @@ export function SendPicker(): m.Component<SendPickerAttrs> {
           onDismiss,
           onEscape: onDismiss,
           width: PICKER_WIDTH_PX,
-          card: { role: "dialog", "aria-modal": "true", "aria-label": SEARCH_PLACEHOLDER, "data-send-picker": "" },
-          title: SEARCH_PLACEHOLDER,
+          card: { role: "dialog", "aria-modal": "true", "aria-label": title, "data-send-picker": "" },
+          title,
         },
         [
           m("p", { class: "send-picker-text type-helper m-0 mb-3 truncate text-secondary" }, `“${text}”`),
           m("input", {
             type: "text",
             "data-send-picker-search": "",
-            "aria-label": SEARCH_PLACEHOLDER,
+            "aria-label": title,
             placeholder: "Type to narrow the chats",
             value: query,
             class: inputClass(),

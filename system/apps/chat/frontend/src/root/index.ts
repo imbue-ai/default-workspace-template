@@ -288,7 +288,13 @@ const ChatRoot: m.Component = {
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
         pendingPick === null
           ? null
-          : m(SendPicker, { rows, text: pendingPick.intake.message, onPick: pickFor, onDismiss: dismissPick }),
+          : m(SendPicker, {
+              rows,
+              text: pendingPick.intake.message,
+              isDraft: pendingPick.intake.isDraft,
+              onPick: pickFor,
+              onDismiss: dismissPick,
+            }),
       ],
     );
   },
