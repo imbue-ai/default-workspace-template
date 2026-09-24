@@ -1,0 +1,1 @@
+Clicking a file path linked in a chat message no longer replaces the conversation with an error page. Links to relative paths (and other paths nothing can open yet) now render as plain text; absolute-path links still download the file, and a missing file fails as a download instead of navigating the chat. Web links are unchanged.
