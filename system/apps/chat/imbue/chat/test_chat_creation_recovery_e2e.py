@@ -7,7 +7,7 @@ agent through that registry, so the panel's first ``/events`` fetch 404s and
 latches into the "No conversation data" view.
 
 The ``provisional_chat_created`` broadcast normally covers that window with the
-"Starting the chat" page, but it is a transient edge event: the frontend holds
+page of a chat being created, but it is a transient edge event: the frontend holds
 the provisional chat only between ``provisional_chat_created`` and
 ``provisional_chat_completed``, so any delivery lag longer than the creation itself
 leaves no render in which the cover is up. These tests pin the two ways that
@@ -84,7 +84,7 @@ _RECOVERY_TIMEOUT_MS = 20000
 
 
 class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
-    """Withholds ``provisional_chat_created`` so the "Starting the chat" cover never engages.
+    """Withholds ``provisional_chat_created`` so the page of a chat being created never engages.
 
     ``release_on_completion`` chooses which delivery pathology is modelled: when
     False the event is dropped outright (the socket was down for the whole

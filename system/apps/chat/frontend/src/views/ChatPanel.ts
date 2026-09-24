@@ -292,21 +292,19 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       });
   }
 
+  /** A conversation with nothing in it yet -- being created, loading, or empty -- drawn as the
+   *  transcript's own empty list with no placeholder text, so a new chat is ready to type into
+   *  at once and moving between these states never changes the page. ``stateClass`` names the
+   *  state for tests and styles; ``nodes`` are messages already on their way (a send typed while
+   *  the chat is created), laid out where the transcript will put them. */
+  function renderEmptyConversation(stateClass: string, nodes: m.Children[]): m.Vnode {
+    return m("div", { class: `message-list-wrapper ${stateClass}` }, [m("div", { class: MESSAGE_LIST_CLASS }, nodes)]);
+  }
+
   /** The page of a chat whose create is running. A message typed now waits for the agent to
-   *  land (see MessageInput); its bubble is laid out exactly as the empty transcript that follows
-   *  lays it out, so it stays where it is when the chat comes up and its turn replaces it. */
+   *  land (see MessageInput). */
   function renderStarting(chatId: string): m.Vnode {
-    const outgoing = renderOutgoingMessages(chatId);
-    if (outgoing.length > 0) {
-      return m("div", { class: "message-list-wrapper message-list-creating" }, [
-        m("div", { class: MESSAGE_LIST_CLASS }, outgoing),
-      ]);
-    }
-    return m(
-      "div",
-      { class: "message-list-creating flex items-center justify-center h-full" },
-      m("p", { class: "text-secondary" }, "Starting the chat..."),
-    );
+    return renderEmptyConversation("message-list-creating", renderOutgoingMessages(chatId));
   }
 
   /** The page of a chat that is not an agent yet, by its phase. */
@@ -518,14 +516,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // error state as soon as any reload succeeds -- the window menu's Refresh or the
     // stream's background reconnect, neither of which goes through loadChat.
     // The phase, not just the error: a load that is in flight -- including a retry -- must not
-    // fall through to "No events yet for this agent.", which claims an answer it does not have.
+    // fall through to the empty state, which claims an answer it does not have.
     const load = getConversationLoadState(chatId);
     if (hasNothingToShow && load.phase === "loading") {
-      return m(
-        "div",
-        { class: "message-list-loading flex items-center justify-center h-full" },
-        m("p", { class: "text-secondary" }, "Loading events..."),
-      );
+      return renderEmptyConversation("message-list-loading", []);
     }
 
     if (hasNothingToShow && load.error !== null) {
@@ -560,14 +554,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     const events = getEventsForChat(chatId);
 
     if (events.length === 0) {
-      // No transcript yet -- but render any queued or in-flight message rather
-      // than the empty-state placeholder (see tailNodes above).
       if (tailNodes.length === 0) {
-        return m(
-          "div",
-          { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-secondary" }, "No events yet for this agent."),
-        );
+        return renderEmptyConversation("message-list-empty", []);
       }
       return m("div", { class: "message-list-wrapper" }, [
         failedReloadNotice,

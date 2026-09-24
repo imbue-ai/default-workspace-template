@@ -183,12 +183,27 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.outgoingBubbles = [];
   });
 
-  it("says the chat is starting while nothing has been sent to it", () => {
+  it("shows a chat being created as an empty conversation, with no placeholder text", () => {
     creating();
     const tree = mountPanel()();
 
-    expect(renderedText(tree)).toContain("Starting the chat...");
-    expect(bubbleListOf(tree)).toBeUndefined();
+    expect(renderedText(tree).trim()).toBe("");
+    expect(findByClass(tree, "message-list-creating")).toBeTruthy();
+    expect(bubbleListOf(tree)?.children).toEqual([]);
+  });
+
+  it("draws a created chat with no events as the same empty conversation, with no placeholder text", () => {
+    creating();
+    const render = mountPanel();
+    const starting = render();
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+
+    const started = render();
+
+    expect(renderedText(started).trim()).toBe("");
+    expect(findByClass(started, "message-list-empty")).toBeTruthy();
+    expect(bubbleListOf(started)?.attrs).toEqual(bubbleListOf(starting)?.attrs);
   });
 
   it("keeps a message sent while the chat starts where the empty transcript after it puts the message", () => {
@@ -202,7 +217,6 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.chat = chatSnapshotFixture(AGENT_ID);
     const started = render();
 
-    expect(renderedText(starting)).not.toContain("Starting the chat...");
     expect(bubbleListOf(starting)?.children).toEqual([bubble]);
     expect(bubbleListOf(started)?.children).toEqual([bubble]);
   });
