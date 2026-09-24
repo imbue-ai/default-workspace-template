@@ -341,11 +341,9 @@ export function getFailedCreateError(chatId: string): Error | null {
  * reconnect's replay turns out not to carry the chat's record any more.
  */
 export function whenChatRegistered(chatId: string): Promise<void> {
-  const provisional = getProvisionalChat(chatId);
-  if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
-  if (provisional.phase === "failed") {
-    return Promise.reject(new Error(provisional.error ?? "The chat could not be started"));
-  }
+  const createFailure = getFailedCreateError(chatId);
+  if (createFailure !== null) return Promise.reject(createFailure);
+  if (getChatById(chatId) !== undefined || getProvisionalChat(chatId) === undefined) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const waiters = registrationWaiters.get(chatId) ?? [];
     waiters.push({ resolve, reject });
