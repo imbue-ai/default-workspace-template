@@ -314,7 +314,10 @@ check_installation = false
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
 #   so they never appear in the transcript.
-config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }
+# - apps = false: disable ChatGPT account app/connector sync -- it's an OAuth side channel
+#   to third-party services that bypasses the latchkey gateway (codex's counterpart of
+#   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
+config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. Codex refuses to
 # re-add a cached Git marketplace if its source declaration has disappeared.
