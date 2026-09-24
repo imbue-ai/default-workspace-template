@@ -1,9 +1,7 @@
 import asyncio
 import json
 import queue
-import shutil
 import sys
-import tempfile
 import time
 from collections import deque
 from pathlib import Path
@@ -45,31 +43,24 @@ def _pop_json(cast_queue: "queue.Queue[str | None]") -> dict[str, Any]:
 # env / key helpers (unchanged)
 
 
-def test_deferred_install_ready_gates_on_fortress_executable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deferred_install_ready_gates_on_fortress_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
     # Isolate the fortress-executable gate from the headful Xvfb gate (which the pixelflux
     # media path adds): force headless so readiness turns only on the Chromium binary.
     monkeypatch.setattr(bsession, "_HEADLESS", True)
-    # The check is os.access(_, X_OK), so the fake binary must live on an EXECUTABLE
-    # filesystem. pytest's tmp_path can be a noexec tmpfs (chmod +x still yields X_OK
-    # False there), so stage it under this app dir (a normal ext4 checkout) instead.
-    staging = Path(tempfile.mkdtemp(dir=Path(__file__).parent))
-    fortress = staging / "tilion"
+    fortress = tmp_path / "tilion"
     monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", str(fortress))
-    try:
-        # Missing binary: still installing.
-        ready, _ = bsession.deferred_install_ready()
-        assert ready is False
-        # Present but not executable (a partially-staged install): still not ready.
-        fortress.write_text("")
-        ready, _ = bsession.deferred_install_ready()
-        assert ready is False
-        fortress.chmod(0o755)
-        ready, reason = bsession.deferred_install_ready()
-        assert ready is True
-        assert reason == "ready"
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    # Missing binary: still installing.
+    ready, _ = bsession.deferred_install_ready()
+    assert ready is False
+    # Present but not executable (a partially-staged install): still not ready.
+    fortress.write_text("")
+    ready, _ = bsession.deferred_install_ready()
+    assert ready is False
+    fortress.chmod(0o755)
+    ready, reason = bsession.deferred_install_ready()
+    assert ready is True
+    assert reason == "ready"
 
 
 # ownership state machine (no browser needed)
