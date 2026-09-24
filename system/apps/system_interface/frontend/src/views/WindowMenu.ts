@@ -1,7 +1,7 @@
 /**
  * The verbs a window's menu, and a taskbar entry's context menu, offer: only what the shell
- * itself can do (concepts.md section 2.2). Size places the window in a zone of the backdrop --
- * the same section the maximize control opens on hover; Share asks the minds chrome
+ * itself can do (concepts.md section 2.2). Move and resize opens the grid of backdrop zones the
+ * maximize control opens on hover, as a submenu; Share asks the minds chrome
  * to open its share settings for the app (never for a critical app); Stop and Start act on the
  * app's supervised program where the workspace can honestly do so; Close removes the window for
  * everyone, and minimizes a pinned window, which is never closed (pinned-taskbar-entries plan
@@ -9,7 +9,7 @@
  */
 
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { windowSizeRow } from "./WindowSizeRow";
+import { windowSizeSubmenuRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import type { AppRecord, EntryMode, PinStyle } from "../model/records";
 import type { EntryLook } from "../reducers/desktopState";
@@ -30,7 +30,7 @@ export interface WindowMenuActions {
 /** The window menu's rows, in display order. */
 export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuActions): MenuRow[] {
   const rows: MenuRow[] = [];
-  if (actions.size !== null) rows.push(windowSizeRow(actions.size, actions.onSized), { kind: "divider" });
+  if (actions.size !== null) rows.push(windowSizeSubmenuRow(actions.size, actions.onSized), { kind: "divider" });
   if (actions.share !== null && app !== undefined) {
     rows.push({
       kind: "action",
@@ -52,7 +52,7 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
     });
   }
   // A rule, not a second one, and none at all above the first row: with neither Share nor Stop
-  // between them, the size section's own divider is already the one Close needs.
+  // between them, the divider under Move and resize is already the one Close needs.
   if (rows.length > 0 && rows[rows.length - 1]?.kind !== "divider") rows.push({ kind: "divider" });
   rows.push({ kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close });
   return rows;
