@@ -213,8 +213,16 @@ Repeat until every node is done.
        --message-with-mngr
    ```
 
-   Add N to `running` in `$RUN/progress.txt`, and launch every ready node before
-   you wait for any of them -- that is what makes them run at once.
+   Launch every ready node before you wait for any of them -- that is what makes
+   them run at once -- and put the bookkeeping after the launches, not between
+   them. Updating `$RUN/progress.txt`, destroying a finished worker, committing
+   `$BUILD`, reading a report: every one of those is time no worker is being
+   started. The order that keeps the folder busy is **launch, launch, launch,
+   then tidy up while they work**.
+
+   The same rule applies when a report lands mid-wave. Run `ready` and launch
+   whatever it unblocked *first*; record the finished node, destroy its worker
+   and commit afterwards, while the new one is already running.
 
    The last three options are what a shared-folder worker needs:
 
