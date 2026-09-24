@@ -11,7 +11,7 @@ README for details.
 - `workspace_ui/` - The frontends' shared JavaScript library (source only,
   a member of the npm workspace at `system/package.json`): the design
   system's token layer, the shared components, and the browser-side app
-  contract and embed modules the shell and the chat page both build from.
+  contract and embed modules the frontends build from.
 - `automations/` - The machinery that runs automations (skills on a
   schedule): the durable recurring-job runner, the cron env wrapper, and the
   automation-agent waker (see the manage-scheduled-tasks skill).
@@ -21,6 +21,9 @@ README for details.
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against
   the live mngr command tree.
+- `pytest_executable_tmp/` - Test-only pytest plugin that keeps a session's
+  temporary files where a stub executable written there can run, or stops
+  the session before any test starts.
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
 

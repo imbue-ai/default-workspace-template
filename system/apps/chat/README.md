@@ -24,7 +24,11 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
   params) serves the same document, and the root creates the chat and selects
-  it client-side. A `draft` query parameter on the root (the `root` launch
+  it client-side; `GET /send` (the `send` launch path, `message` param) serves
+  it too, and the root sends the text through its ordinary send to the one chat
+  there is, or to the chat picked from a picker it opens over them when there
+  are more (with no chat it starts a new one with the text), selects that chat,
+  and reports the selection alone, so a reload sends nothing again. A `draft` query parameter on the root (the `root` launch
   path's one param, what the desktop's "Design your own..." hands the pinned
   chat window) puts its text, unsent, into the composer of the chat the URL
   selects (else the shown one, else the most recently active one, else a chat
@@ -198,6 +202,23 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+The create route is likewise how a chat is made from outside the chat page:
+`message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
+and update chats go through it, run inside the workspace by `mngr exec`). Beside
+`name`, `account_id`, and `message`, the request takes `labels` for the chat's
+agent (`auto_open=true` has the shell surface its window; the labels the app sets
+itself are refused), `is_installation_check_skipped` (a waiver of the claude
+version check the in-container mngr would otherwise fail the create on, which the
+script sends on every create so the update chat that repairs it can be made), and
+`should_wait`, which holds the answer until `mngr create` has finished:
+the chat's identity when it landed, a 500 carrying the create's own reason when
+it failed, a 504 if it is still running at the wait's ceiling. The script falls
+back to a plain `mngr create --template chat` on the send's terms plus one of
+its own: a chat app that cannot be reached, one with no create route, and one
+whose create route predates these fields, which it tells apart by the 400 naming
+the field it does not know (a workspace that has taken a template update and has
+not restarted its chat app yet).
+
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
 `system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
@@ -210,7 +231,15 @@ first member, and the chat is listed as a provisional chat in the
 it. The user's first message is what launches the chat's first real agent
 (the provider chooser opens then if nothing is signed in), which joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
-handoff's successor carries. The seed survives a restart of this app because
+handoff's successor carries. That agent is launched with the seeded
+conversation ahead of the user's message, as one message: the seed is a segment
+this app renders from a file, not a transcript any harness could read, so an
+agent handed the message alone could not tell what a reply like "1" picked out
+of the options the last seeded turn offered. The page strips that context block
+and shows the user's own words alone (`prompt_with_context` in
+`harnesses/message_display.py`). A first message that is a slash command goes
+out as typed, since a harness runs a command only when the slash leads the
+message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
 Every chat that starts with no message is greeted: the `welcome` create
@@ -245,8 +274,9 @@ above). `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
-harness and no account -- the chats the Mind app starts from outside, workers,
-automations, the caretaker -- through `.mngr/settings.local.toml`, mngr's
+harness and no account -- workers, automations, the caretaker, and the bare
+create the Minds app's chats fall back to on a template whose script has no
+create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
 account's harness as `type`, its binding (`env__extend` for claude, an
@@ -307,7 +337,7 @@ never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
-workspace both frontends belong to.
+workspace every frontend belongs to.
 
 ## Memory shedding
 

@@ -2,11 +2,16 @@
 
 import html
 import json
+import os
 import re
 import subprocess
+from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
+import httpx
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
@@ -14,20 +19,23 @@ from flask.testing import FlaskClient
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
+from imbue.system_interface.presence import utc_now
+from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import drain_messages
-from imbue.system_interface.testing import FakeTemplateCatalogFetcher
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import catalog_document
-from imbue.system_interface.testing import catalog_template_document
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
+from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Generous: the first receive occasionally exceeded the previous 5.0s cap on a
 # loaded machine (~1-in-8 locally, failing as ``json.loads(None)``) even though
@@ -49,43 +57,6 @@ def app(config: Config) -> Flask:
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
-
-
-def test_templates_catalog_route_answers_the_catalog_with_resolved_thumbnails(config: Config) -> None:
-    catalog_url = config.system_interface_template_catalog_url
-    fetcher = FakeTemplateCatalogFetcher(
-        body_by_url={
-            catalog_url: catalog_document(
-                catalog_template_document("inbox"),
-                shelves=[{"key": "popular", "title": "Most popular", "slugs": ["inbox"]}],
-            )
-        }
-    )
-    test_client = create_application(build_test_state(config=config, template_catalog_fetcher=fetcher)).test_client()
-
-    response = test_client.get("/api/templates-catalog")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert body["is_stale"] is False
-    assert body["catalog"]["shelves"][0]["slugs"] == ["inbox"]
-    (template,) = body["catalog"]["templates"]
-    assert template["thumbnail_url"] == catalog_url.rsplit("/", 1)[0] + "/thumbnails/someone--inbox.svg"
-
-
-def test_templates_catalog_route_says_when_nothing_could_be_loaded(config: Config) -> None:
-    test_client = create_application(
-        build_test_state(config=config, template_catalog_fetcher=FakeTemplateCatalogFetcher())
-    ).test_client()
-    response = test_client.get("/api/templates-catalog")
-    assert response.status_code == 503
-    assert response.get_json() == {"detail": "failed to load templates"}
-
-
-def test_templates_catalog_route_answers_null_when_no_catalog_is_configured(client: FlaskClient) -> None:
-    response = client.get("/api/templates-catalog")
-    assert response.status_code == 200
-    assert response.get_json() == {"catalog": None, "is_stale": False}
 
 
 def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Path) -> None:
@@ -465,6 +436,149 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert messages[1]["desktops"] == []
     assert messages[2] == {"type": "avatar_status", "mood": "idle", "is_stale": True}
     assert messages[3]["notice"] is None
+
+
+_VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+_OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
+
+
+def _heartbeat(client: FlaskClient, identity: RequestIdentity | None) -> Any:
+    headers = {} if identity is None else identity_headers(identity)
+    return client.post("/api/presence/heartbeat", headers=headers)
+
+
+def _profile_aware_app(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, connector: Callable[[httpx.Request], httpx.Response]
+) -> Flask:
+    """A shell whose profile resolver reaches ``connector`` through the broker a share.env names."""
+    share_env_path = tmp_path / "share.env"
+    share_env_path.write_text('export SHARE_BROKER_URL="https://broker.example.test"\n')
+    profiles = ProfileResolver(
+        cache_directory=tmp_path / "profiles", share_env_path=share_env_path, transport=httpx.MockTransport(connector)
+    )
+    return create_application(
+        build_test_state(
+            broadcaster=broadcaster,
+            shell_state_directory=tmp_path / "state",
+            repo_root=tmp_path / "repo",
+            static_directory=tmp_path / "static",
+            presence_directory=tmp_path / "presence",
+            profiles=profiles,
+        )
+    )
+
+
+def test_presence_heartbeat_records_the_requester_and_answers_their_identity(client: FlaskClient) -> None:
+    response = _heartbeat(client, _VISITOR_IDENTITY)
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "identity": {"owner": False, "user_id": "user-bob-4471", "email": "bob@example.com"}
+    }
+    listed = client.get("/api/presence").get_json()
+    (user,) = listed["users"]
+    assert user["user_id"] == "user-bob-4471"
+    assert user["owner"] is False
+    # No connector to ask, so no profile; the record itself is complete without one.
+    assert user["display_name"] is None and user["profile_picture_url"] is None
+    assert set(user) == {"user_id", "email", "display_name", "profile_picture_url", "owner", "first_seen", "last_seen"}
+
+
+def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(client: FlaskClient) -> None:
+    response = client.post(
+        "/api/presence/heartbeat", json={"session_id": "tab-0001-aaaa"}, headers=identity_headers(_VISITOR_IDENTITY)
+    )
+    assert response.status_code == 200
+
+
+def test_presence_heartbeat_records_nothing_for_an_identity_without_a_user_id(client: FlaskClient) -> None:
+    assert _heartbeat(client, None).status_code == 204
+    assert _heartbeat(client, RequestIdentity(owner=True)).status_code == 204
+    assert client.get("/api/presence").get_json() == {"users": []}
+
+
+def test_the_leave_route_is_gone(client: FlaskClient) -> None:
+    # Only the SPA catch-all (a GET) is left under the old path, so an older page's beacon is refused.
+    assert client.post("/api/presence/leave", headers=identity_headers(_VISITOR_IDENTITY)).status_code == 405
+
+
+def test_presence_carries_each_users_profile_from_the_connector(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    def connector(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/user-bob-4471/profile":
+            return httpx.Response(
+                200, json={"user_id": "user-bob-4471", "display_name": "Bob", "profile_picture_url": "https://a/b"}
+            )
+        return httpx.Response(404, json={"detail": "no such user"})
+
+    app = _profile_aware_app(tmp_path, broadcaster, connector)
+    client = app.test_client()
+    client_queue = broadcaster.register()
+    try:
+        _heartbeat(client, _VISITOR_IDENTITY)
+        _heartbeat(client, _OWNER_IDENTITY)
+        (joined_bob, joined_owner) = drain_messages(client_queue)
+        assert joined_bob["type"] == joined_owner["type"] == "presence_updated"
+        assert [
+            (user["user_id"], user["display_name"], user["profile_picture_url"]) for user in joined_owner["users"]
+        ] == [
+            ("user-bob-4471", "Bob", "https://a/b"),
+            ("user-owner-9c21", None, None),
+        ]
+        listed = client.get("/api/presence").get_json()["users"]
+        assert [(user["user_id"], user["display_name"]) for user in listed] == [
+            ("user-bob-4471", "Bob"),
+            ("user-owner-9c21", None),
+        ]
+    finally:
+        broadcaster.unregister(client_queue)
+
+
+def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_nothing_is_silent(app: Flask) -> None:
+    client = app.test_client()
+    state = state_of(app)
+    client_queue = state.shell.broadcaster.register()
+    try:
+        _heartbeat(client, _VISITOR_IDENTITY)
+        _heartbeat(client, _OWNER_IDENTITY)
+        joined = drain_messages(client_queue)
+        assert [message["type"] for message in joined] == ["presence_updated", "presence_updated"]
+        assert [user["user_id"] for user in joined[1]["users"]] == ["user-bob-4471", "user-owner-9c21"]
+        # A heartbeat that changes nothing about who is here broadcasts nothing.
+        _heartbeat(client, _OWNER_IDENTITY)
+        assert drain_messages(client_queue) == []
+
+        # Bob's tab closed without a word: his file's mtime falls behind, and the next sweep notices.
+        bob_path = state.presence.users_directory / "user-bob-4471.json"
+        stale_at = utc_now() - PRESENCE_CONNECTED_WINDOW - timedelta(seconds=1)
+        os.utime(bob_path, (stale_at.timestamp(), stale_at.timestamp()))
+        assert state.presence_sweep.sweep_once(utc_now()) is True
+
+        (departed,) = drain_messages(client_queue)
+        assert departed["type"] == "presence_updated"
+        assert [user["user_id"] for user in departed["users"]] == ["user-owner-9c21"]
+        assert bob_path.exists()
+        assert state.presence_sweep.sweep_once(utc_now()) is False
+    finally:
+        state.shell.broadcaster.unregister(client_queue)
+
+
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
+def test_websocket_connect_sends_the_connected_users(app: Flask) -> None:
+    client = app.test_client()
+    _heartbeat(client, _VISITOR_IDENTITY)
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(5)]
+        finally:
+            close_ws(ws)
+
+    # The connected users follow the apps, desktops, avatar status, and update notice.
+    assert messages[4]["type"] == "presence_updated"
+    assert [user["user_id"] for user in messages[4]["users"]] == ["user-bob-4471"]
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:

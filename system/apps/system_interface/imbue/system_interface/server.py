@@ -3,9 +3,9 @@ import json
 import queue
 import re
 import shlex
+from collections.abc import Sequence
 from typing import Any
 from typing import Final
-from typing import assert_never
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -28,16 +28,20 @@ from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
 from imbue.system_interface.documents import inject_meta_tag
+from imbue.system_interface.presence import PresenceOutcome
+from imbue.system_interface.presence import PresentUser
+from imbue.system_interface.presence import present_users_wire_json
+from imbue.system_interface.presence import utc_now
+from imbue.system_interface.request_helpers import error_response
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
-from imbue.system_interface.shell.route_helpers import HTTP_SERVICE_UNAVAILABLE
+from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
-from imbue.system_interface.template_catalog import TemplateCatalogAvailability
-from imbue.system_interface.template_catalog import catalog_wire_json
 from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
 from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
@@ -424,31 +428,42 @@ def _health_endpoint() -> Response:
 # Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
 API_PREFIX: Final[str] = "api/"
 
-TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
-_TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
+
+PRESENCE_PATH: Final[str] = "/api/presence"
+PRESENCE_HEARTBEAT_PATH: Final[str] = "/api/presence/heartbeat"
 
 
-def _templates_catalog_endpoint() -> Response:
-    """The launcher's template catalog: the freshest copy the store holds, with each drawing
-    resolved to a URL; ``catalog`` is null when no catalog URL is configured, and a 503 says
-    nothing could be loaded."""
-    state = get_state()
-    reading = state.template_catalog.read()
-    match reading.availability:
-        case TemplateCatalogAvailability.DISABLED:
-            return json_response({"catalog": None, "is_stale": False})
-        case TemplateCatalogAvailability.UNAVAILABLE:
-            return json_response({"detail": _TEMPLATES_UNAVAILABLE_DETAIL}, status_code=HTTP_SERVICE_UNAVAILABLE)
-        case TemplateCatalogAvailability.FRESH | TemplateCatalogAvailability.STALE:
-            assert reading.catalog is not None, "a fresh or stale reading carries its catalog"
-            return json_response(
-                {
-                    "catalog": catalog_wire_json(reading.catalog, state.template_catalog.catalog_url),
-                    "is_stale": reading.availability is TemplateCatalogAvailability.STALE,
-                }
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
+def _present_users_wire_json(users: Sequence[PresentUser]) -> list[dict[str, Any]]:
+    return present_users_wire_json(users, get_state().profiles, utc_now())
+
+
+def _presence_endpoint() -> Response:
+    """The connected users right now (one entry per user), for backends and tests that prefer HTTP to the files."""
+    users = get_state().presence.connected_users(utc_now())
+    return json_response({"users": _present_users_wire_json(users)})
+
+
+def _broadcast_presence_if_changed(outcome: PresenceOutcome) -> None:
+    if outcome.is_membership_changed:
+        _shell().broadcaster.broadcast_presence_updated(_present_users_wire_json(outcome.users))
+
+
+def _presence_heartbeat_endpoint() -> Response:
+    """One shell page's heartbeat (no body): record the requester's presence and answer their own identity record.
+
+    Answers 204 and records nothing when the identity carries no user id (an unshared
+    workspace's owner, or a request that came through no current proxy): there is nobody
+    to name, and the page then shows no account.
+    """
+    identity = request_identity()
+    if identity.user_id is None:
+        return Response(status=204)
+    try:
+        outcome = get_state().presence.heartbeat(identity, utc_now())
+    except InvalidShellValueError as e:
+        return error_response(str(e), 400)
+    _broadcast_presence_if_changed(outcome)
+    return json_response({"identity": identity.model_dump(exclude_none=True)})
 
 
 def _serve_app_contract() -> Response:
@@ -488,7 +503,12 @@ def _serve_asset(filename: str) -> Response:
 
 def _ws_endpoint(websocket: Any) -> None:
     """The one WebSocket per window (desktop contracts.md section 6)."""
-    _run_ws_broadcast_loop(websocket=websocket, shell=get_state().shell)
+    state = get_state()
+    _run_ws_broadcast_loop(
+        websocket=websocket,
+        shell=state.shell,
+        initial_presence=_present_users_wire_json(state.presence.connected_users(utc_now())),
+    )
 
 
 def _handle_client_state_message(
@@ -559,13 +579,17 @@ def _log_client_switches(
             _loguru_logger.opt(exception=e).warning("Could not log the desktop switch for {}", report.client_id)
 
 
-def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
+def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: list[dict[str, Any]]) -> None:
     """Stream the shell broadcaster's messages to ``websocket`` until the client disconnects.
 
     Each WebSocket connection owns its own thread (flask-sock + the threaded WSGI server), so
     this loop blocks on the per-client queue and forwards messages. flask-sock's keepalive
     closes a half-dead peer, surfacing as ``ConnectionClosed`` from ``send``; the broadcaster
     can also evict a hopelessly-behind client by pushing the shutdown sentinel (``None``).
+
+    The connect sends the inventory, the desktops, and the connected users
+    (``initial_presence``, read by the caller before the loop starts) so a window paints from
+    one snapshot; later changes arrive as broadcasts.
 
     Incoming ``client_state`` registrations are drained non-blockingly on each loop iteration.
     """
@@ -590,6 +614,7 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
         websocket.send(
             json.dumps({"type": "update_notice_changed", "notice": notice.wire_json() if notice is not None else None})
         )
+        websocket.send(json.dumps({"type": "presence_updated", "users": initial_presence}))
 
         is_client_registered = False
         shutdown = False
@@ -642,7 +667,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
-    application.add_url_rule(TEMPLATES_CATALOG_PATH, view_func=_templates_catalog_endpoint, methods=["GET"])
+    application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
+    application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
     register_shell_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)

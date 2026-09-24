@@ -254,6 +254,7 @@ class PiTranscriptLoader(StoreBackedTranscriptLoader):
                 if (
                     is_new
                     and event.get("type") == "user_message"
+                    and event.get("role") == "user"
                     and _is_current_generation_drain(event.get("timestamp"), process_started_at)
                 ):
                     self._on_user_turn_drained_locked()

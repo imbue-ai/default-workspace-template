@@ -31,7 +31,9 @@ def _load_script_module(module_name: str, filename: str) -> Any:
 
 layout = _load_script_module("layout_for_fixtures", "layout.py")
 message_chat = _load_script_module("message_chat_for_fixtures", "message_chat.py")
-seed_welcome_chat = _load_script_module("seed_welcome_chat_for_fixtures", "seed_welcome_chat.py")
+seed_welcome_chat = _load_script_module(
+    "seed_welcome_chat_for_fixtures", "seed_welcome_chat.py"
+)
 welcome_count = _load_script_module("welcome_count_for_fixtures", "welcome_count.py")
 
 
@@ -65,10 +67,18 @@ def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_own_chat_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear the chat id the chat app stamps on its agents, so a test that asserts on the
-    requester layout.py derives from MNGR_AGENT_ID is not steered by the developer's own."""
+def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the ambient agent identity from every test for these scripts.
+
+    ``layout.py`` resolves ``self`` and every op's ``requester`` from
+    ``MINDS_CHAT_ID``, falling back to ``MNGR_AGENT_ID``, so a test asserting on
+    an address it derives is reading its own inputs only if BOTH halves are
+    cleared -- clearing the chat id alone leaves the fallback steered by
+    whatever agent is running the suite. Cleared here rather than per test, so a
+    test that needs an identity has to say so explicitly.
+    """
     monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
+    monkeypatch.delenv(layout.ENV_MNGR_AGENT_ID, raising=False)
 
 
 @pytest.fixture
@@ -242,8 +252,9 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 @pytest.fixture
 def fake_mngr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A ``mngr`` on PATH that records its argv and the message file's contents, then exits with
-    the code in ``$FAKE_MNGR_EXIT`` (default 0). Returns the file the record is written to."""
+    """A ``mngr`` on PATH that records its argv and the message file's contents, prints
+    ``$FAKE_MNGR_STDOUT`` (default nothing), then exits with the code in ``$FAKE_MNGR_EXIT``
+    (default 0). Returns the file the record is written to."""
     bin_dir = tmp_path / "fake-bin"
     bin_dir.mkdir()
     record = tmp_path / "mngr-calls.json"
@@ -255,6 +266,7 @@ def fake_mngr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "text = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
         f"with open({str(record)!r}, 'a') as handle:\n"
         "    handle.write(json.dumps({'argv': argv, 'text': text}) + '\\n')\n"
+        "sys.stdout.write(os.environ.get('FAKE_MNGR_STDOUT', ''))\n"
         "raise SystemExit(int(os.environ.get('FAKE_MNGR_EXIT', '0')))\n"
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

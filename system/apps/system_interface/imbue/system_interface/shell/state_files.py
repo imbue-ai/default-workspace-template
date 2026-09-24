@@ -7,10 +7,13 @@ import threading
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import TypeVar
 from uuid import uuid4
 
 from loguru import logger
+from pydantic import ValidationError
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.errors import ShellStateError
 
 # Where the shell keeps its state (desktop contracts.md section 4), relative to the workspace root the
@@ -20,6 +23,8 @@ DEFAULT_STATE_DIRECTORY: Final[Path] = Path("data/.state/system_interface")
 # One process-wide lock serializes every read-modify-write of every shell state file: the
 # files are small and the writers are request threads.
 STATE_FILES_LOCK: Final[threading.RLock] = threading.RLock()
+
+_DocumentT = TypeVar("_DocumentT", bound=FrozenModel)
 
 
 def read_json_object(path: Path) -> dict[str, Any] | None:
@@ -35,6 +40,28 @@ def read_json_object(path: Path) -> dict[str, Any] | None:
         logger.warning("Skipped shell state file {}: expected a JSON object", path)
         return None
     return parsed
+
+
+def parse_versioned_document(
+    raw: dict[str, Any] | None, document_type: type[_DocumentT], expected_version: int, path: Path
+) -> _DocumentT | None:
+    """The document the JSON object read from ``path`` parses to; None when there was no object, when its
+    ``version`` is not the expected one, or when it fails validation (the latter two logged)."""
+    if raw is None:
+        return None
+    if raw.get("version") != expected_version:
+        logger.warning(
+            "Ignored a shell state file of version {!r} at {} (expected {})",
+            raw.get("version"),
+            path,
+            expected_version,
+        )
+        return None
+    try:
+        return document_type.model_validate(raw)
+    except ValidationError as e:
+        logger.warning("Ignored an unreadable shell state file at {}: {}", path, e.errors()[0]["msg"])
+        return None
 
 
 def write_json_atomic(path: Path, document: dict[str, Any]) -> None:

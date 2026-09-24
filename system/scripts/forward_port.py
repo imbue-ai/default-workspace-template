@@ -23,7 +23,7 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 and copies its static fields onto the row: ``display_name``, ``critical``,
 ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
-and the names of the params), ``pin`` (path, and style, scope, and
+the names of the params, and ``text_param`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), and ``window_closed_path``; the icon is read from the file the
 manifest names, relative to the manifest. Every manifest field is authoritative
 on every call, so a re-registration with a changed manifest updates the row.
@@ -124,7 +124,7 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # the first label of every standalone supervisord program with a hyphen in
 # its name: an app named ``share`` would claim ``share-gateway`` as its
 # ``share-<role>`` sidecar when its footprint is computed.
-RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "agent"})
+RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
 # (icons in this repo run a few hundred bytes) while keeping apps.toml small:
@@ -628,9 +628,9 @@ def _copied_pin(pin: Any, path: Path) -> tuple[dict[str, object] | None, str | N
 def _copied_launch_path(
     launch_path: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, and
-    ``params`` (the param names) when it declares any. Returns ``(copied, None)``, or
-    ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``,
+    ``params`` (the param names) when it declares any, and ``text_param`` when it names one. Returns
+    ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
     if not (
         isinstance(launch_path, dict)
         and isinstance(launch_path.get("id"), str)
@@ -651,6 +651,11 @@ def _copied_launch_path(
         return None, params_error
     if param_names:
         copied["params"] = param_names
+    text_param = launch_path.get("text_param")
+    if text_param is not None:
+        if not isinstance(text_param, str):
+            return None, f"manifest {str(path)!r}: a launch path's text_param must be a string"
+        copied["text_param"] = text_param
     return copied, None
 
 
@@ -805,7 +810,7 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, launcher_rank, default_shortcut, "
-            "launch_paths, pin, window_closed_path) are copied onto the row on every call."
+            "launch_paths with their text_param, pin, window_closed_path) are copied onto the row on every call."
         ),
     )
     parser.add_argument(

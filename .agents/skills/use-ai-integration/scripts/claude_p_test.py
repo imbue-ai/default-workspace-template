@@ -192,7 +192,9 @@ def test_child_env_strips_mngr_vars_when_requested(
     assert os.environ.get("MNGR_AGENT_NAME") == "lead"
 
 
-def _isolate_credential_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _isolate_credential_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
     """Point every credential source at an empty tmp dir; return a settings path.
 
     chdir isolates the data/.secrets/anthropic.env snapshot (a repo-root
@@ -206,13 +208,19 @@ def _isolate_credential_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     return tmp_path / "settings.json"
 
 
-def test_credentials_prefer_snapshot_over_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_credentials_prefer_snapshot_over_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The setup-time snapshot pins a keyed integration across later auth changes."""
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
-    settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new/"}}')
+    settings.write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new/"}}'
+    )
     snapshot = tmp_path / "data" / ".secrets" / "anthropic.env"
     snapshot.parent.mkdir(parents=True)
-    snapshot.write_text("ANTHROPIC_API_KEY=sk-pinned-key\nANTHROPIC_BASE_URL=https://pinned/\n")
+    snapshot.write_text(
+        "ANTHROPIC_API_KEY=sk-pinned-key\nANTHROPIC_BASE_URL=https://pinned/\n"
+    )
 
     creds = claude_p.read_workspace_ai_credentials()
 
@@ -266,7 +274,9 @@ def test_credentials_never_take_oauth_token_from_snapshot(
     assert claude_p.read_workspace_ai_credentials().oauth_token is None
 
 
-def test_write_snapshot_captures_key_and_base_url_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_snapshot_captures_key_and_base_url_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The snapshot writer records the key + base URL, owner-only, and never the token."""
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
     settings.write_text(
@@ -278,11 +288,15 @@ def test_write_snapshot_captures_key_and_base_url_only(tmp_path: Path, monkeypat
 
     snapshot = tmp_path / written
     content = snapshot.read_text()
-    assert content == "ANTHROPIC_API_KEY=sk-live-key\nANTHROPIC_BASE_URL=https://proxy/\n"
+    assert (
+        content == "ANTHROPIC_API_KEY=sk-live-key\nANTHROPIC_BASE_URL=https://proxy/\n"
+    )
     assert (snapshot.stat().st_mode & 0o777) == 0o600
 
 
-def test_write_snapshot_raises_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_snapshot_raises_without_a_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A keyless workspace has nothing to snapshot; the writer says so instead of writing junk."""
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
     settings.write_text('{"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"}}')

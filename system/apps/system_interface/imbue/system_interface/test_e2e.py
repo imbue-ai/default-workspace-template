@@ -2,7 +2,7 @@
 
 These tests start a real Flask server (threaded Werkzeug) over a registry of stub apps served by
 stand-in pages over loopback, then use Playwright to drive the shell exactly
-as a user would: every open goes through a shortcut, a launcher tile, a page's own ``shell:open``,
+as a user would: every open goes through a shortcut, a launcher row, a page's own ``shell:open``,
 an agent op, or a deep link; every gesture through the pointer; and every assertion on state reads
 the shell's own API or its files. The framed pages are static stand-ins that import the shell's
 served ``app_contract.js`` and speak the contract, so titles, URL following, and ``shell:open``
@@ -41,14 +41,13 @@ from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
-from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import catalog_document
-from imbue.system_interface.testing import catalog_template_document
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import is_server_answering
@@ -93,10 +92,14 @@ _SECOND_APP_DISPLAY_NAME = "Notes"
 _SECOND_SHORTCUT_KEY = f"{_SECOND_APP_NAME}:{_STUB_LAUNCH_ID}"
 
 # A pinned stub app (pinned-taskbar-entries plan), offered when a test needs a pinned window: its root is the home
-# path, and its pin is what the chat's manifest declares.
+# path, and its pin is what the chat's manifest declares. Its two further launch paths take typed text
+# (launcher-and-getting-started plan section 3.1), so it is what the launcher's free-text rows run.
 _PINNED_APP_NAME = "buddy"
 _PINNED_APP_DISPLAY_NAME = "Buddy"
 _PINNED_HOME_PATH = "/"
+_PINNED_NEW_LAUNCH_ID = "new"
+_PINNED_SEND_LAUNCH_ID = "send"
+_PINNED_TEXT_PARAM = "message"
 
 # The metrics of the default theme (frontend/src/theme/default.css), for driving gestures by pixel.
 _CELL_WIDTH = 96
@@ -104,22 +107,6 @@ _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
 _GEOMETRY_TOLERANCE_PX = 4
-
-# A one-template catalog for the launcher's "Start from a template" section.
-_CATALOG_TEMPLATE_SLUG = "inbox-digest"
-_CATALOG_TEMPLATE_TITLE = "Inbox Digest"
-_CATALOG_DOCUMENT = catalog_document(
-    catalog_template_document(
-        _CATALOG_TEMPLATE_SLUG,
-        title=_CATALOG_TEMPLATE_TITLE,
-        description="A digest of your inbox.",
-        what_it_is="Turns a noisy inbox into a scannable digest.",
-        author="someone",
-        repository_url="https://github.com/someone/inbox-digest",
-        thumbnail="",
-    ),
-    shelves=[{"key": "popular", "title": "Most popular", "slugs": [_CATALOG_TEMPLATE_SLUG]}],
-)
 
 
 class E2EServer(FrozenModel):
@@ -140,20 +127,25 @@ def _get_json(url: str) -> Any:
         return json.loads(response.read())
 
 
+def _post_json(url: str, payload: dict[str, Any]) -> Any:
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.loads(response.read())
+
+
 @contextlib.contextmanager
 def _running_e2e_server(
     tmp_path: Path,
     is_second_app_offered: bool = False,
-    is_stub_taking_message: bool = False,
-    is_catalog_offered: bool = False,
     # The pinned stub's ``[pin]`` as ``(style, scope, default_mode)``; None offers no pinned app.
     pin: tuple[str, str, str] | None = None,
 ) -> Generator[E2EServer, None, None]:
     """Run the shell on a free port over the stub app (and the second one when asked).
 
-    ``is_stub_taking_message`` declares a ``message`` param on the stub's ``new`` launch path, which is what makes
-    it the app the launcher's seeded prompts go to. With ``is_catalog_offered`` the shell has a template catalog.
-    With ``pin`` another stub app is registered with that pin, so every desktop holds its pinned window.
+    With ``pin`` another stub app is registered with that pin, so every desktop holds its pinned window, and with
+    two launch paths taking typed text, so the launcher has its free-text rows.
     """
     port = find_free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -176,7 +168,6 @@ def _running_e2e_server(
                 default_shortcut=(_STUB_LAUNCH_ID, "focus"),
                 display_name=_STUB_APP_DISPLAY_NAME,
                 launch_paths=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL, _STUB_LAUNCH_PATH),),
-                launch_params={_STUB_LAUNCH_ID: ("message",)} if is_stub_taking_message else None,
             )
         ]
         if second_served is not None:
@@ -196,9 +187,21 @@ def _running_e2e_server(
                     pinned_served.http_url,
                     display_name=_PINNED_APP_DISPLAY_NAME,
                     pin=(_PINNED_HOME_PATH, *pin),
-                    # The pin's home path takes a draft, as the chat's root does.
-                    launch_paths=(("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),),
-                    launch_params={"root": ["draft"]},
+                    # The pin's home path takes a draft, as the chat's root does; the other two take typed text.
+                    launch_paths=(
+                        ("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),
+                        (_PINNED_NEW_LAUNCH_ID, f"New {_PINNED_APP_DISPLAY_NAME}", "/new"),
+                        (_PINNED_SEND_LAUNCH_ID, f"Send to {_PINNED_APP_DISPLAY_NAME.lower()}...", "/send"),
+                    ),
+                    launch_params={
+                        "root": ["draft"],
+                        _PINNED_NEW_LAUNCH_ID: [_PINNED_TEXT_PARAM],
+                        _PINNED_SEND_LAUNCH_ID: [_PINNED_TEXT_PARAM],
+                    },
+                    launch_text_params={
+                        _PINNED_NEW_LAUNCH_ID: _PINNED_TEXT_PARAM,
+                        _PINNED_SEND_LAUNCH_ID: _PINNED_TEXT_PARAM,
+                    },
                 )
             )
         write_registry(registry_path, *rows)
@@ -207,16 +210,11 @@ def _running_e2e_server(
         state_dir = tmp_path / "shell-state"
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
         repo_root = tmp_path / "repo"
-        catalog_fetcher: FakeTemplateCatalogFetcher | None = None
-        if is_catalog_offered:
-            catalog_fetcher = FakeTemplateCatalogFetcher()
-            catalog_fetcher.body_by_url[config.system_interface_template_catalog_url] = _CATALOG_DOCUMENT
         agent_events_path = tmp_path / "mngr-events" / "events.jsonl"
         agent_events_path.parent.mkdir()
         state = build_test_state(
             config=config,
             shell_state_directory=state_dir,
-            template_catalog_fetcher=catalog_fetcher,
             repo_root=repo_root,
             agent_events_path=agent_events_path,
         )
@@ -410,20 +408,12 @@ def _wait_for_window_count(base_url: str, count: int, desktop_id: str = _HOME_DE
 def _broadcast_op(base_url: str, op: str, args: dict[str, Any]) -> dict[str, Any]:
     """POST an op to ``/api/layout/broadcast`` the way ``system/scripts/layout.py`` does, retrying while the shell
     has not yet registered the client the op names (a 404 or 412)."""
-    payload = json.dumps({"op": op, "args": args, "requester": None}).encode()
     answer: dict[str, Any] = {}
 
     def _attempt() -> bool:
-        request = urllib.request.Request(
-            f"{base_url}/api/layout/broadcast",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                answer.update(json.loads(response.read()))
-                return True
+            answer.update(_post_json(f"{base_url}/api/layout/broadcast", {"op": op, "args": args, "requester": None}))
+            return True
         except urllib.error.HTTPError as e:
             if e.code in (404, 412):
                 return False
@@ -441,11 +431,14 @@ def _client_id(page: Page) -> str:
     return client_id
 
 
-def _land(page: Page, server: E2EServer, query: str = "") -> None:
-    """Open the shell and wait for the home desktop's backdrop and its seeded shortcut."""
+def _land(page: Page, server: E2EServer, query: str = "", desktop_id: str = _HOME_DESKTOP_ID) -> None:
+    """Open the shell and wait for the desktop's backdrop (home's unless said otherwise) and the seeded shortcut,
+    which every desktop seeded from home carries too."""
     page.goto(f"{server.base_url}/{query}")
-    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
-    expect(page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{desktop_id}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-id="{desktop_id}"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible(
+        timeout=15000
+    )
 
 
 def _window(page: Page, window_id: str) -> Locator:
@@ -543,17 +536,27 @@ def _cell_center(backdrop: FloatRect, column: int, row: int) -> tuple[float, flo
     )
 
 
-def _launch_message(path: str) -> str:
-    """The ``message`` a launch path's query carries."""
-    (message,) = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)["message"]
-    return message
-
-
 def _open_launcher(page: Page) -> Locator:
-    page.locator("[data-launcher-field] input").click()
-    overlay = page.locator("[data-launcher-overlay]")
-    expect(overlay).to_be_visible(timeout=10000)
-    return overlay
+    """Focus the launcher's field, answering the menu it opens."""
+    page.locator("[data-launcher-field] textarea").click()
+    menu = page.locator("[data-launcher-overlay]")
+    expect(menu).to_be_visible(timeout=10000)
+    return menu
+
+
+def _own_window_path(base_url: str, client_id: str, window_id: str) -> str | None:
+    """The client's own stored path for an independent window, off the layout route; None while it has none."""
+    layout = _get_json(f"{base_url}/api/placements/{_HOME_DESKTOP_ID}?client={client_id}")
+    return layout["window_paths"].get(window_id, {}).get("path")
+
+
+def _wait_for_own_window_path(base_url: str, client_id: str, window_id: str, path: str) -> None:
+    wait_for(
+        lambda: _own_window_path(base_url, client_id, window_id) == path,
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"the client's own path for {window_id} never became {path!r}",
+    )
 
 
 def _open_desktops_menu(page: Page) -> None:
@@ -577,12 +580,15 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
 
 
 @contextlib.contextmanager
-def _second_client(page: Page, e2e_server: E2EServer, **context_args: Any) -> Generator[Page, None, None]:
-    """A page of a second browser context (its own client id), landed on the shell and closed with the context."""
+def _second_client(
+    page: Page, e2e_server: E2EServer, desktop_id: str = _HOME_DESKTOP_ID, **context_args: Any
+) -> Generator[Page, None, None]:
+    """A page of a second browser context (its own client id), landed on the shell (on ``desktop_id``) and closed
+    with the context."""
     context = _second_context(page, **context_args)
     try:
         other_page = context.new_page()
-        _land(other_page, e2e_server)
+        _land(other_page, e2e_server, desktop_id=desktop_id)
         yield other_page
     finally:
         context.close()
@@ -593,8 +599,8 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     e2e_server: E2EServer, page: Page
 ) -> None:
     """A fresh browser lands on the home desktop over the bundled wallpaper: the seeded shortcut sits in the first
-    cell, nothing is open, the taskbar carries the launcher field and both tray widgets, and the shell soon knows
-    the client with home as its active desktop."""
+    cell, nothing is open, the taskbar carries the launcher field and the Desktops tray widget, and the shell soon
+    knows the client with home as its active desktop."""
     _land(page, e2e_server)
     expect(page).to_have_title("System Interface")
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
@@ -676,68 +682,167 @@ def test_focus_shortcut_raises_the_existing_window_and_its_menu_opens_another(
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_launcher_tile_search_and_this_desktop_rows(tmp_path: Path, page: Page) -> None:
-    """The launcher opens from its field: its tiles list every app's launch paths, a tile opens a window, searching
-    narrows the tiles and the rows to matches, and a row of an open window brings that window forward."""
+def test_launcher_menu_lists_launch_paths_and_windows_and_runs_the_highlight(tmp_path: Path, page: Page) -> None:
+    """The launcher opens from its field as a menu: one row per launch path with the first highlighted; the arrows
+    move the highlight and Enter runs it; typing narrows the rows to matches and adds the windows across desktops,
+    a window row brings its window forward, and with no match the menu says so; Escape clears, then closes."""
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
-        overlay = _open_launcher(page)
-        expect(overlay.locator(f'.launcher-tile[data-launch="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
-        expect(overlay.locator(f'.launcher-tile[data-launch="{_SECOND_SHORTCUT_KEY}"]')).to_be_visible()
-        expect(overlay.locator("[data-launcher-window]")).to_have_count(0)
+        menu = _open_launcher(page)
+        docs_row = menu.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]')
+        notes_row = menu.locator(f'[data-launch="{_SECOND_SHORTCUT_KEY}"]')
+        expect(docs_row).to_have_attribute("data-highlighted", "true")
+        expect(notes_row).to_have_attribute("data-highlighted", "false")
+        expect(menu.locator("[data-launcher-window]")).to_have_count(0)
+        # No app takes typed text, so there is no free-text row and no key binding for one.
+        expect(menu.locator("[data-text-action]")).to_have_count(0)
 
-        overlay.locator(f'.launcher-tile[data-launch="{_SECOND_SHORTCUT_KEY}"]').click()
+        page.keyboard.press("ArrowDown")
+        expect(notes_row).to_have_attribute("data-highlighted", "true")
+        page.keyboard.press("Enter")
         (window,) = _wait_for_window_count(server.base_url, 1)
-        assert window["app"] == _SECOND_APP_NAME
+        assert window["app"] == _SECOND_APP_NAME and window["path"] == _STUB_LAUNCH_PATH
         expect(_window(page, window["id"])).to_be_visible(timeout=15000)
-        expect(overlay).to_be_hidden()
+        expect(menu).to_be_hidden()
+        expect(page.locator("[data-launcher-field] textarea")).to_have_value("")
 
         _window(page, window["id"]).locator('[data-window-control="minimize"]').click()
         expect(_taskbar_entry(page, window["id"])).to_have_attribute("data-minimized", "true")
-        overlay = _open_launcher(page)
-        expect(overlay.locator(f'[data-launcher-window="{window["id"]}"]')).to_be_visible()
-        overlay.locator(f'[data-launcher-window="{window["id"]}"]').click()
-        expect(overlay).to_be_hidden()
+        menu = _open_launcher(page)
+        expect(menu.locator("[data-launcher-window]")).to_have_count(0)
+        page.locator("[data-launcher-field] textarea").fill("notes")
+        expect(menu.locator("[data-launch]")).to_have_count(1)
+        expect(menu.locator(f'[data-launcher-window="{window["id"]}"]')).to_have_attribute("data-minimized", "true")
+        menu.locator(f'[data-launcher-window="{window["id"]}"]').click()
+        expect(menu).to_be_hidden()
         expect(_window(page, window["id"])).to_be_visible(timeout=10000)
         expect(_window(page, window["id"])).to_have_attribute("data-focused", "true")
 
-        overlay = _open_launcher(page)
-        page.locator("[data-launcher-field] input").fill("docs")
-        expect(overlay.locator("[data-launch]")).to_have_count(1)
-        expect(overlay.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
-        expect(overlay.locator("[data-launcher-window]")).to_have_count(0)
-        page.locator("[data-launcher-field] input").fill("zzzz")
-        expect(overlay.locator(".launcher-no-matches")).to_be_visible()
-        # One Escape clears the search; the next, on an empty field, closes the launcher.
+        menu = _open_launcher(page)
+        page.locator("[data-launcher-field] textarea").fill("zzzz")
+        expect(menu.locator(".launcher-no-matches")).to_be_visible()
+        expect(menu.locator("[data-launch]")).to_have_count(0)
+        # One Escape clears the text; the next, on an empty field, closes the menu.
         page.keyboard.press("Escape")
-        expect(page.locator("[data-launcher-field] input")).to_have_value("")
-        expect(overlay.locator(".launcher-no-matches")).to_have_count(0)
+        expect(page.locator("[data-launcher-field] textarea")).to_have_value("")
+        expect(menu.locator(".launcher-no-matches")).to_have_count(0)
+        expect(menu.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]')).to_have_attribute("data-highlighted", "true")
         page.keyboard.press("Escape")
-        expect(overlay).to_be_hidden()
+        expect(menu).to_be_hidden()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: Path, page: Page) -> None:
+    """The launch paths that take typed text are the menu's free-text rows: Enter with no match runs the primary
+    one, Ctrl+Enter the secondary, each pointing this client's view of the app's independent pinned window at the
+    launch path with the text (no second window opens) and showing it; the row at the pin's home path is a focus
+    row that raises the pinned window; an empty field offers no secondary row; and Shift+Enter breaks the line,
+    after which the menu offers the free-text rows alone and the text goes with its line break."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        menu = _open_launcher(page)
+        primary = menu.locator('[data-text-action="primary"]')
+        secondary = menu.locator('[data-text-action="secondary"]')
+        expect(primary).to_have_attribute("data-launch", f"{_PINNED_APP_NAME}:{_PINNED_NEW_LAUNCH_ID}")
+        expect(secondary).to_have_count(0)
+        # The first launch-path row is highlighted (the stub app's, in registry order) and wears the Enter caption;
+        # the pinned app's home-path row is a launch-path row too, and its free-text rows are never launch-path rows.
+        stub_row = menu.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]')
+        expect(stub_row).to_have_attribute("data-highlighted", "true")
+        expect(stub_row.locator('[data-key="enter"]')).to_have_text("Enter")
+        expect(menu.locator(f'[data-launch="{_PINNED_APP_NAME}:root"]')).to_have_attribute("data-highlighted", "false")
+        expect(menu.locator("[data-launch]")).to_have_count(3)
+
+        page.locator("[data-launcher-field] textarea").fill("hello there")
+        expect(menu.locator(".launcher-no-matches")).to_be_visible()
+        expect(primary).to_have_attribute("data-highlighted", "true")
+        expect(primary.locator('[data-key="enter"]')).to_have_text("Enter")
+        expect(stub_row).to_have_count(0)
+        expect(secondary).to_have_attribute("data-launch", f"{_PINNED_APP_NAME}:{_PINNED_SEND_LAUNCH_ID}")
+        expect(secondary).not_to_have_attribute("data-disabled", "true")
+        page.keyboard.press("Enter")
+        expect(menu).to_be_hidden()
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], "/new?message=hello+there")
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+        frame = _page_frame(page, pinned["id"])
+        expect(frame.locator("#where")).to_have_text("/new?message=hello+there", timeout=15000)
+        # The shared record keeps the home path, and nothing else opened.
+        page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        assert _pinned_window(server.base_url)["path"] == _PINNED_HOME_PATH
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+        menu = _open_launcher(page)
+        field = page.locator("[data-launcher-field] textarea")
+        field.fill("again")
+        page.keyboard.press("Shift+Enter")
+        page.keyboard.type("and more")
+        expect(field).to_have_value("again\nand more")
+        # A text with a line break is a message: the free-text rows stand alone, without the no-match note.
+        expect(menu.locator("[data-launch]")).to_have_count(2)
+        expect(menu.locator(".launcher-no-matches")).to_have_count(0)
+        page.keyboard.press("Control+Enter")
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], "/send?message=again%0Aand+more")
+        expect(frame.locator("#where")).to_have_text("/send?message=again%0Aand+more", timeout=15000)
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+        # The focus row raises the pinned window rather than opening a second root.
+        _window(page, pinned["id"]).locator('[data-window-control="minimize"]').click()
+        expect(_taskbar_entry(page, pinned["id"])).to_have_attribute("data-minimized", "true")
+        menu = _open_launcher(page)
+        menu.locator(f'[data-launch="{_PINNED_APP_NAME}:root"]').click()
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_launcher_intents_and_templates_seed_a_message(tmp_path: Path, page: Page) -> None:
-    """A "Start something" intent opens the message-taking launch path with the prompt as its query; the catalog's
-    template card does the same with its adopt message."""
-    with _running_e2e_server(tmp_path, is_stub_taking_message=True, is_catalog_offered=True) as server:
-        _land(page, server)
-        overlay = _open_launcher(page)
-        overlay.locator('[data-start="build-app"]').click()
-        (window,) = _wait_for_window_count(server.base_url, 1)
-        assert window["path"].startswith(f"{_STUB_LAUNCH_PATH}?message=")
-        assert "build a new app" in _launch_message(window["path"])
+def test_the_launcher_field_grows_upward_out_of_its_row_and_lifts_the_menu(e2e_server: E2EServer, page: Page) -> None:
+    """The field is one row in the taskbar until its text has lines (plan section 4.1): then it grows upward out of
+    its one-row footprint over the backdrop, the taskbar and its entries hold their places, and the menu's foot
+    rises with the field (section 4.2); a cleared field is one row again and the menu comes back down."""
+    _land(page, e2e_server)
+    menu = _open_launcher(page)
+    taskbar_box = _box(page.locator("[data-taskbar]"))
+    entries_box = _box(page.locator("[data-taskbar-entries]"))
+    field = page.locator("[data-launcher-field]")
+    one_row_box = _box(field)
+    _assert_same_box(one_row_box, _box(page.locator(".launcher-field-slot")), "the one-row field in its slot")
+    menu_box = _box(menu)
+    _assert_close(menu_box["y"] + menu_box["height"], taskbar_box["y"], "the menu's foot over a one-row field")
 
-        overlay = _open_launcher(page)
-        card = overlay.locator(f'button[data-template="{_CATALOG_TEMPLATE_SLUG}"]').first
-        expect(card).to_be_visible(timeout=10000)
-        card.click()
-        detail = page.locator(f'[role="dialog"][data-template="{_CATALOG_TEMPLATE_SLUG}"]')
-        expect(detail).to_be_visible(timeout=5000)
-        detail.locator(".new-tab-template-adopt").click()
-        windows = _wait_for_window_count(server.base_url, 2)
-        messages = {_launch_message(window["path"]) for window in windows}
-        assert "/use-template https://github.com/someone/inbox-digest" in messages, messages
+    page.locator("[data-launcher-field] textarea").fill("one\ntwo\nthree\nfour")
+    wait_for(
+        lambda: _box(field)["y"] < taskbar_box["y"],
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the field never grew above the taskbar",
+    )
+    grown_box = _box(field)
+    rise = grown_box["height"] - one_row_box["height"]
+    assert rise > 0, (grown_box, one_row_box)
+    # Grown upward out of its footprint: the foot holds, the top rises over the backdrop, and the taskbar and its
+    # entries stay where they were.
+    _assert_close(
+        grown_box["y"] + grown_box["height"], one_row_box["y"] + one_row_box["height"], "the grown field's foot"
+    )
+    _assert_same_box(_box(page.locator("[data-taskbar]")), taskbar_box, "the taskbar under a grown field")
+    _assert_same_box(_box(page.locator("[data-taskbar-entries]")), entries_box, "the entries beside a grown field")
+    menu_box = _box(menu)
+    _assert_close(menu_box["y"] + menu_box["height"], taskbar_box["y"] - rise, "the menu's foot over a grown field")
+
+    # Escape clears the text: one row again, and the menu comes back down.
+    page.keyboard.press("Escape")
+    expect(page.locator("[data-launcher-field] textarea")).to_have_value("")
+    wait_for(
+        lambda: abs(_box(field)["height"] - one_row_box["height"]) <= _GEOMETRY_TOLERANCE_PX,
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the field never shrank back to one row",
+    )
+    _assert_same_box(_box(field), one_row_box, "the field cleared")
+    menu_box = _box(menu)
+    _assert_close(menu_box["y"] + menu_box["height"], taskbar_box["y"], "the menu's foot over a cleared field")
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -1304,18 +1409,8 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
             frame.evaluate("() => window.__navigateTo('/?doc=1')")
             other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
             wait_for(
-                lambda: _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={client_id}")[
-                    "window_paths"
-                ]
-                .get(pinned["id"], {})
-                .get("path")
-                == "/?doc=1"
-                and _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={other_client_id}")[
-                    "window_paths"
-                ]
-                .get(pinned["id"], {})
-                .get("path")
-                == "/?doc=2",
+                lambda: _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
+                and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2",
                 timeout=15.0,
                 poll_interval=0.1,
                 error_message="the two clients' own paths never reached their window path files",
@@ -1525,8 +1620,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             client_id = _client_id(page)
 
             def _drafted_path() -> str:
-                layout = _get_json(f"{server.base_url}/api/placements/{_HOME_DESKTOP_ID}?client={client_id}")
-                return str(layout["window_paths"].get(pinned_id, {}).get("path", ""))
+                return _own_window_path(server.base_url, client_id, pinned_id) or ""
 
             wait_for(
                 lambda: _drafted_path().startswith(f"{_PINNED_HOME_PATH}?draft="),
@@ -1640,8 +1734,17 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         expect(phone_page.locator("[data-launcher-field]")).to_be_visible()
         phone_page.locator("[data-launcher-field]").tap()
         expect(phone_page.locator("[data-launcher-overlay]")).to_be_visible(timeout=10000)
+        # The menu spans the taskbar on a phone; a window row appears once its title is typed.
+        menu_box = _box(phone_page.locator("[data-launcher-overlay]"))
+        taskbar_box = _box(phone_page.locator("[data-taskbar]"))
+        assert abs(menu_box["width"] - taskbar_box["width"]) <= _GRID_INSET, (menu_box, taskbar_box)
+        # The expanded field keeps the collapsed button's place, centred in the taskbar, over the entries.
+        field_box = _box(phone_page.locator("[data-launcher-field]"))
+        assert abs(_center(field_box)[1] - _center(taskbar_box)[1]) <= 2, (field_box, taskbar_box)
+        phone_page.locator("[data-launcher-field] textarea").fill("stub")
         expect(phone_page.locator(f'[data-launcher-overlay] [data-launcher-window="{window_id}"]')).to_be_visible()
         phone_page.keyboard.press("Escape")
+        expect(phone_page.locator("[data-launcher-field] textarea")).to_have_value("")
         phone_page.keyboard.press("Escape")
         expect(phone_page.locator("[data-launcher-overlay]")).to_be_hidden()
 
@@ -1656,7 +1759,7 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
 def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_server: E2EServer, page: Page) -> None:
     """A window the laptop opens reaches the phone's taskbar minimized (its own client's arrangement); the focus-mode
     shortcut on the phone restores that window there rather than opening another; a window the phone opens from a
-    launcher tile is a window on the laptop too, minimized there in turn."""
+    launcher row is a window on the laptop too, minimized there in turn."""
     _land(page, e2e_server)
     laptop_window = _open_via_shortcut(page, e2e_server)
     with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
@@ -1669,12 +1772,66 @@ def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_serv
         phone_page.locator("[data-launcher-field]").tap()
         overlay = phone_page.locator("[data-launcher-overlay]")
         expect(overlay).to_be_visible(timeout=10000)
-        overlay.locator(f'.launcher-tile[data-launch="{_STUB_SHORTCUT_KEY}"]').tap()
+        overlay.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]').tap()
         windows = _wait_for_window_count(e2e_server.base_url, 2)
         (phone_window,) = [window["id"] for window in windows if window["id"] != laptop_window]
         expect(_window(phone_page, phone_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
         expect(_taskbar_entry(page, phone_window)).to_have_attribute("data-minimized", "true", timeout=15000)
         expect(_window(page, laptop_window)).to_have_attribute("data-focused", "true")
+
+
+def _visiting_client(
+    page: Page, e2e_server: E2EServer, user_id: str, email_local_part: str, desktop_id: str
+) -> contextlib.AbstractContextManager[Page]:
+    """A second client whose every request carries a visitor's identity, landed on the visitor's own desktop
+    rather than on Home (the shell makes one for a first-time visitor, named after their email here: the e2e
+    shell can reach no connector for a profile)."""
+    visitor = RequestIdentity(owner=False, user_id=user_id, email=f"{email_local_part}@example.com")
+    return _second_client(page, e2e_server, desktop_id, extra_http_headers=identity_headers(visitor))
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_server: E2EServer, page: Page) -> None:
+    """A signed-in visitor's first page load gets a desktop named after them, holding Home's shortcut and a window at
+    each of Home's settled windows, and leaves Home as it was; a second client of theirs lands there too; and when
+    that desktop is deleted, their next load seeds another and says so."""
+    _land(page, e2e_server)
+    home_window = _open_via_shortcut(page, e2e_server)
+    expect(_window(page, home_window)).to_be_visible(timeout=15000)
+    # Only a settled window is copied, and the window settles when its page reports its location, after the frame
+    # the line above waits for; the visitor must arrive after that report, not race it.
+    wait_for(
+        lambda: not _windows(e2e_server.base_url)[0]["is_settling"],
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message="Home's window never settled (its page never reported its location)",
+    )
+
+    with _visiting_client(page, e2e_server, "user-alice", "alice", "alice") as visitor:
+        desktops = _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]
+        (alice,) = [desktop for desktop in desktops if desktop["id"] == "alice"]
+        assert alice["name"] == "alice"
+        (copied,) = alice["windows"]
+        assert copied["id"] != home_window and copied["app"] == _STUB_APP_NAME
+        # The copy is hers to arrange: it starts minimized in her taskbar, and Home's window is untouched.
+        expect(_taskbar_entry(visitor, copied["id"])).to_be_visible(timeout=15000)
+        assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
+        expect(page.locator('[data-desktop-switch="alice"]')).to_be_visible(timeout=15000)
+        expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
+
+        with _visiting_client(page, e2e_server, "user-alice", "alice", "alice"):
+            pass
+        assert [desktop["id"] for desktop in _get_json(f"{e2e_server.base_url}/api/desktops")["desktops"]] == [
+            _HOME_DESKTOP_ID,
+            "alice",
+        ]
+
+        _post_json(f"{e2e_server.base_url}/api/desktops/alice/delete", {})
+        visitor.reload()
+        expect(visitor.locator('[data-replaced-desktop-notice="alice"]')).to_be_visible(timeout=15000)
+        expect(visitor.locator('[data-desktop-id="alice"]')).to_be_visible()
+        visitor.locator(".replaced-desktop-dismiss").click()
+        expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)
