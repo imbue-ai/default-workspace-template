@@ -18,7 +18,6 @@ ENV PATH="/root/.local/bin:$PATH"
 # re-run of setup_system.sh (the update apply) would read it over the merged
 # tree's default and silently reinstall the image's version.
 
-# ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
 # toolchain AND invokes the sibling installers (secret scanners, agy,
@@ -35,7 +34,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # Caching tradeoff: a pin bump in any installer rebuilds the whole
 # system-toolchain layer rather than an installer-only layer -- accepted so a
 # single common script covers every provider.
-# ============================================================================
+
 # Pin every apt operation (this build and all runtime installs) to the
 # committed archive snapshot timestamp. Runs before any apt usage so the
 # system-toolchain layer below resolves against the frozen universe; the
@@ -64,13 +63,11 @@ ENV XDG_CACHE_HOME=/var/cache/user
 ENV UV_CACHE_DIR=/var/cache/user/uv
 ENV npm_config_cache=/var/cache/user/npm
 
-# ============================================================================
 # Pre-COPY manifest layer.
 # Copies only the dependency manifests (no application source) so the
 # expensive dependency install below caches against dependency-manifest
 # changes only. Application code edits land on the `COPY . /home/user/workspace/`
 # further down -- they do not invalidate the cache here.
-# ============================================================================
 WORKDIR /home/user/workspace/
 
 # Root + per-workspace-member pyproject.toml + uv.lock.
@@ -105,9 +102,7 @@ COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
 RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
     chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
-# ============================================================================
 # End pre-COPY manifest layer. Source-changing layers begin below.
-# ============================================================================
 
 # copy in all of our code:
 COPY . /home/user/workspace/

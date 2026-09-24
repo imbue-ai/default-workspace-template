@@ -13,8 +13,6 @@
 # Usage (source it, then):
 #   mngr_git_auth_export    # export GIT_CONFIG_* when a token is present
 
-# Strict mode. Callers already set this, so re-asserting is a no-op for them and keeps the
-# library safe to source from anywhere.
 set -euo pipefail
 
 MNGR_INTERNAL_GIT_TOKEN_FILE="${MNGR_INTERNAL_GIT_TOKEN_FILE:-/run/secrets/mngr_internal_git_token}"
@@ -29,7 +27,6 @@ mngr_git_auth_export() {
     if [ -z "$token" ]; then
         return 0
     fi
-    # Append after any rewrite the caller already carries rather than clobbering it.
     local index="${GIT_CONFIG_COUNT:-0}"
     export "GIT_CONFIG_KEY_${index}=url.https://x-access-token:${token}@github.com/imbue-ai/mngr-internal.insteadOf"
     export "GIT_CONFIG_VALUE_${index}=${MNGR_INTERNAL_REPO_URL}"
