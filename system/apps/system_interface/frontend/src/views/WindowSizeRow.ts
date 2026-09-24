@@ -69,9 +69,10 @@ export function windowSizeRow(actions: WindowSizeActions, onPlaced: () => void):
     kind: "custom",
     key: "size",
     render: () =>
-      // Tighter than a menu row's own slab: the tiles are the content, and the card's edge should
-      // sit near their hover boxes rather than at a text row's indent.
-      m("div", { class: "mx-1 flex flex-col gap-1 px-1 py-1" }, [
+      // Tighter than a menu row's own slab: the tiles are the content, and the card's edge sits 4px
+      // off their hover boxes rather than at the indent a row of text is cut for. The 4px above and
+      // below is the card's own padding, so only the sides are spelled out here.
+      m("div", { class: "mx-1 flex flex-col gap-1" }, [
         m("span", { class: "text-(length:--font-size-helper) text-primary" }, "Move and resize"),
         m(
           "div",
