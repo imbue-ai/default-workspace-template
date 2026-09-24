@@ -47,7 +47,7 @@ import time
 import urllib.request
 from pathlib import Path
 from types import ModuleType
-from typing import Iterable
+from typing import Callable, Iterable
 
 import tomlkit
 
@@ -122,7 +122,9 @@ def _validate_name(name: str) -> None:
         )
     registration_problem = _load_forward_port().validate_service_name(name)
     if registration_problem is not None:
-        sys.exit(f"error: --name {name!r} could not be registered: {registration_problem}")
+        sys.exit(
+            f"error: --name {name!r} could not be registered: {registration_problem}"
+        )
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
 
@@ -198,20 +200,22 @@ def _is_port_bound(port: int) -> bool:
             return True
 
 
-def _pick_port(repo_root: Path, requested: int | None) -> int:
+def _pick_port(
+    repo_root: Path, requested: int | None, is_port_bound: Callable[[int], bool]
+) -> int:
     in_use = _supervisord_conf_ports(
         repo_root / "system/supervisord.conf"
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     # Reserve known internal ports that may not have supervisor entries
     in_use.add(8083)  # browser CDP proxy
     if requested is not None:
-        if requested in in_use or _is_port_bound(requested):
+        if requested in in_use or is_port_bound(requested):
             sys.exit(
                 f"error: --port {requested} is already in use by another app or service"
             )
         return requested
     port = LOWEST_AUTO_PORT
-    while port in in_use or _is_port_bound(port):
+    while port in in_use or is_port_bound(port):
         port += 1
     return port
 
@@ -696,7 +700,7 @@ def main() -> None:
         else _find_repo_root(Path.cwd())
     )
     package = _kebab_to_snake(args.name)
-    port = _pick_port(repo_root, args.port)
+    port = _pick_port(repo_root, args.port, _is_port_bound)
     program_path = _reserve_supervisord_program_path(repo_root, args.name)
     display_name = _display_name(args.description, args.display_name)
 

@@ -5,9 +5,12 @@ build two creations in one workspace at the same time. That is a property of the
 files the script touches, not of the lib it generates, so these run the real script
 over a real (temporary) workspace and assert on the tree it leaves behind.
 
-The port pre-flight is checked the same way: every program declares its port in
-its own drop-in now, so a pre-flight that read only the main config would hand a
-new app a port another program already holds.
+The port pre-flight is checked against the same kind of workspace: every program
+declares its port in its own drop-in now, so a pre-flight that read only the main
+config would hand a new app a port another program already holds. Its auto pick
+runs in-process with a bind probe that reports nothing bound, because the real
+probe asks this machine, and a live workspace already has apps listening across
+the auto-pick range.
 """
 
 from __future__ import annotations
@@ -83,6 +86,10 @@ def _make_workspace(
             _dropin(name, port)
         )
     return root
+
+
+def _nothing_bound(port: int) -> bool:
+    return False
 
 
 def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -181,25 +188,14 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
 
     # 8080 is held by the main config and 8081 by the drop-in, so the auto pick
     # lands on 8082 -- it would answer 8080 if the main config went unread.
-    ok = _scaffold(root, "news")
-    assert ok.returncode == 0, ok.stderr
-    assert (
-        "http://localhost:8082"
-        in (root / "system/supervisord.conf.d/news.conf").read_text()
-    )
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:
     """8080 and 8081 are taken by drop-ins alone, so the next app gets 8082."""
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "dashboard": 8080})
 
-    result = _scaffold(root, "news")
-    assert result.returncode == 0, result.stderr
-
-    assert (
-        "http://localhost:8082"
-        in (root / "system/supervisord.conf.d/news.conf").read_text()
-    )
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
 
 
 def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
@@ -215,14 +211,12 @@ def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
     root = _make_workspace(tmp_path / "workspace", {"dashboard": 8080})
     (root / "system/supervisord.conf.d/archive.conf").mkdir()
 
+    # The real drop-in beside it was still scanned: 8080 is taken, so the new app gets 8081.
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8081
+
     result = _scaffold(root, "news")
 
     assert result.returncode == 0, result.stderr
-    # The real drop-in beside it was still scanned: 8080 is taken, so the new app gets 8081.
-    assert (
-        "http://localhost:8081"
-        in (root / "system/supervisord.conf.d/news.conf").read_text()
-    )
 
 
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:

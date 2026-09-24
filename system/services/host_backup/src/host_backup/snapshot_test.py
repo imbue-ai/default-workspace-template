@@ -104,19 +104,18 @@ def _start_fake_outer_helper(
     result_path = trigger_dir / "result.json"
 
     def _loop() -> None:
-        last_request_mtime: float | None = None
+        # Keyed on the request id, as the real caller keys its wait for the result:
+        # a file's mtime can repeat across two requests or change under one, which
+        # would drop or double-handle a request.
+        last_request_id: object = None
         handled = 0
         while not stop_event.is_set():
             try:
-                mtime = request_path.stat().st_mtime
-            except OSError:
-                mtime = None
-            if mtime is not None and mtime != last_request_mtime:
-                last_request_mtime = mtime
-                try:
-                    payload = json.loads(request_path.read_text())
-                except (OSError, ValueError):
-                    continue
+                payload = json.loads(request_path.read_text())
+            except (OSError, ValueError):
+                payload = None
+            if payload is not None and payload.get("request_id") != last_request_id:
+                last_request_id = payload.get("request_id")
                 handled += 1
                 if requests_seen is not None:
                     requests_seen.append(payload)
