@@ -30,7 +30,7 @@ fi
 # A command that is nothing but `cat FILE... | head` is exempt: the files already hold the full
 # output and can be re-read. The whole command must be that one pipeline, so no `cmd | cat` or
 # compound command can hide behind it.
-cat_pipe_re='^[[:blank:]]*cat([[:blank:]]([^|;&()`]|>&|&>)*)?\|[[:blank:]]*(tail|head)([[:blank:]]([^|;&()`]|>&|&>)*)?$'
+cat_pipe_re='^[[:blank:]]*cat([[:blank:]]([^|;&()`\\]|>&|&>)*)?\|[[:blank:]]*(tail|head)([[:blank:]]([^|;&()`\\]|>&|&>)*)?$'
 if [[ "$command" != *$'\n'* && "$command" =~ $cat_pipe_re ]]; then
     exit 0
 fi

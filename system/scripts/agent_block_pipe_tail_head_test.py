@@ -40,6 +40,8 @@ def test_a_cat_of_files_may_pipe_into_head_or_tail(command: str) -> None:
         # The exemption covers a whole command, never one pipeline inside a compound one.
         "cd /tmp && cat out.txt | tail -20",
         "cat f | head; pytest | tail -5",
+        # The escaped `>` leaves `&` a background operator, not part of a `>&` redirect.
+        "cat x\\>& pytest | tail -20",
         "cat f | head -5 | tail -2",
         "cat f | grep x | head",
         "concatenate f | head",
