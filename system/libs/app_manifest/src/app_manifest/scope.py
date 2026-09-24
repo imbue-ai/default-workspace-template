@@ -30,11 +30,14 @@ from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
 
-# The daemon's own configuration, and the directory its ``[include]`` glob reads every
-# program block from, one file per program (``system/test_supervisord_layout.py`` pins
-# that the glob resolves to exactly this directory).
+# The shared wiring files where supervised apps have their blocks: the main config and
+# the drop-in directory its ``[include]`` glob names. The template declares its programs
+# one per drop-in file, so a reader of the main config alone sees none of them.
+# ``system/test_supervisord_layout.py`` pins the directory as the one the glob names.
 _SUPERVISORD_CONF: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf")
-_SUPERVISORD_DROPIN_DIRECTORY: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf.d")
+_SUPERVISORD_DROPIN_DIR: Final[RepoRelativePath] = RepoRelativePath(
+    "system/supervisord.conf.d"
+)
 
 # Applied to every footprint and never written in a manifest: vendored subtrees, gitignored
 # runtime state, installed dependencies, and build output are nobody's creation.
@@ -169,34 +172,15 @@ def _deduplicated(globs: Sequence[ExcludeGlob]) -> tuple[ExcludeGlob, ...]:
     return tuple(dict.fromkeys(globs))
 
 
-def _read_sections(config_path: Path) -> list[str]:
-    """The section names one supervisord config file declares; none when the file is absent."""
-    parser = configparser.ConfigParser(interpolation=None)
-    try:
-        parser.read(config_path)
-    except configparser.Error as e:
-        raise ScopeComputationError(f"cannot parse {config_path}: {e}") from e
-    return parser.sections()
-
-
-def _supervisord_config_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
-    """The daemon's config followed by its drop-ins in name order, which is the order the
-    ``[include]`` glob reads them in."""
-    dropin_directory = repo_root / _SUPERVISORD_DROPIN_DIRECTORY
-    dropins = sorted(dropin_directory.glob("*.conf")) if dropin_directory.is_dir() else []
-    return (
-        _SUPERVISORD_CONF,
-        *(RepoRelativePath(f"{_SUPERVISORD_DROPIN_DIRECTORY}/{dropin.name}") for dropin in dropins),
-    )
-
-
 def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[WiringSection, ...]:
     """The supervisord blocks that run the app: its own program, every ``<app name>-<role>``
-    sidecar, and every program its manifest's ``[wiring] programs`` declares, wherever the
-    daemon's config or one of its ``supervisord.conf.d/`` drop-ins declares them -- one
-    entry per file that holds any, in the order the daemon reads the files.
+    sidecar, and every program its manifest's ``[wiring] programs`` declares.
 
-    A tree with none of the derived ones (an app that is not registered yet) yields no wiring
+    Blocks are looked for in the main config and in every drop-in its ``[include]`` glob
+    names, and each returned section is attributed to the file it is actually written in,
+    so a footprint points at the file a change would have to edit.
+
+    A conf with none of the derived ones (an app that is not registered yet) yields no wiring
     rather than an error; a declared program with no block is an error, since the declaration
     is explicit.
     """
@@ -206,11 +190,17 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
     # program from being claimed here.
     sidecar_prefix = f"program:{manifest.name}-"
     declared_sections = [f"program:{program}" for program in manifest.wiring.programs]
+
     wiring: list[WiringSection] = []
-    seen_sections: set[str] = set()
-    for config_path in _supervisord_config_paths(repo_root):
-        sections = _read_sections(repo_root / config_path)
-        seen_sections.update(sections)
+    defined_sections: set[str] = set()
+    for conf_path in _supervisord_conf_paths(repo_root):
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read(repo_root / conf_path)
+        except configparser.Error as e:
+            raise ScopeComputationError(f"cannot parse {repo_root / conf_path}: {e}") from e
+        sections = parser.sections()
+        defined_sections.update(sections)
         owned_sections = tuple(
             NonEmptyStr(section)
             for section in sections
@@ -219,15 +209,27 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
             or section in declared_sections
         )
         if owned_sections:
-            wiring.append(WiringSection(path=config_path, sections=owned_sections))
+            wiring.append(WiringSection(path=conf_path, sections=owned_sections))
+
     for declared_section in declared_sections:
-        if declared_section not in seen_sections:
+        if declared_section not in defined_sections:
             raise ScopeComputationError(
                 f"manifest {manifest.name} declares wiring program {declared_section!r}, which "
-                f"neither {repo_root / _SUPERVISORD_CONF} nor a drop-in under "
-                f"{repo_root / _SUPERVISORD_DROPIN_DIRECTORY} defines"
+                f"{repo_root / _SUPERVISORD_CONF} and its drop-ins do not define"
             )
     return tuple(wiring)
+
+
+def _supervisord_conf_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
+    """The main config followed by its drop-ins, in the order supervisord reads them."""
+    dropins = sorted((repo_root / _SUPERVISORD_DROPIN_DIR).glob("*.conf"))
+    return (
+        _SUPERVISORD_CONF,
+        *(
+            RepoRelativePath(path.relative_to(repo_root).as_posix())
+            for path in dropins
+        ),
+    )
 
 
 def find_referencing_manifests(

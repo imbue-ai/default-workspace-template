@@ -58,8 +58,8 @@ The models behind a workspace app's two descriptions:
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
-  `[program:*]` blocks out of `system/supervisord.conf` and the
-  `supervisord.conf.d/` drop-ins its include glob reads;
+  `[program:*]` blocks out of `system/supervisord.conf` and every
+  `system/supervisord.conf.d/*.conf` drop-in its `[include]` glob names;
   `find_referencing_manifests(repo_root, target_path)` is the reverse lookup
   from an owned path to the apps that claim it (an app directory with no
   `app.toml` is skipped, and so is a manifest that fails to load, with a warning
@@ -118,16 +118,18 @@ goes to stdout; with it, the parent directories are created.
   null and its `name` is the directory's name.
 - `primary` is what the creation is: the app's package directory, or the
   `--for-path` path. A directory ends in `/`.
-- `wiring` is the supervisord program blocks the app owns, one entry per file
-  that declares any of them (the daemon's `system/supervisord.conf`, then its
-  `supervisord.conf.d/` drop-ins in name order, which is how the include glob
-  reads them): its own `program:<program>` block, every `program:<name>-<role>`
-  sidecar, and every program the manifest's `[wiring] programs` declares (the
-  browser declares `xvfb`, which exists only for it; a declared program with no
-  block anywhere is an error). The first label of every standalone program is a
-  reserved app name, so the sidecar prefix cannot claim an unrelated program.
-  Empty when no file declares any of them, which is the normal state before an
-  app is first registered.
+- `wiring` is the supervisord sections the app owns: its own
+  `program:<program>` block, every `program:<name>-<role>` sidecar, and every
+  program the manifest's `[wiring] programs` declares (the browser declares
+  `xvfb`, which exists only for it; a declared program with no block is an
+  error). The first label of every standalone program is a reserved app name,
+  so the sidecar prefix cannot claim an unrelated program. One entry per file a
+  block is written in, so a footprint names the file a change would have to
+  edit: the browser's own `program:browser` block is in
+  `system/supervisord.conf.d/browser.conf` and the `xvfb` it declares is in
+  `system/supervisord.conf.d/xvfb.conf`, so its footprint carries both. Empty
+  when nothing runs any of them, which is the normal state before an app is
+  first registered.
 - `references` copies the manifest's entries through, with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
 - `context` is the surface a creation is judged against: empty for an app; for a

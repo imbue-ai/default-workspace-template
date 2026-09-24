@@ -117,18 +117,27 @@ def test_wiring_includes_the_programs_the_manifest_declares(tmp_path: Path) -> N
     assert list(wiring[0].sections) == ["program:news", "program:xvfb"]
 
 
-def test_wiring_reads_the_drop_ins_and_reports_one_entry_per_file_that_holds_a_block(
-    tmp_path: Path,
-) -> None:
-    # The template declares every program in its own supervisord.conf.d/ file and none in
-    # the daemon's config, so an app's own block, its declared programs and its sidecars
-    # can each sit in a different file; each file with any of them is its own entry.
+def test_wiring_finds_blocks_in_the_drop_ins_the_include_glob_names(tmp_path: Path) -> None:
+    # The template declares every program in its own drop-in file, so a reader of the main
+    # config alone attributes no wiring at all to any app.
     build_news_workspace(tmp_path)
-    write_supervisord_conf(tmp_path, ("program:files",))
-    write_supervisord_dropin(tmp_path, "news")
-    write_supervisord_dropin(tmp_path, "xvfb")
-    write_supervisord_dropin(tmp_path, "news-fetcher")
-    write_supervisord_dropin(tmp_path, "chat")
+    write_supervisord_conf(tmp_path, ())
+    write_supervisord_dropin(tmp_path, "news", ("program:news", "program:news-fetcher"))
+
+    wiring = find_wiring_sections(tmp_path, _news_manifest(tmp_path))
+
+    assert len(wiring) == 1
+    assert wiring[0].path == "system/supervisord.conf.d/news.conf"
+    assert list(wiring[0].sections) == ["program:news", "program:news-fetcher"]
+
+
+def test_wiring_attributes_each_block_to_the_file_it_is_written_in(tmp_path: Path) -> None:
+    # A footprint names the file a change would have to edit, so a sidecar living in its
+    # own drop-in cannot be reported against the file that merely includes it.
+    build_news_workspace(tmp_path)
+    write_supervisord_conf(tmp_path, ())
+    write_supervisord_dropin(tmp_path, "news", ("program:news",))
+    write_supervisord_dropin(tmp_path, "xvfb", ("program:xvfb",))
     manifest_path = write_app_manifest(
         tmp_path,
         "news",
@@ -138,8 +147,7 @@ def test_wiring_reads_the_drop_ins_and_reports_one_entry_per_file_that_holds_a_b
 
     wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
 
-    assert [(entry.path, list(entry.sections)) for entry in wiring] == [
-        ("system/supervisord.conf.d/news-fetcher.conf", ["program:news-fetcher"]),
+    assert [(section.path, list(section.sections)) for section in wiring] == [
         ("system/supervisord.conf.d/news.conf", ["program:news"]),
         ("system/supervisord.conf.d/xvfb.conf", ["program:xvfb"]),
     ]

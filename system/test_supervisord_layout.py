@@ -3,12 +3,12 @@
 Programs live one per file there, reached via the ``[include] files`` glob in
 ``system/supervisord.conf``. Several readers depend on that -- the OOM band
 checks in ``system/services/oom_priority``, the ``build-app`` scaffolder's port
-pre-flight and duplicate-name guard, ``migrate-workspace``'s port scan, the
-``app_manifest`` footprint library, which reads the blocks that run an app, and
-(cross-repo) the minds evals evidence capture, which joins each registered app
-to the program that supervises it. Neither ``configparser`` nor a plain ``cat``
-follows supervisord's ``[include]``, so each of them reads that directory by
-name rather than expanding the glob the config declares.
+pre-flight and duplicate-name guard, ``migrate-workspace``'s port scan,
+``app_manifest.scope``'s wiring lookup, and (cross-repo) the minds evals
+evidence capture, which joins each registered app to the program that supervises
+it. Neither ``configparser`` nor a plain ``cat`` follows supervisord's
+``[include]``, so each of them reads that directory by name rather than
+expanding the glob the config declares.
 
 That makes the directory a convention the config has to keep, and one that
 fails *open*: if the include glob and the readers ever named different places, a
@@ -26,6 +26,8 @@ import importlib.util
 import re
 from pathlib import Path
 from types import ModuleType
+
+from app_manifest import scope
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
@@ -71,17 +73,15 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
     }
 
 
-# Every in-repo reader of this config, by the path it lives at. They cannot share a helper: they
-# sit in separate uv workspace members, and two of them are standalone scripts. migrate-
-# workspace's REMOTE reader lists the directory over SSH, in shell, so its own suite runs that
-# shell against a local workspace instead.
+# The in-repo readers that have to be loaded by path: they sit in four separate uv workspace
+# members, and two of them are standalone scripts. (``app_manifest.scope`` is a library and is
+# imported normally below.) migrate-workspace's REMOTE reader lists the directory over SSH, in
+# shell, so its own suite runs that shell against a local workspace instead.
 _READER_PATHS: dict[str, Path] = {
     "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
     "migrate_workspace": _REPO_ROOT
     / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
     "app_manifests": _REPO_ROOT / "system/test_app_manifests.py",
-    "app_manifest_footprint": _REPO_ROOT
-    / "system/libs/app_manifest/src/app_manifest/scope.py",
     "oom_bands": _REPO_ROOT
     / "system/services/oom_priority/bin/oom_tag_service_test.py",
 }
@@ -113,7 +113,7 @@ def _program_names_in(paths: list[Path]) -> set[str]:
 
 
 def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
-    """All five in-repo readers see the programs the config's own ``[include]`` glob reaches.
+    """Every in-repo reader sees the programs the config's own ``[include]`` glob reaches.
 
     The readers name ``supervisord.conf.d/`` outright; this file expands the glob the config
     declares. If the two ever come apart -- the glob moved, a reader's spelling drifted -- the
@@ -136,17 +136,12 @@ def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
         _declared_in(_load("migrate_workspace")._local_supervisord_configs(_REPO_ROOT))
         == canonical
     )
-    # The footprint library answers in repo-root-relative paths, being what its scope files carry.
-    footprint_reader = _load("app_manifest_footprint")
-    assert (
-        _declared_in(
-            [
-                _REPO_ROOT / path
-                for path in footprint_reader._supervisord_config_paths(_REPO_ROOT)
-            ]
-        )
-        == canonical
-    )
+    # An empty read is this reader's ordinary answer ("the app is not registered yet"), so a
+    # drift here is silent wherever else it would be loud.
+    scope_files = [
+        _REPO_ROOT / path for path in scope._supervisord_conf_paths(_REPO_ROOT)
+    ]
+    assert _declared_in(scope_files) == canonical
     # These two return command-by-name rather than a file list; the names are the shared claim.
     # The band reader covers event listeners as well, the manifest reader programs only.
     assert set(_load("oom_bands")._command_by_supervisord_program()) == canonical
