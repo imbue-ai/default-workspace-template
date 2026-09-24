@@ -343,11 +343,11 @@ def _stub_app(base_url: str) -> Flask:
         params = {name: value for name, value in body.items() if name not in RESERVED_LAUNCH_PARAM_NAMES}
         return jsonify({"path": _launched_page_path(path, params)})
 
-    def _posted_launches() -> Response:
+    def _serve_posted_launches() -> Response:
         return jsonify(launches)
 
     app.add_url_rule("/", view_func=_page, endpoint="stub_page_root", methods=["GET"])
-    app.add_url_rule("/__launches", view_func=_posted_launches, endpoint="stub_launches", methods=["GET"])
+    app.add_url_rule("/__launches", view_func=_serve_posted_launches, endpoint="stub_launches", methods=["GET"])
     app.add_url_rule("/<path:path>", view_func=_page, endpoint="stub_page", methods=["GET"])
     app.add_url_rule("/<path:path>", view_func=_launch, endpoint="stub_launch", methods=["POST"])
     return app
