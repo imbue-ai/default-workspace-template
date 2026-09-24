@@ -68,6 +68,8 @@ dev = [
     # tree; used by the per-feature contract tests (bootstrap's manager_test,
     # launch-task's create_worker_test).
     "mngr-cli-contract",
+    # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
+    "pytest-executable-tmp",
 ]
 
 [tool.uv]
@@ -99,6 +101,7 @@ env-converge = { workspace = true }
 host-backup = { workspace = true }
 share-gateway = { workspace = true }
 mngr-cli-contract = { workspace = true }
+pytest-executable-tmp = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }

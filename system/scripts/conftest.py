@@ -67,10 +67,18 @@ def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_own_chat_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear the chat id the chat app stamps on its agents, so a test that asserts on the
-    requester layout.py derives from MNGR_AGENT_ID is not steered by the developer's own."""
+def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the ambient agent identity from every test for these scripts.
+
+    ``layout.py`` resolves ``self`` and every op's ``requester`` from
+    ``MINDS_CHAT_ID``, falling back to ``MNGR_AGENT_ID``, so a test asserting on
+    an address it derives is reading its own inputs only if BOTH halves are
+    cleared -- clearing the chat id alone leaves the fallback steered by
+    whatever agent is running the suite. Cleared here rather than per test, so a
+    test that needs an identity has to say so explicitly.
+    """
     monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
+    monkeypatch.delenv(layout.ENV_MNGR_AGENT_ID, raising=False)
 
 
 @pytest.fixture
