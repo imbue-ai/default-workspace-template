@@ -40,8 +40,7 @@ export const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
 export const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
 // A merged chip row is one line of chips plus the message gap below it -- an
 // order of magnitude shorter than the prose message the assistant estimate is
-// sized for, and mis-estimating it by that much is what makes the scrollbar
-// lurch as such a row crosses the window edge.
+// sized for.
 export const ESTIMATED_CHIP_ROW_HEIGHT_PX = 48;
 
 // Layout for the centered message column. Shared by the live transcript views
@@ -144,12 +143,8 @@ function buildRows(
     for (const item of section.items) {
       if (item.kind === "ungrouped") {
         // A row is a RUN: one head event plus every chip-only event that
-        // follows it. A harness splits one model turn across an event per
-        // response, so "here is what I am about to do" and the calls that do it
-        // arrive as separate events; rendering each as its own row sets them a
-        // full message gap apart, when they are one message. Run them together
-        // and they lay out exactly as they would had the harness sent them as
-        // one event -- prose, then the chip row tucked under it.
+        // follows it, so a turn the harness split across several events lays
+        // out as the one message it is (see renderAssistantRunRow).
         let i = 0;
         while (i < item.events.length) {
           const start = i;

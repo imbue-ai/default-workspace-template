@@ -153,9 +153,8 @@ describe("buildConversationRows", () => {
     expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
   });
 
-  // A harness emits one event per model response, so back-to-back tool calls
-  // arrive as separate events. They have to land on ONE row, or each renders a
-  // lone chip a full message gap below the last.
+  // Back-to-back tool calls arrive as separate events; on separate rows each
+  // would render as a lone chip a full message gap below the last.
   it("merges a run of consecutive tool-call events into one chip row", () => {
     const events: TranscriptEvent[] = [
       userMsg("t1", "go"),
@@ -174,9 +173,8 @@ describe("buildConversationRows", () => {
     expect(chipRow.anchorEventId).toBe("a-c1");
   });
 
-  // The line of intent and the calls that carry it out are one message the
-  // harness happened to split, so they share a row and the chips sit tucked
-  // under the sentence rather than a full message gap below it.
+  // The line of intent and the calls that carry it out are one message, so the
+  // chips sit tucked under the sentence rather than a message gap below it.
   it("tucks a chip run onto the prose that introduces it", () => {
     const events: TranscriptEvent[] = [
       userMsg("t1", "go"),
