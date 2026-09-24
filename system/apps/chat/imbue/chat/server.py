@@ -23,6 +23,7 @@ from app_manifest.registry import read_origin_label
 from app_manifest.registry import registry_path
 from flask import Flask
 from flask import Response
+from flask import current_app
 from flask import request
 from flask import send_file
 from flask import send_from_directory
@@ -105,6 +106,7 @@ from imbue.chat.models import ErrorResponse
 from imbue.chat.models import FastModeStateResponse
 from imbue.chat.models import HandoffCancelResponse
 from imbue.chat.models import HandoffError
+from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HandoffRetryRequest
 from imbue.chat.models import HandoffRetryResponse
 from imbue.chat.models import HandoffState
@@ -501,6 +503,57 @@ def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
     )
 
 
+class _SendAccepted(FrozenModel):
+    """A send the chat took: handed to its agent, or held (with the handoff phase) while the chat converges."""
+
+    held_phase: HandoffPhase | None = Field(description="The phase the send was held in; None when it was delivered")
+
+
+def _send_to_chat(
+    state: ChatAppState, chat_id: ChatId, send_message_request: SendMessageRequest, message_id: str
+) -> _SendAccepted | Response:
+    """The ordinary send path, shared by the message route and the intake: hold the send while the chat converges,
+    else deliver it to the active agent; either way record the client's activity and the chat's last message. A
+    send that could not be taken answers the route's own failure response."""
+    agent_manager: AgentManager = state.agent_manager
+    # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
+    # persisted on the record, and delivered in order once the successor runs.
+    held_phase = agent_manager.hold_send(
+        chat_id, message_id, send_message_request.message, _held_send_origin(send_message_request)
+    )
+    if held_phase is None:
+        # Resolved after the hold said the chat is not converging: a handoff that finished between
+        # the caller's lookup and the hold would leave that lookup naming the retiring agent, which
+        # is archived by then and must receive nothing.
+        agent_info = _find_active_agent(str(chat_id))
+        if agent_info is None:
+            return _chat_not_found_response(str(chat_id))
+        try:
+            outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
+        except SendFailedError as send_failure:
+            # The harness said why it refused, in words written for the person who has to fix it
+            # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
+            # than the generic failure below -- it is the only thing here the user can act on.
+            # The kind travels beside the detail so the chat can decide what to offer: trying again
+            # can clear a blocked input and cannot help when there is nothing left to talk to.
+            return json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
+        if outcome is SendOutcome.NOT_READY:
+            failure = ErrorResponse(
+                detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
+            )
+            return json_response(failure.model_dump(), status_code=503)
+        if outcome is SendOutcome.FAILED:
+            failure = ErrorResponse(
+                detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)"
+            )
+            return json_response(failure.model_dump(), status_code=500)
+    _record_client_message_activity(chat_id, send_message_request, state.is_secondary)
+    # Recorded after the delivery, once the revived process (if any) is up and its pid can be
+    # found.
+    agent_manager.record_message_sent(chat_id)
+    return _SendAccepted(held_phase=held_phase)
+
+
 def _send_message_endpoint(chat_id: str) -> Response:
     """Send a message to a chat: its active agent receives it, or the chat app holds it while the chat converges."""
     state = get_state()
@@ -516,48 +569,15 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
     message_id = send_message_request.message_id or uuid4().hex
-
-    # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
-    # persisted on the record, and delivered in order once the successor runs. A 202 tells the
-    # page to keep its "Sending" placeholder and the script that nothing needs backing off.
-    held_phase = agent_manager.hold_send(
-        ChatId(chat_id), message_id, send_message_request.message, _held_send_origin(send_message_request)
-    )
-    if held_phase is not None:
-        _record_client_message_activity(ChatId(chat_id), send_message_request, get_state().is_secondary)
-        agent_manager.record_message_sent(ChatId(chat_id))
+    accepted = _send_to_chat(state, ChatId(chat_id), send_message_request, message_id)
+    if isinstance(accepted, Response):
+        return accepted
+    # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
+    # backing off.
+    if accepted.held_phase is not None:
         return json_response(
-            HeldSendResponse(status="held", phase=held_phase).model_dump(mode="json"), status_code=202
+            HeldSendResponse(status="held", phase=accepted.held_phase).model_dump(mode="json"), status_code=202
         )
-
-    # Resolved after the hold said the chat is not converging: a handoff that finished between
-    # the lookup above and the hold would leave that lookup naming the retiring agent, which is
-    # archived by then and must receive nothing.
-    agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
-        return _chat_not_found_response(chat_id)
-    try:
-        outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
-    except SendFailedError as send_failure:
-        # The harness said why it refused, in words written for the person who has to fix it
-        # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
-        # than the generic failure below -- it is the only thing here the user can act on.
-        # The kind travels beside the detail so the chat can decide what to offer: trying again
-        # can clear a blocked input and cannot help when there is nothing left to talk to.
-        return json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
-    if outcome is SendOutcome.NOT_READY:
-        failure = ErrorResponse(
-            detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
-        )
-        return json_response(failure.model_dump(), status_code=503)
-    if outcome is SendOutcome.FAILED:
-        failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
-        return json_response(failure.model_dump(), status_code=500)
-
-    _record_client_message_activity(ChatId(chat_id), send_message_request, get_state().is_secondary)
-    # Recorded after the delivery, once the revived process (if any) is up and its pid can be
-    # found.
-    agent_manager.record_message_sent(ChatId(chat_id))
     return json_response(SendMessageResponse(status="ok").model_dump())
 
 
@@ -1408,31 +1428,14 @@ def _resolve_intake_account(intake: IntakeRequest) -> str | Response | None:
 
 
 def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> Response | None:
-    """Send an intake's text to a chat that is an agent the way the message route does; None when it landed
-    (or was held for a converging chat), else the message route's own failure response."""
-    agent_manager = state.agent_manager
+    """Send an intake's text to a chat that is an agent through the ordinary send path; None when it landed (or was
+    held for a converging chat), else the message route's own failure response."""
     message_id = uuid4().hex
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
-    held_phase = agent_manager.hold_send(chat_id, message_id, intake.message, _held_send_origin(send_message_request))
-    if held_phase is None:
-        agent_info = agent_manager.get_active_agent_info(chat_id)
-        if agent_info is None:
-            return _chat_not_found_response(str(chat_id))
-        try:
-            outcome = _deliver_message(state, agent_info, intake.message, message_id)
-        except SendFailedError as send_failure:
-            return json_response({"detail": send_failure.detail, "kind": send_failure.kind}, status_code=500)
-        if outcome is SendOutcome.NOT_READY:
-            failure = ErrorResponse(detail=f"Agent '{agent_info.name}' is not ready to receive messages yet.")
-            return json_response(failure.model_dump(), status_code=503)
-        if outcome is SendOutcome.FAILED:
-            failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}'")
-            return json_response(failure.model_dump(), status_code=500)
-    _record_client_message_activity(chat_id, send_message_request, state.is_secondary)
-    agent_manager.record_message_sent(chat_id)
-    return None
+    accepted = _send_to_chat(state, chat_id, send_message_request, message_id)
+    return accepted if isinstance(accepted, Response) else None
 
 
 def _log_undelivered_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> None:
@@ -1448,9 +1451,14 @@ def _log_undelivered_intake_send(state: ChatAppState, chat_id: ChatId, intake: I
 
 
 def _deliver_intake_send_in_background(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> None:
-    threading.Thread(
-        target=_log_undelivered_intake_send, args=(state, chat_id, intake), name=f"intake-send-{chat_id}", daemon=True
-    ).start()
+    # The send path resolves the agent through the current app, so the thread runs under an app context of its own.
+    app_context = current_app.app_context()
+
+    def _send_under_app_context() -> None:
+        with app_context:
+            _log_undelivered_intake_send(state, chat_id, intake)
+
+    threading.Thread(target=_send_under_app_context, name=f"intake-send-{chat_id}", daemon=True).start()
 
 
 def _finish_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> Response | None:
