@@ -17,7 +17,8 @@ import type { AppRecord, WindowState } from "../model/records";
 import { appGlyph, glyph } from "./glyphs";
 
 const CONTROL_GLYPH_SIZE = 14;
-/** The two actions that follow the title: a step under the window's own controls. */
+/** The two actions that follow the title: a smaller glyph than the window's own controls wear,
+ *  in a box the same size as theirs. */
 const TITLE_ACTION_GLYPH_SIZE = 12;
 const APP_GLYPH_SIZE = 14;
 
@@ -37,24 +38,17 @@ export interface TitleBarAttrs {
   readonly onDoubleClick: () => void;
 }
 
-/** A control's box. The window's own controls take the size the bar leaves them, as a floor over the
- *  Button's step so a finger still gets the whole touch target; the two actions beside the title take
- *  the smaller size outright, which needs `!` to beat the step the Button sets itself. */
-function controlSizeClass(size: "control" | "action"): string {
-  return size === "action"
-    ? "h-(--desk-title-action-size)! w-(--desk-title-action-size)!"
-    : "min-h-(--desk-window-control-size) min-w-(--desk-window-control-size)";
-}
-
 function control(
   name: WindowControl,
   label: string,
   markup: string,
   isOpen: boolean,
   onControl: TitleBarAttrs["onControl"],
-  options: { readonly extra?: string; readonly hover?: m.Attributes; readonly size?: "control" | "action" } = {},
+  options: { readonly extra?: string; readonly hover?: m.Attributes } = {},
 ): m.Vnode {
-  const extra = `window-control shrink-0 ${controlSizeClass(options.size ?? "control")}${
+  // One box for every control in the bar, whatever size of glyph it holds: the hover boxes then
+  // line up and read as one row of targets, and the pointer crosses between them without aiming.
+  const extra = `window-control shrink-0 min-h-(--desk-window-control-size) min-w-(--desk-window-control-size)${
     options.extra === undefined ? "" : ` ${options.extra}`
   }`;
   return m(
@@ -115,11 +109,9 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           m("span", { class: "window-title ml-1 min-w-0 truncate text-(length:--font-size-row) font-medium" }, title),
           control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
             extra: "ml-2",
-            size: "action",
           }),
           control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
             extra: "ml-0.5",
-            size: "action",
           }),
           m("span", { class: "flex-1" }),
           control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
