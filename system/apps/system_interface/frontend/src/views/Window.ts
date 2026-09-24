@@ -49,6 +49,8 @@ export interface WindowAttrs {
   readonly isCompact: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
+  /** Spread onto the maximize control: resting on it opens the window's size menu. */
+  readonly sizeMenuTrigger: m.Attributes;
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
    *  launcher is open. */
   readonly isShielded: boolean;
@@ -122,6 +124,7 @@ export function Window(): m.Component<WindowAttrs> {
                 isFocused,
                 isCompact,
                 isMenuOpen: attrs.isMenuOpen,
+                sizeMenuTrigger: attrs.sizeMenuTrigger,
                 onControl: attrs.onControl,
                 onDoubleClick: attrs.onToggleMaximize,
               }),
