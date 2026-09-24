@@ -248,6 +248,31 @@ def test_render_node_task_carries_subtask_handoffs_and_report_path() -> None:
     assert plan_orchestration.WORKER_RULES_REFERENCE in text
 
 
+def test_render_node_task_orients_the_worker_before_it_starts() -> None:
+    """The task says which node this is, where the file sits, and what the paths
+    in it are relative to.
+
+    Without this, four of six workers in one run spent their first commands
+    running `find` and `ls` over the build folder hunting for a task file whose
+    text they had already been handed, and two of them opened a sibling node's
+    task on the way.
+    """
+    plan = plan_orchestration.parse_plan(_TODO_PLAN)
+    report_path = Path("data/.tasks/build-app-parallel/todo/nodes/2/reports/report.md")
+
+    text = plan_orchestration.render_node_task(
+        plan=plan,
+        node_idx=2,
+        finish_report_path=report_path,
+        report_by_node_idx={0: "Spec.", 1: "Scaffolded."},
+    )
+
+    assert "You are **node 2**." in text
+    assert "data/.tasks/build-app-parallel/todo/nodes/2/task.md" in text
+    assert "relative to the folder you are already" in text
+    assert "not yours to read" in text
+
+
 def test_render_node_task_without_dependencies_says_so() -> None:
     plan = plan_orchestration.parse_plan(_TODO_PLAN)
 
