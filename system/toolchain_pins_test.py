@@ -23,8 +23,7 @@ _SETUP_SYSTEM_PATH = _REPO_ROOT / "system" / "scripts" / "setup_system.sh"
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
 
 _EXPANSION_PATTERN = re.compile(r"\$\{(\w+_VERSION)\}")
-_DEFAULT_PATTERN = re.compile(r'^: "\$\{(\w+_VERSION):=', re.MULTILINE)
-_DEFAULT_VALUE_PATTERN = re.compile(r'^: "\$\{(\w+_VERSION):=([^}]*)\}"', re.MULTILINE)
+_DEFAULT_PATTERN = re.compile(r'^: "\$\{(\w+_VERSION):=([^}]*)\}"', re.MULTILINE)
 
 # Each harness agent type in .mngr/settings.toml, and the setup_system.sh default that
 # installs its binary.
@@ -44,7 +43,8 @@ def test_every_expanded_version_has_a_setup_system_default() -> None:
         f"parsed no ${{NAME_VERSION}} expansions out of {_SETUP_SYSTEM_PATH}"
     )
 
-    undefaulted = sorted(expanded - set(_DEFAULT_PATTERN.findall(setup_system)))
+    defaulted = {name for name, _ in _DEFAULT_PATTERN.findall(setup_system)}
+    undefaulted = sorted(expanded - defaulted)
     assert not undefaulted, (
         f"{undefaulted} are expanded by {_SETUP_SYSTEM_PATH.name} with no "
         f': "${{NAME:=...}}" default. Lima and Modal run that script without the '
@@ -63,9 +63,7 @@ def test_harness_version_pin_matches_the_baked_binary_and_only_warns(
     ``version_mismatch`` must be ``WARN`` because a workspace's binary can still drift from
     the pin, and a create that failed on it would block the update chat that repairs it.
     """
-    setup_defaults = dict(
-        _DEFAULT_VALUE_PATTERN.findall(_SETUP_SYSTEM_PATH.read_text())
-    )
+    setup_defaults = dict(_DEFAULT_PATTERN.findall(_SETUP_SYSTEM_PATH.read_text()))
     agent_config = tomllib.loads(_SETTINGS_PATH.read_text())["agent_types"][agent_type]
 
     assert agent_config.get("version") == setup_defaults[setup_variable], (
