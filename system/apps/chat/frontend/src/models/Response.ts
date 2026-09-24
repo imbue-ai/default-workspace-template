@@ -95,11 +95,19 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
   // sentinel tags) never reach the wire -- the decision does.
   display?:
-    "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "secret_resolution" | "status" | "notice";
+    | "hidden"
+    | "chip"
+    | "skill_expansion"
+    | "permission_resolution"
+    | "secret_resolution"
+    | "status"
+    | "notice"
+    | "prompt_with_context";
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
 
   display_label?: string;
-  // The body to display when a wrapper sentinel was stripped (a fleet nudge).
+  // The body to display when a wrapper sentinel was stripped (a fleet nudge), or when a
+  // machine-written context block was (a seeded chat's first send: the user's own words).
   display_body?: string;
   // permission_resolution / secret_resolution only: the verdict written onto the
   // earlier card (granted / denied / error for a permission card; stored / declined /

@@ -126,7 +126,8 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   hyphens, and it must not start with `host-` or `agent-` (those
   prefixes are reserved for workspace hostname coordinates), and it must not
   be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
-  `host`, `env`), which would claim that service as a sidecar. Short and
+  `host`, `env`, `agent`, and `github` for the `github-sync` program enabling
+  GitHub sync adds), which would claim that service as a sidecar. Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used by an existing program (`system_interface`, `browser`, etc.
   are reserved by the scaffolder, which also refuses a name any

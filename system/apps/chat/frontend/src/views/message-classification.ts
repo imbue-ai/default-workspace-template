@@ -53,6 +53,10 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
       };
     case "skill_expansion":
       return { kind: UserMessageKind.SkillExpansion, label: event.display_label ?? null, body: content };
+    // The user's own turn, shown as one: the context block the chat app wrote ahead of their
+    // words is kept out of the bubble.
+    case "prompt_with_context":
+      return { kind: UserMessageKind.UserPrompt, label: null, body: event.display_body ?? content };
     case "status":
       return {
         kind: UserMessageKind.StatusMessage,
@@ -94,6 +98,12 @@ export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean
 /** True when the message is a one-line notice on the agent's rail. */
 export function isNoticeUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.Notice;
+}
+
+/** True for a seeded chat's first send: the user's own words behind the context block the chat
+ *  app prefixed for the agent (the backend's `prompt_with_context`). A genuine human turn. */
+export function isPromptWithContext(event: ClassifiableUserMessage): boolean {
+  return event.display === "prompt_with_context";
 }
 
 /** True when the message is a subtle inline status message. */
