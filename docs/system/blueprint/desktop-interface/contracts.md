@@ -77,7 +77,6 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
       "name": "Home",
       "color": "#2f6b4f",
       "glyph": 0,
-      "sharing": "shared",
       "wallpaper": {"kind": "bundled", "name": "apricot-coast"},
       "shortcuts": [
         {"target": {"kind": "launch", "app": "chat", "launch": "new"}, "mode": "new", "cell": {"column": 0, "row": 0}}
@@ -91,10 +90,10 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 ```
 
 - `desktops` is in creation order; the first is the fallback desktop.
-- `color` is `#RRGGBB`; `glyph` is `0..9`; `sharing` is `shared` or `personal`; `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+- `color` is `#RRGGBB`; `glyph` is `0..9`; `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
 - `shortcuts`: `target.kind` is `launch` (the only V1 kind); at most one shortcut per `(app, launch)`; `cell.column` and `cell.row` are integers at least 0.
 - `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_settling` is true from an open at a launch path until the first location report, and false for an open at an explicit path; `is_pinned` (default `false`) marks the app's pinned window, and `scope` (default `linked`) is `linked` or `independent` (pinned-taskbar-entries plan section 3.2). An independent window's `path` stays its home path.
-- A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read.
+- A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read. A desktop that still carries the retired `sharing` key is read with the key dropped.
 
 ### 4.2 `placements/<desktop_id>/<client_id>.json`
 
@@ -116,8 +115,15 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 ### 4.3 `clients.json`
 
-`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null}}}}}`; `entries` (default `{}`) is how the client shows each pinned entry.
+`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "user_id": "<user_id>" | null, "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null}}}}}`.
+`user_id` is the signed-in visitor the client last arrived as (section 5.5), null for the owner or an anonymous client; an entry without the key reads as null. `entries` (default `{}`) is how the client shows each pinned entry.
 A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and rewritten at version 2 on the next write.
+
+### 4.3a `users.json`
+
+`{"version": 1, "users": {"<user_id>": {"desktop_id": "<desktop_id>", "desktop_name": "<name>", "email": "<email>" | null, "display_name": "<name>" | null, "last_seen": "<RFC 3339>"}}}`.
+One entry per signed-in visitor the shell has made a desktop for (plan section 3.10): the desktop and its name as of the user's last arrival (a rename is picked up by the next arrival), and the identity as of that arrival.
+A user id matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, as the identity header carries it.
 
 ### 4.4 `window_paths/<client_id>.json`
 
@@ -142,6 +148,7 @@ Every error body is `{"detail": "<message>"}`.
 ### 5.1 Page and app routes
 
 Unchanged: `GET /` and the SPA catch-all (with `X-Frontend-Built`), `/assets/<path>`, `/favicon.ico`, `GET /api/health`, `GET /_static/app_contract.js`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (refused for critical apps), `POST /api/client-activity`, `/api/ws`.
+Presence (the share identity spec, `specs/share-identity-and-presence/spec.md` in the mngr repository, section 4.7): `POST /api/presence/heartbeat` takes no body and reads the requester's `X-Imbue-Identity` header (`204` and nothing recorded when it carries no `user_id`; otherwise it touches the mtime of `data/.state/presence/users/<user_id>.json`, writing the file with `{"user_id", "email", "owner", "first_seen"}` on first sight, and answers `{"identity": {"owner", "user_id", "email"}}`); a user is connected while that mtime is within 70 seconds, and the file is never removed. `GET /api/presence` answers `{"users": [present_user, ...]}`, one entry per connected user: `user_id`, `email`, `display_name`, `profile_picture_url`, `owner`, `first_seen`, `last_seen` (the mtime). `display_name` and `profile_picture_url` are the account's profile as imbue_cloud holds it (`null` when it has none or cannot be reached): fetched from `GET {SHARE_BROKER_URL}/users/<user_id>/profile` (public; answers `{"user_id", "display_name", "profile_picture_url"}`), the broker named in `data/.secrets/share.env`, with a 2 second bound, and cached -- answers and failures alike -- for 5 minutes under `data/.state/presence/profiles/<user_id>.json`. There is no leave route: a page that goes away simply stops heartbeating.
 `POST /api/client-activity` takes `{"client_id", "desktop_id", "kind": "message", "app", "key", "text"}`: the client that sent a message to an app's page, the desktop it was on (from the shell's handshake), the app, the page's marker (a chat id; `""` for a page without one), and the text; the shell appends it to the client-activity log as a `message` event (the text truncated), which is what `layout.py context` and an op's requester attribution read.
 Removed: `POST /api/apps/<name>/changed`, `POST /api/apps/<name>/instances` and every `/instances/<key>/...` relay route, `POST /api/tabs/<tab_id>/instance`, every `/api/projects/...` route, `GET` and `POST /api/layouts/<view_id>`.
 Added: `GET /api/updates/pending` (`200` with the update notice -- the rollback point the last `update_self.py apply --keep-rollback-point` kept, whose fields the workspace app model's contracts section 5 lists -- or `null` when none is kept); `POST /api/updates/pending/confirm` (runs `update_self.py confirm-last`; `204`; `409` when none is kept or while a rollback runs; `500` naming a failed script); `POST /api/updates/pending/rollback` (starts `update_self.py rollback-last` detached, its output going to `data/.state/update-apply/rollback-last.log`, and answers `202` once the script has written its first progress into the record, so a second window's press reads that progress rather than starting a second script; `409` when none is kept, one is already running, the point was already taken back, or the script refused, in its own words; `500` when the script could not be started or wrote no progress within 30s). An unknown path under `/api/` answers `404 {"detail": "No such API route: /<path>"}` rather than the app shell.
@@ -153,7 +160,7 @@ A preview shell (`system-interface --preview`, booted by `preview_app.py` over a
 |---|---|---|
 | `GET /api/desktops` | | `{"desktops": [desktop, ...]}` |
 | `POST /api/desktops` | `{"name", "color", "glyph"}` | `201 desktop`, seeded shortcuts, no windows, wallpaper `null`; `409` on an id conflict |
-| `POST /api/desktops/<id>/settings` | `{"name", "color", "glyph", "sharing"}` | `200 desktop` |
+| `POST /api/desktops/<id>/settings` | `{"name", "color", "glyph"}` | `200 desktop` |
 | `POST /api/desktops/<id>/wallpaper` | `{"wallpaper": wallpaper \| null}` | `200 desktop`; `404` when the named wallpaper does not exist |
 | `POST /api/desktops/<id>/delete` | | `200 {"fallback_desktop_id"}`; `409` for the last desktop |
 | `POST /api/desktops/<id>/shortcuts` | `{"target", "mode", "cell"}` | `200 desktop`; replaces the entry for the same `(app, launch)`; `400` for an app or launch path the registry does not declare |
@@ -187,21 +194,28 @@ A location that changes nothing writes and broadcasts nothing.
 `layout` is the object of section 4.2.
 A save whose placements name windows the desktop does not hold is accepted with those entries dropped; the save body carries no `window_paths` (the client's paths are written by the location route alone, and the save route refuses a body with a field it does not know).
 
-### 5.5 Clients, inventory, wallpapers
+### 5.5 Clients, arrival, inventory, wallpapers
 
 | Route | Response |
 |---|---|
-| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected", "entries"}]}` |
+| `GET /api/clients` | `{"clients": [{"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries"}]}` |
+| `POST /api/clients/<client_id>/arrive` | `{"desktop_id", "created_desktop": desktop \| null, "replaced_desktop_name": string \| null}` |
 | `POST /api/clients/<client_id>/entries/<app>` | takes `{"mode", "style", "position"}` (section 4.3), for a pinned non-internal app, the style `plain` or the pin's; answers the client record and announces `client_entries_changed` to that client's windows |
 | `GET /api/avatars` | `{"designs": [{"id", "label", "source_path"}], "selected", "default"}` |
 | `POST /api/avatars` | loopback only: registers `{"id", "label", "svg", "source_path"}` (`201`); `400` for a design off the vocabulary of `docs/system/avatar-designs.md` |
 | `GET /api/avatars/<id>/image.svg?mood=idle\|working&preview=1` | the rendered image; `GET /api/avatars/<id>/source.svg` the original as an attachment; `404` otherwise |
 | `POST /api/avatar-selection` | takes `{"design"}`; writes `avatar_selection.json` and announces `avatar_selection_changed`; `400` for an unknown design |
-| `GET /api/inventory` | `{"is_preview", "desktops": [desktop, ...], "apps": [app, ...], "clients": [client with "shown": [window_id, ...]]}` where `is_preview` is whether a preview shell (section 5.1) answered and `shown` is the windows of the client's active desktop that its layout does not minimize |
+| `GET /api/inventory` | `{"is_preview", "desktops": [desktop, ...], "apps": [app, ...], "clients": [client with "shown": [window_id, ...]]}` where `is_preview` is whether a preview shell (section 5.1) answered and `shown` is the windows of the client's active desktop that its layout does not minimize. The one read a shell page boots from (below), and what an agent's `desktops` and `list` ops answer (section 8) |
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
 `app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "params": [name, ...], "text_param"}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`, and each launch path's `text_param` the declared param name or `null`.
+
+The arrival is what a shell page posts first, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2). The page then reads `GET /api/inventory` once, taking the desktops (the seeded one among them), the apps, and its own client record from that one answer, so it knows every app before it draws a shortcut and needs nothing from the socket to show a complete desktop; the socket's `apps_updated` and `desktops_updated` (section 6) carry every change from then on. Until the inventory answers, a shortcut whose app the page cannot look up draws as connecting (`data-connecting="true"`) and running it says the page is still connecting, rather than that the app is not registered.
+`desktop_id` is where the client lands (`null` while the workspace has no desktop): for the owner and for a request with no `user_id`, the client's stored desktop when it exists, else the first desktop (section 4.3); for a visiting user (`owner` false with a `user_id`), the desktop made for them.
+On a visiting user's first arrival the shell creates that desktop and answers it as `created_desktop`: named after the user (their profile's `display_name` as section 5.1 resolves it, else the local part of their `email`, else `Guest`; suffixed ` 2`, ` 3`, ... until neither the name nor its id is taken), with the first free glyph and that glyph's colour, holding the first desktop's shortcuts, its wallpaper, and one new window at the path of each of its settled windows; it is recorded in `users.json`, broadcast as `desktops_updated`, and the client is recorded on it with its `user_id`.
+A later client of the same user lands on that desktop; a returning client keeps the desktop it was on, when it last arrived as that same user (a client whose record names another user, or none, lands on the user's desktop).
+When the recorded desktop no longer exists the shell seeds another the same way and answers the deleted one's name (as of the user's last arrival) as `replaced_desktop_name`, which the page shows once (`data-replaced-desktop-notice`).
 
 ## 6. The WebSocket
 
@@ -213,15 +227,16 @@ Outbound:
 
 | Type | Payload | When |
 |---|---|---|
-| `apps_updated` | `{"apps": [app, ...]}` | on connect, and when any row or liveness changed |
+| `apps_updated` | `{"apps": [app, ...]}` | on connect (a resync: the page's first app list is the inventory's, section 5.5), and when any row or liveness changed |
 | `desktops_updated` | `{"desktops": [desktop, ...]}` | on connect, and after any write of `desktops.json` (a desktop, shortcut, wallpaper, window open or close, or location change) |
 | `placements_updated` | `{"desktop_id", "client_id", "save_id"}` | after any write of a layout file, and after a write of a client's window path (with a shell-minted save id); a window applies it only when `client_id` is its own, the desktop is the one it shows, and `save_id` is not one it minted |
-| `active_desktop_changed` | `{"client_id", "desktop_id"}` | after a `client_state` report or an op changed the client's stored active desktop |
+| `active_desktop_changed` | `{"client_id", "desktop_id"}` | after a `client_state` report, an op, or an arrival (section 5.5) changed the client's stored active desktop |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | only the transient ops `refresh` and `reload_system_interface` (section 8) |
 | `client_entries_changed` | `{"client_id", "entries"}` | to that client's windows, after its entry presentations were written |
 | `avatar_status` | `{"mood": "idle" \| "working", "is_stale"}` | on connect, and when either changes |
 | `avatar_selection_changed` | `{"design"}` | after the selection is written |
 | `update_notice_changed` | `{"notice": notice \| null}` | on connect (after `avatar_status`), and whenever `data/.state/update-apply/last-good.json` is written or removed and reads differently: an apply kept it, a rollback's progress and outcome, a confirm cleared it; `notice` is the document `GET /api/updates/pending` answers (section 5.1) |
+| `presence_updated` | `{"users": [present_user, ...]}` | on connect, when a heartbeat brings a user into the connected set, and when the shell's sweep (every 10 seconds) finds that a user's heartbeats have stopped (section 5.1) |
 
 `is_connected` on a client is whether any window of it holds the socket.
 
@@ -352,9 +367,10 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-window-frame`, `data-window-content` | the window's clipping frame, and the content box its page is laid over |
 | `data-drag-handle`, `data-resize-edge="n\|s\|e\|w\|ne\|nw\|se\|sw"` | title bar, resize edges |
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
-| `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"` | each shortcut |
+| `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"`, `data-connecting="true"` | each shortcut; the last only while its app is unknown because no app list has landed |
 | `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar, the launcher field, and its menu (the overlay's name kept from the tiles) |
-| `data-tray-widget="desktops"`, `data-desktop-switch="<id>"` | the tray |
+| `data-tray-widget="desktops"`, `data-desktop-switch="<id>"`, `data-tray-widget="presence"`, `data-presence-user="<user-id>"`, `data-presence-self="true"` | the tray; the Presence widget is drawn only while two or more users are connected, and `data-presence-self` marks the viewer's own entry, drawn last |
+| `data-replaced-desktop-notice="<name>"` | the notice that a visitor's desktop was deleted and replaced |
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launcher-row="launch:<app>:<launch>" \| "window:<window-id>" \| "text:<app>:<launch>"` | each row of the launcher's menu |
 | `data-launch="<app>:<launch>"` | each launch-path and free-text row (the tiles' spelling kept) |
