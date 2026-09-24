@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -25,6 +26,7 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
@@ -66,6 +68,8 @@ from imbue.chat.state import state_of
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -565,6 +569,59 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert tracked is not None and tracked.state == "WAITING"
 
 
+def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: bool) -> tuple[int, list[bool]]:
+    """Send one message to a claude agent in ``state`` and return the response status and every
+    ``is_connecting`` the page was pushed for its chat, in order."""
+    agent_id = f"agent-{uuid4().hex}"
+    state_dir = agent_state_dir(Path(os.environ["MNGR_HOST_DIR"]), agent_id)
+    state_dir.mkdir(parents=True)
+    if is_ready_marker_written:
+        (state_dir / "session_started").touch()
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="claude-agent",
+        state=state,
+        agent_state_dir=state_dir,
+        claude_config_dir=state_dir / ".claude",
+    )
+    broadcaster = WebSocketBroadcaster()
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="claude-agent", state=state)
+    pushes = broadcaster.register()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+    return response.status_code, drain_is_connecting_pushes(pushes, agent_id)
+
+
+def test_a_send_to_a_claude_agent_still_starting_reads_as_connecting_until_it_resolves() -> None:
+    """Claude's launch deletes its ``session_started`` marker and the SessionStart hook writes it
+    back, so a running agent without one has not finished starting: the send waits inside mngr
+    for the prompt, and the page is told so for exactly that long."""
+    status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=False)
+
+    assert status == 200
+    assert True in connecting_pushes
+    assert connecting_pushes[-1] is False
+
+
+def test_a_send_to_a_ready_claude_agent_never_reads_as_connecting() -> None:
+    status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=True)
+
+    assert status == 200
+    assert True not in connecting_pushes
+
+
+def test_a_send_to_a_stopped_agent_reads_as_connecting_while_the_send_starts_it() -> None:
+    """A stopped agent is started by the send itself, whatever its markers say from its last run."""
+    status, connecting_pushes = _send_and_record_connecting_pushes("STOPPED", is_ready_marker_written=True)
+
+    assert status == 200
+    assert True in connecting_pushes
+    assert connecting_pushes[-1] is False
+
+
 class _FakeCodexLedger:
     """A stand-in for the live codex ledger the endpoints reach through the agent manager."""
 
@@ -617,6 +674,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         model_state_path=agent_info.agent_state_dir / "model_state.json",
         send_to_harness=lambda text: True,
         notify_agents_changed=lambda: None,
+        is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
         on_queue_snapshot=lambda snapshot: None,
         on_user_turn=lambda event: None,
@@ -638,6 +696,15 @@ def _codex_session_over(ledger: "_FakeCodexLedger | None") -> CodexHarnessSessio
     session.ensure_live = lambda: None
     session._live_ledger = lambda: ledger
     return session
+
+
+def _codex_session_down_until_started(ledger: "_FakeCodexLedger") -> tuple[CodexHarnessSession, Callable[[], None]]:
+    """A codex session whose daemon is down until the returned ``bring_up`` runs (a revive's start)."""
+    session = CodexHarnessSession.__new__(CodexHarnessSession)
+    session.ensure_live = lambda: None
+    live: list[_FakeCodexLedger] = []
+    session._live_ledger = lambda: live[0] if live else None
+    return session, lambda: live.append(ledger)
 
 
 def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
@@ -691,13 +758,10 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
     ledger = _FakeCodexLedger()
 
     # The daemon is down until the revive starts the agent; the retry then finds the ledger.
-    session = CodexHarnessSession.__new__(CodexHarnessSession)
-    session.ensure_live = lambda: None
-    live: list[_FakeCodexLedger] = []
-    session._live_ledger = lambda: live[0] if live else None
+    session, bring_up = _codex_session_down_until_started(ledger)
 
     def fake_start(agent_name: str) -> None:
-        live.append(ledger)
+        bring_up()
 
     with (
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
@@ -707,6 +771,44 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
         response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
     assert response.status_code == 200
     assert ledger.sent == [("hi", "m9")]
+
+
+def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_revives(tmp_path: Path) -> None:
+    """With no live connection the send first waits on the daemon (here, through a revive), and the
+    chat reads as connecting from the start of the send until it resolves."""
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="codex-agent", harness=HarnessType.CODEX)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    ledger = _FakeCodexLedger()
+    session, bring_up = _codex_session_down_until_started(ledger)
+    is_connecting_at_connect: list[bool] = []
+    is_connecting_at_revive: list[bool] = []
+
+    # The first connect attempt runs before the send reports NOT_READY, so this reading is the
+    # pre-send check's alone.
+    def record_connecting_at_connect() -> None:
+        is_connecting_at_connect.append(is_chat_connecting(manager, agent_id))
+
+    def fake_start(agent_name: str) -> None:
+        is_connecting_at_revive.append(is_chat_connecting(manager, agent_id))
+        bring_up()
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server.start_agent", fake_start),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+        patch.object(session, "ensure_live", record_connecting_at_connect),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert ledger.sent == [("hi", "m-1")]
+    assert is_connecting_at_connect[0] is True
+    assert is_connecting_at_revive == [True]
+    assert is_chat_connecting(manager, agent_id) is False
 
 
 def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_manager: AgentManager) -> None:
