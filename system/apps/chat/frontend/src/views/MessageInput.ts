@@ -532,7 +532,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
             return;
           }
           // A chat still being created takes the send at once: the chat app holds it for the
-          // agent, so it is the agent's first message rather than one queued behind a greeting.
+          // agent, so it reaches the agent ahead of any greeting rather than queued behind one.
           // A create that fails refuses it, and the message goes back to the composer like any
           // failed send.
           const createFailure = getFailedCreateError(chatId);
