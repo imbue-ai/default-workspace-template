@@ -230,6 +230,7 @@ describe("the open chip's detail panel", () => {
 
   beforeEach(() => {
     setBlockExpanded("chip:pc-1", true);
+    setBlockExpanded("chip-output:pc-1", false);
   });
 
   it("shows loading notes and requests both payloads while nothing is cached", () => {
@@ -300,7 +301,6 @@ describe("the open chip's detail panel", () => {
   });
 
   it("clamps a long output and offers the whole of it by line count", () => {
-    setBlockExpanded("chip-output:pc-1", false);
     loadOutput(Array.from({ length: 64 }, (_, i) => `line ${i + 1}`).join("\n"));
     mount([chip(call, "a-pc-1")], [done]);
     expect(detailText()).toContain("line 20");
@@ -309,13 +309,37 @@ describe("the open chip's detail panel", () => {
   });
 
   it("opens the clamp up, and offers the way back", () => {
-    setBlockExpanded("chip-output:pc-1", false);
     loadOutput(Array.from({ length: 64 }, (_, i) => `line ${i + 1}`).join("\n"));
     mount([chip(call, "a-pc-1")], [done]);
     toggle()!.click();
     mount([chip(call, "a-pc-1")], [done]);
     expect(detailText()).toContain("line 64");
     expect(toggle()!.textContent).toBe("Show less");
+  });
+
+  // The unfold is a second key in a store nothing sweeps, so it has to be cleared
+  // with the chip or a reopened panel dumps the whole log again.
+  it("forgets an unfolded output when the chip is closed", () => {
+    loadOutput(Array.from({ length: 64 }, (_, i) => `line ${i + 1}`).join("\n"));
+    mount([chip(call, "a-pc-1")], [done]);
+    toggle()!.click();
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(detailText()).toContain("line 64");
+
+    root.querySelector<HTMLButtonElement>(".tool-chip-detail-close")!.click();
+    setBlockExpanded("chip:pc-1", true);
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(detailText()).not.toContain("line 64");
+    expect(toggle()!.textContent).toBe("View all 64 lines");
+  });
+
+  // Minified JSON, base64, a captured request body: one logical line the pane
+  // wraps into hundreds of visual ones, which a line count alone never catches.
+  it("clamps a payload with no newlines in it at all", () => {
+    loadOutput("x".repeat(5000));
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(toggle()!.textContent).toBe("Show the whole output");
+    expect(root.querySelector(".tool-call-output")!.textContent!.length).toBeLessThan(5000);
   });
 
   it("shows the quiet placeholder when the payload is gone", () => {
