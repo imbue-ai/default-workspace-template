@@ -202,7 +202,7 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. A send to a chat
 still being created waits for its agent: once the create lands, the sends go
-in the order they arrived, after the first message the create itself carries;
+in the order they arrived, after the message the chat was created with, if it has one;
 a create that fails refuses them with 409, as it does every send to the chat until it is tried again. See `docs/system/blueprint/chat-agent-split/`.
 
 A chat can also start from a conversation that happened before the workspace
