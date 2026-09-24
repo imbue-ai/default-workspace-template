@@ -174,10 +174,11 @@ def test_every_option_label_is_the_binarys_display_name() -> None:
 
 
 def test_supports_fast_is_the_binarys_fast_mode_capability() -> None:
-    # supports_fast gates MATCHING, not just rendering: an agent on a model with fast on shrugs
-    # unless that model declares it, and offering fast on a model that does not have it sends a
-    # /fast the session rejects. Either way the answer is in the binary's capability list, so
-    # take it from there rather than from the release notes' prose.
+    # supports_fast is not cosmetic either way: resolve_model_choice drops a live read's fast flag
+    # on a model that does not declare it, so a missing flag shows fast off on a session running
+    # fast, and offering fast on a model that does not have it sends a /fast the session rejects.
+    # The answer is in the binary's capability list, so take it from there rather than from the
+    # release notes' prose.
     entries = _baked_entry_by_id()
     for option in CLAUDE_CATALOG.options:
         key = option.harness_reported_model_id or option.id
