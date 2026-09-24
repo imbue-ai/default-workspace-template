@@ -1,5 +1,5 @@
-"""Tests for ``ShellState``: the stale-client prune it runs at start and on its interval, the close hints, and the
-arrival."""
+"""Tests for ``ShellState``: the stale-client prune it runs at start and on its interval, the close hints, the
+arrival, and the absolute-directory invariant it is built with."""
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -7,7 +7,9 @@ from datetime import timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from app_manifest.primitives import AppName
+from pydantic import ValidationError
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
@@ -32,6 +34,7 @@ from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PAT
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import write_two_app_registry
+from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -224,3 +227,30 @@ def test_a_visiting_user_arrives_named_by_email_when_the_connector_is_down(
 
     assert outcome is not None and outcome.created_desktop is not None
     assert outcome.created_desktop.name == "bob.smith"
+
+
+def test_the_wallpapers_directory_is_absolute_however_the_workspace_root_is_named(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory configured under the workspace root lands absolute even when that root is named relatively.
+
+    The listing route walks the directory itself while the serve route hands it to a sender that resolves
+    against the package, so a relative directory reaches two different places and the image 500s. ``ShellState``
+    refuses one outright, which is what a second construction site beside ``build_shell_state`` would meet.
+    """
+    registry_path = write_two_app_registry(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        repo_root=Path("repo"),
+    )
+
+    assert built.wallpaper_files_directory == (tmp_path / "repo" / DEFAULT_WALLPAPER_FILES_DIRECTORY).resolve()
+    built_fields = {name: getattr(built, name) for name in ShellState.model_fields}
+    with pytest.raises(ValidationError) as refused:
+        ShellState.model_validate({**built_fields, "wallpaper_files_directory": DEFAULT_WALLPAPER_FILES_DIRECTORY})
+    assert str(DEFAULT_WALLPAPER_FILES_DIRECTORY) in str(refused.value)
