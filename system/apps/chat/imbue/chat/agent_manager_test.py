@@ -3179,10 +3179,14 @@ def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManag
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
     state_dir = agent_manager._get_agent_state_dir(agent_id)
-    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)}
+    assert agent_manager._list_model_state_paths() == {
+        agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)
+    }
 
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
-    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CODEX, state_dir)}
+    assert agent_manager._list_model_state_paths() == {
+        agent_id: get_model_state_path(HarnessType.CODEX, state_dir)
+    }
 
 
 def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
