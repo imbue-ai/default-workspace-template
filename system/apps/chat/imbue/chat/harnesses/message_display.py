@@ -64,6 +64,10 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 _BACKGROUND_TASK_REPORT_RE = re.compile(
     rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
 )
+# One report anywhere in a text that joins several messages (a queue handed back on Stop).
+_EMBEDDED_BACKGROUND_TASK_REPORT_RE = re.compile(
+    rf"<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>[^\n]*?</summary>[\s\S]*?</{BACKGROUND_TASK_REPORT_TAG}>"
+)
 # Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own words
 # follow it). Non-greedy, since the block never nests.
 _SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT_TAG}>\s*")
@@ -417,3 +421,17 @@ def is_non_turn_tail(content: str, *, is_meta: bool = False) -> bool:
         return True
     # The detectors themselves, so this can never drift from rendering.
     return _match_composer_command(content) is not None or _match_local_command_output(content) is not None
+
+
+@pure
+def split_background_task_reports(block: str) -> tuple[str, tuple[str, ...]]:
+    """The joined queue ``block`` without its background-task reports, and the reports themselves.
+
+    The reports are for the agent, not the user, so a queue handed back to the composer keeps
+    only the rest; each piece of that is stripped of the newlines that joined it to a report.
+    """
+    reports = tuple(match.group(0) for match in _EMBEDDED_BACKGROUND_TASK_REPORT_RE.finditer(block))
+    if not reports:
+        return block, ()
+    pieces = (piece.strip("\n") for piece in _EMBEDDED_BACKGROUND_TASK_REPORT_RE.split(block))
+    return "\n".join(piece for piece in pieces if piece.strip()), reports

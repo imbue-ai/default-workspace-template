@@ -16,6 +16,7 @@ from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import is_non_turn_tail
+from imbue.chat.harnesses.message_display import split_background_task_reports
 
 _SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
@@ -375,3 +376,24 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
 
 def test_text_that_merely_mentions_the_background_task_tag_is_a_human_turn() -> None:
     assert classify_user_message(f"why did the <{BACKGROUND_TASK_REPORT_TAG}> message show up twice?") is None
+
+
+def test_a_stopped_queue_keeps_the_users_text_and_gives_up_its_reports() -> None:
+    """Reports composed by the real script, joined with the user's queued text the way a Stop hands a queue back."""
+    module = _load_system_script("run_in_background.py")
+    reports = [
+        module.compose_report(
+            description=description,
+            command=["make"],
+            returncode=0,
+            output="<output> of its own\n",
+            output_path=Path("data/.tasks/run-in-background/x/output.log"),
+        )
+        for description in ("Build", "Test")
+    ]
+    block = "\n".join(["fix the header too", reports[0], "and the footer", reports[1]])
+
+    assert split_background_task_reports(block) == ("fix the header too\nand the footer", tuple(reports))
+    assert split_background_task_reports(reports[0]) == ("", (reports[0],))
+    assert split_background_task_reports("only my words") == ("only my words", ())
+

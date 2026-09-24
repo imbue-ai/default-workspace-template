@@ -40,6 +40,7 @@ from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
 from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
+from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
@@ -81,6 +82,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Generous: the first receive can take several seconds on a loaded machine even
@@ -801,6 +803,52 @@ def test_drain_to_composer_codex_returns_the_ledger_block(tmp_path: Path) -> Non
         response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
     assert response.status_code == 200
     assert response.get_json()["block"] == "bring me back to edit"
+
+
+_QUEUED_REPORT = (
+    f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Wait for the worker (finished)</summary>\n"
+    f"Exit code: 0\n</{BACKGROUND_TASK_REPORT_TAG}>"
+)
+
+
+class _RefusingCodexLedger(_FakeCodexLedger):
+    """A ledger whose daemon refuses every send."""
+
+    def send(self, text: str, client_id: str | None = None) -> str:
+        raise CodexAppServerError("the daemon refused the message")
+
+
+def test_drain_to_composer_sends_a_queued_report_back_to_the_agent_and_keeps_the_users_text(
+    tmp_path: Path,
+) -> None:
+    """A report is the agent's, not the user's: left in the composer it would never reach the agent."""
+    agent_id = "codex-agent-8"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(interrupt_block=f"fix the header\n\n{_QUEUED_REPORT}")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "fix the header"
+    assert [text for text, _client_id in ledger.sent] == [_QUEUED_REPORT]
+
+
+def test_drain_to_composer_hands_a_report_the_agent_refused_to_the_composer(tmp_path: Path) -> None:
+    """The report is the only copy of its command's result, so a failed re-send keeps it in view."""
+    agent_id = "codex-agent-9"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _RefusingCodexLedger(interrupt_block=f"fix the header\n{_QUEUED_REPORT}")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == f"{_QUEUED_REPORT}\nfix the header"
 
 
 def test_drain_to_composer_codex_no_ledger_returns_empty_block(tmp_path: Path) -> None:
