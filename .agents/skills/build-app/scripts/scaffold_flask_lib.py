@@ -84,7 +84,9 @@ LOWEST_AUTO_PORT = 8080
 # element context menu, built by the shell's frontend into its static output. Mirrors
 # app_manifest.registry's SHELL_APP_CONTRACT_PATH and SHELL_CONTEXT_MENU_PATH; the scaffold
 # runs in its own environment and cannot import the library, so it carries the path.
-SHELL_STATIC_MODULES_DIR = "system/apps/system_interface/imbue/system_interface/static/_static"
+SHELL_STATIC_MODULES_DIR = (
+    "system/apps/system_interface/imbue/system_interface/static/_static"
+)
 SHELL_STATIC_MODULE_NAMES = ("app_contract.js", "context_menu.js")
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -129,7 +131,9 @@ def _validate_name(name: str) -> None:
         )
     registration_problem = _load_forward_port().validate_service_name(name)
     if registration_problem is not None:
-        sys.exit(f"error: --name {name!r} could not be registered: {registration_problem}")
+        sys.exit(
+            f"error: --name {name!r} could not be registered: {registration_problem}"
+        )
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
 

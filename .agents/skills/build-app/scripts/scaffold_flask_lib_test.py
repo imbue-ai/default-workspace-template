@@ -320,7 +320,10 @@ def test_the_runner_page_connects_to_the_shell_and_installs_the_element_menu() -
     assert 'from "/_static/app_contract.js"' in source
     assert 'from "/_static/context_menu.js"' in source
     assert "connection.location(location.pathname + location.search" in source
-    assert "installElementContextMenu({ connection, handshake: () => handshake })" in source
+    assert (
+        "installElementContextMenu({ connection, handshake: () => handshake })"
+        in source
+    )
     assert "minds-location" not in source
 
 
@@ -329,15 +332,23 @@ def test_the_shell_module_paths_match_the_library() -> None:
     # library, so it carries its own copy of the paths.
     from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
 
-    assert Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR) == SHELL_APP_CONTRACT_PATH.parent
-    assert Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR) == SHELL_CONTEXT_MENU_PATH.parent
+    assert (
+        Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
+        == SHELL_APP_CONTRACT_PATH.parent
+    )
+    assert (
+        Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
+        == SHELL_CONTEXT_MENU_PATH.parent
+    )
     assert scaffold_flask_lib.SHELL_STATIC_MODULE_NAMES == (
         SHELL_APP_CONTRACT_PATH.name,
         SHELL_CONTEXT_MENU_PATH.name,
     )
 
 
-def test_the_runner_serves_the_shell_modules_and_nothing_else(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_runner_serves_the_shell_modules_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The scaffolded app answers the two shell-built modules from its own origin, and 404s any other name."""
     source = scaffold_flask_lib._lib_runner(
         "inbox-status", "inbox_status", "inbox status dashboard", 8081
@@ -346,7 +357,9 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(tmp_path: Path, mo
     runner.write_text(source)
     modules_dir = tmp_path / scaffold_flask_lib.SHELL_STATIC_MODULES_DIR
     modules_dir.mkdir(parents=True)
-    (modules_dir / "app_contract.js").write_text("export function connectToShell() {}\n")
+    (modules_dir / "app_contract.js").write_text(
+        "export function connectToShell() {}\n"
+    )
     monkeypatch.chdir(tmp_path)
     spec = importlib.util.spec_from_file_location("scaffolded_runner", runner)
     assert spec is not None and spec.loader is not None

@@ -261,7 +261,9 @@ def test_upload_attachment_stores_file_and_returns_path(client: FlaskClient) -> 
     assert Path(data["path"]).read_bytes() == b"image-bytes"
 
 
-def test_an_element_reference_is_written_to_a_file_the_answer_names(client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_an_element_reference_is_written_to_a_file_the_answer_names(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     import tempfile
 

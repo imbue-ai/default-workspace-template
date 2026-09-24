@@ -886,9 +886,10 @@ def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_pa
         assert posted["body"]["desktop_id"] == _HOME_DESKTOP_ID
         assert posted["body"]["window_path"] == _PINNED_HOME_PATH
         text = posted["body"][_PINNED_TEXT_PARAM]
-        prompt, _, block_open, block_json, block_close, _ = text.split("\n")
-        assert prompt == "Explain this element:"
+        prompt, blank, block_open, block_json, block_close, *room_to_type = text.split("\n")
+        assert (prompt, blank) == ("Explain this element:", "")
         assert (block_open, block_close) == ("```json", "```")
+        assert room_to_type == ["", ""]
         reference = json.loads(block_json)["element_reference"]
         assert reference["app"] == _STUB_APP_NAME
         assert reference["window_id"] == window_id
