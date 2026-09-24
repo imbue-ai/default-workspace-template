@@ -94,11 +94,11 @@ installed.
 workspace-local `.agents/mcp_config.json` (or `~/.gemini/config/mcp_config.json`),
 a `mcpServers` object of `command` / `args` / `env` in the same wrapped shape.
 
-**A hosted server** (a URL rather than a package) that needs no credential is
-named by its URL, with nothing running here: in `.mcp.json`,
-`"example": {"type": "http", "url": "https://mcp.example.com/mcp"}`; in codex's
-`config.toml`, `url = "https://mcp.example.com/mcp"` in its `[mcp_servers.<name>]`
-table.
+**A hosted server** (a URL rather than a package) that needs no credential, or
+signs in with its own OAuth, is named by its URL, with nothing running here: in
+`.mcp.json`, `"example": {"type": "http", "url": "https://mcp.example.com/mcp"}`;
+in codex's `config.toml`, `url = "https://mcp.example.com/mcp"` in its
+`[mcp_servers.<name>]` table. The sign-in is the harness's own (last section).
 
 One that needs a key cannot take it that way, because the harness fills in the
 config from its own environment, which does not hold the secret. Wire it through
@@ -112,8 +112,6 @@ the wrapper, pinned like any other server, and forwards to the URL:
 mcp-remote fills in `${EXAMPLE_API_KEY}` itself, from the environment the wrapper
 gives it. Claude Code leaves it as written because its own environment does not
 hold the variable (`claude mcp list` warns about that; the server still starts).
-One with its own OAuth sign-in also goes through mcp-remote, without the wrapper
-or the `--header`: it prints the consent URL, as below.
 
 Wiring is built and tested only for the harnesses this workspace has an account
 for; do not write a config for a harness the user does not run.
@@ -123,9 +121,23 @@ for; do not write a config for a harness the user does not run.
 A server that signs in through OAuth opens a consent page and listens on a
 `localhost` callback. That callback must resolve inside this workspace, so the
 browser has to run here too: start one with the `agentic-browser-fleet` skill,
-navigate to the consent URL the server prints, and `handoff` the browser so the
-user completes the sign-in themselves. Say what you are doing: "Example needs
-you to sign in once; I've opened a browser you can take over."
+navigate to the consent URL, and `handoff` the browser so the user completes the
+sign-in themselves. Say what you are doing: "Example needs you to sign in once;
+I've opened a browser you can take over."
+
+For a hosted server the harness runs the sign-in. On Claude Code,
+`claude mcp login <name> --no-browser` prints the consent URL and waits for the
+callback, but refuses to run without a terminal, so start it in a tmux session of
+its own (`tmux new-session -d -s <name>-login 'claude mcp login <name> --no-browser'`)
+and read the URL with `tmux capture-pane -p -t <name>-login`. When the user
+hands the browser back, the callback has reached the waiting command and the
+harness holds the token. On codex the command is `codex mcp login <name>`.
+
+The server's tools arrive when the chat's agent next starts. Until then, do not
+reach the server some other way: never read the token out of the harness's
+credential store (`~/.claude/.credentials.json` and the like), which also holds
+the harness's own sign-in. Tell the user the connection is ready and that it
+takes effect in the chat's next session.
 
 ## What to tell the user
 
