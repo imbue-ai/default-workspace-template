@@ -11,7 +11,7 @@ import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
-import type { MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
+import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { fetchWallpapers, wallpaperImageUrl } from "../model/api";
 import { launchPathOf } from "../model/launch";
@@ -129,6 +129,12 @@ export function App(): m.Component<AppAttrs> {
     // content is a grid of tiles, and a floor wider than the grid would only pad it on one side.
     get minWidth(): number | undefined {
       return openMenu?.kind === "size" ? undefined : MENU_MIN_WIDTH;
+    },
+    // The size menu hangs off an icon a fraction of its own width, so lining their left edges up
+    // would point it at the button's corner; centred, it reads as belonging to the whole button.
+    // Every other menu is opened from a row or a press, which has a left edge worth aligning to.
+    get align(): MenuAlign | undefined {
+      return openMenu?.kind === "size" ? "center" : undefined;
     },
     // The marker class each menu is known by. Read off the open menu on every render, so one
     // component can wear all five names.
