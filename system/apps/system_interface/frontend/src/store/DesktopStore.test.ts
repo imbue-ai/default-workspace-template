@@ -4,7 +4,7 @@ import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
-import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, settle } from "../testing/fakeShell";
+import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
   clientRecord,
@@ -464,15 +464,9 @@ describe("opening", () => {
     expect(last(notices)).toBe("Cannot open: buddy has no launch path missing");
   });
 
-  /** Offer ``apps`` as the shell's inventory would: to the store over the socket, and to the fake shell itself. */
-  function offerApps(apps: AppRecord[]): void {
-    api.apps = apps;
-    socket.deliver().onAppsUpdated(apps);
-  }
-
   it("a free-text row launches into this client's view of the app's pinned window", async () => {
     const store = await storeWithPinnedBuddy();
-    offerApps([
+    offerApps(api, socket, [
       appRecord("buddy", {
         pin: { path: "/", style: "plain", scope: "independent", default_mode: "bar" },
         launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
@@ -495,7 +489,7 @@ describe("opening", () => {
     expect(await store.runFreeText("buddy", "new", "x".repeat(2100))).toBe(false);
     expect(last(notices)).toBe("Too long to send from here");
     // A POST launch path carries the text in a body: no bound, and the window lands where the app answers.
-    offerApps([
+    offerApps(api, socket, [
       appRecord("buddy", {
         pin: { path: "/", style: "plain", scope: "independent", default_mode: "bar" },
         launch_paths: [
@@ -517,7 +511,7 @@ describe("opening", () => {
 
   it("a free-text row opens a new window for an app with no pinned window here, and launches into a linked one", async () => {
     const store = await startedStore();
-    offerApps([
+    offerApps(api, socket, [
       appRecord("docs", {
         launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
       }),
@@ -907,8 +901,7 @@ describe("pinned entries", () => {
         ],
       }),
     ];
-    api.apps = draftingApps;
-    socket.deliver().onAppsUpdated(draftingApps);
+    offerApps(api, socket, draftingApps);
     api.postLaunchAnswer = "/?chat=agent-1";
     const loadsBefore = store.getLayoutLoadsRevision();
     expect(await store.draftIntoPinnedWindow("Draw me")).toBe(true);
