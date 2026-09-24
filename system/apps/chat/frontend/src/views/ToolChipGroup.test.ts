@@ -212,10 +212,18 @@ describe("the tool chip row", () => {
     expect(group.className).toContain("mb-5");
   });
 
-  it("marks a failed call on the chip itself, before anything is opened", () => {
+  // Deliberately unmarked. Whatever a failed call means, the agent says in prose
+  // a line or two below, which is the form a reader can act on -- so the chip
+  // reads like any other and the transcript's alarm colour keeps its meaning.
+  it("leaves a failed call looking like every other chip", () => {
+    // The expansion store outlives a test, and an open chip has a tone of its
+    // own; closing both is what leaves the failure as the only difference.
+    setBlockExpanded("chip:c1", false);
+    setBlockExpanded("chip:c2", false);
     mount([chip(read), chip(exec)], [result({ tool_call_id: "c2", is_error: true })]);
     expect(chipButtons()[0].className).toContain("text-faint");
-    expect(chipButtons()[1].className).toContain("text-danger");
+    expect(chipButtons()[1].className).toContain("text-faint");
+    expect(chipButtons()[1].className).not.toContain("text-danger");
   });
 });
 
