@@ -397,6 +397,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_LIMIT_POPUP,
         ),
+        supports_compaction=True,
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -424,6 +425,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
             _MODEL_BAR_POPUP,
         ),
+        supports_compaction=True,
     ),
     # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
     # transcript watcher, activity tracker, model resolver or catalog of its own. It is

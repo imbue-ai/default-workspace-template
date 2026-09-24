@@ -2141,8 +2141,8 @@ def test_autocompact_sweep_runs_mngr_only_for_running_chats_on_a_compacting_harn
             for agent_id, state, labels, harness in (
                 ("chat-running", "RUNNING", {"user_created": "true"}, HarnessType.CLAUDE),
                 ("chat-waiting", "WAITING", {"user_created": "true"}, HarnessType.CLAUDE),
-                ("chat-codex", "RUNNING", {"user_created": "true"}, HarnessType.CODEX),
-                ("chat-pi", "RUNNING", {"user_created": "true"}, HarnessType.PI_CODING),
+                ("chat-opencode", "RUNNING", {"user_created": "true"}, HarnessType.OPENCODE),
+                ("chat-antigravity", "RUNNING", {"user_created": "true"}, HarnessType.ANTIGRAVITY),
                 ("chat-dead", "DEAD", {"user_created": "true"}, HarnessType.CLAUDE),
                 ("chat-stopped", "STOPPED", {"user_created": "true"}, HarnessType.CLAUDE),
                 ("worker-running", "RUNNING", {"agent_created": "true"}, HarnessType.CLAUDE),
