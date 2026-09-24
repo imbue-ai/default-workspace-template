@@ -125,18 +125,37 @@ Follow `.agents/shared/references/worker-reporting.md`: read your task file's
 stamped paths, write your report body to a file, and hand that file to the
 launcher's `report` subcommand, which delivers it to the orchestrator. Your
 flow's only report values are `--type status` with `--name done` or
-`--name stuck`.
+`--name stuck`. That file tells you to address the user; in this flow the reader
+is the orchestrator and the nodes after you, and the shape below is what they
+need.
 
-The body of a `done` report is the handoff the nodes after you read. Include:
+The body of a `done` report is the handoff the nodes after you read, and it is
+pasted whole into the task file of every node that depends on you. A long report
+is a tax on all of them: in earlier builds these ran to 1,500 words, and a late
+node opened a 6,000-word task file to find the 40 words that were its own
+subtask.
 
-1. **What you built**, in two or three sentences.
-2. **Files you created or changed**, as a list of paths.
-3. **Contracts** later nodes build against: routes and what they return, module
-   functions, data shapes, the app name, package folder and port.
-4. **Decisions you made** that were not in your subtask.
-5. **What you left stubbed or undone**, and any change you need outside your
-   boundary or would make to your subtask.
-6. **How to see it**: the command you used for your quick check.
+So report only what is not already in the folder. The nodes after you can read
+the files you wrote; what they cannot get from the tree is what to call, what
+shape to expect, and what is missing. **Everything except item 3 fits in 300
+words together.** Item 3 has no cap -- it is the part the next node cannot work
+without.
+
+1. **What you built** -- three sentences. No subheadings and no walkthrough of
+   the page or the module.
+2. **Files you created or changed** -- the paths, one per line, with nothing
+   said about each.
+3. **Contracts** later nodes build against: routes and what they return,
+   function signatures, data shapes, the app name, package folder and port. A
+   list of the things themselves, not prose about them. Be complete here.
+4. **Decisions a later node could trip over** -- one line each, and only where a
+   node would otherwise contradict you or guess wrong. A field you capped at 500
+   characters is one; your palette, your copy and your reasons for either are
+   not, because they are in the files.
+5. **What you left stubbed or undone**, and anything you need changed outside
+   your boundary -- one line each.
+6. **How to see it** -- the command, and at most one sentence. Not a recital of
+   what you checked or what it showed.
 
 Use `stuck` when you cannot finish the subtask: say why in one or two sentences
 and what you would need.
@@ -146,3 +165,5 @@ and what you would need.
 Stop your turn. If you built something the user reviews (the mock or the working
 site), the orchestrator may message you with changes the user asked for. Apply
 them inside your boundary, check them, and deliver a fresh report the same way.
+A second report is shorter than the first: the same six items, carrying only the
+lines that changed.
