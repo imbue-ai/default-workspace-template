@@ -95,7 +95,9 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           },
         },
         [
-          m("span", { class: "flex shrink-0 items-center text-secondary" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
+          // No colour of its own: the icon takes the bar's, which is the title's, so the two read as
+          // one thing and dim together when the window loses focus.
+          m("span", { class: "flex shrink-0 items-center" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
           m("span", { class: "window-title ml-1 min-w-0 truncate text-(length:--font-size-row) font-medium" }, title),
           control("refresh", "Refresh", icon("refresh", { size: CONTROL_GLYPH_SIZE }), false, onControl, {
             extra: "ml-2",
