@@ -292,8 +292,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       });
   }
 
-  /** The page of a chat whose create is running. A message typed now waits for the agent to
-   *  land (see MessageInput); its bubble is laid out exactly as the empty transcript that follows
+  /** The page of a chat whose create is running. A message typed now is held by the chat app
+   *  until the agent is up; its bubble is laid out exactly as the empty transcript that follows
    *  lays it out, so it stays where it is when the chat comes up and its turn replaces it. */
   function renderStarting(chatId: string): m.Vnode {
     const outgoing = renderOutgoingMessages(chatId);
