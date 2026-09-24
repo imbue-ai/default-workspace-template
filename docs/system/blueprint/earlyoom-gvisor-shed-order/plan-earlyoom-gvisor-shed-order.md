@@ -77,10 +77,11 @@
     - `/proc/<pid>/exe` is `/usr/local/bin/earlyoom`;
     - its command line is identical to before;
     - its log shows the fork's version line and no self-check ERROR.
-  - If any check fails, it removes the binary and stamp, restarts back onto `/usr/bin/earlyoom`, and reports `failed`.
-- A host reports `blocked`, and is left alone, if either:
-  - its earlyoom process's PATH doesn't put `/usr/local/bin` ahead of `/usr/bin`; or
-  - its dry run is flagged (below), unless `--force` is passed.
+  - If any check fails, it puts back what was there before (an earlier fork release and its stamp, or nothing, leaving `/usr/bin/earlyoom`), restarts earlyoom again, and reports `failed`.
+- A host reports `blocked`, and is left alone, if any of:
+  - its earlyoom process's PATH doesn't put `/usr/local/bin` ahead of `/usr/bin`, or supervisord runs it by an absolute path other than `/usr/local/bin/earlyoom`;
+  - its dry run is flagged (below), unless `--force` is passed;
+  - earlyoom is not `RUNNING` under supervisord, or the container is not x86_64.
 - Any stamp other than the pinned version counts as needing the swap, so re-running `--apply` upgrades hosts swapped earlier.
 - The probe reports, per host:
   - the earlyoom process's exe, command line and PATH, and the stamp;
