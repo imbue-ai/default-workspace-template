@@ -208,7 +208,7 @@ FAST_ROLE_TEMPLATE: Final[str] = "fast"
 # What a chat that starts with nothing to say is sent once it is up (``.agents/skills/welcome``).
 WELCOME_MESSAGE: Final[str] = "/welcome"
 
-# Why a send that waited for a chat's create was refused: the page shows the create's own reason.
+# Why a send to a chat whose create failed is refused: the page shows the create's own reason.
 CREATE_FAILED_SEND_DETAIL: Final[str] = "This chat could not be started, so the message was not sent."
 
 
