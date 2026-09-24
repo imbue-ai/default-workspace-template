@@ -552,51 +552,57 @@ def _post_in_background(client: FlaskClient, path: str, body: dict[str, str]) ->
     return thread, responses
 
 
-def _manager_creating_chat(chat_id: str) -> tuple[AgentManager, RecordingMngrMessenger]:
-    """A manager with ``chat_id``'s create running, the way ``create_chat`` leaves it."""
+_CREATING_CHAT_ID = "agent-00000000000000000000000000000001"
+_CREATING_CHAT_MESSAGE_PATH = f"/api/chats/{_CREATING_CHAT_ID}/message"
+
+
+def _manager_creating_chat() -> tuple[AgentManager, RecordingMngrMessenger, FlaskClient]:
+    """A manager with ``_CREATING_CHAT_ID``'s create running, the way ``create_chat`` leaves it, and a client over it."""
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     manager.note_agent_list_known()
-    seed_creating_chat(manager, ChatId(chat_id), "Chat 1")
-    return manager, messenger
+    seed_creating_chat(manager, ChatId(_CREATING_CHAT_ID), "Chat 1")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    return manager, messenger, client
+
+
+def _post_a_held_send(client: FlaskClient, manager: AgentManager) -> tuple[threading.Thread, list[Any]]:
+    """Send "hello" to the creating chat in the background, returning once the send is waiting for the create."""
+    thread, responses = _post_in_background(client, _CREATING_CHAT_MESSAGE_PATH, {"message": "hello"})
+    wait_until_true(
+        lambda: manager._has_waiting_new_chat_sends(ChatId(_CREATING_CHAT_ID)),
+        timeout_seconds=5.0,
+        what="the send waiting",
+    )
+    return thread, responses
 
 
 def test_a_send_to_a_chat_being_created_waits_for_its_agent_and_is_then_delivered() -> None:
-    agent_id = "agent-00000000000000000000000000000001"
     agent_info = AgentInfo(
-        id=agent_id,
+        id=_CREATING_CHAT_ID,
         name="chat-1",
         state="RUNNING",
         agent_state_dir=Path("/tmp/test"),
         claude_config_dir=Path("/tmp/.claude"),
     )
-    manager, messenger = _manager_creating_chat(agent_id)
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, messenger, client = _manager_creating_chat()
 
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        thread, responses = _post_in_background(client, f"/api/chats/{agent_id}/message", {"message": "hello"})
-        wait_until_true(
-            lambda: manager._has_waiting_new_chat_sends(ChatId(agent_id)), timeout_seconds=5.0, what="the send waiting"
-        )
+        thread, responses = _post_a_held_send(client, manager)
         assert messenger.sent == []
-        manager._open_new_chat_send_gate(ChatId(agent_id))
+        manager._open_new_chat_send_gate(ChatId(_CREATING_CHAT_ID))
         thread.join(timeout=10.0)
 
     assert [response.status_code for response in responses] == [200]
-    assert messenger.sent == [(agent_id, "hello")]
+    assert messenger.sent == [(_CREATING_CHAT_ID, "hello")]
 
 
 def test_a_send_to_a_chat_whose_create_fails_is_refused_so_the_page_can_put_it_back() -> None:
-    agent_id = "agent-00000000000000000000000000000001"
-    manager, messenger = _manager_creating_chat(agent_id)
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, messenger, client = _manager_creating_chat()
 
-    thread, responses = _post_in_background(client, f"/api/chats/{agent_id}/message", {"message": "hello"})
-    wait_until_true(
-        lambda: manager._has_waiting_new_chat_sends(ChatId(agent_id)), timeout_seconds=5.0, what="the send waiting"
-    )
+    thread, responses = _post_a_held_send(client, manager)
     with manager._lock:
-        manager._mark_creation_failed_locked(ChatId(agent_id), "mngr create exited with code 3")
+        manager._mark_creation_failed_locked(ChatId(_CREATING_CHAT_ID), "mngr create exited with code 3")
     thread.join(timeout=10.0)
 
     assert [response.status_code for response in responses] == [409]
@@ -606,13 +612,11 @@ def test_a_send_to_a_chat_whose_create_fails_is_refused_so_the_page_can_put_it_b
 
 def test_a_send_to_a_chat_whose_create_has_already_failed_is_refused_rather_than_not_found() -> None:
     """A 404 would send an in-workspace sender around the chat app to ``mngr message``."""
-    agent_id = "agent-00000000000000000000000000000001"
-    manager, messenger = _manager_creating_chat(agent_id)
+    manager, messenger, client = _manager_creating_chat()
     with manager._lock:
-        manager._mark_creation_failed_locked(ChatId(agent_id), "mngr create exited with code 3")
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+        manager._mark_creation_failed_locked(ChatId(_CREATING_CHAT_ID), "mngr create exited with code 3")
 
-    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+    response = client.post(_CREATING_CHAT_MESSAGE_PATH, json={"message": "hello"})
 
     assert response.status_code == 409
     assert response.get_json()["detail"] == CREATE_FAILED_SEND_DETAIL
@@ -621,15 +625,13 @@ def test_a_send_to_a_chat_whose_create_has_already_failed_is_refused_rather_than
 
 def test_a_send_to_a_chat_being_created_that_cannot_be_read_is_refused_without_waiting_in_line() -> None:
     """A malformed send is not something said to the new chat: it neither waits for the create nor keeps the chat's greeting from it."""
-    agent_id = "agent-00000000000000000000000000000001"
-    manager, messenger = _manager_creating_chat(agent_id)
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, messenger, client = _manager_creating_chat()
 
-    thread, responses = _post_in_background(client, f"/api/chats/{agent_id}/message", {"text": "hello"})
+    thread, responses = _post_in_background(client, _CREATING_CHAT_MESSAGE_PATH, {"text": "hello"})
     thread.join(timeout=10.0)
 
     assert [response.status_code for response in responses] == [500]
-    assert not manager._has_waiting_new_chat_sends(ChatId(agent_id))
+    assert not manager._has_waiting_new_chat_sends(ChatId(_CREATING_CHAT_ID))
     assert messenger.sent == []
 
 
