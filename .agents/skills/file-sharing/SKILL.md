@@ -27,7 +27,7 @@ The base URL is `http://latchkey-self.invalid/minds-api-proxy/api/v1/files`. Onl
 
 ## Folders the user keeps synced
 
-For a shared folder, the user can additionally ask Minds to keep a copy of it
+For a shared folder, the user can additionally ask Mind to keep a copy of it
 on this machine. When there is one, **use it instead of the WebDAV server
 above**: it is ordinary local files, so your normal tools work on it, there is
 no round trip per file, and it keeps working while the user's computer is
@@ -38,8 +38,8 @@ no copy here.
   folder that is syncing now. So `/Users/kim/notes` from device `host-abc`
   is at `~/synced_folders/host-abc/Users/kim/notes`.
 - `~/inactive_synced_folders/...` holds a copy whose syncing the user turned
-  off. **Treat it as Minds' own.** Do not create, move, or write anything under
-  it: Minds moves folders in and out of it by name, and anything of yours
+  off. **Treat it as Mind' own.** Do not create, move, or write anything under
+  it: Mind moves folders in and out of it by name, and anything of yours
   sitting where a folder belongs is deleted when the user turns syncing off
   again. If you need somewhere to put your own files, use your working
   directory or `/tmp`.
@@ -132,7 +132,7 @@ After posting, wait for an automated system message indicating whether the user 
 
 ### Ask for a synchronized copy
 
-Access through the file server only works while the user's computer is awake and the Minds app is running. If you need a folder to stay reachable while the user's computer is asleep or offline, ask for a synchronized copy of it on this machine in the same request, by adding `sync` to the payload:
+Access through the file server only works while the user's computer is awake and the Mind app is running. If you need a folder to stay reachable while the user's computer is asleep or offline, ask for a synchronized copy of it on this machine in the same request, by adding `sync` to the payload:
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
