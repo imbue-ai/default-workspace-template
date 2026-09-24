@@ -1,0 +1,1 @@
+The tool-call policy for piping into `tail`/`head` (P1) now records its one exemption: a command that is nothing but `cat FILE... | head` (or `tail`) is allowed, because the files already hold the full output and can be re-read. Any other shape, including a compound command that contains such a pipeline, is still blocked.
