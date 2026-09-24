@@ -826,18 +826,29 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
     """A message typed while the chat is being created sits where the transcript will put it, and
     stays there when the chat lands; it reaches the new agent as its first message, with no
     greeting ahead of it to queue it behind."""
-    monkeypatch.setenv("FAKE_MNGR_CREATE_SECONDS", "6")
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
     messenger = RecordingMngrMessenger()
     with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
-        chat = _start_new_chat(page, server)
-        expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
-        chat.locator(".message-input-textbox").fill("hello")
-        chat.locator(".message-input-textbox").press("Enter")
-        bubble = chat.locator(".outgoing-message")
-        expect(bubble).to_be_visible(timeout=5000)
-        assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
-        box_while_starting = bubble.bounding_box()
-        assert box_while_starting is not None
+        try:
+            chat = _start_new_chat(page, server)
+            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
+            chat.locator(".message-input-textbox").fill("hello")
+            chat.locator(".message-input-textbox").press("Enter")
+            bubble = chat.locator(".outgoing-message")
+            expect(bubble).to_be_visible(timeout=5000)
+            agent_manager = server.chat_state.agent_manager
+            (creating,) = agent_manager.get_provisional_chats()
+            wait_for(
+                lambda: agent_manager._has_waiting_new_chat_sends(creating.chat_id),
+                timeout=15.0,
+                error_message="the send never reached the chat app",
+            )
+            assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
+            box_while_starting = bubble.bounding_box()
+            assert box_while_starting is not None
+        finally:
+            release_create.touch()
 
         wait_for(lambda: len(messenger.sent) > 0, timeout=30.0, error_message="the message never reached the agent")
         expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
