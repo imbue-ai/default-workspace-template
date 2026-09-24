@@ -255,7 +255,7 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
   // it is readable the instant the panel opens, while the full output -- which
   // is what actually has to be fetched -- is still on its way.
   if (isError && toolResult?.error_snippet) {
-    sections.push(renderPane("tool-call-error-snippet", toolResult.error_snippet, "text-danger"));
+    sections.push(renderPane("tool-call-error-snippet", toolResult.error_snippet));
   }
   if (inputState === "loaded") {
     const input = formatToolInput(inputText, chip.call.action_note);
@@ -268,11 +268,10 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
   } else {
     sections.push(renderPaneNote("tool-call-input", inputState));
   }
-  const outputMarker = isError ? "tool-call-output tool-call-output--error" : "tool-call-output";
   if (outputState === "loaded") {
-    if (outputText) sections.push(renderPane(outputMarker, outputText, isError ? "text-danger" : ""));
+    if (outputText) sections.push(renderPane("tool-call-output", outputText));
   } else {
-    sections.push(renderPaneNote(outputMarker, outputState));
+    sections.push(renderPaneNote("tool-call-output", outputState));
   }
 
   // A call with nothing recorded either way still says so: an empty box would
@@ -321,12 +320,15 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
         { class: ROW_CLASS },
         chips.flatMap((chip) => {
           const isOpen = open !== null && open.call.tool_call_id === chip.call.tool_call_id;
-          const failed = toolResults.get(chip.call.tool_call_id)?.is_error === true;
           const text = chipText(chip.call);
-          // Colour says two different things at once, so they are ordered: a
-          // failed call stays red whether or not it is the open one, since the
-          // failure matters more than the selection.
-          const tone = failed ? "text-danger" : isOpen ? "text-primary" : "text-faint";
+          // A failed call is NOT marked here, and that is deliberate. A call that
+          // fails is followed by the agent saying what it means and what it did
+          // next -- in prose, which is the form a reader can actually act on. The
+          // chip's red said the same thing worse and earlier, and spending the
+          // transcript's one alarm colour on something already answered two lines
+          // down is how a reader learns to discount it. Colour is left to say the
+          // one thing nothing else does: which chip is open.
+          const tone = isOpen ? "text-primary" : "text-faint";
           const fill = isOpen ? "tool-chip--selected bg-fill-active" : "bg-transparent";
           const button = m(
             "button",
