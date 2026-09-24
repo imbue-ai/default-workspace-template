@@ -46,6 +46,7 @@ from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.chat_transcript import agent_switch_event
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_PROMPT_LABEL
@@ -211,16 +212,20 @@ def summary_request_message(path: Path) -> str:
 @pure
 def is_genuine_user_turn(event: dict[str, Any]) -> bool:
     """Whether a transcript event is a turn that carries the user's own words: a ``user_message`` with no
-    display decision, or a handoff prompt.
+    display decision, a seeded chat's first send, or a handoff prompt.
 
     A chip (the summary request itself, a nudge), a hidden framework line (``/welcome``), or a
     permission verdict is not one. The handoff prompt is, although it renders as a chip: it
     carries the message the user switched with and the summary, so a successor that has only
-    received it has context to hand on.
+    received it has context to hand on. So is a seeded chat's first send, whose context block
+    is stripped for display but whose words are the user's own.
     """
     if event.get("type") != "user_message":
         return False
-    return event.get("display") is None or event.get("display_label") == HANDOFF_PROMPT_LABEL
+    display = event.get("display")
+    if display is None or display == DisplayKind.PROMPT_WITH_CONTEXT.value:
+        return True
+    return event.get("display_label") == HANDOFF_PROMPT_LABEL
 
 
 @pure

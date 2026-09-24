@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -8,14 +9,21 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 
+from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import ShortcutTarget
 from imbue.system_interface.shell.data_types import Wallpaper
+from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
+from imbue.system_interface.shell.desktops import FALLBACK_USER_DESKTOP_NAME
+from imbue.system_interface.shell.desktops import default_desktop
+from imbue.system_interface.shell.desktops import desktop_kept_by_returning_client
+from imbue.system_interface.shell.desktops import desktop_name_for_user
 from imbue.system_interface.shell.desktops import find_desktop_by_name_or_id
+from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopConflictError
@@ -25,7 +33,8 @@ from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import SharingMode
+from imbue.system_interface.shell.primitives import GLYPH_COUNT
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -33,6 +42,11 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import window_record
+
+# The frontend's glyph palette, which ``DESKTOP_GLYPH_COLORS`` restates for the desktops the shell names itself.
+_SQUIGGLES_PATH = Path(__file__).resolve().parents[3] / "frontend" / "src" / "views" / "squiggles.ts"
+_SQUIGGLE_GLYPHS_ARRAY = re.compile(r"export const SQUIGGLE_GLYPHS\b[^=]*=\s*\[(.*?)\n\];", re.DOTALL)
+_GLYPH_COLOR = re.compile(r'color: "(#[0-9A-Fa-f]{6})"')
 
 _SEED = (
     DesktopShortcut(
@@ -90,7 +104,7 @@ def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_
     store = DesktopStore(state_directory=tmp_path)
     home = store.ensure_default(lambda: ())[0]
     research = store.create_desktop("Research!", "#12B5A5", 4, _SEED, ())
-    assert research.id == "research" and research.shortcuts == _SEED and research.sharing is SharingMode.SHARED
+    assert research.id == "research" and research.shortcuts == _SEED
     with pytest.raises(DesktopConflictError):
         store.create_desktop("research", "#12B5A5", 4, (), ())
     with pytest.raises(DesktopValueError):
@@ -99,14 +113,8 @@ def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_
         store.create_desktop("Bad", "#12B5A5", 12, (), ())
     with pytest.raises(DesktopValueError):
         slugify_desktop_name("!!!")
-    settled = store.update_settings("research", "Research 2", "#222222", 2, SharingMode.PERSONAL)
-    assert (settled.id, settled.name, settled.color, settled.glyph, settled.sharing) == (
-        "research",
-        "Research 2",
-        "#222222",
-        2,
-        SharingMode.PERSONAL,
-    )
+    settled = store.update_settings("research", "Research 2", "#222222", 2)
+    assert (settled.id, settled.name, settled.color, settled.glyph) == ("research", "Research 2", "#222222", 2)
     papered = store.set_wallpaper("research", Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dunes")))
     assert papered.wallpaper is not None and papered.wallpaper.name == "dunes"
     assert store.set_wallpaper("research", None).wallpaper is None
@@ -170,3 +178,59 @@ def test_a_clients_active_desktop_falls_back_from_its_desktop_to_the_first(tmp_p
     assert resolve_active_desktop(stale, desktops) == home.id
     unplaced = ClientRecord(id=ClientId("c1"), last_seen=TEST_NOW)
     assert resolve_active_desktop(unplaced, desktops) == home.id
+
+
+def test_a_desktops_file_carrying_the_retired_sharing_key_still_reads(tmp_path: Path) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    home = store.ensure_default(lambda: ())[0]
+    raw = json.loads((tmp_path / "desktops.json").read_text())
+    raw["desktops"][0]["sharing"] = "personal"
+    (tmp_path / "desktops.json").write_text(json.dumps(raw))
+    assert store.list_desktops() == [home]
+    store.update_settings("home", "Home", "#2f6b4f", 1)
+    assert "sharing" not in json.loads((tmp_path / "desktops.json").read_text())["desktops"][0]
+
+
+def test_a_users_desktop_is_named_after_them_and_made_unique() -> None:
+    home = default_desktop(())
+    assert desktop_name_for_user("Alice", "alice@example.com", [home]) == "Alice"
+    assert desktop_name_for_user(None, "bob.smith@example.com", [home]) == "bob.smith"
+    assert desktop_name_for_user("   ", "!!!@example.com", [home]) == FALLBACK_USER_DESKTOP_NAME
+    assert desktop_name_for_user(None, None, [home]) == FALLBACK_USER_DESKTOP_NAME
+    taken = [
+        home,
+        home.model_copy_update(
+            to_update(home.field_ref().id, DesktopId("alice")), to_update(home.field_ref().name, "alice")
+        ),
+    ]
+    assert desktop_name_for_user("Alice", "alice@example.com", taken) == "Alice 2"
+    # The name is unique by id as well as by name: "Home" is taken however it is spelled.
+    assert desktop_name_for_user("home!", "h@example.com", [home]) == "home! 2"
+
+
+def test_the_next_glyph_is_the_first_unused_then_cycles() -> None:
+    assert next_glyph_index([]) == 0
+    assert next_glyph_index([0, 1, 3]) == 2
+    assert next_glyph_index(list(range(GLYPH_COUNT))) == 0
+    assert next_glyph_index([*range(GLYPH_COUNT), 0]) == 1
+
+
+def test_the_shells_glyph_colours_are_the_frontends_palette_in_glyph_order() -> None:
+    palette = _SQUIGGLE_GLYPHS_ARRAY.search(_SQUIGGLES_PATH.read_text())
+    assert palette is not None, f"no SQUIGGLE_GLYPHS array in {_SQUIGGLES_PATH}"
+    assert tuple(_GLYPH_COLOR.findall(palette.group(1))) == DESKTOP_GLYPH_COLORS
+    assert len(DESKTOP_GLYPH_COLORS) == GLYPH_COUNT
+
+
+def test_a_returning_client_keeps_its_desktop_only_when_it_last_arrived_as_the_same_user() -> None:
+    alice = UserId("user-alice")
+    desktop_ids = {DesktopId("home"), DesktopId("alice")}
+    on_home = ClientRecord(id=ClientId("c1"), active_desktop=DesktopId("home"), last_seen=TEST_NOW, user_id=alice)
+    assert desktop_kept_by_returning_client(on_home, alice, desktop_ids) == "home"
+    assert desktop_kept_by_returning_client(None, alice, desktop_ids) is None
+    bobs = on_home.model_copy_update(to_update(on_home.field_ref().user_id, UserId("user-bob")))
+    assert desktop_kept_by_returning_client(bobs, alice, desktop_ids) is None
+    anonymous = on_home.model_copy_update(to_update(on_home.field_ref().user_id, None))
+    assert desktop_kept_by_returning_client(anonymous, alice, desktop_ids) is None
+    gone = on_home.model_copy_update(to_update(on_home.field_ref().active_desktop, DesktopId("deleted")))
+    assert desktop_kept_by_returning_client(gone, alice, desktop_ids) is None

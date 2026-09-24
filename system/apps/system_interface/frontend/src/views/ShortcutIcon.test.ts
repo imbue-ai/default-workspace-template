@@ -5,7 +5,7 @@ import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopShortcut } from "../model/records";
 import { appRecord, launchPathRecord } from "../testing/records";
-import { ShortcutIcon, shortcutLabel } from "./ShortcutIcon";
+import { CONNECTING_TOOLTIP, ShortcutIcon, shortcutLabel, shortcutTooltip } from "./ShortcutIcon";
 import type { ShortcutIconAttrs } from "./ShortcutIcon";
 
 const docs = appRecord("docs", { launch_paths: [launchPathRecord({ id: "new", label: "New docs" })] });
@@ -23,6 +23,14 @@ describe("shortcutLabel", () => {
   });
 });
 
+describe("shortcutTooltip", () => {
+  it("says the page is connecting before the apps are known, else why the app is faint, else nothing", () => {
+    expect(shortcutTooltip("Docs", false, true)).toBe(CONNECTING_TOOLTIP);
+    expect(shortcutTooltip("Docs", true, false)).toBe("Docs: not running");
+    expect(shortcutTooltip("Docs", false, false)).toBeNull();
+  });
+});
+
 afterEach(unmountViews);
 
 function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
@@ -31,6 +39,7 @@ function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
     cell: { column: 1, row: 2 },
     rect: { x: 112, y: 240, width: 96, height: 112 },
     app: docs,
+    isAppsLoaded: true,
     isSelected: false,
     isLifted: false,
     isRunOnClick: false,
@@ -84,5 +93,18 @@ describe("ShortcutIcon", () => {
     expect(render({ isSelected: true }).getAttribute("aria-pressed")).toBe("true");
     unmountViews();
     expect(render({ isLifted: true }).className).toContain("opacity-40");
+  });
+
+  it("draws an unknown app as connecting only while no app list has landed", () => {
+    const connecting = render({ app: undefined, isAppsLoaded: false });
+    expect(connecting.getAttribute("data-connecting")).toBe("true");
+    expect(connecting.className).toContain("text-faint");
+    expect(connecting.querySelector(".shortcut-label")?.textContent).toBe("docs");
+    unmountViews();
+    const unregistered = render({ app: undefined, isAppsLoaded: true });
+    expect(unregistered.hasAttribute("data-connecting")).toBe(false);
+    expect(unregistered.className).toContain("text-primary");
+    unmountViews();
+    expect(render().hasAttribute("data-connecting")).toBe(false);
   });
 });

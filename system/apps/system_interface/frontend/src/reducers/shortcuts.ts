@@ -17,9 +17,15 @@ import type { DesktopState } from "./desktopState";
 export type ShortcutRun =
   | { readonly kind: "raise"; readonly windowId: string }
   | { readonly kind: "open"; readonly app: string; readonly path: string; readonly launch: string }
+  /** The app is not known yet because no app list has landed; nothing is wrong with the shortcut. */
+  | { readonly kind: "connecting" }
   | { readonly kind: "unavailable"; readonly reason: string };
 
-/** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. */
+/** What the user is told when a shortcut is run before the apps are known. */
+export const STILL_CONNECTING_NOTICE = "Still connecting to the workspace; try again in a moment.";
+
+/** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. An app the page does not
+ *  know is ``connecting`` until the first app list lands, and unregistered after. */
 export function resolveLaunchRun(
   state: DesktopState,
   appName: string,
@@ -27,7 +33,10 @@ export function resolveLaunchRun(
   mode: ShortcutMode,
 ): ShortcutRun {
   const app = appByName(state, appName);
-  if (app === undefined) return { kind: "unavailable", reason: `${appName} is not registered` };
+  if (app === undefined) {
+    if (!state.isAppsLoaded) return { kind: "connecting" };
+    return { kind: "unavailable", reason: `${appName} is not registered` };
+  }
   const launchPath = launchPathOf(app, launch);
   if (launchPath === null) return { kind: "unavailable", reason: `${app.display_name} has no launch path ${launch}` };
   const desktop = activeDesktop(state);

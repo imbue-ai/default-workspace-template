@@ -32,6 +32,7 @@ from typing import Any
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.pi_coding.tool_labels import shell_command
 from imbue.chat.harnesses.pi_coding.tool_labels import tool_labels
@@ -223,13 +224,42 @@ def _tool_result_event(event_id: str, timestamp: str, message: dict[str, Any]) -
     return event
 
 
+def _compaction_event(event_id: str, timestamp: str, record: dict[str, Any]) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "timestamp": timestamp,
+        "type": "user_message",
+        "event_id": event_id,
+        "source": SOURCE,
+        "role": "system",
+        "content": "Context was compacted",
+        "message_uuid": event_id,
+        "display": DisplayKind.STATUS,
+        "non_turn_tail": True,
+    }
+    summary = record.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        event["display_body"] = summary.strip()
+    return event
+
+
 def parse_record(record: dict[str, Any]) -> list[dict[str, Any]]:
     """Map one pi native session record to zero or one UI event dict (``[]`` to skip).
 
-    Only ``message`` records produce events; ``session`` / ``model_change`` /
-    ``thinking_level_change`` are dropped. The event id is pi's own stable record ``id``.
+    ``message`` records produce events; ``compaction`` records produce a status event;
+    ``session`` / ``model_change`` / ``thinking_level_change`` are dropped. The event id
+    is pi's own stable record ``id``.
     """
-    if record.get("type") != "message":
+    record_type = record.get("type")
+    if record_type == "compaction":
+        record_id = record.get("id")
+        if not isinstance(record_id, str) or not record_id:
+            return []
+        timestamp = record.get("timestamp")
+        timestamp = timestamp if isinstance(timestamp, str) else ""
+        event_id = f"pi-{record_id}"
+        return [_compaction_event(event_id, timestamp, record)]
+
+    if record_type != "message":
         return []
     record_id = record.get("id")
     if not isinstance(record_id, str) or not record_id:

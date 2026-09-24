@@ -6,11 +6,15 @@ import { PointerGestureSource, bindingForTarget } from "./pointerGestures";
 let root: HTMLElement;
 let detach: (() => void) | null = null;
 let events: string[];
+/** The press notifications, kept apart from ``events`` so a test names only what it is about. */
+let presses: string[];
 
 function listener(isDraggable: boolean = true): GestureListener {
   return {
     thresholdPx: () => 4,
     isDraggable: () => isDraggable,
+    onPressStart: (binding) => void presses.push(`press:${describe_(binding)}`),
+    onPressEnd: (binding) => void presses.push(`release:${describe_(binding)}`),
     onBegin: (binding, point) => void events.push(`begin:${describe_(binding)}:${point.x},${point.y}`),
     onMove: (binding, point, delta) =>
       void events.push(`move:${describe_(binding)}:${point.x},${point.y}:${delta.x},${delta.y}`),
@@ -54,6 +58,7 @@ function pointer(type: string, target: Element, x: number, y: number, extra: Poi
 
 beforeEach(() => {
   events = [];
+  presses = [];
   root = document.createElement("div");
   root.innerHTML =
     '<div data-window-id="win-1"><div data-drag-handle><span id="title">T</span><button data-no-drag id="menu">m</button></div>' +
@@ -196,11 +201,11 @@ describe("PointerGestureSource", () => {
     expect(events).toEqual([]);
   });
 
-  it("a press released over a live page (no pointerup reaches the root) does not become a drag on the next hover", () => {
+  it("a press whose release the root never saw does not become a drag on the next hover", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70);
-    // The release landed in the focused window's iframe; the pointer hovers back over the shell.
+    // The release landed where the root could not see it; the pointer hovers back over the shell.
     pointer("pointermove", title, 150, 70, { buttons: 0 });
     pointer("pointermove", title, 190, 70, { buttons: 0 });
     expect(events).toEqual([]);
@@ -215,17 +220,55 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
-  it("a drag whose release the root never saw is cancelled on the next hover, not left hanging", () => {
+  it("a drag whose release the root never saw ends where the pointer last held it, not left hanging", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70);
     pointer("pointermove", title, 150, 70);
-    // The window lost focus mid-drag; the button came up unseen and the pointer hovers back.
+    // The release landed outside the window; the pointer hovers back over the shell well past where
+    // it let go.
     pointer("pointermove", title, 190, 70, { buttons: 0 });
-    expect(events).toEqual(["begin:move(win-1):140,50", "move:move(win-1):140,50:40,0", "cancel:move(win-1)"]);
+    expect(events).toEqual([
+      "begin:move(win-1):140,50",
+      "move:move(win-1):140,50:40,0",
+      "end:move(win-1):140,50:40,0",
+    ]);
   });
 
-  it("a touch press released over a live page does not block the next finger's press", () => {
+  it("a press on a handle makes the pages inert at once, and gives them back on a click and on a drag", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const title = root.querySelector("#title") as Element;
+    // A press that is only a click.
+    pointer("pointerdown", title, 110, 70);
+    expect(presses).toEqual(["press:move(win-1)"]);
+    expect(events).toEqual([]);
+    pointer("pointerup", title, 111, 70);
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
+    // A press that becomes a drag.
+    presses = [];
+    pointer("pointerdown", title, 200, 70);
+    pointer("pointermove", title, 240, 70);
+    expect(presses).toEqual(["press:move(win-1)"]);
+    pointer("pointerup", title, 240, 70);
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
+  });
+
+  it("a resize whose release the root never saw ends at the edge's last point", () => {
+    detach = new PointerGestureSource().attach(root, listener());
+    const edge = root.querySelector("#edge") as Element;
+    pointer("pointerdown", edge, 500, 500);
+    pointer("pointermove", edge, 560, 540);
+    // An edge drag runs the pointer out to the rim of the viewport, where a release is most easily
+    // missed.
+    pointer("pointermove", edge, 600, 560, { buttons: 0 });
+    expect(events).toEqual([
+      "begin:resize(win-1,se):550,520",
+      "move:resize(win-1,se):550,520:60,40",
+      "end:resize(win-1,se):550,520:60,40",
+    ]);
+  });
+
+  it("a touch press whose release the root never saw does not block the next finger's press", () => {
     detach = new PointerGestureSource().attach(root, listener());
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70, { pointerId: 7, pointerType: "touch" });
@@ -254,12 +297,16 @@ describe("PointerGestureSource", () => {
     ]);
   });
 
-  it("does not begin when the listener says the binding is not draggable", () => {
+  it("does not begin when the listener says the binding is not draggable, and ends the press there", () => {
     detach = new PointerGestureSource().attach(root, listener(false));
     const title = root.querySelector("#title") as Element;
     pointer("pointerdown", title, 110, 70);
     pointer("pointermove", title, 150, 70);
+    // The refusal is an ending of its own, so the pages come back at the threshold rather than at the
+    // release, and the release finds nothing left to give back.
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
     pointer("pointerup", title, 150, 70);
+    expect(presses).toEqual(["press:move(win-1)", "release:move(win-1)"]);
     expect(events).toEqual([]);
   });
 
@@ -274,6 +321,7 @@ describe("PointerGestureSource", () => {
       "move:resize(win-1,se):510,510:20,30",
       "cancel:resize(win-1,se)",
     ]);
+    expect(presses).toEqual(["press:resize(win-1,se)", "release:resize(win-1,se)"]);
   });
 
   it("a touch held still is a long press whose release's click is swallowed; one that moves is a drag", () => {
@@ -286,7 +334,11 @@ describe("PointerGestureSource", () => {
       pointer("pointerdown", shortcut, 50, 60, { pointerType: "touch" });
       vi.advanceTimersByTime(600);
       expect(events).toEqual(["long:shortcut(docs:new):50,60"]);
+      // The press is spent on the menu, so the pages come back with the menu rather than with the
+      // release, and the release finds nothing left to give back.
+      expect(presses).toEqual(["press:shortcut(docs:new)", "release:shortcut(docs:new)"]);
       pointer("pointerup", shortcut, 50, 60, { pointerType: "touch" });
+      expect(presses).toEqual(["press:shortcut(docs:new)", "release:shortcut(docs:new)"]);
       shortcut.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(clicks).toEqual([]);
 

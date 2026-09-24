@@ -1,19 +1,26 @@
-"""Tests for ``ShellState``: the stale-client prune it runs at start and on its interval."""
+"""Tests for ``ShellState``: the stale-client prune it runs at start and on its interval, the close hints, and the
+arrival."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 
+import httpx
 from app_manifest.primitives import AppName
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import WindowOpenRequest
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
@@ -125,3 +132,95 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
         (str(first), "work"),
         (str(second), "work"),
     ]
+
+
+def test_concurrent_first_arrivals_of_one_user_seed_a_single_desktop(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    shell = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    alice = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
+    arrival_count = 6
+    ready = threading.Barrier(arrival_count)
+
+    def arrive(index: int) -> tuple[str | None, bool]:
+        ready.wait(timeout=5)
+        outcome = shell.arrive_client(ClientId(f"tab-{index}"), alice)
+        assert outcome is not None
+        return outcome.desktop_id, outcome.created_desktop is not None
+
+    with ThreadPoolExecutor(max_workers=arrival_count) as executor:
+        outcomes = list(executor.map(arrive, range(arrival_count)))
+    assert [landing for landing, _ in outcomes] == ["alice"] * arrival_count
+    assert sum(1 for _, is_created in outcomes if is_created) == 1
+    assert [desktop.id for desktop in shell.list_desktops()] == ["home", "alice"]
+
+
+def test_a_visiting_users_desktop_is_named_after_the_profile_the_connector_answers(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The header names the account; what the desktop is called comes from the account's profile, fetched from the
+    broker share.env names and kept on the user's record for the notice."""
+    registry_path = write_two_app_registry(tmp_path)
+    (tmp_path / "share.env").write_text('export SHARE_BROKER_URL="https://broker.example.test/"\n')
+    requested_paths: list[str] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        return httpx.Response(
+            200, json={"user_id": "user-alice", "display_name": "Alice Q", "profile_picture_url": None}
+        )
+
+    profiles = ProfileResolver(
+        cache_directory=tmp_path / "profiles",
+        share_env_path=tmp_path / "share.env",
+        transport=httpx.MockTransport(answer),
+    )
+    shell = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        profiles=profiles,
+    )
+    alice = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
+
+    outcome = shell.arrive_client(ClientId("tab-1"), alice)
+
+    assert outcome is not None and outcome.created_desktop is not None
+    assert outcome.created_desktop.name == "Alice Q" and outcome.desktop_id == "alice-q"
+    assert requested_paths == ["/users/user-alice/profile"]
+    stored = shell.users.get_user(UserId("user-alice"))
+    assert stored is not None and stored.display_name == "Alice Q"
+
+
+def test_a_visiting_user_arrives_named_by_email_when_the_connector_is_down(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    (tmp_path / "share.env").write_text("SHARE_BROKER_URL=https://broker.example.test\n")
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    profiles = ProfileResolver(
+        cache_directory=tmp_path / "profiles",
+        share_env_path=tmp_path / "share.env",
+        transport=httpx.MockTransport(refuse),
+    )
+    shell = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        profiles=profiles,
+    )
+
+    outcome = shell.arrive_client(
+        ClientId("tab-1"), RequestIdentity(owner=False, user_id="user-bob", email="bob.smith@example.com")
+    )
+
+    assert outcome is not None and outcome.created_desktop is not None
+    assert outcome.created_desktop.name == "bob.smith"

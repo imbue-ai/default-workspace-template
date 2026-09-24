@@ -21,6 +21,9 @@ README for details.
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against
   the live mngr command tree.
+- `pytest_executable_tmp/` - Test-only pytest plugin that keeps a session's
+  temporary files where a stub executable written there can run, or stops
+  the session before any test starts.
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
 

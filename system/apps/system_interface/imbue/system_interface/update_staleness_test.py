@@ -161,7 +161,9 @@ def test_tracker_reports_a_moved_path_git_would_otherwise_quote(git_work_dir: Pa
     # of such a file would show no banner.
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
-    _commit_files(repo, "an update with a non-ASCII path", "system/apps/system_interface/imbue/system_interface/l\u00efst.py")
+    _commit_files(
+        repo, "an update with a non-ASCII path", "system/apps/system_interface/imbue/system_interface/l\u00efst.py"
+    )
     assert tracker.staleness() == STALENESS_TREE_MOVED
 
 

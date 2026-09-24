@@ -189,8 +189,8 @@ describe("renderQueuedMessages", () => {
 
   // A published entry is not necessarily a PARKED one. The backend flags an entry it is about
   // to type, or is typing, as ``is_sending`` -- agy's send to an idle agent, codex's
-  // shoulder-tap resend. Those bubbles already render as "Sending…"; the group chrome around
-  // them was the only thing still claiming they were queued.
+  // shoulder-tap resend. Those bubbles already render as ordinary sends; the group chrome
+  // around them was the only thing still claiming they were queued.
   it("renders no queued-group chrome when every entry is sending", () => {
     mocks.queued = [queuedMessage("q1", "beep", true)];
 
@@ -200,10 +200,13 @@ describe("renderQueuedMessages", () => {
     expect(findByClass(rendered, "queued-action--flush")).toBeUndefined();
     expect(findByClass(rendered, "queued-group")).toBeUndefined();
     expect(renderedText(rendered)).not.toContain("Queued messages");
-    // Still visible, and still reading as Sending -- suppressing the chrome must not
-    // suppress the message (contract A1a).
+    // Still visible, drawn as an ordinary send -- suppressing the chrome must not suppress the
+    // message (contract A1a).
     expect(renderedText(rendered)).toContain("beep");
-    expect(renderedText(rendered)).toContain("Sending");
+    expect(findByClass(rendered, "outgoing-message--sending")).toBeDefined();
+    expect(renderedText(rendered)).not.toContain("Sending");
+    // Bare, it stands apart like the optimistic bubble it replaces.
+    expect(String(findByClass(rendered, "outgoing-message--sending")?.attrs?.className)).toContain("mb-5");
   });
 
   it("still shows the chrome when only some entries are sending", () => {
@@ -214,5 +217,7 @@ describe("renderQueuedMessages", () => {
     expect(findByClass(rendered, "queued-header")).toBeDefined();
     expect(findByClass(rendered, "queued-action--flush")).toBeDefined();
     expect(renderedText(rendered)).toContain("Queued messages");
+    // Inside the group the group's own gap spaces the bubbles, the sending one included.
+    expect(String(findByClass(rendered, "outgoing-message--sending")?.attrs?.className)).not.toContain("mb-5");
   });
 });

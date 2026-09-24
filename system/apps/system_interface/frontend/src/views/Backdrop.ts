@@ -88,6 +88,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 cell,
                 rect: cellRect(cell, metrics),
                 app: appByName(state, shortcut.target.app),
+                isAppsLoaded: state.isAppsLoaded,
                 isSelected: attrs.selectedShortcutKey === key,
                 isLifted: liftedKey === key,
                 isRunOnClick: state.modes.isTouch,

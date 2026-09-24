@@ -140,8 +140,8 @@ class LedgerEntry(MutableModel):
     ``combined_client_id`` is set on a queued entry that a shoulder-tap re-sent as part of a single
     combined ``turn/start`` (Fix 3): its own ``client_id`` no longer names the message the daemon
     commits (the combined turn carries ONE fresh id), so delivery is decided by that combined id.
-    ``resend_visible`` is True while such an entry is mid-resend (Sending): it stays a visible chip
-    rendered "Sending..." through the interrupt+resend so it never blinks out (contract A1a).
+    ``resend_visible`` is True while such an entry is mid-resend (Sending): it stays visible as an
+    ordinary sent message through the interrupt+resend so it never blinks out (contract A1a).
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -297,7 +297,7 @@ class CodexMessageLedger(MutableModel):
         client.add_notification_handler(ledger.handle_notification)
         return ledger
 
-    # -- send -------------------------------------------------------------------
+    # Send
 
     def send(self, text: str, client_id: str | None = None) -> str:
         """Accept ``text`` for send: mint a ``client_id``, ``submit`` it, and record the entry.
@@ -348,7 +348,7 @@ class CodexMessageLedger(MutableModel):
         self.next_send_seq = seq + 1
         return seq
 
-    # -- notification handling --------------------------------------------------
+    # Notification handling
 
     def handle_notification(self, method: str, params: Any) -> None:
         """Reduce one app-server notification into the ledger. Registered on the client.
@@ -472,7 +472,7 @@ class CodexMessageLedger(MutableModel):
             settings.get("serviceTier") == _FAST_SERVICE_TIER,
         )
 
-    # -- reconcile / sweep ------------------------------------------------------
+    # Reconcile / sweep
 
     def _reconcile(self, turn: dict[str, Any]) -> None:
         """Settle every owned entry bound to ``turn`` -- delivery = COMMIT, else Returned (§2.4).
@@ -624,7 +624,7 @@ class CodexMessageLedger(MutableModel):
         combined commit, or Return if its own resend fails)."""
         self._settle_live_to_returned(include_resend=False)
 
-    # -- shoulder-tap / interrupt (Contract B) ----------------------------------
+    # Shoulder-tap / interrupt (Contract B)
 
     def is_tap_available(self) -> bool:
         """Whether a shoulder tap is offered: nothing Sending AND the queue is non-empty (Contract B).
@@ -727,7 +727,7 @@ class CodexMessageLedger(MutableModel):
         visible (A1a):
 
         1. Capture the Queued messages in send order and flip each to a resend-visible **Sending**
-           state, so it stays a chip rendered "Sending..." through the whole interrupt+resend -- never
+           state, so it stays visible as an ordinary sent message through the whole interrupt+resend -- never
            removed to the composer, never blinked out. (Gated benign no-op if not available.)
         2. ``turn/interrupt`` the running turn fire-and-forget and clear it locally.
         3. Reconcile per committed id: a steer that already committed (observed via ``item/completed``)
@@ -805,7 +805,7 @@ class CodexMessageLedger(MutableModel):
         self._flush_user_turns()
         return ShoulderTapResult(status="tapped")
 
-    # -- reads ------------------------------------------------------------------
+    # Reads
 
     def queued_snapshot(self) -> list[dict[str, Any]]:
         """The wire snapshot of the on-screen chip group, in send order (feeds ``update_queued_messages``).
@@ -815,8 +815,8 @@ class CodexMessageLedger(MutableModel):
         * a **Queued** chip (``is_sending=False``) -- a parked steer waiting on the running turn;
         * a **resend** chip (``is_sending=True``) -- a message a shoulder-tap is re-sending as part of
           the combined ``turn/start`` (Fix 3). It stays visible through the interrupt+resend, rendered
-          "Sending..." by the frontend, so it never blinks out (A1a); it drops only when the combined
-          turn commits (chip removal, then the turn -- A3b).
+          by the frontend as an ordinary sent message, so it never blinks out (A1a); it drops
+          only when the combined turn commits (chip removal, then the turn -- A3b).
 
         ``queued_id`` is the entry's correlation token (not an ``item.id``: codex assigns a parked
         steer no ``item.id`` until it commits -- verified live). The frontend uses it only for
@@ -894,7 +894,7 @@ class CodexMessageLedger(MutableModel):
         entry = self.entries.get(client_id)
         return entry.state if entry is not None else None
 
-    # -- change-gated callbacks -------------------------------------------------
+    # Change-gated callbacks
 
     def _queue_user_turn(self, client_id: str | None, epoch_ms: int | None, content: str) -> None:
         """Record a committed user-turn to broadcast after the queue snapshot (A3b), deduped.

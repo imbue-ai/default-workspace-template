@@ -36,6 +36,9 @@ export interface ActiveAgent {
   // Backend-computed shoulder-tap availability: true iff something is queued AND no send is in
   // flight.
   shoulder_tap_available: boolean;
+  // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
+  // Sending, shown beside the model bar.
+  is_connecting: boolean;
 }
 
 /** A handoff runs draining, summarizing, switching; a rebind runs draining, restarting; both can end failed. */
@@ -115,7 +118,7 @@ export interface QueuedMessage {
   content: string;
   timestamp: string;
   // True while the backend is actively re-sending this chip (a codex shoulder-tap's
-  // interrupt+resend): it renders "Sending…" rather than as a plain queued chip.
+  // interrupt+resend): it renders as an ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
 }
 

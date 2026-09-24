@@ -2,9 +2,11 @@
 
 Events land at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`, one
 JSONL line per event, with the standard envelope (timestamp, type,
-event_id, source) plus event-specific fields. The full stdout/stderr of
-each restic command is embedded in the matching event so operators can
-diagnose failures without rerunning anything.
+event_id, source) plus event-specific fields. The stdout/stderr of each
+restic command is embedded in the matching event so operators can diagnose
+failures without rerunning anything, with each field capped at write time
+(see `_truncated_for_storage`). The runner rotates the file between ticks
+(see `rotate_events_log_if_over`).
 """
 
 import json
@@ -22,10 +24,21 @@ from imbue.imbue_common.event_envelope import (
     EventType,
     IsoTimestamp,
 )
+from imbue.imbue_common.logging import (
+    cleanup_old_rotated_files,
+    generate_rotation_timestamp,
+)
 from loguru import logger
 from pydantic import Field
 
 BACKUP_EVENT_SOURCE: Final[EventSource] = EventSource("backup")
+
+EVENTS_FILENAME: Final[str] = "events.jsonl"
+
+# The size at which the runner moves the events log aside. It checks only at the
+# start of a tick, so the log can grow past this until the next tick starts.
+EVENTS_LOG_ROTATION_BYTES: Final[int] = 8 * 1024 * 1024
+MAX_ROTATED_EVENTS_LOGS: Final[int] = 2
 
 
 class BackupEventType(UpperCaseStrEnum):
@@ -315,6 +328,28 @@ def make_event(event_type: BackupEventType, **fields: object) -> dict[str, objec
     return payload
 
 
+# How much of any one string field survives into the log. Generous for a restic
+# command's output while keeping a single event small: `restic backup --json`
+# emits one progress document per tick, which ran to hundreds of kilobytes per
+# event. Head and tail are both kept, so the command's opening lines and the
+# final summary -- the two things an operator reads -- both survive.
+_MAX_FIELD_CHARS: Final[int] = 16384
+_TRUNCATION_MARKER: Final[str] = "\n...[{dropped} characters dropped]...\n"
+
+
+def _truncated_for_storage(event: dict[str, object]) -> dict[str, object]:
+    """`event` with any over-long string field reduced to its head and tail."""
+    truncated: dict[str, object] = {}
+    for key, value in event.items():
+        if isinstance(value, str) and len(value) > _MAX_FIELD_CHARS:
+            keep = _MAX_FIELD_CHARS // 2
+            marker = _TRUNCATION_MARKER.format(dropped=len(value) - 2 * keep)
+            truncated[key] = value[:keep] + marker + value[-keep:]
+        else:
+            truncated[key] = value
+    return truncated
+
+
 def write_event(events_dir: Path | None, event: dict[str, object]) -> None:
     """Append `event` as a JSONL line to events_dir/events.jsonl.
 
@@ -332,10 +367,44 @@ def write_event(events_dir: Path | None, event: dict[str, object]) -> None:
     except OSError as e:
         logger.warning("Cannot create events dir {}: {}", events_dir, e)
         return
-    events_path = events_dir / "events.jsonl"
+    events_path = events_dir / EVENTS_FILENAME
     try:
         with events_path.open("a") as fh:
-            fh.write(json.dumps(event, default=str))
+            fh.write(json.dumps(_truncated_for_storage(event), default=str))
             fh.write("\n")
     except OSError as e:
         logger.warning("Cannot append to {}: {}", events_path, e)
+
+
+def rotate_events_log_if_over(events_dir: Path | None) -> None:
+    """Move the events log aside once it reaches `EVENTS_LOG_ROTATION_BYTES`.
+
+    The log becomes `events.jsonl.<timestamp>` (the name `mngr events` discovers
+    rotated logs by) and only the newest `MAX_ROTATED_EVENTS_LOGS` are kept; the
+    next `write_event` starts a fresh file.
+    """
+    if events_dir is None:
+        return
+    events_path = events_dir / EVENTS_FILENAME
+    try:
+        size = events_path.stat().st_size
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        logger.warning("Cannot stat {} to decide on rotation: {}", events_path, e)
+        return
+    if size < EVENTS_LOG_ROTATION_BYTES:
+        return
+    rotated_path = events_path.with_name(
+        f"{EVENTS_FILENAME}.{generate_rotation_timestamp()}"
+    )
+    try:
+        events_path.rename(rotated_path)
+    except OSError as e:
+        logger.warning("Cannot rotate {}: {}", events_path, e)
+        return
+    logger.info("Rotated the backup events log to {}", rotated_path)
+    try:
+        cleanup_old_rotated_files(events_dir, MAX_ROTATED_EVENTS_LOGS)
+    except OSError as e:
+        logger.warning("Cannot remove old rotated logs in {}: {}", events_dir, e)
