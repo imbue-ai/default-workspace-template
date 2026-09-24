@@ -21,6 +21,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isCompact: false,
     isTouch: false,
     isMenuOpen: false,
+    sizeMenuTrigger: {},
     isShielded: false,
     isPlacedHere: true,
     onStartApp: null,
@@ -94,7 +95,7 @@ describe("Window", () => {
     const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
       control.getAttribute("data-window-control"),
     );
-    expect(controls).toEqual(["menu", "minimize", "maximize", "close"]);
+    expect(controls).toEqual(["refresh", "menu", "minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="close"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
   });

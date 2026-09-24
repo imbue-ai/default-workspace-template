@@ -31,6 +31,8 @@ export interface BackdropAttrs {
   /** The pinned entries this client draws floating above the windows. */
   readonly floatingEntries: readonly TaskbarEntry[];
   readonly openEntryMenuWindowId: string | null;
+  /** Spread onto a window's maximize control: resting on it opens that window's size menu. */
+  readonly sizeMenuTrigger: (windowId: string) => m.Attributes;
   readonly onEntryClick: (windowId: string) => void;
   readonly onEntryContextMenu: (windowId: string, x: number, y: number) => void;
   /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
@@ -123,6 +125,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   isCompact: state.modes.isCompact,
                   isTouch: state.modes.isTouch,
                   isMenuOpen: attrs.openMenuWindowId === window.id,
+                  sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                   isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
                   isPlacedHere: store.isPlacedHere(window.id),
                   onStartApp:

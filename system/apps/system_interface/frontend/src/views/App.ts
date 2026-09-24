@@ -55,12 +55,15 @@ import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import { taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import { windowSizeRow } from "./WindowSizeRow";
+import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
 type OpenMenu =
   | { readonly kind: "window"; readonly windowId: string }
+  | { readonly kind: "size"; readonly windowId: string }
   | { readonly kind: "entry"; readonly windowId: string }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut }
   | { readonly kind: "desktops" }
@@ -324,13 +327,38 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
+  /** The size section's actions for a window, or null in compact mode, where every window renders
+   *  maximized and there is nothing to choose. */
+  function sizeActionsOf(current: DesktopStore, windowId: string): WindowSizeActions | null {
+    if (current.getState().modes.isCompact) return null;
+    return {
+      setState: (state) => current.setWindowState(windowId, state),
+      setFrame: (frame) => current.setWindowFrame(windowId, frame),
+    };
+  }
+
+  /** The maximize control's own menu: the size section alone. */
+  function rowsOfSizeMenu(current: DesktopStore, windowId: string): MenuRow[] | null {
+    const actions = sizeActionsOf(current, windowId);
+    if (actions === null) return null;
+    return [windowSizeRow(actions, () => menu.close())];
+  }
+
+  /** Spread onto a window's maximize control: resting on it opens that window's size menu. */
+  function sizeMenuTrigger(windowId: string): m.Attributes {
+    return menu.hoverTriggerAttrs(() => {
+      openMenu = { kind: "size", windowId };
+    });
+  }
+
   function rowsOfWindowMenu(current: DesktopStore, windowId: string): MenuRow[] | null {
     const state = current.getState();
     const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) return null;
     const app = appByName(state, window.app);
     return windowMenuRows(app, {
-      refresh: () => current.refreshWindow(windowId),
+      size: sizeActionsOf(current, windowId),
+      onSized: () => menu.close(),
       share:
         app === undefined || app.critical
           ? null
@@ -485,6 +513,8 @@ export function App(): m.Component<AppAttrs> {
     switch (open.kind) {
       case "window":
         return rowsOfWindowMenu(current, open.windowId);
+      case "size":
+        return rowsOfSizeMenu(current, open.windowId);
       case "entry":
         return rowsOfEntryMenu(current, open.windowId);
       case "shortcut":
@@ -642,6 +672,9 @@ export function App(): m.Component<AppAttrs> {
       case "close":
         void current.closeOrMinimizeWindow(windowId);
         return;
+      case "refresh":
+        current.refreshWindow(windowId);
+        return;
       case "menu":
         // A press while this menu is up lands on the menu's own sheet and closes it there, so the
         // click that reaches the kebab is almost always the opening one; the toggle stands for the
@@ -732,6 +765,7 @@ export function App(): m.Component<AppAttrs> {
                   openMenuWindowId: openMenu?.kind === "window" ? openMenu.windowId : null,
                   floatingEntries: floatingEntries(state),
                   openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
+                  sizeMenuTrigger,
                   onEntryClick,
                   onEntryContextMenu,
                   isOverlayOpen: openMenu !== null || isLauncherOpen,

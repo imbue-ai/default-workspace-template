@@ -31,6 +31,7 @@ import type {
   EntryMode,
   EntryPresentation,
   FloatingPosition,
+  Frame,
   GridCell,
   IfPresent,
   Inventory,
@@ -975,6 +976,13 @@ export class DesktopStore {
   setWindowState(windowId: string, state: WindowState): void {
     if (this.deferWhileSettling(windowId)) return;
     this.dispatch({ type: "window_state_set", windowId, state });
+  }
+
+  /** Place a window at a fraction of the backdrop -- the size menu's halves and quarters, which no
+   *  window state stands for. Normal, shown and raised, as a drag that ends away from an edge leaves it. */
+  setWindowFrame(windowId: string, frame: Frame): void {
+    if (this.state.modes.isCompact || this.deferWhileSettling(windowId)) return;
+    this.dispatch({ type: "window_frame_set", windowId, frame });
   }
 
   toggleMaximized(windowId: string): void {
