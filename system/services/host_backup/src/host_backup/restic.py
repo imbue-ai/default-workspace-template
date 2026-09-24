@@ -17,7 +17,7 @@ from typing import Final
 _RESTIC_TIMEOUT_SECONDS: Final[float] = 3600.0
 # Caps restic to one core and one file read at a time so a backup cannot starve
 # the workspace's agents and UI. `nice`/`ionice` cannot do this: gVisor, which
-# remote workspaces run under, accepts but ignores scheduling priorities.
+# remote workspaces run under, ignores `nice` and rejects `ionice` outright.
 _RESOURCE_LIMIT_ENV: Final[Mapping[str, str]] = {
     "GOMAXPROCS": "1",
     "RESTIC_READ_CONCURRENCY": "1",
