@@ -125,7 +125,11 @@ export function App(): m.Component<AppAttrs> {
   const menu = createMenu({
     placement: "below",
     role: "menu",
-    minWidth: MENU_MIN_WIDTH,
+    // A menu of verbs never goes under a card's worth of width. The size menu is not one: its
+    // content is a grid of tiles, and a floor wider than the grid would only pad it on one side.
+    get minWidth(): number | undefined {
+      return openMenu?.kind === "size" ? undefined : MENU_MIN_WIDTH;
+    },
     // The marker class each menu is known by. Read off the open menu on every render, so one
     // component can wear all five names.
     get extraClass(): string | undefined {
