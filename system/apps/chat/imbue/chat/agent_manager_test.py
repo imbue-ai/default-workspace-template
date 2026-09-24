@@ -89,7 +89,6 @@ from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.models import TransitionKind
 from imbue.chat.new_chat_sends import NewChatCreateFailedError
-from imbue.chat.new_chat_sends import NewChatSendGate
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
@@ -105,6 +104,7 @@ from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import observer_holding_the_lock
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import seed_creating_chat
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_recording_mngr_binary
@@ -1143,14 +1143,6 @@ def test_full_snapshot_replaces_agent_set(agent_manager: AgentManager, broadcast
     assert len(msg["chats"]) == 2
 
 
-def _seed_creating_chat(agent_manager: AgentManager, chat_id: ChatId, name: str) -> None:
-    with agent_manager._lock:
-        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
-            chat_id=chat_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
-        )
-        agent_manager._new_chat_send_gate_by_chat_id[chat_id] = NewChatSendGate.build()
-
-
 def _record_deliveries(agent_manager: AgentManager) -> list[str]:
     """Hand the manager a delivery that records each message's text, in the order it went."""
     delivered: list[str] = []
@@ -1192,7 +1184,7 @@ def _send_while_the_chat_is_created(
 def test_a_chat_that_starts_with_nothing_to_say_is_greeted_once_it_is_up(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     delivered = _record_deliveries(agent_manager)
 
     agent_manager._run_creation(
@@ -1207,7 +1199,7 @@ def test_a_message_sent_while_a_silent_chat_is_created_is_its_first_and_it_is_no
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     """The greeting would run first and leave the user's message queued behind it."""
-    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     delivered = _record_deliveries(agent_manager)
     errors: list[str] = []
     sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "hello", delivered, errors)
@@ -1227,7 +1219,7 @@ def test_a_message_sent_while_a_silent_chat_is_created_is_its_first_and_it_is_no
 def test_a_message_sent_while_a_chat_is_created_goes_after_the_message_the_create_left_out(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     delivered = _record_deliveries(agent_manager)
     errors: list[str] = []
     sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "and another thing", delivered, errors)
@@ -1249,7 +1241,7 @@ def test_a_message_sent_while_a_chat_is_created_goes_after_the_message_the_creat
 
 
 def test_a_failed_create_refuses_the_messages_sent_while_it_ran(agent_manager: AgentManager, tmp_path: Path) -> None:
-    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     delivered = _record_deliveries(agent_manager)
     errors: list[str] = []
     sender = _send_while_the_chat_is_created(agent_manager, ChatId("test-id"), "hello", delivered, errors)
@@ -1273,7 +1265,7 @@ def test_a_send_to_a_chat_that_is_not_being_created_goes_at_once(agent_manager: 
 def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     q = broadcaster.register()
 
     agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
@@ -1297,7 +1289,7 @@ def test_a_created_chat_stays_listed_through_observe_events_that_predate_it(
     """The observe stream reports a new agent seconds after its create returns; every event before
     that rebuilds the tracked agents without it, which must not unlist the chat the create landed."""
     created_id = str(MngrAgentId())
-    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
 
     agent_manager._handle_observe_event(make_agent_state_event(_agent_details("older-chat")))
@@ -1313,7 +1305,7 @@ def test_a_created_agent_the_observe_stream_never_reports_is_let_go(
     for good: the full snapshots are how the stream says what exists, so two of them without it end it."""
     created_id = str(MngrAgentId())
     (tmp_path / "agents" / created_id).mkdir(parents=True)
-    _seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId(created_id), "Chat 1")
     agent_manager._run_creation(ChatId(created_id), created_id, "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE)
     with agent_manager._lock:
         assert created_id in agent_manager._activity_tracked_agents
@@ -1335,7 +1327,7 @@ def test_the_observe_stream_owns_a_created_agent_once_it_reports_it(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     created_id = MngrAgentId()
-    _seed_creating_chat(agent_manager, ChatId(str(created_id)), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId(str(created_id)), "Chat 1")
     agent_manager._run_creation(
         ChatId(str(created_id)), str(created_id), "chat-1", ["true"], tmp_path, {}, HarnessType.CLAUDE
     )
@@ -1352,7 +1344,7 @@ def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails
 ) -> None:
     """The agent is up, so the create succeeded; a first message that could not be handed over is the
     settling step's problem and must not cost the waiting page its answer."""
-    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         raise OSError("the pane went away")
@@ -1392,7 +1384,7 @@ def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_t
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     """A failed create is not forgotten: the page shows why, and can try again on the same account."""
-    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
+    seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     cmd = ["sh", "-c", "echo first line; echo the real reason >&2; exit 3"]
 
     agent_manager._run_creation(ChatId("test-id"), "test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)

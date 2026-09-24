@@ -53,10 +53,8 @@ from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import ModelPick
-from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
-from imbue.chat.new_chat_sends import NewChatSendGate
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
@@ -77,6 +75,7 @@ from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import seed_creating_chat
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
 from imbue.chat.testing import wait_until_true
@@ -557,11 +556,7 @@ def _manager_creating_chat(chat_id: str) -> tuple[AgentManager, RecordingMngrMes
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     manager.note_agent_list_known()
-    with manager._lock:
-        manager._provisional_chats[ChatId(chat_id)] = ProvisionalChat(
-            chat_id=ChatId(chat_id), name="Chat 1", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
-        )
-        manager._new_chat_send_gate_by_chat_id[ChatId(chat_id)] = NewChatSendGate.build()
+    seed_creating_chat(manager, ChatId(chat_id), "Chat 1")
     return manager, messenger
 
 
