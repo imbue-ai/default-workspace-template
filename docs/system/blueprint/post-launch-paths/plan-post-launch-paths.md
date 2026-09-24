@@ -272,7 +272,7 @@ Both read only the params they declare and ignore the envelope.
 ```
 
 - `target.kind` is `new`, `focus`, or `window`; `window_id` is required for `window` and must name a window of `app` on the desktop.
-- The shell resolves the launch path (`400` for an unknown app, launch id, or param; a missing required param), builds the path (a GET) or posts for it (a POST, section 3.2), then opens (`new`, `focus`; `minimized` as the op's) or navigates (`window`) and answers `{"window", "path", "is_new"}` with `201` for an open and `200` otherwise.
+- The shell resolves the launch path (`400` for an unknown app, launch id, or param; the registry row carries the param names alone, so a missing required param is the app's to refuse, which a POST launch path does with a `4xx` and its `detail`), builds the path (a GET) or posts for it (a POST, section 3.2), then opens (`new`, `focus`; `minimized` as the op's) or navigates (`window`) and answers `{"window", "path", "is_new"}` with `201` for an open and `200` otherwise.
 - The POST is made by `shell/launches.py`, behind a `launch_poster` field on `ShellState` injected like `close_hint_poster`, so the routes are tested against a recording poster and the e2e suite against a stub app.
 
 The op route's `open` uses the same resolution (`_open_target` returns the answered path for a POST launch path); `WindowOpenRequest` no longer carries a launch.

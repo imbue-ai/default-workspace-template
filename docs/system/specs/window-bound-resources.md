@@ -26,7 +26,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 - The **browser** (`system/apps/browser`) runs one headful Chromium per browser, each on its own `--user-data-dir` profile and its own Xvfb display, filmed per viewer by pixelflux; a browser accepts up to eight viewers.
   `BROWSER_MAX_SESSIONS` caps the fleet at 2.
   `stop_browser` ends Chromium and its display while keeping the profile and the tab list; `close_and_forget` (`DELETE /browsers/<name>`, the fleet CLI's `close`) also deletes the profile.
-  `/new[?url=]` creates a browser and redirects to `/?session=<name>`.
+  `POST /new` (the `new` launch path, body `{"url"?}`) creates a browser and answers `{"path": "/?session=<name>"}`, the page the shell opens.
   Chromium refuses two processes on one profile directory, so concurrent browsers cannot share a profile.
 - The **fleet CLI** (`agentic-browser-fleet new`) creates a browser and already opens a viewer window through `layout.py open browser --path /?session=<name>`, falling back to a printed hint when the shell cannot place it.
   The **lease** (`acquire`, `release`, `handoff`) says who is driving; it is not a lifetime.
@@ -154,11 +154,11 @@ The cap counts launched browsers (`init`, `running`); a stopped browser holds no
 Restore honours the cap: the first saved browser by name relaunches and every further saved browser is registered stopped, never refused.
 
 **`/new` means "the browser".**
-`GET /new[?url=]`:
+`POST /new` with `{"url"?}` (the `new` launch path; the post-launch-paths plan section 4.8), answering `{"path"}`, the browser's page:
 
-- a browser exists and runs: redirect to its page; with `url`, first open the URL as a new tab in it (the daemon's CDP client already opens tabs for restore);
-- a browser exists and is stopped or crashed: `start_browser` it (with `url` as an extra tab once it is up), then redirect;
-- no browser exists: create as today, then redirect.
+- a browser exists and runs: answer its page; with `url`, first open the URL as a new tab in it (the daemon's CDP client already opens tabs for restore);
+- a browser exists and is stopped or crashed: `start_browser` it (with `url` as an extra tab once it is up), then answer its page;
+- no browser exists: create as today, then answer its page.
 
 With several saved browsers (a workspace upgraded from a cap of 2), "the browser" is the running one, else the first by name.
 `POST /browsers` with no `name` answers the same browser the same way, so the fleet CLI's `new` needs no change beyond section 6; a `POST /browsers` with a `name` keeps its create-or-409 semantics for a named second browser an operator insists on.
