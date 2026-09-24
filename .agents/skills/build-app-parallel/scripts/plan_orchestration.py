@@ -22,8 +22,9 @@ Three subcommands:
 ``parse``
     Extract the three lists from ``plan.md``, validate them, expand ``["all"]``
     access lists, attach the model each node's worker runs on, and write
-    ``plan.json``. Exits 2 with a message naming the problem when the plan is
-    malformed.
+    ``plan.json``. With ``--reduce-access``, also drop each access entry another
+    entry already reaches. Exits 2 with a message naming the problem when the
+    plan is malformed.
 
 ``ready``
     Given which nodes are done and which are running, print the nodes that can
@@ -182,8 +183,61 @@ def _expand_access_list(node_idx: int, access: object) -> list[int]:
     return sorted(int(entry) for entry in access)
 
 
-def parse_plan(plan_text: str) -> dict[str, object]:
-    """Turn the planner's output into the validated plan the orchestrator runs."""
+def _indirect_ancestors(access_by_node: dict[int, list[int]]) -> dict[int, set[int]]:
+    """Every node each node depends on, directly or through another node.
+
+    Safe to compute in index order because a node may only name earlier indices,
+    so each node's dependencies are already resolved by the time it is reached.
+    """
+    ancestors: dict[int, set[int]] = {}
+    for idx in sorted(access_by_node):
+        reached: set[int] = set()
+        for dep in access_by_node[idx]:
+            reached.add(dep)
+            reached |= ancestors[dep]
+        ancestors[idx] = reached
+    return ancestors
+
+
+def reduce_access_lists(
+    access_by_node: dict[int, list[int]],
+) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
+    """Drop each access entry that another entry already reaches.
+
+    A planner that names the node holding the design alongside the nodes that
+    built against it writes an edge that constrains nothing: node 5 cannot start
+    before node 0 when it is already waiting on node 3, which waited on node 0.
+    The edge is not free, though, because an access list is also the list of
+    reports pasted into the node's task file -- one such entry put 2,300 words of
+    an ancestor's report into a brief that already carried the two nodes which
+    had built against it.
+
+    Returns the reduced lists and, per node, what was dropped, so ``parse`` can
+    say what it did. A DAG has exactly one transitive reduction, so there is no
+    choice to make here.
+    """
+    ancestors = _indirect_ancestors(access_by_node)
+    reduced: dict[int, list[int]] = {}
+    dropped: dict[int, list[int]] = {}
+    for idx, access in access_by_node.items():
+        # ``ancestors[dep]`` excludes ``dep``, so an entry survives unless some
+        # *other* entry reaches it.
+        reached_by_siblings: set[int] = set()
+        for dep in access:
+            reached_by_siblings |= ancestors[dep]
+        reduced[idx] = [dep for dep in access if dep not in reached_by_siblings]
+        dropped[idx] = [dep for dep in access if dep in reached_by_siblings]
+    return reduced, dropped
+
+
+def parse_plan(plan_text: str, *, reduce_access: bool = False) -> dict[str, object]:
+    """Turn the planner's output into the validated plan the orchestrator runs.
+
+    With ``reduce_access``, an access entry another entry already reaches is
+    dropped; without it, the planner's lists are carried through untouched. The
+    two are worth comparing on a real build, so this is a switch rather than a
+    decision baked into the script.
+    """
     output_block = _extract_output_block(plan_text)
     capabilities = _validate_capabilities(
         _extract_list(output_block, _CAPABILITY_LIST_NAME)
@@ -204,12 +258,25 @@ def parse_plan(plan_text: str) -> dict[str, object]:
             f"the plan has {node_count} nodes; expected {MIN_NODE_COUNT} to {MAX_NODE_COUNT}"
         )
 
+    planned_access = {
+        idx: _expand_access_list(idx, access_lists[idx]) for idx in range(node_count)
+    }
+    if reduce_access:
+        access, dropped_access = reduce_access_lists(planned_access)
+    else:
+        access = planned_access
+        dropped_access = {idx: [] for idx in range(node_count)}
+
     nodes = [
         {
             "index": idx,
             "capability": capabilities[idx],
             "subtask": subtasks[idx],
-            "access": _expand_access_list(idx, access_lists[idx]),
+            "access": access[idx],
+            # What the planner named that another entry already reached. Kept so
+            # plan.json shows the reduction rather than hiding it; plan.md holds
+            # the planner's own words either way.
+            "access_dropped": dropped_access[idx],
             "model": MODEL_BY_CAPABILITY.get(capabilities[idx]),
         }
         for idx in range(node_count)
@@ -339,11 +406,22 @@ def _parse_node_index_list(text: str) -> list[int]:
         ) from None
 
 
-def _run_parse(run_dir: Path) -> int:
-    plan = parse_plan(_read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME))
+def _run_parse(run_dir: Path, reduce_access: bool) -> int:
+    plan = parse_plan(
+        _read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME), reduce_access=reduce_access
+    )
     plan_json_path = run_dir / PLAN_JSON_FILE_NAME
     plan_json_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     print(f"plan_orchestration: wrote {len(plan['nodes'])} nodes to {plan_json_path}")
+    nodes = plan["nodes"]
+    assert isinstance(nodes, list)
+    for node in nodes:
+        if node["access_dropped"]:
+            print(
+                f"plan_orchestration: node {node['index']} no longer waits on "
+                f"{node['access_dropped']}; the nodes it still waits on "
+                f"({node['access']}) already depend on them"
+            )
     return 0
 
 
@@ -389,6 +467,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "parse", help="Validate <run-dir>/plan.md and write <run-dir>/plan.json."
     )
     parse_parser.add_argument("--run-dir", type=Path, required=True)
+    parse_parser.add_argument(
+        "--reduce-access",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Drop each access entry another entry already reaches, so a node "
+            "waits on -- and is handed the report of -- only the nodes no other "
+            "dependency covers. Off by default."
+        ),
+    )
 
     ready_parser = subparsers.add_parser(
         "ready", help="Print the nodes that can start now, comma-separated."
@@ -411,7 +499,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         match args.command:
             case "parse":
-                return _run_parse(args.run_dir)
+                return _run_parse(args.run_dir, args.reduce_access)
             case "ready":
                 return _run_ready(args.run_dir, args.done, args.running)
             case "write-task":

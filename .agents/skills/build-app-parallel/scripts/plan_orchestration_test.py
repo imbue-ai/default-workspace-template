@@ -446,3 +446,107 @@ def test_cli_reports_missing_run_files_with_exit_code_2(
     assert "missing" in capsys.readouterr().err
     assert plan_orchestration.main(["ready", "--run-dir", str(run_dir)]) == 2
     assert "plan.json" in capsys.readouterr().err
+
+
+def test_reduce_access_lists_drops_an_entry_a_sibling_already_reaches() -> None:
+    # The shape every real plan so far has produced: the integration node names
+    # the design node alongside the two nodes that built against it.
+    reduced, dropped = plan_orchestration.reduce_access_lists(
+        {0: [], 1: [], 2: [0, 1], 3: [0, 1], 4: [2], 5: [0, 2, 3, 4], 6: [5]}
+    )
+
+    assert reduced[5] == [3, 4]
+    assert dropped[5] == [0, 2]
+    # Nodes whose entries cover nothing between them are left alone.
+    assert reduced[2] == [0, 1]
+    assert dropped[2] == []
+    assert reduced[6] == [5]
+
+
+def test_reduce_access_lists_follows_a_chain_of_any_length() -> None:
+    reduced, dropped = plan_orchestration.reduce_access_lists(
+        {0: [], 1: [0], 2: [1], 3: [2], 4: [0, 1, 2, 3]}
+    )
+
+    assert reduced[4] == [3]
+    assert dropped[4] == [0, 1, 2]
+
+
+def test_reduce_access_lists_keeps_independent_entries() -> None:
+    reduced, dropped = plan_orchestration.reduce_access_lists(
+        {0: [], 1: [], 2: [], 3: [0, 1, 2]}
+    )
+
+    assert reduced[3] == [0, 1, 2]
+    assert dropped == {0: [], 1: [], 2: [], 3: []}
+
+
+def test_parse_plan_leaves_the_access_lists_alone_by_default() -> None:
+    plan = plan_orchestration.parse_plan(_TODO_PLAN)
+
+    assert [node["access"] for node in plan["nodes"]][5] == [3, 4]
+    assert all(node["access_dropped"] == [] for node in plan["nodes"])
+
+
+def test_parse_plan_reduces_the_access_lists_when_asked() -> None:
+    plan_text = _plan_text(
+        '["high", "medium", "medium", "high"]',
+        '["Settle the spec.", "Scaffold.", "Build the store.", "Wire it up."]',
+        "[[], [0], [0, 1], [0, 1, 2]]",
+    )
+
+    plan = plan_orchestration.parse_plan(plan_text, reduce_access=True)
+
+    nodes = plan["nodes"]
+    assert [node["access"] for node in nodes] == [[], [0], [1], [2]]
+    assert [node["access_dropped"] for node in nodes] == [[], [], [0], [0, 1]]
+
+
+def test_parse_plan_reduces_an_expanded_all_access_list() -> None:
+    plan_text = _plan_text(
+        '["high", "medium", "medium", "high"]',
+        '["Settle the spec.", "Scaffold.", "Build the store.", "Wire it up."]',
+        '[[], [0], [1], ["all"]]',
+    )
+
+    plan = plan_orchestration.parse_plan(plan_text, reduce_access=True)
+
+    # ``["all"]`` expands to every earlier node, and all but the last are covered.
+    assert plan["nodes"][3]["access"] == [2]
+    assert plan["nodes"][3]["access_dropped"] == [0, 1]
+
+
+def test_parse_command_says_which_dependencies_it_dropped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan_text = _plan_text(
+        '["high", "medium", "medium", "high"]',
+        '["Settle the spec.", "Scaffold.", "Build the store.", "Wire it up."]',
+        "[[], [0], [0, 1], [0, 1, 2]]",
+    )
+    run_dir = _write_run_dir(tmp_path, plan_text)
+
+    assert plan_orchestration.main(["parse", "--run-dir", str(run_dir), "--reduce-access"]) == 0
+
+    out = capsys.readouterr().out
+    assert "node 3 no longer waits on [0, 1]" in out
+    assert "([2]) already depend on them" in out
+    written = json.loads((run_dir / "plan.json").read_text())
+    assert [node["access"] for node in written["nodes"]] == [[], [0], [1], [2]]
+
+
+def test_parse_command_leaves_the_plan_alone_without_the_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan_text = _plan_text(
+        '["high", "medium", "medium", "high"]',
+        '["Settle the spec.", "Scaffold.", "Build the store.", "Wire it up."]',
+        "[[], [0], [0, 1], [0, 1, 2]]",
+    )
+    run_dir = _write_run_dir(tmp_path, plan_text)
+
+    assert plan_orchestration.main(["parse", "--run-dir", str(run_dir)]) == 0
+
+    assert "no longer waits on" not in capsys.readouterr().out
+    written = json.loads((run_dir / "plan.json").read_text())
+    assert [node["access"] for node in written["nodes"]] == [[], [0], [0, 1], [0, 1, 2]]
