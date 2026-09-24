@@ -41,12 +41,12 @@ describe("renderMarkdown links", () => {
   }
 
   it("leaves web links as ordinary links", () => {
-    const anchor = render("[Docs](https://example.com/docs) and [mail](mailto:a@example.com)").querySelectorAll("a");
-    expect(Array.from(anchor, (a) => a.getAttribute("href"))).toEqual([
+    const anchors = render("[Docs](https://example.com/docs) and [mail](mailto:a@example.com)").querySelectorAll("a");
+    expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
       "https://example.com/docs",
       "mailto:a@example.com",
     ]);
-    expect(anchor[0].hasAttribute("download")).toBe(false);
+    expect(anchors[0].hasAttribute("download")).toBe(false);
   });
 
   it("keeps an absolute path as a download link", () => {
