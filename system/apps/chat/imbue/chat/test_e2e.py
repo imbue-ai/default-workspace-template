@@ -805,22 +805,28 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_it_lands(
-    tmp_path: Path, page: Page
+def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With an account signed in the create runs immediately on it; the page says so while the
-    create runs, and the composer arrives when the agent registers. The launcher points the chat's pinned
-    window at ``/new`` in place, so the create can land before the notice is looked for: either is
-    accepted, and the composer is what must arrive."""
+    """With an account signed in the create runs immediately on it, and the page is an empty chat with its composer
+    ready from the first frame: no placeholder text while the agent is created, and none once it lands."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
     with _running_e2e_server(tmp_path) as server:
-        chat = _start_new_chat(page, server)
-        creating_or_landed = chat.locator(".message-list-creating, .message-input-textbox")
-        expect(creating_or_landed.first).to_be_visible(timeout=15000)
-        if chat.locator(".message-list-creating").count() > 0:
-            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat")
-        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
-        expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
-        assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
+        try:
+            chat = _start_new_chat(page, server)
+            # The long wait only covers the chat page's socket, which in CI has taken about twenty seconds to
+            # connect and bring the provisional record; the create itself is held until released below.
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
+            expect(chat.locator(".message-input-textbox")).to_be_editable()
+            expect(chat.locator(".message-list-creating")).to_have_text("")
+            assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
+        finally:
+            release_create.touch()
+
+        expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
+        expect(chat.locator(".message-list-empty")).to_have_text("")
+        expect(chat.locator(".message-input-textbox")).to_be_editable()
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -838,7 +844,7 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
             chat = _start_new_chat(page, server)
             # The create is held until released below, so the long wait only covers the chat page's socket,
             # which in CI has taken about twenty seconds to connect and bring the provisional record.
-            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=45000)
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
             chat.locator(".message-input-textbox").fill("hello")
             chat.locator(".message-input-textbox").press("Enter")
             bubble = chat.locator(".outgoing-message")
