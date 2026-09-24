@@ -94,6 +94,20 @@ installed.
 workspace-local `.agents/mcp_config.json` (or `~/.gemini/config/mcp_config.json`),
 a `mcpServers` object of `command` / `args` / `env` in the same wrapped shape.
 
+**A hosted server** (a URL rather than a package) is wired the same way, through
+[mcp-remote](https://github.com/geelen/mcp-remote), a bridge that runs here,
+pinned like any other server, and forwards to the URL:
+
+```json
+"args": ["system/scripts/with_secrets.py", "data/.secrets/example.env", "--", "npx", "-y", "mcp-remote@0.14.3", "https://mcp.example.com/mcp", "--header", "Authorization: Bearer ${EXAMPLE_API_KEY}"]
+```
+
+mcp-remote fills in `${EXAMPLE_API_KEY}` itself, from the environment the wrapper
+gives it. Claude Code leaves it as written because its own environment does not
+hold the variable (`claude mcp list` warns about that; the server still starts).
+A hosted server that needs no key drops the wrapper and the `--header`; one with
+its own OAuth sign-in prints its consent URL through mcp-remote, as below.
+
 Wiring is built and tested only for the harnesses this workspace has an account
 for; do not write a config for a harness the user does not run.
 
