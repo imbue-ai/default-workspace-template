@@ -257,6 +257,70 @@ describe("the open chip's detail panel", () => {
     expect(detailText()).toContain("the whole output");
   });
 
+  /** Stub the detail fetch so the output pane loads `output` and the input is absent. */
+  function loadOutput(output: string): void {
+    mockDetailState.mockImplementation((_chatId: string, eventId: string) =>
+      eventId === "a-pc-1"
+        ? { state: "loaded", detail: { inputs_by_tool_call_id: {}, output: null, thinking: null } }
+        : { state: "loaded", detail: { inputs_by_tool_call_id: {}, output, thinking: null } },
+    );
+  }
+
+  function toggle(): HTMLButtonElement | null {
+    return root.querySelector<HTMLButtonElement>(".tool-call-output-toggle");
+  }
+
+  // The chip that opened the panel can be a screenful above it once the output is
+  // long, so the header repeats what the call was and carries the way out.
+  it("heads the panel with the call's own phrase and a close control", () => {
+    loadOutput("out");
+    mount([chip({ ...call, action_note: "Check disk usage" }, "a-pc-1")], [done]);
+    const header = root.querySelector(".tool-chip-detail-header")!;
+    expect(header.textContent).toContain("Check disk usage");
+    expect(header.querySelector(".tool-chip-detail-close")).not.toBeNull();
+  });
+
+  it("closes the chip from the header's close control", () => {
+    loadOutput("out");
+    mount([chip(call, "a-pc-1")], [done]);
+    root.querySelector<HTMLButtonElement>(".tool-chip-detail-close")!.click();
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(root.querySelector(".tool-chip-detail")).toBeNull();
+  });
+
+  it("shows a short output whole, with nothing to ask about", () => {
+    loadOutput(Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n"));
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(detailText()).toContain("line 20");
+    expect(toggle()).toBeNull();
+  });
+
+  // A trailing newline must not make a 20-line output look like 21 and get clamped.
+  it("does not count the empty line a trailing newline leaves behind", () => {
+    loadOutput(Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(toggle()).toBeNull();
+  });
+
+  it("clamps a long output and offers the whole of it by line count", () => {
+    setBlockExpanded("chip-output:pc-1", false);
+    loadOutput(Array.from({ length: 64 }, (_, i) => `line ${i + 1}`).join("\n"));
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(detailText()).toContain("line 20");
+    expect(detailText()).not.toContain("line 21");
+    expect(toggle()!.textContent).toBe("View all 64 lines");
+  });
+
+  it("opens the clamp up, and offers the way back", () => {
+    setBlockExpanded("chip-output:pc-1", false);
+    loadOutput(Array.from({ length: 64 }, (_, i) => `line ${i + 1}`).join("\n"));
+    mount([chip(call, "a-pc-1")], [done]);
+    toggle()!.click();
+    mount([chip(call, "a-pc-1")], [done]);
+    expect(detailText()).toContain("line 64");
+    expect(toggle()!.textContent).toBe("Show less");
+  });
+
   it("shows the quiet placeholder when the payload is gone", () => {
     mockDetailState.mockReturnValue({ state: "unavailable" });
     mount([chip(call, "a-pc-1")], [done]);
