@@ -213,10 +213,11 @@ def test_subagent_route_refuses_an_agent_that_is_not_the_chats(
     assert matched.get_json() == {"events": [], "metadata": None}
 
 
-def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
-    """Sending a message to a nonexistent agent returns 404."""
+@pytest.mark.parametrize("chat_ref", ["nonexistent", "%20"])
+def test_send_message_for_unknown_agent(client: FlaskClient, chat_ref: str) -> None:
+    """Sending a message to a nonexistent agent, or to a blank chat ref, returns 404."""
     with patch("imbue.chat.server.discover_agents", return_value=[]):
-        response = client.post("/api/chats/nonexistent/message", json={"message": "hello"})
+        response = client.post(f"/api/chats/{chat_ref}/message", json={"message": "hello"})
     assert response.status_code == 404
 
 
