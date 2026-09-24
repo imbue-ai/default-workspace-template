@@ -746,6 +746,30 @@ describe("carryover", () => {
     expect(carried[0].is_carryover).toBe(true);
     expect(carried[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
   });
+
+  // A fresh start leaves no handoff node behind, so a message the retiring agent never answered
+  // leaves a section holding only the carried-over step: it shows once, in the successor's turn.
+  it("carries a step past a message and a fresh-start switch without an empty node between them", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t0", "first", "u1"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "never mind, switch", "u2"),
+      agentSwitch("t4", "sw1", "claude", "pi", null, true),
+      userMsg("t5", "carry on in pi", "u3"),
+      workMsg("t6", "Edit", "w2"),
+      result("t6", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual(["u1", "u2", null, "u3"]);
+    expect(sections[1].items).toEqual([]);
+    expect(sections[2].items).toEqual([]);
+    const carried = stepItems(sections[3].items);
+    expect(carried.map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(carried[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
 });
 
 describe("pending roster", () => {

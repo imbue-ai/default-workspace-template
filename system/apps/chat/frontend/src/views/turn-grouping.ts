@@ -586,22 +586,18 @@ export function buildSections(
         lastSwitched = null;
         const requestId = resolutionRequestIdOf(e);
         if (requestId !== null) resolutionsByRequestId.set(requestId, resolution);
-        carryover = closeSection(current);
+        carryover = current === null ? [] : openStepsAtEnd(current);
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
-      if (isSystemChipUserMessage(e) || isNoticeUserMessage(e)) {
-        if (current !== null && current.open_handoff !== null) {
-          // The handoff node takes the retiring agent's whole summary turn, so a chip landing
-          // inside it stays in that turn, at its spot after the node.
-          current.entries.push({ kind: "chip", event: e });
-          continue;
-        }
-        // The agent resumes after a chip, so it breaks the timeline like a permission verdict
-        // (see the module docstring): the section closes, carrying any open step over, and the
-        // chip heads the next one.
-        carryover = closeSection(current);
-        current = ensureSection(e, `section-${e.event_id}`);
+      if (
+        current !== null &&
+        current.open_handoff !== null &&
+        (isSystemChipUserMessage(e) || isNoticeUserMessage(e))
+      ) {
+        // The handoff node takes the retiring agent's whole summary turn, so a chip landing
+        // inside it stays in that turn, at its spot after the node.
+        current.entries.push({ kind: "chip", event: e });
         continue;
       }
       if (isNonBoundaryUserMessage(e)) {
@@ -610,10 +606,11 @@ export function buildSections(
         continue;
       }
 
-      // Real user turn: close the prior section (carrying open steps) and open
-      // a new one.
+      // A boundary -- a real user turn, a status line, or a system chip or notice (see the
+      // module docstring): close the prior section (carrying open steps) and open a new one
+      // headed by the message.
       lastSwitched = null;
-      carryover = closeSection(current);
+      carryover = current === null ? [] : openStepsAtEnd(current);
       current = ensureSection(e, `section-${e.event_id}`);
       continue;
     }
@@ -741,26 +738,6 @@ function openStepsAtEnd(section: SectionBuilder): string[] {
   return section.step_order.filter((id) => section.steps.get(id)!.status === "active");
 }
 
-/** Close a section at a turn boundary, returning the steps to carry over. A section that ends
- *  before the agent did anything in it (two breaks back to back) drops its carried-over nodes,
- *  since the next section re-opens them: otherwise each would show twice, once empty. */
-function closeSection(section: SectionBuilder | null): string[] {
-  if (section === null) return [];
-  const carried = openStepsAtEnd(section);
-  const isUntouched = section.entries.every((entry) => {
-    if (entry.kind !== "step") return false;
-    const node = section.steps.get(entry.id)!;
-    return node.is_carryover && node.status === "active" && node.events.length === 0;
-  });
-  if (isUntouched) {
-    section.entries = [];
-    section.steps.clear();
-    section.step_order = [];
-    section.current_step_id = null;
-  }
-  return carried;
-}
-
 /** Collect each step's closing remarks: the prose it spoke after its last work
  *  in this section. The live frontier step is exempt: nothing has ended it, so
  *  its trailing prose is in-flight narration shown as a caption (see step 3). */
@@ -798,6 +775,19 @@ function finalizeSection(
   // A fresh start asked for no summary and delivered no prompt: there was no handoff to show, so
   // its node comes off the timeline rather than standing as an empty line.
   section.entries = section.entries.filter((entry) => entry.kind !== "handoff" || !isFreshStartNode(entry.node));
+
+  // A section the agent did nothing in (two boundaries back to back) holds only the steps it
+  // carried over, which the next section shows again: drop them rather than show each twice.
+  const isUntouched = section.entries.every((entry) => {
+    if (entry.kind !== "step") return false;
+    const node = section.steps.get(entry.id)!;
+    return node.is_carryover && node.status === "active" && node.events.length === 0;
+  });
+  if (!is_tail && isUntouched) {
+    section.entries = [];
+    section.steps.clear();
+    section.step_order = [];
+  }
 
   // 1. Ejection: prose spoken inside a step AFTER its last work (so it is NOT
   //    narration, which is prose *followed* by more work in the same step). It

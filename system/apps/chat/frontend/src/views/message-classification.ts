@@ -74,14 +74,20 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
 // all derive from the single classification above.
 
 /**
- * True for a user_message that is NOT a turn of the conversation: it never counts
- * as a turn the user took. The progress timeline still breaks at a system chip or
- * notice (see turn-grouping); the other non-boundary kinds render no row at all.
+ * True for a user_message that does NOT open a new section of the progress
+ * timeline: a skill expansion or a hidden framework injection, which renders no
+ * row of its own there.
  */
 export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolean {
   // Derived from the KIND_SPEC registry (its `boundary` column) so the boundary
   // rule lives in exactly one place -- the spec.
   return !KIND_SPEC[classifyUserMessage(event).kind].boundary;
+}
+
+/** True for a user_message that is a turn of the conversation (the registry's `isTurn`
+ *  column): what fast mode's turn limit counts. */
+export function isTurnUserMessage(event: ClassifiableUserMessage): boolean {
+  return KIND_SPEC[classifyUserMessage(event).kind].isTurn;
 }
 
 /** True when the message shows as a collapsed chip (rather than being dropped):

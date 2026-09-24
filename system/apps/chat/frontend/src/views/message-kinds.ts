@@ -30,8 +30,9 @@
  *      task notification are all the SAME display (a collapsed system chip) and
  *      so are all `UserMessageKind.SystemChip`, differing only by their chip label.
  *   2. `KIND_SPEC` records, per kind, exactly how it renders: which rail, whether
- *      it is a turn of its own, and a prose description of the net visual. Read
- *      it to answer "what will my message look like?" without tracing render code.
+ *      it opens a new timeline section, whether it counts as a turn, and a prose
+ *      description of the net visual. Read it to answer "what will my message look
+ *      like?" without tracing render code.
  *
  * ---------------------------------------------------------------------------
  * Adding a harness (Codex, etc.)
@@ -110,13 +111,14 @@ export interface KindSpec {
   /** Which rail / channel the message (or its relocated content) appears on. */
   rail: Rail;
   /**
-   * Whether this message is a turn of the conversation (a boundary) rather than
-   * something injected into the agent's running work. Independent of `rail` and of
-   * appearance: a `SystemChip` is on the user rail yet is NOT a boundary -- it is
-   * not a turn the user took -- although the progress timeline still breaks at it
-   * (see turn-grouping), so the work the agent resumes renders below it.
+   * Whether this message OPENS A NEW SECTION of the progress timeline (a boundary)
+   * or produces no row there at all. Independent of `rail`, of appearance, and of
+   * `isTurn`: a `SystemChip` is not a turn the user took, yet the timeline breaks
+   * at it, so the work the agent resumes after it renders below it.
    */
   boundary: boolean;
+  /** Whether this message is a turn of the conversation: what fast mode's turn limit counts. */
+  isTurn: boolean;
   /** Exact, human-readable description of the net visual -- the contract. */
   netVisual: string;
 }
@@ -125,6 +127,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   [UserMessageKind.UserPrompt]: {
     rail: Rail.User,
     boundary: true,
+    isTurn: true,
     netVisual:
       "Right-aligned rounded accent bubble opening a new turn section; the text " +
       "renders as light markdown. This is the baseline every other kind is " +
@@ -132,7 +135,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   },
   [UserMessageKind.SystemChip]: {
     rail: Rail.User,
-    boundary: false,
+    boundary: true,
+    isTurn: false,
     netVisual:
       "Right-aligned COLLAPSED chip ('▸ <label>') at the point it arrived. It is " +
       "not a turn of its own, but the timeline breaks at it: what the agent said " +
@@ -145,6 +149,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   [UserMessageKind.SkillExpansion]: {
     rail: Rail.Assistant,
     boundary: false,
+    isTurn: false,
     netVisual:
       "No row of its own on the user rail. Its SKILL.md body is relocated into " +
       "the preceding assistant-side 'Tool: Skill' tool-call block, where it shows " +
@@ -153,11 +158,13 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   [UserMessageKind.Hidden]: {
     rail: Rail.None,
     boundary: false,
+    isTurn: false,
     netVisual: "No DOM at all -- fully invisible (e.g. the seeded '/welcome').",
   },
   [UserMessageKind.PermissionResolution]: {
     rail: Rail.None,
     boundary: true,
+    isTurn: false,
     netVisual:
       "No row of its own. The extracted verdict (granted/denied/error) is written " +
       "onto the EARLIER permission-request card, and a fresh turn section opens " +
@@ -167,13 +174,15 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   [UserMessageKind.StatusMessage]: {
     rail: Rail.User,
     boundary: true,
+    isTurn: true,
     netVisual:
       "A subtle centered status pill (e.g. 'Context was compacted') rendered as " +
       "its own row between turns or at the start/end of a turn.",
   },
   [UserMessageKind.Notice]: {
     rail: Rail.Assistant,
-    boundary: false,
+    boundary: true,
+    isTurn: false,
     netVisual:
       "A left-aligned single line at the point it arrived, breaking the timeline " +
       "like a SystemChip: a tick, the lead in medium weight ('Background task " +

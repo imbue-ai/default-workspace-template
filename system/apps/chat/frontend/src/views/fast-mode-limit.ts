@@ -12,11 +12,11 @@
  * it. The first switch in a workspace also raises a short notice explaining what happened and
  * where the mode lives, recorded on the settings so it shows once.
  *
- * A turn is a message of a boundary kind in the message-kind registry -- one the user sent, or a
+ * A turn is a message the message-kind registry marks as one -- a message the user sent, or a
  * status line between turns -- so "5 turns" means five exchanges the user can see. The timeline
  * also breaks at system chips, notices and permission verdicts, but none of those is a turn the
- * user took: the registry leaves chips and notices out, and verdicts are excluded on top of that
- * (the app talking to itself). So are the turns of a seeded chat's seed segment: the Mind app wrote
+ * user took: the registry marks chips and notices as no turn, and verdicts are excluded on top of
+ * that (the app talking to itself). So are the turns of a seeded chat's seed segment: the Mind app wrote
  * those before any agent ran, so they bought no fast turns.
  */
 
@@ -34,7 +34,7 @@ import { hasFastModeLimit } from "../models/HarnessCatalog";
 import { getChatFastMode, setFastMode } from "../models/ModelSettings";
 import type { TranscriptEvent } from "../models/Response";
 import { SEED_SOURCE } from "../models/Response";
-import { isNonBoundaryUserMessage, resolutionOf } from "./message-classification";
+import { isTurnUserMessage, resolutionOf } from "./message-classification";
 
 // The chat whose switch raised the notice, or null while none is showing.
 let noticeChatId: string | null = null;
@@ -49,7 +49,7 @@ export function countUserTurns(events: readonly TranscriptEvent[]): number {
     if (event.source === SEED_SOURCE) {
       continue;
     }
-    if (isNonBoundaryUserMessage(event)) {
+    if (!isTurnUserMessage(event)) {
       continue;
     }
     if (resolutionOf(event) !== null) {

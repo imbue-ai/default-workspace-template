@@ -3,6 +3,7 @@ import {
   classifyUserMessage,
   isHiddenUserMessage,
   isNonBoundaryUserMessage,
+  isTurnUserMessage,
   isNoticeUserMessage,
   isSkillExpansionUserMessage,
   isStatusUserMessage,
@@ -92,14 +93,22 @@ describe("classifyUserMessage", () => {
 });
 
 describe("semantic helpers", () => {
-  it("isNonBoundaryUserMessage is true for non-boundary kinds and false for prompt and status boundaries", () => {
+  it("isNonBoundaryUserMessage is true only for the kinds that render no timeline row", () => {
     expect(isNonBoundaryUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(
-      true,
+      false,
     );
     expect(isNonBoundaryUserMessage({ content: "x", display: "status" })).toBe(false);
     expect(isNonBoundaryUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "/welcome", display: "hidden" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "a normal message" })).toBe(false);
+  });
+
+  it("isTurnUserMessage is true only for a message the user sent and a status line", () => {
+    expect(isTurnUserMessage({ content: "a normal message" })).toBe(true);
+    expect(isTurnUserMessage({ content: "x", display: "status" })).toBe(true);
+    expect(isTurnUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(false);
+    expect(isTurnUserMessage({ content: "x", display: "notice" })).toBe(false);
+    expect(isTurnUserMessage({ content: "/welcome", display: "hidden" })).toBe(false);
   });
 
   it("isSystemChipUserMessage is true only for the collapsed-chip kind", () => {
@@ -120,9 +129,9 @@ describe("semantic helpers", () => {
     expect(cls.kind).toBe(UserMessageKind.Notice);
     expect(cls.label).toBe("Background task completed");
     expect(cls.body).toBe('Agent "Crispy comments" finished');
-    // It is not a turn the user took, and it is the agent that was told, so it sits on the
-    // agent's rail.
-    expect(isNonBoundaryUserMessage({ content: "x", display: "notice" })).toBe(true);
+    // The timeline breaks at it, but it is not a turn the user took.
+    expect(isNonBoundaryUserMessage({ content: "x", display: "notice" })).toBe(false);
+    expect(isTurnUserMessage({ content: "x", display: "notice" })).toBe(false);
     expect(isNoticeUserMessage({ content: "x", display: "notice" })).toBe(true);
     expect(isNoticeUserMessage({ content: "x", display: "chip", display_label: "Background task" })).toBe(false);
     expect(isSystemChipUserMessage({ content: "x", display: "notice" })).toBe(false);
