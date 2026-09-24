@@ -33,9 +33,9 @@ format) and a template's own publish count. See
 > finished "What it is" / "How it works" / "Requirements"
 > prose in `template.md`, the bespoke `template.svg`
 > thumbnail, and the adopters' "Adaptation history". A naive re-run of
-> `build_template.sh` RESETS to the raw `BASE_REF` and REGENERATES all of that from scratch (FILL-IN placeholders, the generic
-> placeholder SVG, an empty adaptation history) -- it would
-> DESTROY every one of those. **NEVER run `build_template.sh` for an update,
+> `build_template.sh` RESETS to the raw `BASE_REF` and REGENERATES all of that
+> from scratch (FILL-IN placeholders, the generic placeholder SVG, an empty
+> adaptation history) -- it would DESTROY every one of those. **NEVER run `build_template.sh` for an update,
 > and never reset the assembly worktree to `BASE_REF`.** The update worker resets
 > to the PUBLISHED TIP's tree (fetched from the repo) and overlays ONLY the
 > user-confirmed changed paths on top of it, so everything hand-crafted survives
