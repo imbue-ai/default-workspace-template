@@ -15,6 +15,7 @@ from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from pydantic import field_validator
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -74,6 +75,7 @@ from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
@@ -118,7 +120,7 @@ class ShellState(MutableModel):
         frozen=True, description="The per-client paths and titles of independent windows"
     )
     wallpaper_files_directory: Path = Field(
-        frozen=True, description="Where the workspace's own wallpaper files are read from"
+        frozen=True, description="Where the workspace's own wallpaper files are read from, as an absolute path"
     )
     clients: ClientStore = Field(frozen=True, description="clients.json")
     users: UserStore = Field(frozen=True, description="users.json: the desktop made for each signed-in visitor")
@@ -148,6 +150,14 @@ class ShellState(MutableModel):
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
+
+    @field_validator("wallpaper_files_directory")
+    @classmethod
+    def _validate_wallpaper_files_directory(cls, value: Path) -> Path:
+        """Refuse a relative directory, which each reader would resolve against a root of its own."""
+        if not value.is_absolute():
+            raise InvalidShellValueError(f"The wallpaper files directory must be absolute, not {str(value)!r}")
+        return value
 
     def start(self) -> None:
         """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness)
@@ -617,7 +627,7 @@ def _under_repo_root(directory: Path, repo_root: Path) -> Path:
     Flask's ``send_file`` resolves it against the app's root path, so a listing route and a
     serve route reading one configured directory read two different places.
     """
-    return directory if directory.is_absolute() else repo_root / directory
+    return directory if directory.is_absolute() else repo_root.resolve() / directory
 
 
 def build_shell_state(
