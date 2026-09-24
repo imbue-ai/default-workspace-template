@@ -26,9 +26,6 @@
      box; the bar's own padding gives the outermost one the same clearance from the window edge. */
   --desk-window-control-inset: 4px;
   --desk-window-control-size: calc(var(--desk-title-bar-height) - 2 * var(--desk-window-control-inset));
-  /* The two actions that follow the title -- Refresh and the window menu -- are a step under the
-     window's own controls, so the bar reads as a name with verbs beside it, not six equal buttons. */
-  --desk-title-action-size: calc(var(--desk-window-control-size) - 4px);
   --desk-window-shadow: var(--shadow-overlay);
   --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 70%, transparent);
   --desk-taskbar-blur: 20px;
