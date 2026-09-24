@@ -216,7 +216,7 @@ old `app:`, `chat:`, `chat-terminal:`, `terminal:`, `service:`, `url:`, and
 The shell edits the files itself and answers with the result, so every op
 returns as soon as the file is written; a connected window shows it within a
 redraw. Ops print a one-line description on **stderr** (`opened window
-win-... (terminal at /new) on desktop home for client ...`, `placed window ...
+win-... (terminal at /?session=terminal-3) on desktop home for client ...`, `placed window ...
 in the left zone ...`); `refresh` prints `(sent refresh to client <id>)`.
 
 **stdout** is reserved for machine-readable output: the id of the window
