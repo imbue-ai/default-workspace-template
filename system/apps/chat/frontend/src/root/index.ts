@@ -293,7 +293,7 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
 
 /** Run ``take`` once the chats have arrived (which chat an intake lands on is decided against them) and the
  *  accounts have loaded (a launch before they load would run on none). */
-function onceListedAndSignedIn(accountsLoaded: Promise<void>, take: () => void): void {
+function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => void): void {
   const onceListed = (): void => {
     removeChatsUpdatedListener(onceListed);
     void accountsLoaded.then(take);
@@ -359,7 +359,7 @@ function bootstrap(): void {
   const token = intakeTokenFromSearch(window.location.search);
   if (token !== null) {
     const requested = selectedChatId;
-    onceListedAndSignedIn(accountsLoaded, () => void takeIntake(token, requested));
+    onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token, requested));
   }
 }
 
