@@ -334,7 +334,9 @@ def test_backup_stores_the_source_tree_at_the_snapshot_root(tmp_path: Path) -> N
         env_overrides=env,
     )
     assert restore_result.returncode == 0, restore_result.stderr
-    assert sorted(p.relative_to(target_dir).as_posix() for p in target_dir.rglob("*")) == [
+    assert sorted(
+        p.relative_to(target_dir).as_posix() for p in target_dir.rglob("*")
+    ) == [
         "workspace",
         "workspace/notes.md",
     ]
