@@ -25,9 +25,12 @@ two.
 
 The detached process starts a session of its own, so it outlives the caller's tool call,
 its process group, and a stop of the caller's agent (the chat app revives a stopped agent
-to take the message). It keeps the caller's OOM band: a command shed for memory is
-reported like any other exit, but if the detached process itself is shed no report comes,
-and ``runner.log`` ends without a delivery line.
+to take the message). A send that fails is retried with backoff for hours, since the
+chat may be mid-handoff or its agent shed for memory until its lead restarts it; only a
+chat that no longer exists ends the retries at once. The command keeps the caller's OOM
+band, so a command shed for memory is reported like any other exit; the detached process
+then moves itself down to the user-service band, below every agent, because it holds
+next to no memory and shedding it would lose the report.
 
 Standard library only: ``update-self`` stages this file from its target release and runs it
 in a workspace that may predate it, so the messenger is looked up in the tree the script
@@ -62,15 +65,24 @@ MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
 # ``mngr message``'s exit codes, which ``message_chat.py`` passes through.
 EXIT_DELIVERED = 0
 EXIT_DELIVERED_BUT_BLOCKED = 7
+# ``message_chat.py``'s code for a chat that no longer exists. An older tree's copy never
+# returns it, so there every failed send is retried.
+EXIT_CHAT_GONE = 8
 # This script's own exit status when there is no chat to deliver the result to.
 EXIT_USAGE = 2
 # What a shell reports for a command it could not start.
 EXIT_COMMAND_NOT_RUNNABLE = 127
 
-# A refused send (the chat app mid-handoff, say) is worth a few more tries: the command's
-# result exists only in this message, so giving up early strands the agent.
-DELIVERY_ATTEMPTS = 6
-DELIVERY_RETRY_SECONDS = 20.0
+# The command's result exists only in this message, so a failed send is retried for as long
+# as a shed agent might plausibly wait for its lead to restart it.
+DELIVERY_RETRY_INITIAL_SECONDS = 20.0
+DELIVERY_RETRY_MAX_INTERVAL_SECONDS = 600.0
+DELIVERY_GIVE_UP_AFTER_SECONDS = 4 * 3600.0
+
+# oom_priority's ``USER_SERVICE`` band, copied because this script is standard library only;
+# a test pins it to ``bands.py``.
+RUNNER_OOM_SCORE_ADJ = 200
+OWN_OOM_SCORE_ADJ_PATH = Path("/proc/self/oom_score_adj")
 
 MAX_INLINE_OUTPUT_CHARS = 20_000
 # How much of a long output's start is kept: enough for a report's frontmatter, which a
@@ -168,18 +180,46 @@ def deliver_report(
     messenger: Sequence[str],
     run: Callable[[list[str]], int],
     sleep: Callable[[float], None],
+    clock: Callable[[], float],
 ) -> bool:
-    """Send the report, retrying a failed send; whether it was delivered."""
-    for attempt in range(1, DELIVERY_ATTEMPTS + 1):
+    """Send the report, retrying a failed send with backoff until it lands, the chat is gone, or
+    the retry budget runs out; whether it was delivered."""
+    started_at = clock()
+    interval = DELIVERY_RETRY_INITIAL_SECONDS
+    attempt = 0
+    while True:
+        attempt += 1
         returncode = run(list(messenger))
         if returncode in (EXIT_DELIVERED, EXIT_DELIVERED_BUT_BLOCKED):
             return True
+        if returncode == EXIT_CHAT_GONE:
+            _log(f"Delivery attempt {attempt}: the chat no longer exists")
+            return False
+        if clock() - started_at + interval > DELIVERY_GIVE_UP_AFTER_SECONDS:
+            _log(
+                f"Delivery attempt {attempt} failed with exit code {returncode}, "
+                f"and the {DELIVERY_GIVE_UP_AFTER_SECONDS:.0f}s retry budget is spent"
+            )
+            return False
         _log(
-            f"Delivery attempt {attempt} of {DELIVERY_ATTEMPTS} failed with exit code {returncode}"
+            f"Delivery attempt {attempt} failed with exit code {returncode}; retrying in {interval:.0f}s"
         )
-        if attempt < DELIVERY_ATTEMPTS:
-            sleep(DELIVERY_RETRY_SECONDS)
-    return False
+        sleep(interval)
+        interval = min(interval * 2, DELIVERY_RETRY_MAX_INTERVAL_SECONDS)
+
+
+def move_to_runner_oom_band(oom_score_adj_path: Path) -> None:
+    """Lower this process's ``oom_score_adj`` to the runner's band; never raises it.
+
+    Best-effort: a host without the file (macOS) or a refused write leaves the inherited band,
+    noted in ``runner.log``.
+    """
+    try:
+        current = int(oom_score_adj_path.read_text())
+        if current > RUNNER_OOM_SCORE_ADJ:
+            oom_score_adj_path.write_text(f"{RUNNER_OOM_SCORE_ADJ}\n")
+    except (OSError, ValueError) as exc:
+        _log(f"Kept the inherited OOM band: {exc}")
 
 
 def _log(message: str) -> None:
@@ -199,17 +239,20 @@ def _run_messenger(argv: list[str]) -> int:
 def _run_command(command: Sequence[str], output_path: Path) -> int:
     with output_path.open("wb") as output:
         try:
-            completed = subprocess.run(
+            process: subprocess.Popen[bytes] | None = subprocess.Popen(
                 list(command),
                 stdin=subprocess.DEVNULL,
                 stdout=output,
                 stderr=subprocess.STDOUT,
-                check=False,
             )
         except OSError as exc:
             output.write(f"Could not start the command: {exc}\n".encode())
+            process = None
+        # After the start, so the command keeps the band it inherited.
+        move_to_runner_oom_band(OWN_OOM_SCORE_ADJ_PATH)
+        if process is None:
             return EXIT_COMMAND_NOT_RUNNABLE
-    return completed.returncode
+        return process.wait()
 
 
 def run_and_deliver(
@@ -237,7 +280,9 @@ def run_and_deliver(
         encoding="utf-8",
     )
     messenger = messenger_argv(script_repo_root(), chat_id, message_file)
-    if deliver_report(messenger, run=_run_messenger, sleep=time.sleep):
+    if deliver_report(
+        messenger, run=_run_messenger, sleep=time.sleep, clock=time.monotonic
+    ):
         _log(f"Delivered the report to chat {chat_id}")
         return 0
     _log(f"Gave up delivering the report to chat {chat_id}; it is in {message_file}")

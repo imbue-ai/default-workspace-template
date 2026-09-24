@@ -69,6 +69,18 @@ def _mngr_calls(record: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in record.read_text().splitlines()]
 
 
+# What ``mngr message --format jsonl`` prints for an agent the text reached.
+_MESSAGE_SENT_LINE = (
+    json.dumps(
+        {
+            "event": "message_sent",
+            "agent": "some-chat",
+            "message": "Message sent successfully",
+        }
+    )
+    + "\n"
+)
+
 _CREATED_ANSWER = (
     201,
     {"chat_id": _CHAT_ID, "name": "assist-1a2b3c", "display_name": "assist-1a2b3c"},
@@ -281,9 +293,10 @@ def test_a_connection_dropped_after_the_connect_is_a_failure_not_a_backoff(
 
 
 def test_a_persisting_404_hands_the_message_to_mngr(
-    fake_chat_app: Any, fake_mngr: Path
+    fake_chat_app: Any, fake_mngr: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_chat_app.answers = [(404, {"detail": "Agent 'x' not found"})]
+    monkeypatch.setenv("FAKE_MNGR_STDOUT", _MESSAGE_SENT_LINE)
 
     rc, slept = _run(
         "-m", "hello", clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS / 4
@@ -298,6 +311,35 @@ def test_a_persisting_404_hands_the_message_to_mngr(
     assert call["argv"][:3] == ["message", _CHAT_ID, "--start"]
     assert call["text"] == "hello"
     assert_mngr_argv_valid(["mngr", *call["argv"]])
+
+
+def test_a_chat_neither_the_chat_app_nor_mngr_knows_is_gone(
+    fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """mngr exits 0 for an id that matches no agent, having sent nothing; only its missing
+    ``message_sent`` event says so."""
+    fake_chat_app.answers = [(404, {"detail": "Chat 'x' not found"})]
+
+    rc, _ = _run("-m", "hello", clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS)
+
+    assert rc == message_chat.EXIT_CHAT_GONE
+    assert f"found no agent with id {_CHAT_ID}" in capsys.readouterr().err
+    assert len(_mngr_calls(fake_mngr)) == 1
+
+
+def test_an_unreachable_chat_app_and_no_agent_by_the_id_is_a_failure_not_a_gone_chat(
+    fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The id names the chat's first agent, which is not the chat once a handoff has retired
+    it; with the chat app down, nothing here can say the chat itself is gone."""
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+
+    rc, _ = _run("-m", "hello")
+
+    assert rc == message_chat.EXIT_FAILED
+    assert len(_mngr_calls(fake_mngr)) == 1
 
 
 def test_a_404_that_clears_within_the_window_is_delivered_by_the_chat_app(

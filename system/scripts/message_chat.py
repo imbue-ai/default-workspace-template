@@ -22,6 +22,9 @@ route's verdict is the script's exit status, in ``mngr message``'s vocabulary:
     1  refused, or the chat app could not be reached and the backoff failed too
     7  delivered, but the agent's input is blocked on a dialog (``mngr
        message``'s "delivered but blocked" code)
+    8  the chat is gone: the chat app does not know it and mngr has no agent
+       by its id, so no later try can deliver it (``mngr``'s code for a target
+       that does not exist)
 
 ``mngr message`` is used only as a BACKOFF, when the chat app cannot take the
 message at all: the connection to it fails, or its route keeps answering 404
@@ -31,7 +34,9 @@ briefly first). Any other answer is the chat app's decision and is never
 second-guessed by pasting the text around it: a refusal during a handoff is
 what keeps the message from landing on the wrong agent, and a blocked send has
 already put the text in the pane. The backoff passes ``--start``: the chat app's
-route revives a stopped agent on send, so the backoff does the same.
+route revives a stopped agent on send, so the backoff does the same. Its verdict
+is read from mngr's JSONL events as well as its exit status, because an id that
+matches no agent exits 0 having sent nothing.
 
 A 503 means the chat app is up but not ready (it has not read its agent list
 from mngr yet, or the agent's daemon is still starting), so it is retried for a
@@ -100,6 +105,10 @@ SYSTEM_MESSAGE_TAG = "agentic-browser-fleet"
 EXIT_DELIVERED = 0
 EXIT_FAILED = 1
 EXIT_DELIVERED_BUT_BLOCKED = 7
+EXIT_CHAT_GONE = 8
+
+# The event ``mngr message --format jsonl`` emits per agent the text reached.
+MESSAGE_SENT_EVENT = "message_sent"
 
 # The route's ``kind`` for a send that landed behind a dialog
 # (``SendFailureKind.INPUT_BLOCKED`` in mngr).
@@ -446,28 +455,47 @@ def _script_exit_for_mngr_exit(returncode: int) -> int:
 
 
 def send_through_mngr(chat_id: str, text: str) -> int:
-    """The backoff: ``mngr message --start`` straight to the agent, its verdict in this script's codes."""
+    """The backoff: ``mngr message --start`` straight to the agent, its verdict in this script's codes.
+
+    ``EXIT_CHAT_GONE`` when mngr has no agent by that id: it then exits 0 having sent nothing
+    (its ``--on-error`` default is ``continue``), and only the missing ``message_sent`` event
+    tells that apart from a delivery.
+    """
     completed = _run_mngr(
-        ["mngr", "message", chat_id, "--start"], text, [], capture_stdout=False
+        ["mngr", "message", chat_id, "--start"],
+        text,
+        ["--format", "jsonl"],
+        capture_stdout=True,
     )
-    return (
-        EXIT_FAILED
-        if completed is None
-        else _script_exit_for_mngr_exit(completed.returncode)
-    )
+    if completed is None:
+        return EXIT_FAILED
+    if completed.returncode == EXIT_DELIVERED and not _jsonl_events(
+        completed.stdout, MESSAGE_SENT_EVENT
+    ):
+        print(f"`mngr message` found no agent with id {chat_id}", file=sys.stderr)
+        return EXIT_CHAT_GONE
+    return _script_exit_for_mngr_exit(completed.returncode)
 
 
-def _created_agent_id(create_stdout: str) -> str:
-    """The agent id from ``mngr create --format jsonl``'s ``created`` event; '' when it named none."""
-    for line in create_stdout.splitlines():
+def _jsonl_events(stdout: str, event_type: str) -> list[dict[str, object]]:
+    """The events of one type in an ``mngr --format jsonl`` run's stdout, skipping lines that are not JSON objects."""
+    events: list[dict[str, object]] = []
+    for line in stdout.splitlines():
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("event") == "created":
-            agent_id = event.get("agent_id")
-            if isinstance(agent_id, str):
-                return agent_id
+        if isinstance(event, dict) and event.get("event") == event_type:
+            events.append(event)
+    return events
+
+
+def _created_agent_id(create_stdout: str) -> str:
+    """The agent id from ``mngr create --format jsonl``'s ``created`` event; '' when it named none."""
+    for event in _jsonl_events(create_stdout, "created"):
+        agent_id = event.get("agent_id")
+        if isinstance(agent_id, str):
+            return agent_id
     return ""
 
 
@@ -636,7 +664,13 @@ def main(
                 f"Falling back to `mngr message` for chat {args.chat_id}: {result.detail}",
                 file=sys.stderr,
             )
-            return send_through_mngr(args.chat_id, text)
+            returncode = send_through_mngr(args.chat_id, text)
+            if returncode == EXIT_CHAT_GONE and result.outcome is Outcome.UNREACHABLE:
+                # Only the chat app knows which chats exist; the id names the chat's first agent,
+                # which is not the chat once a handoff has retired it. So mngr missing that agent
+                # means the chat is gone only when the chat app said it does not know it either.
+                return EXIT_FAILED
+            return returncode
         case _ as unreachable:
             assert_never(unreachable)
 

@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from oom_priority import bands
 
 from conftest import run_in_background
 
@@ -236,34 +237,177 @@ def test_a_tree_without_the_chat_messenger_delivers_through_mngr_message(
     assert_mngr_argv_valid(argv)
 
 
-@pytest.mark.parametrize(
-    ("exit_codes", "expected_attempts", "is_delivered"),
-    [
-        ((0,), 1, True),
-        # Delivered, but the agent's input is blocked on a dialog: the text is in, so no resend.
-        ((7,), 1, True),
-        ((1, 1, 0), 3, True),
-        ((1,) * 10, run_in_background.DELIVERY_ATTEMPTS, False),
-    ],
-)
-def test_a_failed_delivery_is_retried_until_it_lands_or_the_attempts_run_out(
-    exit_codes: tuple[int, ...], expected_attempts: int, is_delivered: bool
-) -> None:
-    remaining = list(exit_codes)
+class _SleepClock:
+    """A clock that moves only when the code under test sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def _deliver(exit_codes: list[int]) -> tuple[bool, int, _SleepClock]:
+    """Run ``deliver_report`` against a messenger answering ``exit_codes`` in turn (the last one
+    repeating); whether it delivered, how many sends it made, and the clock it slept on."""
+    clock = _SleepClock()
     attempts: list[list[str]] = []
-    slept: list[float] = []
 
     def run(argv: list[str]) -> int:
         attempts.append(argv)
-        return remaining.pop(0)
+        return exit_codes[min(len(attempts), len(exit_codes)) - 1]
 
-    result = run_in_background.deliver_report(
-        ["messenger"], run=run, sleep=slept.append
+    is_delivered = run_in_background.deliver_report(
+        ["messenger"], run=run, sleep=clock.sleep, clock=clock
+    )
+    return is_delivered, len(attempts), clock
+
+
+@pytest.mark.parametrize(
+    "exit_code",
+    [
+        run_in_background.EXIT_DELIVERED,
+        # Delivered, but the agent's input is blocked on a dialog: the text is in, so no resend.
+        run_in_background.EXIT_DELIVERED_BUT_BLOCKED,
+    ],
+)
+def test_a_landed_send_is_never_repeated(exit_code: int) -> None:
+    is_delivered, attempts, clock = _deliver([exit_code])
+
+    assert is_delivered
+    assert attempts == 1
+    assert clock.slept == []
+
+
+def test_a_failed_send_is_retried_with_a_growing_wait_until_it_lands() -> None:
+    initial = run_in_background.DELIVERY_RETRY_INITIAL_SECONDS
+
+    is_delivered, attempts, clock = _deliver([1, 1, 1, run_in_background.EXIT_DELIVERED])
+
+    assert is_delivered
+    assert attempts == 4
+    assert clock.slept == [initial, initial * 2, initial * 4]
+
+
+def test_a_gone_chat_ends_the_retries_at_once() -> None:
+    is_delivered, attempts, clock = _deliver([1, run_in_background.EXIT_CHAT_GONE])
+
+    assert not is_delivered
+    assert attempts == 2
+    assert clock.slept == [run_in_background.DELIVERY_RETRY_INITIAL_SECONDS]
+
+
+def test_a_send_that_keeps_failing_is_retried_for_hours_at_a_capped_interval_then_given_up() -> None:
+    """A worker shed for memory refuses its reports until its lead restarts it, which can take
+    far longer than a mid-handoff refusal."""
+    is_delivered, attempts, clock = _deliver([1])
+
+    assert not is_delivered
+    assert max(clock.slept) == run_in_background.DELIVERY_RETRY_MAX_INTERVAL_SECONDS
+    # It gave up because one more wait would cross the budget, not before.
+    assert clock.now <= run_in_background.DELIVERY_GIVE_UP_AFTER_SECONDS
+    assert (
+        clock.now + run_in_background.DELIVERY_RETRY_MAX_INTERVAL_SECONDS
+        > run_in_background.DELIVERY_GIVE_UP_AFTER_SECONDS
+    )
+    assert attempts == len(clock.slept) + 1
+
+
+@pytest.mark.usefixtures("fake_mngr")
+def test_a_report_for_a_chat_that_no_longer_exists_is_given_up_on_the_first_send(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    """The chat app does not know the chat and mngr has no agent by its id (the fake mngr sends
+    nothing and exits 0), so the real messenger answers "gone" and the runner stops."""
+    fake_chat_app.answers = [(404, {"detail": "Chat not found"})]
+
+    started = _start_runner(
+        tmp_path,
+        _agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        "Report to nobody",
+        *_python_command("print('done')"),
     )
 
-    assert result is is_delivered
-    assert len(attempts) == expected_attempts
-    assert slept == [run_in_background.DELIVERY_RETRY_SECONDS] * (expected_attempts - 1)
+    assert started.returncode == 0, started.stderr
+    runner_log = _task_dir_from(started.stdout, tmp_path) / "runner.log"
+    # The messenger's own 404 window runs first, in real time.
+    deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS + 10
+    while "Gave up delivering" not in (runner_log.read_text() if runner_log.exists() else ""):
+        assert time.monotonic() < deadline, "the runner never gave up"
+        time.sleep(0.2)
+    log = runner_log.read_text()
+    assert "Delivery attempt 1: the chat no longer exists" in log
+    assert "retrying" not in log
+
+
+def test_the_runners_band_is_oom_prioritys_user_service_band() -> None:
+    assert run_in_background.RUNNER_OOM_SCORE_ADJ == bands.USER_SERVICE
+
+
+@pytest.mark.parametrize(
+    ("inherited", "expected"),
+    [
+        (bands.AGENT_SUBPROCESS, run_in_background.RUNNER_OOM_SCORE_ADJ),
+        # Started from something more protected than a user service (a built-in service, say),
+        # the runner keeps that protection rather than giving it up.
+        (25, 25),
+    ],
+)
+def test_the_runner_only_ever_lowers_its_own_band(
+    tmp_path: Path, inherited: int, expected: int
+) -> None:
+    oom_score_adj = tmp_path / "oom_score_adj"
+    oom_score_adj.write_text(f"{inherited}\n")
+
+    run_in_background.move_to_runner_oom_band(oom_score_adj)
+
+    assert int(oom_score_adj.read_text()) == expected
+
+
+@pytest.mark.skipif(
+    not run_in_background.OWN_OOM_SCORE_ADJ_PATH.exists(),
+    reason="needs Linux's /proc/<pid>/oom_score_adj",
+)
+@pytest.mark.usefixtures("fake_mngr")
+def test_the_runner_moves_below_the_agents_while_its_command_keeps_the_callers_band(
+    fake_chat_app: Any, tmp_path: Path
+) -> None:
+    """The caller is an agent's Bash tool call, tagged most-expendable; the command it started
+    stays there, and only the runner, which the report depends on, moves down."""
+    # Reads its own band and, once the runner has moved, its parent's (the runner's).
+    command = _python_command(
+        "import os, time\n"
+        "parent = f'/proc/{os.getppid()}/oom_score_adj'\n"
+        "deadline = time.monotonic() + 5\n"
+        f"while int(open(parent).read()) == {bands.AGENT_SUBPROCESS} and time.monotonic() < deadline:\n"
+        "    time.sleep(0.05)\n"
+        "print('command', open('/proc/self/oom_score_adj').read().strip())\n"
+        "print('runner', open(parent).read().strip())\n"
+    )
+    caller_argv = [
+        "sh",
+        "-c",
+        f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj && exec {shlex.join(_runner_argv('Check the bands', *command))}",
+    ]
+
+    started = subprocess.run(
+        caller_argv,
+        cwd=tmp_path,
+        env=_agent_env(MNGR_AGENT_ID=_CHAT_ID),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert started.returncode == 0, started.stderr
+    [(_, body)] = _wait_for_posts(fake_chat_app, 1)
+    assert f"command {bands.AGENT_SUBPROCESS}" in body["message"]
+    assert f"runner {run_in_background.RUNNER_OOM_SCORE_ADJ}" in body["message"]
 
 
 @pytest.mark.parametrize(
