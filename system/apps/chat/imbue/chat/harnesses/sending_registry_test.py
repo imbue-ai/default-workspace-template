@@ -71,6 +71,7 @@ def _file_session(send_to_harness: "Callable[[str], bool] | None" = None) -> "Fi
         model_state_path=Path("/nonexistent/model_state.json"),
         send_to_harness=send_to_harness if send_to_harness is not None else lambda text: True,
         notify_agents_changed=lambda: None,
+        is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
         on_queue_snapshot=lambda snapshot: None,
         on_user_turn=lambda event: None,

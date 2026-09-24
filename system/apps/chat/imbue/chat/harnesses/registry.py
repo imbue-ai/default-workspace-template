@@ -34,6 +34,7 @@ from imbue.chat.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.chat.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
+from imbue.chat.harnesses.claude.activity import CLAUDE_STARTUP_READY_MARKER
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
@@ -60,6 +61,7 @@ from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
 from imbue.chat.harnesses.pi_coding.account_binding import PiAccountBinding
+from imbue.chat.harnesses.pi_coding.activity import PI_STARTUP_READY_MARKER
 from imbue.chat.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.chat.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -79,6 +81,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -287,6 +290,10 @@ class HarnessSpec(FrozenModel):
     # agent that has been discovered but not yet wired up has no tracker to ask -- which
     # silently cost the prioritizer its aging for exactly the agents it most needs to age.
     process_started_marker_filename: str
+    # The marker the harness writes once a freshly launched process accepts input, which is how a
+    # send tells an agent still starting (shown as "Connecting...") from one that is up. None for a
+    # harness that writes none: its sends never read as connecting on this evidence.
+    startup_ready_marker: StartupReadyMarker | None = None
     # The special-event kinds this harness may emit. A parser emitting a kind outside its
     # own declaration is a bug; an empty set is the honest statement that a harness's
     # transcript carries no markers, not an omission.
@@ -328,6 +335,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=ClaudeTranscriptLoader,
         tracker_class=ClaudeActivityTracker,
         process_started_marker_filename=ClaudeActivityTracker.marker_filename,
+        startup_ready_marker=CLAUDE_STARTUP_READY_MARKER,
         binding_class=ClaudeAccountBinding,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
@@ -394,6 +402,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         loader_class=PiTranscriptLoader,
         tracker_class=PiActivityTracker,
         process_started_marker_filename=PiActivityTracker.marker_filename,
+        startup_ready_marker=PI_STARTUP_READY_MARKER,
         binding_class=PiAccountBinding,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,

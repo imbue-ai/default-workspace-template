@@ -17,6 +17,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import queue
 import socket
 import sys
 import threading
@@ -168,6 +169,27 @@ def is_e2e_browser_installed() -> bool:
     else:
         cache_dir = Path.home() / ".cache" / "ms-playwright"
     return cache_dir.exists() and any(cache_dir.iterdir())
+
+
+def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
+    """Every ``is_connecting`` value the ``chats_updated`` pushes queued so far carried for ``chat_id``, in order."""
+    values: list[bool] = []
+    while not client_queue.empty():
+        raw = client_queue.get_nowait()
+        assert raw is not None
+        message = json.loads(raw)
+        if message["type"] == "chats_updated":
+            values.extend(
+                chat["active_agent"]["is_connecting"] for chat in message["chats"] if chat["chat_id"] == chat_id
+            )
+    return values
+
+
+def is_chat_connecting(manager: AgentManager, chat_id: str) -> bool:
+    """The ``is_connecting`` the chat's current snapshot reports; the chat must have one."""
+    snapshot = manager.get_chat_snapshot(chat_id)
+    assert snapshot is not None
+    return snapshot.active_agent.is_connecting
 
 
 def seed_agent_state(
