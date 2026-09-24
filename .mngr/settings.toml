@@ -187,7 +187,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
 # so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
 # an empty model bar.
-settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, feedbackSurveyRate = 0, feedbackDrafts = "off", tui = "fullscreen"}
+settings_overrides__extend = {model = "claude-opus-5[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, feedbackSurveyRate = 0, feedbackDrafts = "off", tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
@@ -1685,7 +1685,7 @@ message = "/welcome"
 # resolved are inert, so this template is safe to stack with any --type.
 [create_templates.fast]
 setting__extend = [
-    "agent_types.claude.settings_overrides.fastMode=true",
+    "agent_types.claude.settings_overrides.fastMode=false",
     'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
 ]
 
