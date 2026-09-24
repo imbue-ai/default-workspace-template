@@ -195,7 +195,9 @@ from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
-wake-ups, a lead's replies to a worker, the automation runner) and falls back
+wake-ups, a lead's replies to a worker, the automation runner, and the
+`<background-task-report>` that `system/scripts/run_in_background.py` sends when
+a command it ran exits, which the page shows as a one-line notice) and falls back
 to `mngr message` only when the chat app cannot be reached or does not know the
 chat. A send that names no client (no `client_id` or `desktop_id`) posts no
 client-activity report. The route answers 503 until
