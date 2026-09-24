@@ -625,7 +625,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
         ),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
-        // own not-yet-real sends.
+        // own not-yet-delivered sends.
         ...renderHeldSends(chatId),
         ...renderOutgoingMessages(chatId),
       ]),
