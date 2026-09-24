@@ -208,11 +208,10 @@ def prune(env_overrides: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
     return run_restic(("prune",), env_overrides=env_overrides)
 
 
-def extract_snapshot_id_from_backup_output(stdout: str) -> str:
-    """Pluck the snapshot_id from `restic backup --json` stdout (best-effort).
+def find_backup_summary(stdout: str) -> dict[str, object] | None:
+    """The final `summary` document of `restic backup --json` stdout, or None if there is none.
 
-    Restic emits one JSON document per line; the final `summary` document
-    carries the snapshot id. Returns "" when we can't find one.
+    Restic emits one JSON document per line; lines that are not JSON are skipped.
     """
     for line in reversed(stdout.splitlines()):
         line = line.strip()
@@ -223,7 +222,18 @@ def extract_snapshot_id_from_backup_output(stdout: str) -> str:
         except ValueError:
             continue
         if isinstance(payload, dict) and payload.get("message_type") == "summary":
-            sid = payload.get("snapshot_id")
-            if isinstance(sid, str):
-                return sid
-    return ""
+            return payload
+    return None
+
+
+def extract_snapshot_id_from_backup_output(stdout: str) -> str:
+    """Pluck the snapshot_id from `restic backup --json` stdout (best-effort).
+
+    The final `summary` document carries the snapshot id. Returns "" when we
+    can't find one.
+    """
+    summary = find_backup_summary(stdout)
+    if summary is None:
+        return ""
+    sid = summary.get("snapshot_id")
+    return sid if isinstance(sid, str) else ""

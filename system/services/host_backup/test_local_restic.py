@@ -24,6 +24,7 @@ from host_backup.restic import (
 )
 from host_backup.restic import (
     extract_snapshot_id_from_backup_output,
+    find_backup_summary,
     init_repo,
     is_repo_missing_error,
     probe_repo,
@@ -267,16 +268,6 @@ def test_forget_thins_snapshots_that_each_came_from_their_own_snapshot_path(
     )
 
 
-def _backup_summary(stdout: str) -> dict[str, object]:
-    """The final `summary` document of `restic backup --json` output."""
-    for line in reversed(stdout.splitlines()):
-        if line.startswith("{"):
-            payload = json.loads(line)
-            if payload.get("message_type") == "summary":
-                return payload
-    raise AssertionError(f"no summary document in restic backup output: {stdout!r}")
-
-
 def test_backup_skips_unchanged_files_when_each_tick_reads_a_new_snapshot_path(
     tmp_path: Path,
 ) -> None:
@@ -307,7 +298,8 @@ def test_backup_skips_unchanged_files_when_each_tick_reads_a_new_snapshot_path(
     )
     assert second.returncode == 0, second.stderr
 
-    summary = _backup_summary(second.stdout)
+    summary = find_backup_summary(second.stdout)
+    assert summary is not None, second.stdout
     assert summary["files_unmodified"] == 19
     assert summary["files_changed"] == 1
     assert summary["files_new"] == 0
