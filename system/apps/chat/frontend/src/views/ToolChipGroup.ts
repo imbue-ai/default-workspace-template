@@ -150,30 +150,31 @@ const CHIP_LABEL_CLASS = "tool-chip-label min-w-0 truncate";
  *  the row's own `-ml-1` for this one child. */
 const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-1 basis-[calc(100%-0.25rem)] rounded-md border px-3 py-1.5";
 
-/** The panel's header, which stays put while the panel's own content scrolls under it.
+/** The panel's header: which call this is, and the way out of it.
  *
- *  What it buys: an output long enough to fill the screen leaves its chip far above,
- *  so without this a reader scrolling through one has nothing on screen saying which
- *  call they are reading, and no way out that is not a scroll back up.
+ *  It does NOT stick. It was sticky, and the pinning read as erratic against a
+ *  transcript that is virtualized and scroll-anchored -- a header holding still
+ *  while everything around it moves under its own rules.
  *
- *  It sticks within the PANEL, not the transcript -- a sticky element's containing
- *  block is its offset parent, so it rides down with the panel's top edge and leaves
- *  with its bottom one, rather than hanging over the messages either side.
+ *  What the header is for without that is room: a chip caps its phrase at 20rem and
+ *  truncates, so the full text of what a call did had nowhere to be said. Here it
+ *  has the panel's whole width, and wraps rather than truncating when even that is
+ *  not enough. `items-start` is what keeps the glyph and the close control on the
+ *  first line when it does.
  *
- *  The negative margins undo the panel's own padding so the header spans its full
- *  width and meets its rounded top corners; the fill is what makes content scroll
- *  UNDER it rather than through it, so it has to be the transcript's own background
- *  (the panel is deliberately unfilled). z-[1]: design-system-exception -- the z scale
- *  starts above this, at `--z-sticky` for things that float over a whole pane, and
- *  this only has to beat its own siblings. */
+ *  The negative margins undo the panel's own padding, so the header spans its full
+ *  width and meets its rounded top corners. */
 const DETAIL_HEADER_CLASS =
-  "tool-chip-detail-header sticky top-0 z-[1] -mx-3 -mt-1.5 mb-1.5 flex items-center gap-1.5 " +
-  "rounded-t-md border-b bg-chat px-3 py-1.5 text-(length:--font-size-helper) leading-normal";
+  "tool-chip-detail-header -mx-3 -mt-1.5 mb-1.5 flex items-start gap-1.5 " +
+  "rounded-t-md border-b px-3 py-1.5 text-(length:--font-size-helper) leading-normal";
 
-/** The close control: the same ghost treatment as a chip, squared off for an icon. */
+/** The close control: the same ghost treatment as a chip, squared off for an icon.
+ *  `-mr-2` sets it nearer the panel's edge than its own padding would -- the gap that
+ *  reads as right is the one to the glyph, not to the invisible box around it. */
 const DETAIL_CLOSE_CLASS =
-  "tool-chip-detail-close -mr-1 ml-auto flex cursor-pointer appearance-none items-center rounded border-0 " +
-  "bg-transparent p-1 text-faint transition-colors duration-(--dur-base) hover:bg-fill-hover hover:text-primary";
+  "tool-chip-detail-close -mr-2 ml-auto flex shrink-0 cursor-pointer appearance-none items-center rounded " +
+  "border-0 bg-transparent p-1 text-faint transition-colors duration-(--dur-base) hover:bg-fill-hover " +
+  "hover:text-primary";
 
 /** The code itself adds only how it wraps; the pane around it sets the face. */
 const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
@@ -313,12 +314,19 @@ function renderOutput(call: ToolCall, text: string): m.Vnode {
 function renderDetailHeader(chip: ChipCall): m.Vnode {
   return m("div", { class: DETAIL_HEADER_CLASS }, [
     m.trust(
-      icon(toolIcon(chip.call.tool_name), { size: 13, strokeWidth: 1.75, className: "tool-chip-icon shrink-0" }),
+      // `mt-[3px]` centres a 13px glyph on the first line of a ~19px line box, which
+      // matters only once the title wraps and `items-start` stops doing it.
+      icon(toolIcon(chip.call.tool_name), {
+        size: 13,
+        strokeWidth: 1.75,
+        className: "tool-chip-icon mt-[3px] shrink-0",
+      }),
     ),
-    // The chip's own phrase, repeated here for the reader who has scrolled past it.
+    // The whole phrase, wrapping if it must -- the chip above truncated it, and this
+    // is the one place with the width to say it in full.
     m(
       "span",
-      { class: "tool-chip-detail-title min-w-0 truncate text-secondary", title: chip.call.tool_name },
+      { class: "tool-chip-detail-title min-w-0 text-secondary", title: chip.call.tool_name },
       chipTitle(chipText(chip.call)),
     ),
     m(
@@ -393,7 +401,12 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     { class: DETAIL_CLASS, key: `detail-${chip.call.tool_call_id}` },
     [
       renderDetailHeader(chip),
-      ...sections.map((section, i) => (i === 0 ? section : m("div", { class: "mt-1.5 border-t pt-1.5" }, section))),
+      // Dashed: the rule between the panes separates two parts of one call, which is
+      // a lighter claim than the solid one under the header (that divides the panel's
+      // chrome from its contents).
+      ...sections.map((section, i) =>
+        i === 0 ? section : m("div", { class: "mt-1.5 border-t border-dashed pt-1.5" }, section),
+      ),
     ],
   );
 }
