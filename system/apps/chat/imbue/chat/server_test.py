@@ -3316,8 +3316,7 @@ def test_the_event_fan_out_is_keyed_by_chat(app: Flask, tmp_path: Path) -> None:
 
 
 def _intake(client: FlaskClient, **fields: object) -> Any:
-    response = client.post("/api/chats/intake", json=fields)
-    return response
+    return client.post("/api/chats/intake", json=fields)
 
 
 def _token_of(path: str) -> str:
