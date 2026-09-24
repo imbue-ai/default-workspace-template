@@ -193,9 +193,9 @@ def build_test_state(
     directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
     package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
     test fills itself, and ``wallpaper_files_directory`` the directory the workspace's own wallpaper
-    files are read from (one under the state directory by default). The avatar's catalog lives under the state directory, and its mood is read
-    from ``agent_events_path`` (a file under the state directory by default, absent until a test
-    writes it).
+    files are read from (one under the state directory by default). The avatar's catalog lives under
+    the state directory, and its mood is read from ``agent_events_path`` (a file under the state
+    directory by default, absent until a test writes it).
     ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
     the resolver that names and pictures each account (one that can reach no connector by default, so no test
     fetches anything unless it says so).
