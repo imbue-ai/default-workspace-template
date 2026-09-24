@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
  * The live-page layer against a real store over the fake shell: pages are created for the shown
- * windows of the active desktop, laid
- * over their windows' content boxes in the interleaved stacking order, inert unless focused,
- * hidden when minimized, destroyed when closed; they are greeted after every load, told shown
- * and hidden, and follow their windows' stored paths in place or by reload; and their own
- * ``shell:location``, ``shell:focused``, ``shell:open``, and ``shell:start-with-text`` reach the store.
+ * windows of the active desktop, laid over their windows' content boxes in the interleaved
+ * stacking order, inert unless focused, hidden when minimized, destroyed when closed; they are
+ * greeted after every load, told shown and hidden, and follow their windows' stored paths in
+ * place or by reload; and their own ``shell:location``, ``shell:focused``, ``shell:open``, and
+ * ``shell:start-with-text`` reach the store.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

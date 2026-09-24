@@ -337,9 +337,9 @@ export function findWindow(state: DesktopState, windowId: string): { desktop: De
   return null;
 }
 
-/** The app that holds chats: the one that can start one from typed text, which is the one whose
- *  launch path declares a ``text_param`` (the launcher's primary free-text row). The shell names no
- *  app. Null when this machine has no such app. */
+/** The app that holds chats: the one that can start one from typed text, which is the app of the
+ *  launcher's primary free-text row (the first launch path declaring a ``text_param`` or a
+ *  ``draft_param``). The shell names no app. Null when this machine has no such app. */
 export function chatApp(state: DesktopState): AppRecord | null {
   return freeTextRowsOf(state.apps)[0]?.app ?? null;
 }
