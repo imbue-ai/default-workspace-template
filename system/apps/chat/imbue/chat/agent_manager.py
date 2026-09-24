@@ -339,9 +339,8 @@ def _build_chat_create_command(
     for label in extra_labels:
         cmd.extend(["--label", label])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
-    # once the harness signals readiness, exactly as the ``welcome`` template's ``/welcome``
-    # does (a CLI ``--message`` takes precedence over a template's). A create that has a model
-    # to apply first withholds its message and sends it afterwards, so it passes none here.
+    # once the harness signals readiness. A create that has a model to apply first withholds
+    # its message and sends it afterwards, so it passes none here.
     if initial_message:
         cmd.extend(["--message", initial_message])
     return cmd
