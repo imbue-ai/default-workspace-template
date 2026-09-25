@@ -126,7 +126,7 @@ verdict and record the Mind app, bootstrap and the system interface read),
 ``update_environment``, ``update_probes``, ``update_ledger``,
 ``update_history_bridge``, and ``update_apply`` (the apply and recover
 orchestration). All of it is covered by ``update_self_test.py`` and
-``update_history_bridge_test.py``.
+``test_update_history_bridge.py``.
 """
 
 from __future__ import annotations

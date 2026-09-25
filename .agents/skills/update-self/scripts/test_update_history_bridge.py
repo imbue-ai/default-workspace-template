@@ -10,6 +10,9 @@ import pytest
 import update_self
 from update_history_bridge import REWRITTEN_PATHS
 
+# The rewrite runs git-filter-repo through uvx, which downloads it on a cold cache.
+pytestmark = pytest.mark.acceptance
+
 VENDORED_FILE = "system/vendor/mngr/libs/mngr/cli.py"
 
 # The filter upstream's rewrite runs.
