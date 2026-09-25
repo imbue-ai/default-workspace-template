@@ -349,10 +349,13 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-resize-corner` | `16px` | | | no |
 | `--desk-resize-overhang` | `3px` | | | no |
 | `--desk-resize-edge-inset` | `calc(var(--desk-resize-corner) - var(--desk-resize-overhang))` | | | no |
+| `--desk-window-move` | `180ms` | | | no |
+| `--desk-window-move-ease` | `cubic-bezier(0.2, 0, 0, 1)` | | | no |
 | `--desk-launcher-menu-width` | `22rem` | `calc(100% - var(--spacing) * 4)` | | no |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
 The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.
+`--desk-window-move` and `--desk-window-move-ease` time a window's travel to a rectangle the pointer did not move it to (a snap, a `place`, an `open` with `beside`): the window's root transitions over them, a press turns the transition off for its whole length through `data-window-motion="off"` on the desktop's root, and `prefers-reduced-motion: reduce` turns it off entirely.
 Colours, type roles, radii, and elevation come from `base.css` and are not repeated here.
 
 ## 12. Selectors shared with tests

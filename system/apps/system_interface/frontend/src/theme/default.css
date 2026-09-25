@@ -46,13 +46,13 @@
   --desk-floating-entry-inset-y: 12px;
   --desk-resize-edge: 8px;
   --desk-resize-corner: 16px;
+  --desk-resize-overhang: 3px;
+  --desk-resize-edge-inset: calc(var(--desk-resize-corner) - var(--desk-resize-overhang));
   /* How long a window takes to travel when something other than the pointer moves it: long enough
      to read as one motion from the old rectangle to the new, short enough not to sit between the
      user and the window. */
   --desk-window-move: 180ms;
   --desk-window-move-ease: cubic-bezier(0.2, 0, 0, 1);
-  --desk-resize-overhang: 3px;
-  --desk-resize-edge-inset: calc(var(--desk-resize-corner) - var(--desk-resize-overhang));
   --desk-launcher-menu-width: 22rem;
 }
 
