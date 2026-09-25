@@ -48,12 +48,9 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _commit(repo: Path, message: str, files: dict[str, str | None]) -> None:
+def _commit(repo: Path, message: str, files: dict[str, str]) -> None:
     for rel, content in files.items():
         path = repo / rel
-        if content is None:
-            path.unlink()
-            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     _git(repo, "add", "-A")
@@ -100,7 +97,7 @@ def _workspace(
     *,
     depth: int | None = None,
     message: str = "Add my notes",
-    files: dict[str, str | None] | None = None,
+    files: dict[str, str] | None = None,
 ) -> Path:
     """A workspace created from ``minds-v1`` before the rewrite, with a commit of its own."""
     workspace = tmp_path / "workspace"
