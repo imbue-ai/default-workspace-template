@@ -1037,12 +1037,13 @@ def _drain_to_composer_endpoint(chat_id: str) -> Response:
     which returns the concatenated block the frontend drops into the composer for the user to
     edit and send, rather than resent. A background-task report in the block is the exception: it
     is the agent's, not the user's, so it is sent straight back to the agent, which starts its next
-    turn, and reaches the composer only if that send fails. Unlike the flush there is NO empty-queue short-circuit: a
-    stop mid-turn with nothing queued still interrupts (block comes back empty). The endpoint
-    binds the harness-neutral capabilities -- watcher, restart, activity-settle, and the native
-    cancel keypress (routed through mngr's locked message API, like the tap) -- and the
-    implementation uses whichever it needs. Returns 404 for an unknown agent, 400 for the primary
-    services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
+    turn, and reaches the composer only if that send fails. Unlike the flush there is NO
+    empty-queue short-circuit: a stop mid-turn with nothing queued still interrupts (block comes
+    back empty). The endpoint binds the harness-neutral capabilities -- watcher, restart,
+    activity-settle, and the native cancel keypress (routed through mngr's locked message API,
+    like the tap) -- and the implementation uses whichever it needs. Returns 404 for an unknown
+    agent, 400 for the primary services agent, 500 if the interrupt fails, 200 with ``{block}``
+    otherwise.
     """
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
