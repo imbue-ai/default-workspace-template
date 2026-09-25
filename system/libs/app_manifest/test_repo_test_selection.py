@@ -7,6 +7,7 @@ import pytest
 
 from app_manifest.selection import OVERRIDES_PATH
 from app_manifest.selection import is_docs_path
+from app_manifest.selection import load_overrides
 from app_manifest.selection import load_repo_layout
 from app_manifest.selection import select_tests
 
@@ -30,7 +31,7 @@ def test_every_tracked_path_is_classified() -> None:
 
 
 def test_every_suite_the_override_file_names_exists() -> None:
-    overrides = load_repo_layout(_REPO_ROOT).overrides
+    overrides = load_overrides(_REPO_ROOT / OVERRIDES_PATH)
     named = [
         *overrides.always_run,
         *(suite for consumer in overrides.consumer for suite in consumer.suites),
