@@ -237,37 +237,37 @@ function pressOn(element: HTMLElement): void {
   m.redraw.sync();
 }
 
+// The pinned app declares a launch path taking a draft, so a draft (the avatar chooser's prompt, an element
+// reference) is launched into this client's view of its window.
+const buddy = appRecord("buddy", {
+  pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
+  launch_paths: [
+    launchPathRecord({
+      id: "draft",
+      path: "/api/intake",
+      method: "POST",
+      params: ["message"],
+      presets: { is_draft: "true" },
+      draft_param: "message",
+    }),
+  ],
+});
+
+/** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
+function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
+  offerApps(api, socket, [appRecord("docs"), buddy, ...apps]);
+  api.postLaunchAnswer = "/?chat=agent-1";
+  api.desktops = [
+    desktopRecord("home", {
+      windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+    }),
+  ];
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  m.redraw.sync();
+  return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
+}
+
 describe("the avatar chooser", () => {
-  // The pinned app declares a launch path taking a draft, so the chooser's prompt is launched into this client's
-  // view of its window.
-  const buddy = appRecord("buddy", {
-    pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
-    launch_paths: [
-      launchPathRecord({
-        id: "draft",
-        path: "/api/intake",
-        method: "POST",
-        params: ["message"],
-        presets: { is_draft: "true" },
-        draft_param: "message",
-      }),
-    ],
-  });
-
-  /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
-  function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
-    offerApps(api, socket, [appRecord("docs"), buddy, ...apps]);
-    api.postLaunchAnswer = "/?chat=agent-1";
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
-      }),
-    ];
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    m.redraw.sync();
-    return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
-  }
-
   function openEntryMenuRow(entry: HTMLElement, key: string): void {
     entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     m.redraw.sync();
@@ -346,28 +346,7 @@ describe("the element menu", () => {
   });
 
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
-    const buddy = appRecord("buddy", {
-      pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
-      launch_paths: [
-        launchPathRecord({
-          id: "draft",
-          path: "/api/intake",
-          method: "POST",
-          params: ["message"],
-          presets: { is_draft: "true" },
-          draft_param: "message",
-        }),
-      ],
-    });
-    offerApps(api, socket, [appRecord("docs"), buddy]);
-    api.postLaunchAnswer = "/?chat=agent-1";
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
-      }),
-    ];
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    m.redraw.sync();
+    pinnedEntry();
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
     entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     m.redraw.sync();
