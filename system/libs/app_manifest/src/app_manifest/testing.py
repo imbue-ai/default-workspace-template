@@ -189,7 +189,7 @@ def build_selection_workspace(repo_root: Path) -> None:
         "system/apps/chat/pyproject.toml",
         '[project]\nname = "chat"\ndependencies = ["corelib"]\n\n'
         '[tool.hatch.build.targets.wheel]\npackages = ["imbue"]\n\n'
-        '[tool.pytest.ini_options]\naddopts = ["-m", "not release"]\n',
+        '[tool.pytest.ini_options]\naddopts = ["--cov=imbue.chat", "-m", "not release"]\n',
     )
     write_repo_file(repo_root, "system/apps/chat/imbue/chat/__init__.py", "")
     write_repo_file(repo_root, "system/apps/chat/imbue/chat/server.py", "PORT = 1\n")

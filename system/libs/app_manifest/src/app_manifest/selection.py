@@ -57,6 +57,7 @@ from app_manifest.workspace_graph import PythonMember
 from app_manifest.workspace_graph import classify_lockfile_change
 from app_manifest.workspace_graph import npm_consumers
 from app_manifest.workspace_graph import python_consumers
+from app_manifest.workspace_graph import read_coverage_measured_units
 from app_manifest.workspace_graph import read_npm_packages
 from app_manifest.workspace_graph import read_own_root_units
 from app_manifest.workspace_graph import read_python_members
@@ -109,6 +110,9 @@ _SPLIT_TYPE_CHECKS: Final[Mapping[str, str]] = {
     "system/apps/chat": "imbue/chat/test_ratchets.py::test_no_type_errors",
 }
 _ALL_MARKERS_EXPRESSION: Final[str] = ""
+# A run of only some of a coverage-measured suite's tests would fail its coverage floor, which
+# only the whole suite can reach.
+_NO_COVERAGE_FLAG: Final[str] = "--no-cov"
 # A test file that drives a browser imports the library it drives it with.
 _BROWSER_TEST_LIBRARY: Final[str] = "playwright"
 
@@ -265,6 +269,9 @@ class RepoLayout(FrozenModel):
     )
     own_root_units: tuple[str, ...] = Field(
         description="Suites with their own pytest configuration"
+    )
+    coverage_measured_units: frozenset[str] = Field(
+        description="The own-root suites whose pytest configuration measures coverage"
     )
     python_members: tuple[PythonMember, ...] = Field(description="The uv workspace members")
     npm_packages: tuple[NpmPackage, ...] = Field(description="The npm workspace packages")
@@ -439,6 +446,7 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
             and _drives_a_browser(repo_root / path)
         ),
         own_root_units=own_root_units,
+        coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
         python_members=read_python_members(repo_root),
         npm_packages=read_npm_packages(repo_root),
         manifests=manifests,
@@ -1015,7 +1023,14 @@ def _pytest_commands(
                 )
             continue
         own_root_commands.extend(
-            _own_root_commands(root, whole, files, layout.browser_test_files, reasons)
+            _own_root_commands(
+                root,
+                whole,
+                files,
+                layout.browser_test_files,
+                root in layout.coverage_measured_units,
+                reasons,
+            )
         )
     return root_commands + own_root_commands
 
@@ -1025,11 +1040,14 @@ def _own_root_commands(
     whole: Sequence[_PytestRequest],
     files: Sequence[str],
     browser_test_files: Set[str],
+    is_coverage_measured: bool,
     reasons: tuple[SelectionReason, ...],
 ) -> list[SuiteCommand]:
     """The run of an own-root suite: whole (with its browser tests when the app itself
-    changed), or just the named files in full; then its split-out type check."""
+    changed), or just the named files in full, without coverage; then its split-out type
+    check."""
     commands: list[SuiteCommand] = []
+    partial_run = ("uv", "run", "pytest", *((_NO_COVERAGE_FLAG,) if is_coverage_measured else ()))
     split_type_check = _SPLIT_TYPE_CHECKS.get(root)
     relative_files = [_relative_to_root(root, file) for file in files]
     runs_type_check_test = split_type_check is not None and (
@@ -1060,7 +1078,7 @@ def _own_root_commands(
                 _command(
                     SuiteKind.PYTEST,
                     root,
-                    ("uv", "run", "pytest", "-m", _ALL_MARKERS_EXPRESSION, *named_browser_files),
+                    (*partial_run, "-m", _ALL_MARKERS_EXPRESSION, *named_browser_files),
                     reasons,
                 )
             )
@@ -1069,15 +1087,7 @@ def _own_root_commands(
             _command(
                 SuiteKind.PYTEST,
                 root,
-                (
-                    "uv",
-                    "run",
-                    "pytest",
-                    "-m",
-                    _ALL_MARKERS_EXPRESSION,
-                    *deselect,
-                    *relative_files,
-                ),
+                (*partial_run, "-m", _ALL_MARKERS_EXPRESSION, *deselect, *relative_files),
                 reasons,
             )
         )

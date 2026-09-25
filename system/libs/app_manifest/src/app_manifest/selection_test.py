@@ -177,7 +177,7 @@ def test_a_shared_frontend_library_change_builds_then_runs_consumer_checks_and_b
         "(cd system && npm run typecheck --workspace=libs/ui)",
         _ALWAYS_RUN,
         # Only the chat app's browser tests can observe the library; the rest of its suite cannot.
-        "(cd system/apps/chat && uv run pytest -m '' imbue/chat/test_e2e.py)",
+        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
     ]
 
 

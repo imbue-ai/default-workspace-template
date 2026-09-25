@@ -31,8 +31,10 @@ cannot launch must fail the run. The only per-suite setup a browser test needs
 is a `pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
 10-second default does not cover a browser launch. In the chat app's and the
 shell's own suites, browser tests also carry the `release` marker, which those
-suites skip by default: run them with `-m ''` (everything) or `-m release`
-(browser tests only). The test gate passes `-m ''` when the app itself changed.
+suites skip by default: run them with `-m ''` (everything) or `-m release
+--no-cov` (browser tests only; each suite fails a run under its coverage floor,
+so a partial run needs `--no-cov`). The test gate passes `-m ''` when the app
+itself changed.
 
 ## Look at the rendered page
 

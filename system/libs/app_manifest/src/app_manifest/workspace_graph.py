@@ -296,6 +296,21 @@ def read_own_root_units(repo_root: Path) -> tuple[str, ...]:
     return tuple(sorted(own_roots))
 
 
+def read_coverage_measured_units(repo_root: Path, own_root_units: Iterable[str]) -> frozenset[str]:
+    """The own-root suites whose pytest configuration measures coverage (an ``addopts`` entry
+    starting with ``--cov``), so a run of only part of one misses its coverage floor."""
+    measured: set[str] = set()
+    for unit in own_root_units:
+        pytest_options = _table(
+            _table(_table(_read_toml(repo_root / unit / "pyproject.toml").get("tool")).get("pytest")).get(
+                "ini_options"
+            )
+        )
+        if any(option.startswith("--cov") for option in _string_list(pytest_options.get("addopts"))):
+            measured.add(unit)
+    return frozenset(measured)
+
+
 @pure
 def _locked_dependency_names(package: Mapping[str, object]) -> set[str]:
     names: set[str] = set()
