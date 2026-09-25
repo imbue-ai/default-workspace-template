@@ -16,6 +16,7 @@ import {
   modifyPromptOf,
   standardContextMenuRows,
   targetOfEvent,
+  type ContextMenuActionRow,
   type ContextMenuRow,
   type ContextMenuTarget,
 } from "./context_menu_rows";
@@ -29,6 +30,13 @@ function keysOf(rows: readonly ContextMenuRow[]): string[] {
 
 function targetOf(element: Element, selectionText = ""): ContextMenuTarget {
   return { element, selectionText, click: CLICK };
+}
+
+/** The action row keyed ``key``; a key no row carries is a failed test, not a silent miss. */
+function actionRowOf(rows: readonly ContextMenuRow[], key: string): ContextMenuActionRow {
+  const found = rows.find((row): row is ContextMenuActionRow => row.kind === "action" && row.key === key);
+  if (found === undefined) throw new Error(`no row ${key} among ${keysOf(rows).join(", ")}`);
+  return found;
 }
 
 function byId(id: string): Element {
@@ -125,11 +133,10 @@ describe("standardContextMenuRows", () => {
     const field = byId("field") as HTMLInputElement;
     field.setSelectionRange(0, 5);
     const rows = standardContextMenuRows(targetOf(field));
-    const rowByKey = Object.fromEntries(rows.map((row) => [row.kind === "divider" ? "|" : row.key, row]));
-    (rowByKey.copy as { onSelect: () => void }).onSelect();
+    actionRowOf(rows, "copy").onSelect();
     await Promise.resolve();
     expect(clipboard.writeText).toHaveBeenCalledWith("hello");
-    (rowByKey.cut as { onSelect: () => void }).onSelect();
+    actionRowOf(rows, "cut").onSelect();
     await vi.waitFor(() => expect(field.value).toBe(" world"));
   });
 
@@ -141,9 +148,8 @@ describe("standardContextMenuRows", () => {
     const field = byId("field") as HTMLInputElement;
     field.setSelectionRange(0, 5);
     const rows = standardContextMenuRows(targetOf(field));
-    (rows[0] as { key: string; onSelect: () => void }).onSelect();
+    actionRowOf(rows, "cut").onSelect();
     await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("not focused")));
-    expect((rows[0] as { key: string }).key).toBe("cut");
     expect(field.value).toBe("hello world");
     warn.mockRestore();
   });
@@ -154,10 +160,10 @@ describe("standardContextMenuRows", () => {
     Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
     const rows = standardContextMenuRows(targetOf(mail));
     expect(keysOf(rows)).toEqual(["paste", "select-all"]);
-    (rows[0] as { onSelect: () => void }).onSelect();
+    actionRowOf(rows, "paste").onSelect();
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("insertText", false, "pasted"));
     expect(document.activeElement).toBe(mail);
-    (rows[1] as { onSelect: () => void }).onSelect();
+    actionRowOf(rows, "select-all").onSelect();
     expect(execCommand).toHaveBeenCalledWith("selectAll");
   });
 
@@ -168,18 +174,18 @@ describe("standardContextMenuRows", () => {
     Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
     const rows = standardContextMenuRows(targetOf(byId("word")));
     expect(keysOf(rows)).toEqual(["paste", "select-all"]);
-    (rows[0] as { onSelect: () => void }).onSelect();
+    actionRowOf(rows, "paste").onSelect();
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("insertText", false, "pasted"));
     expect(document.activeElement).toBe(note);
     (document.activeElement as HTMLElement).blur();
-    (rows[1] as { onSelect: () => void }).onSelect();
+    actionRowOf(rows, "select-all").onSelect();
     expect(execCommand).toHaveBeenCalledWith("selectAll");
     expect(document.activeElement).toBe(note);
   });
 
   it("copies an absolute link address", async () => {
     const rows = standardContextMenuRows(targetOf(byId("link")));
-    (rows[0] as { onSelect: () => void }).onSelect();
+    actionRowOf(rows, "copy-link").onSelect();
     await Promise.resolve();
     expect(clipboard.writeText).toHaveBeenCalledWith(`${window.location.origin}/docs/intro`);
   });
@@ -196,12 +202,11 @@ describe("elementReferenceRows", () => {
       "Explain...",
       "Modify...",
     ]);
-    const [copy, explain, modify] = rows as { onSelect: () => void; isDisabled?: boolean }[];
-    expect(explain.isDisabled).toBe(false);
-    copy.onSelect();
+    expect(actionRowOf(rows, "explain-element").isDisabled).toBe(false);
+    actionRowOf(rows, "copy-reference").onSelect();
     expect(clipboard.writeText).toHaveBeenCalledWith(referenceBlock(reference));
-    explain.onSelect();
-    modify.onSelect();
+    actionRowOf(rows, "explain-element").onSelect();
+    actionRowOf(rows, "modify-element").onSelect();
     const id = reference.reference_id;
     expect(draft.mock.calls).toEqual([
       [draftTextOf(explainPromptOf(id), referenceBlock(reference))],
@@ -213,15 +218,11 @@ describe("elementReferenceRows", () => {
 
   it("greys Explain and Modify with the reason when no draft can go", () => {
     const reference = describeElement(byId("para"), CLICK, SCOPE);
-    const rows = elementReferenceRows(reference, vi.fn(), false) as {
-      key: string;
-      isDisabled?: boolean;
-      tooltip?: string;
-    }[];
-    expect(rows[0].isDisabled).toBeUndefined();
-    expect(rows[1].isDisabled).toBe(true);
-    expect(rows[1].tooltip).toBe(NO_SHELL_DRAFT_REASON);
-    expect(rows[2].isDisabled).toBe(true);
+    const rows = elementReferenceRows(reference, vi.fn(), false);
+    expect(actionRowOf(rows, "copy-reference").isDisabled).toBeUndefined();
+    expect(actionRowOf(rows, "explain-element").isDisabled).toBe(true);
+    expect(actionRowOf(rows, "explain-element").tooltip).toBe(NO_SHELL_DRAFT_REASON);
+    expect(actionRowOf(rows, "modify-element").isDisabled).toBe(true);
   });
 });
 
