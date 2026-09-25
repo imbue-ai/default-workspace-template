@@ -156,10 +156,13 @@ def test_bridge_history_is_a_no_op_for_a_workspace_on_the_rewritten_history(
     _git(tmp_path, "clone", "-q", "--branch", "minds-v1", str(upstream), str(workspace))
 
     result = _bridge(workspace, capsys)
+    dropped = _drop(workspace, capsys)
 
     assert result["bridged"] is False
     assert result["fork_point"] == _git(upstream, "rev-parse", "minds-v1^{commit}")
+    assert dropped["dropped"] is None
     assert _replace_refs(workspace) == []
+    assert not (workspace / "data").exists()
 
 
 def test_bridge_history_makes_the_old_fork_point_the_merge_base(
