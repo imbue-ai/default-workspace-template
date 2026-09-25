@@ -3,14 +3,20 @@ workspace whenever the selector or its override file changes."""
 
 from pathlib import Path
 
+import pytest
+
 from app_manifest.selection import OVERRIDES_PATH
 from app_manifest.selection import is_docs_path
 from app_manifest.selection import load_repo_layout
 from app_manifest.selection import select_tests
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+# Selecting for every tracked path takes seconds, not the pure-Python budget the root
+# configuration's 10 s per-test timeout is sized for.
+_WHOLE_TREE_SELECTION_TIMEOUT_SECONDS = 60
 
 
+@pytest.mark.timeout(_WHOLE_TREE_SELECTION_TIMEOUT_SECONDS)
 def test_every_tracked_path_is_classified() -> None:
     layout = load_repo_layout(_REPO_ROOT)
     paths = sorted(path for path in layout.tracked_files if not is_docs_path(path))
