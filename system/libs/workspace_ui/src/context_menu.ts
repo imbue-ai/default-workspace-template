@@ -57,12 +57,15 @@ const uninstallerByDocument = new WeakMap<Document, () => void>();
 
 /**
  * Install the element menu on the page. Answers the uninstaller; a document already carrying
- * the menu answers the uninstaller of the install it has.
+ * the menu answers the uninstaller of the install it has, or a no-op when that install came
+ * from another copy of this module (one bundled from source beside the served file), which
+ * left the mark but is not this copy's to undo.
  */
 export function installElementContextMenu(options: ContextMenuOptions): () => void {
   const ownerDocument = options.document ?? document;
   const existing = uninstallerByDocument.get(ownerDocument);
   if (existing !== undefined) return existing;
+  if (ownerDocument.documentElement.hasAttribute(CONTEXT_MENU_INSTALLED_ATTR)) return () => undefined;
   const open = options.open ?? createDefaultRenderer(ownerDocument);
   const draft = options.draft ?? ((text: string) => options.connection.draftText(text));
   const isDraftAvailable = options.isDraftAvailable ?? (() => options.connection.isFramed);

@@ -160,4 +160,15 @@ describe("installElementContextMenu", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(card()).toBeNull();
   });
+
+  it("yields to a mark another copy of the module left, and its uninstaller leaves that mark alone", () => {
+    document.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
+    const noop = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    const event = rightClick(document.getElementById("para") as Element);
+    expect(event.defaultPrevented).toBe(false);
+    expect(card()).toBeNull();
+    noop();
+    expect(document.documentElement.hasAttribute(CONTEXT_MENU_INSTALLED_ATTR)).toBe(true);
+    document.documentElement.removeAttribute(CONTEXT_MENU_INSTALLED_ATTR);
+  });
 });
