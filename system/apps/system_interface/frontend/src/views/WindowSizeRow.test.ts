@@ -8,7 +8,7 @@ import type { WindowSizeActions } from "./WindowSizeRow";
 
 afterEach(unmountViews);
 
-function actions(): WindowSizeActions & { setState: ReturnType<typeof vi.fn>; setFrame: ReturnType<typeof vi.fn> } {
+function actions(): WindowSizeActions {
   return { setState: vi.fn(), setFrame: vi.fn() };
 }
 
@@ -63,11 +63,11 @@ describe("the zone grid", () => {
     const root = render(windowSizeRow(placed, onPlaced).render());
 
     tile(root, "left-half").dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(placed.setState).toHaveBeenCalledWith("SNAPPED_LEFT");
-    expect(placed.setFrame).not.toHaveBeenCalled();
+    expect(vi.mocked(placed.setState)).toHaveBeenCalledWith("SNAPPED_LEFT");
+    expect(vi.mocked(placed.setFrame)).not.toHaveBeenCalled();
 
     tile(root, "bottom-right-quarter").dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(placed.setFrame).toHaveBeenCalledWith({ x: 0.5, y: 0.5, width: 0.5, height: 0.5 });
+    expect(vi.mocked(placed.setFrame)).toHaveBeenCalledWith({ x: 0.5, y: 0.5, width: 0.5, height: 0.5 });
     expect(onPlaced).toHaveBeenCalledTimes(2);
   });
 
