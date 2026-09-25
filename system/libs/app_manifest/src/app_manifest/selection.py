@@ -265,7 +265,9 @@ class RepoLayout(FrozenModel):
 
     repo_root: Path = Field(description="The absolute repo root")
     tracked_files: frozenset[str] = Field(description="Every file git tracks")
-    test_files: tuple[str, ...] = Field(description="Every tracked test file, in path order")
+    test_files: tuple[str, ...] = Field(
+        description="Every tracked test file some suite collects, in path order"
+    )
     test_texts: Mapping[str, str] = Field(description="Each test file's text")
     browser_test_files: frozenset[str] = Field(
         description="The own-root test files that drive a browser"
