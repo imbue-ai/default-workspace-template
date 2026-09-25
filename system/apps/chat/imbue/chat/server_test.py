@@ -261,16 +261,24 @@ def test_upload_attachment_stores_file_and_returns_path(client: FlaskClient) -> 
     assert Path(data["path"]).read_bytes() == b"image-bytes"
 
 
-def test_an_element_reference_is_written_to_a_file_the_answer_names(tmp_path: Path) -> None:
+_ELEMENT_REFERENCE_ENVELOPE = {"element_reference": {"app": "docs", "tag": "a", "text": "Read the intro"}}
+
+
+def _client_writing_element_references_to(directory: Path) -> FlaskClient:
+    """A test client of an app whose element references are written under ``directory``."""
     state = build_test_state()
-    state.element_references_directory = tmp_path / "element_references"
-    client = create_application(state).test_client()
-    envelope = {"element_reference": {"app": "docs", "tag": "a", "text": "Read the intro"}}
-    response = client.post("/api/element-references", json={"reference": envelope})
+    state.element_references_directory = directory
+    return create_application(state).test_client()
+
+
+def test_an_element_reference_is_written_to_a_file_the_answer_names(tmp_path: Path) -> None:
+    directory = tmp_path / "element_references"
+    client = _client_writing_element_references_to(directory)
+    response = client.post("/api/element-references", json={"reference": _ELEMENT_REFERENCE_ENVELOPE})
     assert response.status_code == 200
     path = Path(response.get_json()["path"])
-    assert path.parent == state.element_references_directory
-    assert json.loads(path.read_text()) == envelope
+    assert path.parent == directory
+    assert json.loads(path.read_text()) == _ELEMENT_REFERENCE_ENVELOPE
 
 
 def test_an_element_reference_that_is_not_an_envelope_is_refused(client: FlaskClient) -> None:
@@ -282,13 +290,10 @@ def test_an_element_reference_that_is_not_an_envelope_is_refused(client: FlaskCl
 
 
 def test_an_element_reference_that_cannot_be_written_is_a_server_error(tmp_path: Path) -> None:
-    state = build_test_state()
     blocker = tmp_path / "blocker"
     blocker.write_text("not a directory")
-    state.element_references_directory = blocker / "element_references"
-    client = create_application(state).test_client()
-    envelope = {"element_reference": {"app": "docs", "tag": "a", "text": "Read the intro"}}
-    response = client.post("/api/element-references", json={"reference": envelope})
+    client = _client_writing_element_references_to(blocker / "element_references")
+    response = client.post("/api/element-references", json={"reference": _ELEMENT_REFERENCE_ENVELOPE})
     assert response.status_code == 500
     assert "could not write" in response.get_json()["detail"]
 
