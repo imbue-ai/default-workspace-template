@@ -9,17 +9,15 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { getChatSettings } from "../models/ChatSettings";
 import { getChatById } from "../models/Chats";
+import { getFastModeLimitNoticeBody } from "../models/HarnessCatalog";
 import { dismissFastModeNotice, getFastModeNoticeChatId } from "./fast-mode-limit";
 
-// Claude Code bills fast mode through the API even on a subscription; codex's
-// fast tier has no such split, so only a claude chat gets the billing line.
-const CLAUDE_HARNESS = "claude";
-
-/** What the notice says for a limit of `turnLimit` turns on a chat run by `harness`. */
-export function fastModeNoticeText(turnLimit: number, harness: string | undefined): string {
+/** What the notice says for a limit of `turnLimit` turns, followed by `noticeBody` when the
+ *  chat's harness declared one on its turn-limit popup. */
+export function fastModeNoticeText(turnLimit: number, noticeBody: string | null): string {
   const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
-  const billing = harness === CLAUDE_HARNESS ? " Fast mode always uses API billing, not subscription usage." : "";
-  return `Fast mode is off now: this chat ran fast for its first ${turns}. Change this in the model picker.${billing}`;
+  const body = `Fast mode is off now: this chat ran fast for its first ${turns}. Change this in the model picker.`;
+  return noticeBody === null ? body : `${body} ${noticeBody}`;
 }
 
 export function FastModeNotice(): m.Component<{ chatId: string }> {
@@ -27,7 +25,7 @@ export function FastModeNotice(): m.Component<{ chatId: string }> {
     view(vnode) {
       if (getFastModeNoticeChatId() !== vnode.attrs.chatId) return null;
       const turnLimit = getChatSettings()?.fast_mode_turn_limit ?? 0;
-      const harness = getChatById(vnode.attrs.chatId)?.active_agent.harness;
+      const noticeBody = getFastModeLimitNoticeBody(getChatById(vnode.attrs.chatId)?.active_agent.harness);
       return m(
         "div",
         {
@@ -38,7 +36,7 @@ export function FastModeNotice(): m.Component<{ chatId: string }> {
         },
         [
           m("span", { class: "mt-0.5 shrink-0 text-accent" }, m.trust(icon("zap", { size: 14, filled: true }))),
-          m("span", { class: "min-w-0" }, fastModeNoticeText(turnLimit, harness)),
+          m("span", { class: "min-w-0" }, fastModeNoticeText(turnLimit, noticeBody)),
           m(
             Button,
             {

@@ -28,8 +28,9 @@ const CATALOGS = {
   claude: catalogFixture([
     { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
     { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
-    { trigger: "turn_check", commands: [], action: "fast_mode_limit" },
+    { trigger: "turn_check", commands: [], action: "fast_mode_limit", notice_body: "Billed through the API." },
   ]),
+  codex: catalogFixture([{ trigger: "turn_check", commands: [], action: "fast_mode_limit" }]),
   "pi-coding": catalogFixture([{ trigger: "composer_command", commands: ["/login"], action: "open_auth" }]),
 };
 
@@ -75,6 +76,18 @@ describe("hasFastModeLimit", () => {
     expect(harnessCatalog.hasFastModeLimit("claude")).toBe(true);
     expect(harnessCatalog.hasFastModeLimit("pi-coding")).toBe(false);
     expect(harnessCatalog.hasFastModeLimit(undefined)).toBe(false);
+  });
+});
+
+describe("getFastModeLimitNoticeBody", () => {
+  it("is the line the turn_check popup declared, and null where it declared none", async () => {
+    const harnessCatalog = await loadHarnessCatalog();
+    mockRequest.mockResolvedValue(CATALOGS);
+    await harnessCatalog.ensureHarnessCatalogs();
+    expect(harnessCatalog.getFastModeLimitNoticeBody("claude")).toBe("Billed through the API.");
+    expect(harnessCatalog.getFastModeLimitNoticeBody("codex")).toBeNull();
+    expect(harnessCatalog.getFastModeLimitNoticeBody("pi-coding")).toBeNull();
+    expect(harnessCatalog.getFastModeLimitNoticeBody(undefined)).toBeNull();
   });
 });
 

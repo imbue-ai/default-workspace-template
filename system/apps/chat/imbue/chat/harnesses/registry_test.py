@@ -60,3 +60,19 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
                 continue
             overlap = set(popup.commands) & {"/model", "/effort", "/fast"}
             assert overlap == set(), f"{harness}: {overlap} duplicated in the terminal-notice tuple"
+
+
+def test_only_claude_adds_the_billing_line_to_the_fast_mode_notice() -> None:
+    # The turn-limit notice's extra line is declared on the popup, not chosen by the
+    # frontend from the harness name. Claude Code bills fast mode through the API even on
+    # a subscription; codex's fast tier has no such split, so its notice has nothing to add.
+    bodies = {
+        harness: popup.notice_body
+        for harness in HARNESS_SPECS
+        for popup in HARNESS_SPECS[harness].popups
+        if popup.action is PopupAction.FAST_MODE_LIMIT
+    }
+    assert bodies == {
+        HarnessType.CLAUDE: "Fast mode always uses API billing, not subscription usage.",
+        HarnessType.CODEX: None,
+    }

@@ -118,9 +118,12 @@ class HarnessPopup(FrozenModel):
     trigger: PopupTrigger
     commands: tuple[str, ...] = ()
     action: PopupAction
-    # NOTICE only: replaces the notice's default "send it from the agent's terminal"
-    # body. A harness declares WHY a command is declined; the composer stays free of
-    # per-command branching, which is the whole point of shipping these declaratively.
+    # NOTICE: replaces the notice's default "send it from the agent's terminal" body. A
+    # harness declares WHY a command is declined; the composer stays free of per-command
+    # branching, which is the whole point of shipping these declaratively.
+    # FAST_MODE_LIMIT: a line the turn-limit notice adds after its default body, for a
+    # harness with something more to say about running fast (the frontend never branches
+    # on the harness name for it).
     notice_body: str | None = None
 
 
@@ -134,8 +137,8 @@ class HarnessPopup(FrozenModel):
 # the distinct rationale survives: those tuples are measured-against-a-live-agent lists,
 # and a future re-measure would find these three send fine and drop them.
 # Split by whether the harness HAS a fast mode. /model and /effort are universal, but
-# only claude and codex can launch fast (they are the harnesses declaring
-# ``_FAST_MODE_LIMIT_POPUP``), and their catalogs are the only ones carrying
+# only claude and codex can launch fast (they are the harnesses declaring a
+# ``FAST_MODE_LIMIT`` popup), and their catalogs are the only ones carrying
 # ``supports_fast``. Declining /fast on a harness with no fast mode would point the user at
 # a picker control that is not rendered for it -- worse than letting the text through.
 _MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort")
@@ -252,9 +255,16 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
 # the harness's agent-auth surface instead of sending.
 _AUTH_COMMANDS: Final[tuple[str, ...]] = ("/login", "/logout")
 
-# The fast-mode turn limit, declared by the harnesses that can launch fast.
+# The fast-mode turn limit, declared by the harnesses that can launch fast. Claude Code
+# bills fast mode through the API even on a subscription; codex's fast tier has no such
+# split, so only claude's notice carries the billing line.
 _FAST_MODE_LIMIT_POPUP: Final[HarnessPopup] = HarnessPopup(
     trigger=PopupTrigger.TURN_CHECK, action=PopupAction.FAST_MODE_LIMIT
+)
+_CLAUDE_FAST_MODE_LIMIT_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.TURN_CHECK,
+    action=PopupAction.FAST_MODE_LIMIT,
+    notice_body="Fast mode always uses API billing, not subscription usage.",
 )
 
 
@@ -354,7 +364,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CLAUDE_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
             _MODEL_BAR_POPUP_WITH_FAST,
-            _FAST_MODE_LIMIT_POPUP,
+            _CLAUDE_FAST_MODE_LIMIT_POPUP,
         ),
     ),
     HarnessType.CODEX: HarnessSpec(
