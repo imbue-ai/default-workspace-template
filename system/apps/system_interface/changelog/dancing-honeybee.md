@@ -18,5 +18,7 @@ pairing above -- now runs as a 180ms transition (`--desk-window-move`). Only the
 chrome transitions: its live page is positioned by measuring the chrome, so it
 has nothing to transition towards and is re-measured every frame of the travel
 instead. A press sets `data-window-motion="off"` on the desktop's root for its
-whole length, so a dragged window stays under the pointer and the settle at the
-release does not animate; `prefers-reduced-motion` turns the travel off entirely.
+whole length, so a dragged window is held by the pointer rather than trailing
+it; the snap a release commits lands after the press is over, so it travels the
+last step like any other move. `prefers-reduced-motion` turns the travel off
+entirely.

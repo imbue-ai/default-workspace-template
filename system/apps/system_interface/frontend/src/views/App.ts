@@ -79,7 +79,8 @@ const MENU_MIN_WIDTH = 176;
 const WINDOW_DRAGGING_ATTRIBUTE = "data-window-dragging";
 
 /** Set on the desktop's root for the length of a press, which is longer than the drag it may
- *  become and spans the settle at the end, so neither travels (style.css). */
+ *  become, so a window the pointer carries is held by it rather than trailing it (style.css). The
+ *  snap a release commits is written after the press has ended, and travels the last step. */
 const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
 
 interface SettingsDialogState {
