@@ -1,0 +1,1 @@
+The provider chooser describes Opencode Go and OpenRouter in plain terms of what you get instead of echoing the providers' own marketing: Opencode Go is "A $10/mo subscription to a selection of open models." and OpenRouter is "Models from many providers on one key, billed per token."
