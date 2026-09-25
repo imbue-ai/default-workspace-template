@@ -13,21 +13,13 @@
  * through the connection the page already holds).
  */
 
-import { scopeOfHandshake, type ReferenceScope } from "./element_reference";
+import { scopeOfHandshake, type ReferenceHandshake, type ReferenceScope } from "./element_reference";
 import { elementMenuRows, targetOfEvent, type ContextMenuRow, type ContextMenuTarget } from "./context_menu_rows";
 
 /** The connection the page holds to the shell: what the installer drafts through. */
 export interface ContextMenuConnection {
   readonly isFramed: boolean;
   draftText(text: string): void;
-}
-
-/** The shell's handshake as the page last received it (``ShellHandshake``), or null before one. */
-export interface ContextMenuHandshake {
-  app?: string;
-  windowId: string;
-  desktopId: string;
-  clientId: string;
 }
 
 /** Where the menu opens: the pointer's viewport position. */
@@ -39,7 +31,7 @@ export interface ContextMenuPoint {
 export interface ContextMenuOptions {
   connection: ContextMenuConnection;
   /** The page's last handshake, read at every right-click (so a getter); the scope of every reference. */
-  handshake?: () => ContextMenuHandshake | null;
+  handshake?: () => ReferenceHandshake | null;
   /** The scope of a reference, for a page that knows more than its handshake says (the shell, which is no
    *  frame's page); ``handshake`` when unset. */
   scope?: (target: ContextMenuTarget) => ReferenceScope;

@@ -297,10 +297,17 @@ export function describeElement(element: Element, click: ReferenceClick, scope: 
   };
 }
 
+/** What a page's last handshake from the shell says of it (``ShellHandshake`` without the path): the scope of
+ *  every reference the page builds. ``app`` is optional so a handshake from a shell that sends none scopes one too. */
+export interface ReferenceHandshake {
+  app?: string;
+  windowId: string;
+  desktopId: string;
+  clientId: string;
+}
+
 /** The scope a handshake gives a page, or the empty scope with none. */
-export function scopeOfHandshake(
-  handshake: { app?: string; windowId: string; desktopId: string; clientId: string } | null,
-): ReferenceScope {
+export function scopeOfHandshake(handshake: ReferenceHandshake | null): ReferenceScope {
   if (handshake === null) return { app: null, windowId: null, desktopId: null, clientId: null };
   const nullIfEmpty = (value: string | undefined): string | null =>
     value === undefined || value === "" ? null : value;
