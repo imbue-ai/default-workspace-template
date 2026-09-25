@@ -25,7 +25,7 @@ _UPSTREAM_FILTER = (
 )
 
 
-def _git(repo: Path, *args: str, check: bool = True) -> str:
+def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         [
             "git",
@@ -40,7 +40,7 @@ def _git(repo: Path, *args: str, check: bool = True) -> str:
         cwd=repo,
         capture_output=True,
         text=True,
-        check=check,
+        check=True,
     )
     return result.stdout.strip()
 
@@ -187,8 +187,10 @@ def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
     _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
 
     assert (
-        _git(workspace, "merge-base", "--is-ancestor", old_head, "HEAD", check=False)
-        == ""
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", old_head, "HEAD"], cwd=workspace
+        ).returncode
+        == 0
     )
     assert not (workspace / VENDORED_FILE).exists()
     assert (workspace / "notes.md").read_text() == "mine\n"
