@@ -334,9 +334,9 @@ the caller's own chat, which takes the left half), and prints the window's id;
 an `open` with no client to target still writes the window, unplaced. A close
 is posted to the app's registered `window_closed_path`, when it has one, so an
 app whose resources live as long as their windows (the terminal, the browser)
-can collect at once
-(`docs/system/specs/window-bound-resources.md`). Only `refresh` and the
-interface reload reach the browser as messages. See the `manage-desktop` skill for end-to-end orientation.
+can collect at once (`docs/system/specs/window-bound-resources.md`). Only
+`refresh` and the interface reload reach the browser as messages. See the
+`manage-desktop` skill for end-to-end orientation.
 
 ## Updating the running UI
 
