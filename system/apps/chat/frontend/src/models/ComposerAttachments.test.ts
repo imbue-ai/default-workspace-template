@@ -97,6 +97,25 @@ describe("persistence", () => {
     clearComposerAttachments(otherChatId);
   });
 
+  it("keeps only the stored items that are in shape, warning about the rest", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const otherChatId = `chat-${Math.random().toString(36).slice(2)}`;
+    const good = {
+      localId: "composer-att-901",
+      fileName: "plan.pdf",
+      isImage: false,
+      uploaded: { path: "/w/data/uploads/y/plan.pdf", name: "plan.pdf", size: 3, isImage: false },
+    };
+    localStorage.setItem(
+      `${STORAGE_KEY_PREFIX}${otherChatId}`,
+      JSON.stringify([{ localId: "composer-att-902", fileName: "lost.txt", isImage: false }, good, "junk"]),
+    );
+    expect(getComposerAttachments(otherChatId).map((attachment) => attachment.fileName)).toEqual(["plan.pdf"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not in shape"), expect.any(Array));
+    clearComposerAttachments(otherChatId);
+    warn.mockRestore();
+  });
+
   it("takes in a list another document wrote, keeping this document's upload in flight", async () => {
     let finish: (() => void) | null = null;
     uploadAnswers.push(

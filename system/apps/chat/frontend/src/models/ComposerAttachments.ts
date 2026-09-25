@@ -67,6 +67,26 @@ type StoredAttachment = Pick<ComposerAttachment, "localId" | "fileName" | "isIma
   uploaded: UploadedAttachment;
 };
 
+function _isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Whether a stored item carries what a chip and a send read off it, in shape. */
+function _isStoredAttachment(value: unknown): value is StoredAttachment {
+  if (!_isRecord(value) || !_isRecord(value.uploaded)) return false;
+  const { localId, fileName, isImage, summary, uploaded } = value;
+  return (
+    typeof localId === "string" &&
+    typeof fileName === "string" &&
+    typeof isImage === "boolean" &&
+    (summary === undefined || typeof summary === "string") &&
+    typeof uploaded.path === "string" &&
+    typeof uploaded.name === "string" &&
+    typeof uploaded.size === "number" &&
+    typeof uploaded.isImage === "boolean"
+  );
+}
+
 function _storedAttachmentsOf(chatId: string): StoredAttachment[] {
   let raw: string | null;
   try {
@@ -87,7 +107,11 @@ function _storedAttachmentsOf(chatId: string): StoredAttachment[] {
     console.warn(`Discarding the stored attachments of chat ${chatId}: they are not a list`, parsed);
     return [];
   }
-  return parsed as StoredAttachment[];
+  const malformed = parsed.filter((item) => !_isStoredAttachment(item));
+  if (malformed.length > 0) {
+    console.warn(`Discarding stored attachments of chat ${chatId} that are not in shape`, malformed);
+  }
+  return parsed.filter(_isStoredAttachment);
 }
 
 function _persist(chatId: string, attachments: readonly ComposerAttachment[]): void {
