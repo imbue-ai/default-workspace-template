@@ -59,7 +59,7 @@ def _commit(repo: Path, message: str, files: dict[str, str | None]) -> None:
 
 @pytest.fixture
 def template(tmp_path: Path) -> Path:
-    """A template that vendors mngr, released as ``minds-v1``."""
+    """A template that vendors mngr, released as ``minds-v1`` and ``minds-v1.1``."""
     template = tmp_path / "template"
     template.mkdir()
     _git(template, "init", "-q", "-b", "main")
@@ -71,6 +71,8 @@ def template(tmp_path: Path) -> Path:
     _commit(template, "Improve the readme", {"README.md": "two\n"})
     _commit(template, "Refresh vendored mngr", {VENDORED_FILE: "v2\n"})
     _git(template, "tag", "-a", "minds-v1", "-m", "minds-v1")
+    _commit(template, "Document the template", {"docs.md": "docs\n"})
+    _git(template, "tag", "-a", "minds-v1.1", "-m", "minds-v1.1")
     return template
 
 
@@ -190,6 +192,37 @@ def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
     assert not (workspace / VENDORED_FILE).exists()
     assert (workspace / "notes.md").read_text() == "mine\n"
     assert (workspace / "pyproject.toml").read_text() == "mngr = 'git'\n"
+    assert _git(workspace, "diff", "--name-only", "minds-v2", "HEAD").splitlines() == [
+        "notes.md"
+    ]
+
+
+def test_bridge_history_forks_at_the_newest_release_the_workspace_merged(
+    template, upstream, workspace, capsys
+) -> None:
+    # An update before the rewrite took the workspace to minds-v1.1; upstream has since moved the tag.
+    _git(
+        workspace,
+        "fetch",
+        "-q",
+        "origin",
+        "refs/tags/minds-v1.1:refs/pre-rewrite/minds-v1.1",
+    )
+    _git(
+        workspace,
+        "merge",
+        "-q",
+        "--no-edit",
+        "-m",
+        "update-self: merge upstream template (minds-v1.1)",
+        "refs/pre-rewrite/minds-v1.1",
+    )
+
+    result = _bridge(workspace, capsys)
+
+    assert result["fork_point"] == _git(template, "rev-parse", "minds-v1.1^{commit}")
+    assert result["twin"] == _git(upstream, "rev-parse", "minds-v1.1^{commit}")
+    _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
     assert _git(workspace, "diff", "--name-only", "minds-v2", "HEAD").splitlines() == [
         "notes.md"
     ]
