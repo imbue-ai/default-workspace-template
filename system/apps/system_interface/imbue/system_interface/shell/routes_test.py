@@ -1134,14 +1134,29 @@ def test_an_open_asked_to_sit_beside_a_window_snaps_the_pair_and_keeps_both_fram
     assert by_window[anchor]["frame"] == {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.6}
 
 
-def test_an_open_beside_a_window_the_desktop_does_not_have_still_opens_it(client: FlaskClient, app: Flask) -> None:
-    """The pairing is the open's courtesy: a chat the user closed costs the open its placement, not its window."""
+@pytest.mark.parametrize("requester", [_TERMINAL_REQUESTER, {"app": "terminal"}, None])
+def test_an_open_beside_a_window_the_desktop_does_not_have_still_opens_it(
+    client: FlaskClient, app: Flask, requester: dict[str, str] | None
+) -> None:
+    """The pairing is the open's courtesy: a chat the user closed, and an op from nobody's chat (no requester, or
+    one with no marker, which is what ``self`` is resolved from), cost the open its placement, not its window."""
     _register_client(app, "c1", "home")
-    opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "self"}, _TERMINAL_REQUESTER)
+    opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "self"}, requester)
     assert opened.status_code == 200
     (placement,) = _placements(client, "c1")
     assert placement["window_id"] == opened.get_json()["window_id"]
     assert (placement["state"], placement["is_minimized"]) == ("NORMAL", False)
+
+
+def test_an_open_beside_a_spelling_that_is_no_window_is_refused_before_it_opens_anything(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A ``beside`` the window rule refuses is the caller's mistake, not a window that is simply not there, so the
+    op is refused rather than half applied: nothing is left on the desktop to wonder about."""
+    _register_client(app, "c1", "home")
+    refused = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "Not A Window"}, _TERMINAL_REQUESTER)
+    assert refused.status_code == 400 and "window" in refused.get_json()["detail"]
+    assert _desktop_windows(client) == []
 
 
 def test_a_whole_app_refresh_reaches_every_client_and_needs_no_target(client: FlaskClient, app: Flask) -> None:

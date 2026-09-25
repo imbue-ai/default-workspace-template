@@ -22,6 +22,10 @@ class LayoutOpError(ShellError, ValueError):
     """An op's arguments cannot be applied to the arrangement."""
 
 
+class NoRequesterWindowError(LayoutOpError):
+    """``self`` or ``pinned`` names a window of the requester's, and the op carries no requester that has one."""
+
+
 class UnknownAppError(ShellError, LookupError):
     """No registered app has the given name."""
 
