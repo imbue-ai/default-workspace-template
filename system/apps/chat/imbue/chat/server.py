@@ -66,7 +66,6 @@ from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
 from imbue.chat.element_references import ElementReferenceRequest
 from imbue.chat.element_references import ElementReferenceResponse
-from imbue.chat.element_references import get_element_references_directory
 from imbue.chat.element_references import write_element_reference_file
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
@@ -835,7 +834,7 @@ def _store_element_reference() -> Response:
     element-reference-menu plan, section 7.1) and answer the file's path, which the composer takes in the
     pointer form instead of the block."""
     posted = parse_request_body(ElementReferenceRequest)
-    written = write_element_reference_file(posted.reference, get_element_references_directory())
+    written = write_element_reference_file(posted.reference, get_state().element_references_directory)
     return json_response(ElementReferenceResponse(path=str(written)).model_dump())
 
 
