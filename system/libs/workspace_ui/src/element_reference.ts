@@ -163,22 +163,21 @@ function escapeIdentifier(value: string): string {
 }
 
 /** One level of the selector: the id when there is one, else the tag with its classes and an index among
- *  same-tag siblings when another sibling looks the same. */
+ *  same-tag siblings when that step would match another sibling (one with the same classes, or more). */
 function selectorStepOf(element: Element): { step: string; isAnchored: boolean } {
   const id = idOf(element);
   if (id !== null) return { step: `#${escapeIdentifier(id)}`, isAnchored: true };
   const tag = element.tagName.toLowerCase();
-  const classes = classesOf(element);
-  const base = classes.map((name) => `.${escapeIdentifier(name)}`).join("");
+  const step = `${tag}${classesOf(element)
+    .map((name) => `.${escapeIdentifier(name)}`)
+    .join("")}`;
   const parent = element.parentElement;
-  if (parent === null) return { step: `${tag}${base}`, isAnchored: false };
+  if (parent === null) return { step, isAnchored: false };
   const sameTagSiblings = Array.from(parent.children).filter((sibling) => sibling.tagName === element.tagName);
-  const lookalike = sameTagSiblings.some(
-    (sibling) => sibling !== element && classesOf(sibling).join(" ") === classes.join(" "),
-  );
-  if (!lookalike) return { step: `${tag}${base}`, isAnchored: false };
+  const lookalike = sameTagSiblings.some((sibling) => sibling !== element && sibling.matches(step));
+  if (!lookalike) return { step, isAnchored: false };
   const index = sameTagSiblings.indexOf(element) + 1;
-  return { step: `${tag}${base}:nth-of-type(${index})`, isAnchored: false };
+  return { step: `${step}:nth-of-type(${index})`, isAnchored: false };
 }
 
 /**

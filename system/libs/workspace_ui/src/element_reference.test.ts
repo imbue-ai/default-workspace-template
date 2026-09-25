@@ -137,6 +137,11 @@ describe("uniqueSelectorFor", () => {
     for (const row of Array.from(rows)) {
       expect(document.querySelector(uniqueSelectorFor(row) as string)).toBe(row);
     }
+    // A sibling with the same classes and more is matched by the step too, so it counts as a lookalike.
+    render('<ul id="list"><li class="row">a</li><li class="row other">c</li></ul>');
+    const [plain, decorated] = Array.from(document.querySelectorAll("li"));
+    expect(uniqueSelectorFor(plain)).toBe("#list > li.row:nth-of-type(1)");
+    expect(uniqueSelectorFor(decorated)).toBe("#list > li.row.other");
   });
 
   it("walks up to the body when nothing on the way carries an id", () => {

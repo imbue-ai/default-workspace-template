@@ -75,7 +75,7 @@ The element's own text, its markup, and its ancestors are deliberately not carri
 
 #### 3.1.1 The selector
 
-The selector is built from the element upward: at each level the element's `id` when it has one (`#id`, then stop), else its tag with its classes (`div.message-user.selected`), with `:nth-of-type(n)` appended (`n` the element's index among its same-tag siblings) when another sibling has the same tag and the same classes.
+The selector is built from the element upward: at each level the element's `id` when it has one (`#id`, then stop), else its tag with its classes (`div.message-user.selected`), with `:nth-of-type(n)` appended (`n` the element's index among its same-tag siblings) when that step would match another sibling (one with the same classes, or the same and more).
 The result is checked against the document with `querySelectorAll`; a selector that matches more than one element, or none, is replaced by `null`.
 The check is what makes the field trustworthy; the construction is only a good first try.
 
