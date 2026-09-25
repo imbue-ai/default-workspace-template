@@ -25,6 +25,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
@@ -95,6 +96,8 @@ from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -3158,9 +3161,7 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     assert choice.matched.id == "gpt-5.6-terra"
 
 
-# =============================================================================
-# The shared model-state poller (the bounded replacement for per-agent watchers)
-# =============================================================================
+# The shared model-state poller.
 
 
 def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_changes(
@@ -3227,14 +3228,10 @@ def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManag
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
     state_dir = agent_manager._get_agent_state_dir(agent_id)
-    assert agent_manager._list_model_state_paths() == {
-        agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)
-    }
+    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CLAUDE, state_dir)}
 
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
-    assert agent_manager._list_model_state_paths() == {
-        agent_id: get_model_state_path(HarnessType.CODEX, state_dir)
-    }
+    assert agent_manager._list_model_state_paths() == {agent_id: get_model_state_path(HarnessType.CODEX, state_dir)}
 
 
 def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rejected_for_good(
@@ -4670,3 +4667,108 @@ def test_status_mapping_follows_the_chat_row(
     lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
+
+
+# Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)
+
+
+def test_mint_awaiting_chat_lists_a_provisional_chat_with_a_minted_name_and_no_seed(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    _tracked_chat(agent_manager, "agent-1", "Chat-1", display_name="Chat 1")
+    q = broadcaster.register()
+
+    minted = agent_manager.mint_awaiting_chat("acct-1")
+
+    assert minted.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    assert minted.is_seeded is False
+    assert minted.name == "Chat 2"
+    assert minted.account_id == "acct-1"
+    assert minted.message == ""
+    assert agent_manager.get_provisional_chat(minted.chat_id) == minted
+    assert agent_manager.knows_chat(minted.chat_id)
+    raw = q.get_nowait()
+    assert raw is not None
+    broadcast = json.loads(raw)
+    assert broadcast["type"] == "provisional_chat_created"
+    assert broadcast["chat_id"] == minted.chat_id
+    assert broadcast["phase"] == "awaiting_first_send"
+
+
+def test_an_awaiting_chat_is_launched_by_its_first_message_under_its_own_id(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        (signed_in,) = read_index().accounts
+        minted = manager.mint_awaiting_chat(signed_in.id)
+        launched = manager.create_chat("", chat_id=minted.chat_id, account_id=signed_in.id, message="Let's go")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(minted.chat_id) is None, 10, "the provisional chat's completion"
+        )
+    finally:
+        manager.stop()
+
+    assert launched.chat_id == minted.chat_id
+    assert launched.display_name == minted.name
+    (argv_line,) = argv_log.read_text().splitlines()
+    argv = argv_line.split()
+    assert f"--id {minted.chat_id}" in argv_line
+    assert [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"] == ["chat", "fast"]
+    assert "Let's" in argv_line and "/welcome" not in argv_line
+
+
+def test_discarding_an_awaiting_chat_drops_it(agent_manager: AgentManager) -> None:
+    minted = agent_manager.mint_awaiting_chat("")
+
+    assert agent_manager.discard_provisional_chat(minted.chat_id) is True
+    assert agent_manager.get_provisional_chat(minted.chat_id) is None
+    assert agent_manager.knows_chat(minted.chat_id) is False
+
+
+def test_a_chat_reads_as_connecting_while_any_of_its_sends_waits_on_the_agent(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="connecting-agent")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1") as mark_first:
+        mark_first()
+        with agent_manager.track_connecting_send(agent_id, "m-2") as mark_second:
+            mark_second()
+            assert is_chat_connecting(agent_manager, agent_id)
+        # The second send resolved; the first still waits on the agent.
+        assert is_chat_connecting(agent_manager, agent_id)
+    assert not is_chat_connecting(agent_manager, agent_id)
+
+    # The page hears the change twice -- on, then off -- not once per mark.
+    assert drain_is_connecting_pushes(pushes, agent_id) == [True, False]
+
+
+def test_a_send_that_never_waits_on_the_agent_leaves_the_chat_alone(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="ready-agent")
+    pushes = broadcaster.register()
+
+    with agent_manager.track_connecting_send(agent_id, "m-1"):
+        assert not is_chat_connecting(agent_manager, agent_id)
+
+    assert drain_is_connecting_pushes(pushes, agent_id) == []
+
+
+def test_a_send_that_fails_while_connecting_still_clears_the_mark(agent_manager: AgentManager) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(agent_manager, agent_id, name="failing-agent")
+
+    with pytest.raises(SendFailedError):
+        with agent_manager.track_connecting_send(agent_id, "m-1") as mark_connecting:
+            mark_connecting()
+            raise SendFailedError("the agent is in shell mode")
+
+    assert not is_chat_connecting(agent_manager, agent_id)
