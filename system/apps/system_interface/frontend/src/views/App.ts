@@ -203,18 +203,18 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
-  /** Paint a window as the store now has it, straight onto the DOM: its rectangle onto its element, its
-   *  page over the content box that just moved, and the snap preview shown or hidden. Per pointer move
-   *  of a drag or resize, with no redraw (one per move would re-render the whole desktop and reposition
-   *  every page), and once more when the gesture ends or is cancelled: a redraw diffs against the last
-   *  render rather than the DOM and writes nothing it finds equal, so the DOM must already be at what
-   *  the render answers, which the store's ``windowRect`` and ``snapPreviewRect`` are at every point. */
   /** The chrome of one window as the backdrop holds it now, else null (its window is closed, or its desktop
    *  is no longer the one on screen). */
   function windowElement(windowId: string): HTMLElement | null {
     return backdropArea?.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`) ?? null;
   }
 
+  /** Paint a window as the store now has it, straight onto the DOM: its rectangle onto its element, its
+   *  page over the content box that just moved, and the snap preview shown or hidden. Per pointer move
+   *  of a drag or resize, with no redraw (one per move would re-render the whole desktop and reposition
+   *  every page), and once more when the gesture ends or is cancelled: a redraw diffs against the last
+   *  render rather than the DOM and writes nothing it finds equal, so the DOM must already be at what
+   *  the render answers, which the store's ``windowRect`` and ``snapPreviewRect`` are at every point. */
   function paintWindow(current: DesktopStore, windowId: string): void {
     const area = backdropArea;
     if (area === null) return;
