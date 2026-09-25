@@ -206,16 +206,20 @@ history was rewritten once, so a workspace created before that shares no commit
 with `$REF` and the worker's merge would have no base. This grafts the
 workspace's fork point onto its rewritten twin in `$REF` until the update lands;
 the workspace's own history is not touched, and for every other workspace it
-changes nothing:
+changes nothing. Fetch the tags again first, forced: an older copy of Step 2
+cannot move a tag this workspace already holds, and the bridge must be built
+against the commit the worker will merge:
 
 ```bash
+git fetch upstream --tags --force
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     bridge-history --ref "$REF" || exit 1
 ```
 
 Either `"bridged"` value needs nothing from the user. If it exits non-zero,
 nothing changed: record `run-status verdict STUCK --detail "<the error line, in
-plain terms>"`, surface it, and stop.
+plain terms>"`, surface it, and stop. From here on, a pass that ends for any
+reason drops the bridge first (Step 6's opening command); a retry rebuilds it.
 
 ### 3b. Launch
 
@@ -416,7 +420,7 @@ carry on into §5 and get their verdict there.
   the error text, a pointer to `data/.tasks/update-self/reports/`) -- this is
   the one message where detail is preserved, because it gets pasted into bug
   reports. Record `run-status verdict STUCK --detail "<one plain line on what
-  failed>"`.
+  failed>"`, and drop the history bridge as Step 6 opens.
 - **`done`** -> the audit below.
 
 ### 5a. Audit the report
@@ -559,6 +563,14 @@ exists, offered in the same breath).
 
 ## 6. Teardown
 
+Drop the history bridge, whatever the outcome (a no-op when Step 3a built none;
+a retry rebuilds it):
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    bridge-history --drop
+```
+
 If a stray preview of a critical app is registered (an older pass may have left
 one; the careful flow refuses its next pass on that app while one is), tear it
 down with the preview script and close its window:
@@ -599,14 +611,6 @@ mkdir -p data/.tasks/update-self/reports/consumed
 mv data/.tasks/update-self/reports/report.md \
     data/.tasks/update-self/reports/consumed/$(date +%s)-done.md
 mngr stop update-self
-```
-
-Drop the history bridge if Step 3a built one; with the update landed the
-histories share a commit and the graft has nothing left to do:
-
-```bash
-python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    bridge-history --ref "$REF"
 ```
 
 Release the leases and close the ticket last, each as its own tool call: `tk

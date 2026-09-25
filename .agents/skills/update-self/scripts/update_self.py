@@ -160,6 +160,7 @@ from update_history_bridge import (
     DEFAULT_STATE_PATH,
     HistoryBridgeError,
     bridge_history,
+    drop_history_bridge,
 )
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
@@ -497,11 +498,13 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
 def _cmd_bridge_history(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args).resolve()
     state = Path(args.state)
-    print(
-        bridge_history(
-            repo_root, args.ref, state if state.is_absolute() else repo_root / state
-        ).to_json()
-    )
+    state = state if state.is_absolute() else repo_root / state
+    if args.drop:
+        print(drop_history_bridge(repo_root, state).to_json())
+        return 0
+    if args.ref is None:
+        raise HistoryBridgeError("--ref is required unless --drop is given")
+    print(bridge_history(repo_root, args.ref, state).to_json())
     return 0
 
 
@@ -804,7 +807,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "the target's history while they share no commit; drop the graft after.",
         parents=[common],
     )
-    bridge_parser.add_argument("--ref", required=True, help="The resolved target ref.")
+    bridge_parser.add_argument("--ref", default=None, help="The resolved target ref.")
+    bridge_parser.add_argument(
+        "--drop",
+        action="store_true",
+        help="Only remove a graft this subcommand recorded, whatever the histories.",
+    )
     bridge_parser.add_argument(
         "--state",
         default=DEFAULT_STATE_PATH,
