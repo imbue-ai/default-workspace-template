@@ -382,6 +382,26 @@ def test_select_tests_over_explicit_paths_matches_the_same_set_read_from_a_diff(
     assert "uv run pytest system/libs/corelib" in from_diff.output.splitlines()
 
 
+def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    run_git(tmp_path, ("checkout", "-q", "-b", "work"))
+    run_git(
+        tmp_path,
+        ("mv", "system/libs/corelib/src/corelib/core.py", "system/libs/midlib/src/midlib/moved.py"),
+    )
+    commit_everything(tmp_path, "move corelib's core into midlib")
+
+    result = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    # corelib lost the module its consumers import, so it and they run, not only midlib's side.
+    assert "uv run pytest system/libs/corelib" in lines
+    assert "uv run pytest .agents/skills/refresh" in lines
+
+
 def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> None:
     build_selection_workspace(tmp_path)
 

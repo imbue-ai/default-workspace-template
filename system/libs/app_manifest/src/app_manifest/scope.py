@@ -453,10 +453,19 @@ def list_changed_files(repo_root: Path, diff_base: str, diff_ref: str) -> Change
     merge_base_sha = NonEmptyStr(_run_git(repo_root, ("merge-base", base_sha, ref_sha)).strip())
     # A NUL-separated listing with quoting off is the only form every filename survives: git
     # otherwise renders a non-ASCII name as an escaped, double-quoted string, which is not the
-    # path it changed, and a name with a newline in it would split across lines.
+    # path it changed, and a name with a newline in it would split across lines. With rename
+    # detection a renamed file would list only its new path, though its old path is gone.
     diff_output = _run_git(
         repo_root,
-        ("-c", "core.quotePath=false", "diff", "--name-only", "-z", f"{base_sha}...{ref_sha}"),
+        (
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            f"{base_sha}...{ref_sha}",
+        ),
     )
     return ChangedFiles(
         base=base_sha,
