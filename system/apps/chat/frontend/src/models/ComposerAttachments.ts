@@ -6,6 +6,11 @@
  * model module rather than a view closure so both the composer (the attach
  * button / chips) and the chat panel (its panel-wide drop target) can stage the
  * same agent's attachments.
+ *
+ * The ready items are also persisted to localStorage beside the draft text, so a
+ * chip survives a reload the way the text does, and a document of the same origin
+ * that staged one (the chat root, drafting into a page not yet loaded) is seen by
+ * the page once it loads: a ``storage`` event brings the stored list in.
  */
 
 import m from "mithril";
@@ -26,6 +31,9 @@ export interface ComposerAttachment {
    *  from the dropped File so the chip can choose its shape before upload ends. */
   isImage: boolean;
   status: ComposerAttachmentStatus;
+  /** One line saying what the file stands for, when it is not the user's own file: an element
+   *  reference's chip shows it in place of the size, and as its tooltip. */
+  summary?: string;
   /** Present once the upload succeeds. */
   uploaded?: UploadedAttachment;
   /** Present when the upload failed. */
@@ -35,15 +43,81 @@ export interface ComposerAttachment {
   uploadSettled?: Promise<void>;
 }
 
+const STORAGE_KEY_PREFIX = "composer-attachments:";
+const LOCAL_ID_PREFIX = "composer-att-";
+
+function storageKey(chatId: string): string {
+  return `${STORAGE_KEY_PREFIX}${chatId}`;
+}
+
 let _nextLocalId = 0;
 const _attachmentsByChat: Record<string, ComposerAttachment[]> = {};
 
+/** What a ready attachment persists as: the fields a chip and a send need, none of the in-flight ones. */
+type StoredAttachment = Pick<ComposerAttachment, "localId" | "fileName" | "isImage" | "summary"> & {
+  uploaded: UploadedAttachment;
+};
+
+function _storedAttachmentsOf(chatId: string): StoredAttachment[] {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(storageKey(chatId));
+  } catch {
+    return [];
+  }
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as StoredAttachment[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function _persist(chatId: string, attachments: readonly ComposerAttachment[]): void {
+  const stored: StoredAttachment[] = [];
+  for (const attachment of attachments) {
+    if (attachment.status !== "ready" || attachment.uploaded === undefined) continue;
+    const { localId, fileName, isImage, summary, uploaded } = attachment;
+    stored.push({ localId, fileName, isImage, summary, uploaded });
+  }
+  try {
+    if (stored.length === 0) {
+      localStorage.removeItem(storageKey(chatId));
+    } else {
+      localStorage.setItem(storageKey(chatId), JSON.stringify(stored));
+    }
+  } catch {
+    // Storage may be full or refused; the in-memory list still serves this document.
+  }
+}
+
+/** Keep minted ids clear of the ones a stored list brought back from an earlier document. */
+function _reserveLocalIds(attachments: readonly StoredAttachment[]): void {
+  for (const attachment of attachments) {
+    const suffix = Number(attachment.localId.slice(LOCAL_ID_PREFIX.length));
+    if (Number.isInteger(suffix) && suffix >= _nextLocalId) _nextLocalId = suffix + 1;
+  }
+}
+
+/** The stored list of ``chatId`` as ready attachments, adopted once into memory (the first read after a load). */
+function _hydrate(chatId: string): ComposerAttachment[] {
+  const stored = _storedAttachmentsOf(chatId);
+  _reserveLocalIds(stored);
+  return stored.map((attachment) => ({ ...attachment, status: "ready" as const }));
+}
+
 export function getComposerAttachments(chatId: string): ComposerAttachment[] {
-  return _attachmentsByChat[chatId] ?? [];
+  const held = _attachmentsByChat[chatId];
+  if (held !== undefined) return held;
+  const hydrated = _hydrate(chatId);
+  _attachmentsByChat[chatId] = hydrated;
+  return hydrated;
 }
 
 function _setAttachments(chatId: string, attachments: ComposerAttachment[]): void {
   _attachmentsByChat[chatId] = attachments;
+  _persist(chatId, attachments);
 }
 
 function _patchAttachment(chatId: string, localId: string, patch: Partial<ComposerAttachment>): void {
@@ -51,8 +125,51 @@ function _patchAttachment(chatId: string, localId: string, patch: Partial<Compos
   if (list === undefined) {
     return;
   }
-  _attachmentsByChat[chatId] = list.map((item) => (item.localId === localId ? { ...item, ...patch } : item));
+  _setAttachments(
+    chatId,
+    list.map((item) => (item.localId === localId ? { ...item, ...patch } : item)),
+  );
   m.redraw();
+}
+
+/**
+ * Another document of this origin wrote ``chatId``'s stored list (the root staging a reference for a page it
+ * had not loaded yet): take its ready items in, keeping whatever this document has in flight.
+ */
+function _takeStoredChanges(chatId: string): void {
+  const held = _attachmentsByChat[chatId];
+  if (held === undefined) return;
+  const stored = _hydrate(chatId);
+  const storedIds = new Set(stored.map((attachment) => attachment.localId));
+  const inFlight = held.filter((attachment) => attachment.status !== "ready" && !storedIds.has(attachment.localId));
+  _attachmentsByChat[chatId] = [...stored, ...inFlight];
+  m.redraw();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event: StorageEvent) => {
+    if (event.key === null || !event.key.startsWith(STORAGE_KEY_PREFIX)) return;
+    _takeStoredChanges(event.key.slice(STORAGE_KEY_PREFIX.length));
+  });
+}
+
+function _startUpload(chatId: string, file: File, summary: string | undefined): void {
+  const localId = `${LOCAL_ID_PREFIX}${_nextLocalId++}`;
+  const item: ComposerAttachment = {
+    localId,
+    fileName: file.name,
+    isImage: file.type.startsWith("image/") || isImagePath(file.name),
+    status: "uploading",
+    summary,
+  };
+  _setAttachments(chatId, [...getComposerAttachments(chatId), item]);
+  item.uploadSettled = uploadAttachment(file)
+    .then((uploaded) => {
+      _patchAttachment(chatId, localId, { status: "ready", uploaded });
+    })
+    .catch((error: unknown) => {
+      _patchAttachment(chatId, localId, { status: "error", error: describeRequestError(error) });
+    });
 }
 
 /**
@@ -68,22 +185,14 @@ export function uploadFilesToComposer(chatId: string, files: FileList | readonly
     return;
   }
   for (const file of fileArray) {
-    const localId = `composer-att-${_nextLocalId++}`;
-    const item: ComposerAttachment = {
-      localId,
-      fileName: file.name,
-      isImage: file.type.startsWith("image/") || isImagePath(file.name),
-      status: "uploading",
-    };
-    _setAttachments(chatId, [...getComposerAttachments(chatId), item]);
-    item.uploadSettled = uploadAttachment(file)
-      .then((uploaded) => {
-        _patchAttachment(chatId, localId, { status: "ready", uploaded });
-      })
-      .catch((error: unknown) => {
-        _patchAttachment(chatId, localId, { status: "error", error: describeRequestError(error) });
-      });
+    _startUpload(chatId, file, undefined);
   }
+  m.redraw();
+}
+
+/** Upload a file the chat made for the user (an element reference), whose chip says ``summary`` instead of a size. */
+export function uploadDescribedFileToComposer(chatId: string, file: File, summary: string): void {
+  _startUpload(chatId, file, summary);
   m.redraw();
 }
 

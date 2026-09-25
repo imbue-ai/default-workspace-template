@@ -277,8 +277,8 @@ answers by running the primary free-text row (the Getting Started app's
 intents and templates use it), and drafts a text into the chat on screen
 through `shell:draft-text`, which the shell answers by running the pinned
 app's launch path with a `draft_param` into the pinned window, as the avatar
-dialog's "Design your own..." does (the element context menu's "Explain this
-element..." uses it). The shell names no app in any of this. A
+dialog's "Design your own..." does (the element context menu's "Explain..."
+uses it). The shell names no app in any of this. A
 fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
 

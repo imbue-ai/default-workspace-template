@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -860,7 +861,7 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
 @pytest.mark.timeout(60, func_only=False)
 def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_path: Path, page: Page) -> None:
     """A right-click in a framed page opens the page's own element menu (the served module, as a scaffolded app's
-    page installs it); "Explain this element..." hands the shell a prompt over the element's reference through
+    page installs it); "Explain..." hands the shell a prompt over the element's reference through
     ``shell:draft-text``, and the shell posts the pinned app's draft launch path with it (the element-reference-menu
     plan sections 4.1 and 6), pointing this client's view of the pinned window at the page it answers. The reference
     carries the page's scope from the handshake and the element as the page has it. A right-click on the desktop's
@@ -886,11 +887,11 @@ def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_pa
         assert posted["body"]["desktop_id"] == _HOME_DESKTOP_ID
         assert posted["body"]["window_path"] == _PINNED_HOME_PATH
         text = posted["body"][_PINNED_TEXT_PARAM]
-        prompt, blank, block_open, block_json, block_close, *room_to_type = text.split("\n")
-        assert (prompt, blank) == ("Explain this element:", "")
-        assert (block_open, block_close) == ("```json", "```")
-        assert room_to_type == ["", ""]
+        prompt, blank, block_open, block_json, block_close = text.split("\n")
         reference = json.loads(block_json)["element_reference"]
+        assert re.fullmatch(r"REF-[0-9a-z]{11}", reference["reference_id"])
+        assert (prompt, blank) == (f"Explain what I attached in {reference['reference_id']}", "")
+        assert (block_open, block_close) == ("```json", "```")
         assert reference["app"] == _STUB_APP_NAME
         assert reference["window_id"] == window_id
         assert reference["client_id"] == client_id
@@ -899,8 +900,9 @@ def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_pa
         assert reference["id"] == "where"
         assert reference["selector"] == "#where"
         assert reference["page_path"] == _STUB_LAUNCH_PATH
-        assert reference["text"] == _STUB_LAUNCH_PATH
-        assert [ancestor["tag"] for ancestor in reference["ancestors"]] == ["body"]
+        assert "text" not in reference
+        assert "ancestors" not in reference
+        assert "outer_html" not in reference
         assert reference["viewport"]["width"] > 0
 
         draft_page_path = _launched_page_path(_PINNED_DRAFT_LAUNCH_ID, {_PINNED_TEXT_PARAM: text})

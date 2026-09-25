@@ -1,27 +1,24 @@
 // @vitest-environment jsdom
 /**
- * The element reference, built from a real (jsdom) document: what it captures of an element,
- * its ancestors, and the page; the selector's uniqueness check; the block, its bound, and the
- * pointer form.
+ * The element reference, built from a real (jsdom) document: what it captures of an element and
+ * the page; the selector's uniqueness check; the reference id, the file it names, and the block.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  ELEMENT_REFERENCE_BLOCK_LIMIT,
-  ELEMENT_REFERENCE_FILE_KEY,
   ELEMENT_REFERENCE_KEY,
-  ELEMENT_REFERENCE_SUMMARY_KEY,
-  SUMMARY_TEXT_LIMIT,
-  ancestorsOf,
+  REFERENCE_ID_PATTERN,
   describeElement,
   elementOfTarget,
   isEditableElement,
-  isOversizeBlock,
-  pointerFormOf,
+  isReferenceFileName,
+  mintReferenceId,
   referenceBlock,
   referenceEnvelopeOf,
+  referenceFileNameOf,
+  referenceFileText,
+  referenceSummaryOf,
   scopeOfHandshake,
   uniqueSelectorFor,
-  type ElementReference,
 } from "./element_reference";
 
 const CLICK = { clientX: 10, clientY: 20, pageX: 10, pageY: 220 };
@@ -43,7 +40,7 @@ afterEach(() => {
 });
 
 describe("describeElement", () => {
-  it("captures the element, its ancestors, the page, and the scope", () => {
+  it("captures the element, the page, and the scope, under a fresh reference id", () => {
     document.title = "Plan the launch";
     render(
       '<div class="message-list"><div id="evt-1" class="message-user selected" data-chat-id="agent-1" style="color: red">' +
@@ -52,6 +49,7 @@ describe("describeElement", () => {
     const link = document.querySelector("a") as Element;
     const reference = describeElement(link, CLICK, SCOPE);
 
+    expect(reference.reference_id).toMatch(REFERENCE_ID_PATTERN);
     expect(reference.app).toBe("chat");
     expect(reference.window_id).toBe("win-1");
     expect(reference.desktop_id).toBe("home");
@@ -63,22 +61,13 @@ describe("describeElement", () => {
     expect(reference.id).toBeNull();
     expect(reference.classes).toEqual([]);
     expect(reference.attributes).toEqual({ href: "/docs/intro" });
-    expect(reference.text).toBe("Read the intro");
     expect(reference.link_href).toBe(`${window.location.origin}/docs/intro`);
     expect(reference.image_src).toBeNull();
     expect(reference.input_value).toBeNull();
     expect(reference.selector).toBe("#evt-1 > a");
-    expect(reference.outer_html).toBe('<a href="/docs/intro">Read  the\n intro</a>');
-    expect(reference.ancestors).toEqual([
-      {
-        tag: "div",
-        id: "evt-1",
-        classes: ["message-user", "selected"],
-        attributes: { "data-chat-id": "agent-1", style: "color: red" },
-      },
-      { tag: "div", id: null, classes: ["message-list"], attributes: {} },
-      { tag: "body", id: null, classes: [], attributes: {} },
-    ]);
+    expect(reference).not.toHaveProperty("text");
+    expect(reference).not.toHaveProperty("outer_html");
+    expect(reference).not.toHaveProperty("ancestors");
     expect(reference.selection_text).toBe("");
     expect(reference.selection_box).toBeNull();
     expect(Object.keys(reference.bounding_box)).toEqual(["x", "y", "width", "height"]);
@@ -179,26 +168,44 @@ describe("uniqueSelectorFor", () => {
   });
 });
 
-describe("ancestorsOf", () => {
-  it("ends at the body, and at the root outside one", () => {
-    render('<div id="outer"><p>x</p></div>');
-    const paragraph = document.querySelector("p") as Element;
-    expect(ancestorsOf(paragraph).map((ancestor) => ancestor.tag)).toEqual(["div", "body"]);
-    const detached = document.createElement("div");
-    const inner = document.createElement("span");
-    detached.appendChild(inner);
-    expect(ancestorsOf(inner).map((ancestor) => ancestor.tag)).toEqual(["div"]);
+describe("the reference id and its file", () => {
+  it("mints ids of the one shape that never repeat", () => {
+    const ids = new Set(Array.from({ length: 200 }, () => mintReferenceId()));
+    expect(ids.size).toBe(200);
+    for (const id of ids) expect(id).toMatch(REFERENCE_ID_PATTERN);
+  });
+
+  it("names the file after the id, and recognises only such a name", () => {
+    const id = mintReferenceId();
+    expect(referenceFileNameOf(id)).toBe(`${id}.json`);
+    expect(isReferenceFileName(`${id}.json`)).toBe(true);
+    expect(isReferenceFileName(id)).toBe(false);
+    expect(isReferenceFileName("REF-1.json")).toBe(false);
+    expect(isReferenceFileName("plan.json")).toBe(false);
+  });
+
+  it("writes the file pretty-printed with a final newline", () => {
+    render('<p id="para">x</p>');
+    const built = describeElement(byId("para"), CLICK, SCOPE);
+    const text = referenceFileText({ [ELEMENT_REFERENCE_KEY]: built });
+    expect(text.endsWith("}\n")).toBe(true);
+    expect(text.split("\n").length).toBeGreaterThan(10);
+    expect(JSON.parse(text)).toEqual({ [ELEMENT_REFERENCE_KEY]: built });
+  });
+
+  it("summarises a reference as the element and where it is", () => {
+    render('<button id="save" class="btn primary wide extra">Save</button><p>plain</p>');
+    const button = describeElement(byId("save"), CLICK, SCOPE);
+    expect(referenceSummaryOf(button)).toBe(`button#save.btn.primary.wide in chat ${button.page_path}`);
+    const paragraph = describeElement(document.querySelector("p") as Element, CLICK, scopeOfHandshake(null));
+    expect(referenceSummaryOf(paragraph)).toBe(`p in ${paragraph.page_path}`);
   });
 });
 
-describe("the block and the pointer form", () => {
-  function reference(text: string): ElementReference {
-    render('<p id="para">x</p>');
-    return { ...describeElement(byId("para"), CLICK, SCOPE), text };
-  }
-
+describe("the block", () => {
   it("fences the envelope on one line, and parses back to it", () => {
-    const built = reference("x");
+    render('<p id="para">x</p>');
+    const built = describeElement(byId("para"), CLICK, SCOPE);
     const block = referenceBlock(built);
     expect(block.startsWith("```json\n{")).toBe(true);
     expect(block.endsWith("}\n```")).toBe(true);
@@ -207,35 +214,11 @@ describe("the block and the pointer form", () => {
     expect(referenceEnvelopeOf(json)).toEqual({ [ELEMENT_REFERENCE_KEY]: built });
   });
 
-  it("is oversize past the bound, fences included", () => {
-    const small = referenceBlock(reference("x"));
-    expect(isOversizeBlock(small)).toBe(false);
-    expect(small.length).toBeLessThanOrEqual(ELEMENT_REFERENCE_BLOCK_LIMIT);
-    const big = referenceBlock(reference("y".repeat(ELEMENT_REFERENCE_BLOCK_LIMIT)));
-    expect(isOversizeBlock(big)).toBe(true);
-  });
-
-  it("summarises a reference behind its file, cutting only the text", () => {
-    const built = reference("z".repeat(SUMMARY_TEXT_LIMIT + 50));
-    const pointer = pointerFormOf(built, "/tmp/element_references/abc.json");
-    expect(pointer[ELEMENT_REFERENCE_FILE_KEY]).toBe("/tmp/element_references/abc.json");
-    expect(pointer[ELEMENT_REFERENCE_SUMMARY_KEY]).toEqual({
-      app: "chat",
-      window_id: "win-1",
-      page_path: built.page_path,
-      tag: "p",
-      id: "para",
-      selector: "#para",
-      text: "z".repeat(SUMMARY_TEXT_LIMIT),
-    });
-  });
-
   it("recognises only an object under the one key as an envelope", () => {
     expect(referenceEnvelopeOf("not json")).toBeNull();
     expect(referenceEnvelopeOf('{"other": {}}')).toBeNull();
     expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {}, "extra": 1}`)).toBeNull();
     expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": "text"}`)).toBeNull();
-    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_FILE_KEY}": "/tmp/x.json"}`)).toBeNull();
     expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {"tag": "p"}}`)).toEqual({
       [ELEMENT_REFERENCE_KEY]: { tag: "p" },
     });

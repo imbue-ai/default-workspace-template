@@ -64,10 +64,6 @@ from imbue.chat.documents import inject_hostname_meta_tag
 from imbue.chat.documents import inject_plugin_script_tags
 from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
-from imbue.chat.element_references import ElementReferenceRequest
-from imbue.chat.element_references import ElementReferenceResponse
-from imbue.chat.element_references import ElementReferenceWriteError
-from imbue.chat.element_references import write_element_reference_file
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.file_serving import try_serve_file
@@ -828,19 +824,6 @@ def _put_settings_endpoint() -> Response:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     get_state().chat_settings.write(settings)
     return json_response(ChatSettingsResponse(settings=settings).model_dump(mode="json"))
-
-
-def _store_element_reference() -> Response:
-    """``POST /api/element-references``: write a reference too large for a composer to a file (the
-    element-reference-menu plan, section 7.1) and answer the file's path, which the composer takes in the
-    pointer form instead of the block."""
-    posted = parse_request_body(ElementReferenceRequest)
-    try:
-        written = write_element_reference_file(posted.reference, get_state().element_references_directory)
-    except ElementReferenceWriteError as e:
-        logger.opt(exception=e).warning("Failed to write an element reference file")
-        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
-    return json_response(ElementReferenceResponse(path=str(written)).model_dump())
 
 
 def _upload_attachment() -> Response:
@@ -2043,7 +2026,6 @@ def create_application(state: ChatAppState) -> Flask:
     )
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
-    application.add_url_rule("/api/element-references", view_func=_store_element_reference, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])
     application.add_url_rule(
         "/api/uploads/<path:relative_path>",

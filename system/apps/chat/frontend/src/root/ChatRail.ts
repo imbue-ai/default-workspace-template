@@ -34,7 +34,7 @@ export interface ChatRailAttrs {
   onNew: () => void;
   /** The scope a reference to a row carries (the root's handshake). */
   referenceScope: ReferenceScope;
-  /** Where a row's "Explain this element..." drafts (element-reference-menu plan section 4.4). */
+  /** Where a row's "Explain..." drafts (element-reference-menu plan section 4.4). */
   onDraftReference: (text: string) => void;
   /** Whether such a draft has somewhere to go; the rows grey otherwise. */
   isReferenceDraftAvailable: boolean;

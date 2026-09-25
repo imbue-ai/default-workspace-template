@@ -15,7 +15,6 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_intakes import PendingIntakeStore
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.config import Config
-from imbue.chat.element_references import get_element_references_directory
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
@@ -84,11 +83,6 @@ class ChatAppState(MutableModel):
         default=DEFAULT_STATIC_DIRECTORY,
         description="The bundle directory the chat routes serve from: the package's own static/ unless the "
         "state is built with another (a test serving a document it wrote)",
-    )
-    element_references_directory: Path = Field(
-        default_factory=get_element_references_directory,
-        description="Where ``POST /api/element-references`` writes a reference too large for a composer: "
-        "``element_references/`` under the temporary directory unless the state is built with another",
     )
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)

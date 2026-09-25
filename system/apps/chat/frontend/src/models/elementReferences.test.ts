@@ -1,94 +1,103 @@
+// @vitest-environment jsdom
 /**
- * The spill: only an oversize reference block goes to a file, the pointer form takes its place,
- * a failed write leaves the block standing, and a text with nothing to spill costs no request.
+ * A reference block entering a composer becomes an attachment: the block leaves the text, a
+ * ``REF-<id>.json`` file goes up the ordinary upload path with the reference's summary on its chip,
+ * a text with no reference block costs nothing, and a block that is not a reference is left alone.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 
-import {
-  ELEMENT_REFERENCE_BLOCK_LIMIT,
-  ELEMENT_REFERENCE_FILE_KEY,
-  ELEMENT_REFERENCE_SUMMARY_KEY,
-  jsonBlock,
-} from "@imbue/workspace-ui/src/element_reference";
-import { spillOversizeElementReferences } from "./elementReferences";
+import { jsonBlock, type ElementReference } from "@imbue/workspace-ui/src/element_reference";
+import { clearComposerAttachments, getComposerAttachments } from "./ComposerAttachments";
+import { referenceFileOf, stageElementReferences } from "./elementReferences";
 
-function reference(text: string): Record<string, unknown> {
+function reference(id: string): ElementReference {
   return {
-    element_reference: {
-      app: "docs",
-      window_id: "win-1",
-      page_path: "/",
-      tag: "p",
-      id: "para",
-      selector: "#para",
-      text,
-    },
+    reference_id: id,
+    app: "docs",
+    window_id: "win-1",
+    desktop_id: "home",
+    client_id: "client-1",
+    page_origin: "http://docs.test",
+    page_path: "/intro",
+    page_title: "Intro",
+    viewport: { width: 800, height: 600 },
+    pointer: { client_x: 1, client_y: 2, page_x: 1, page_y: 2 },
+    tag: "p",
+    id: "para",
+    classes: ["lead"],
+    attributes: {},
+    role: null,
+    aria_label: null,
+    selection_text: "",
+    selection_box: null,
+    input_value: null,
+    link_href: null,
+    image_src: null,
+    selector: "#para",
+    bounding_box: { x: 0, y: 0, width: 10, height: 10 },
   };
 }
 
-const SMALL = jsonBlock(reference("short"));
-const BIG = jsonBlock(reference("x".repeat(ELEMENT_REFERENCE_BLOCK_LIMIT)));
+const ID_A = "REF-aaaaaaaaaaa";
+const ID_B = "REF-bbbbbbbbbbb";
+const BLOCK_A = jsonBlock({ element_reference: reference(ID_A) });
+const BLOCK_B = jsonBlock({ element_reference: reference(ID_B) });
 
 let fetchSpy: ReturnType<typeof vi.fn>;
+let chatId: string;
 
-function stubFetch(answer: () => Promise<Response>): void {
-  fetchSpy = vi.fn(answer);
+beforeEach(() => {
+  chatId = `chat-${Math.random().toString(36).slice(2)}`;
+  fetchSpy = vi.fn(async (_url: string, init: RequestInit) => {
+    const file = (init.body as FormData).get("file") as File;
+    return new Response(JSON.stringify({ path: `/w/data/uploads/x/${file.name}`, size: file.size }), { status: 201 });
+  });
   vi.stubGlobal("fetch", fetchSpy);
-}
+});
 
 afterEach(() => {
+  clearComposerAttachments(chatId);
   vi.unstubAllGlobals();
 });
 
-describe("spillOversizeElementReferences", () => {
-  it("leaves a text with no oversize block alone, without a request", async () => {
-    stubFetch(() => Promise.reject(new Error("must not be called")));
-    const text = `Explain this element:\n\n${SMALL}\n\n`;
-    expect(await spillOversizeElementReferences(text)).toBe(text);
+describe("referenceFileOf", () => {
+  it("names the file after the id and holds the envelope pretty-printed", async () => {
+    const file = referenceFileOf({ element_reference: reference(ID_A) });
+    expect(file.name).toBe(`${ID_A}.json`);
+    expect(file.type).toBe("application/json");
+    const text = await file.text();
+    expect(text.split("\n").length).toBeGreaterThan(10);
+    expect(JSON.parse(text)).toEqual({ element_reference: reference(ID_A) });
+  });
+});
+
+describe("stageElementReferences", () => {
+  it("leaves a text with no reference block alone, uploading nothing", () => {
+    const text = 'Explain what I attached in REF-x\n\n```json\n{"other": 1}\n```';
+    expect(stageElementReferences(chatId, text)).toBe(text);
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(getComposerAttachments(chatId)).toEqual([]);
   });
 
-  it("writes an oversize block to a file and puts the pointer form in its place", async () => {
-    stubFetch(() =>
-      Promise.resolve(new Response(JSON.stringify({ path: "/tmp/element_references/abc.json" }), { status: 200 })),
-    );
-    const text = `Modify this element:\n\n${BIG}\n\n${SMALL}\n\n`;
-    const spilled = await spillOversizeElementReferences(text);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("/api/element-references");
-    expect(JSON.parse(init.body as string)).toEqual({
-      reference: reference("x".repeat(ELEMENT_REFERENCE_BLOCK_LIMIT)),
-    });
-    expect(spilled.startsWith("Modify this element:\n\n```json\n")).toBe(true);
-    expect(spilled).toContain(SMALL);
-    const pointerJson = spilled.split("\n")[3];
-    const pointer = JSON.parse(pointerJson) as Record<string, unknown>;
-    expect(pointer[ELEMENT_REFERENCE_FILE_KEY]).toBe("/tmp/element_references/abc.json");
-    expect(pointer[ELEMENT_REFERENCE_SUMMARY_KEY]).toMatchObject({
-      app: "docs",
-      tag: "p",
-      id: "para",
-      selector: "#para",
-    });
-    expect((pointer[ELEMENT_REFERENCE_SUMMARY_KEY] as { text: string }).text).toHaveLength(200);
+  it("takes each block out of the text and uploads it as a file with the reference's summary", async () => {
+    const text = `Change ${ID_A} to \n\n${BLOCK_A}\n\nAnd ${ID_B}:\n\n${BLOCK_B}`;
+    expect(stageElementReferences(chatId, text)).toBe(`Change ${ID_A} to \n\nAnd ${ID_B}:`);
+    const staged = getComposerAttachments(chatId);
+    expect(staged.map((attachment) => attachment.fileName)).toEqual([`${ID_A}.json`, `${ID_B}.json`]);
+    expect(staged[0].summary).toBe("p#para.lead in docs /intro");
+    expect(staged[0].isImage).toBe(false);
+    await Promise.all(staged.map((attachment) => attachment.uploadSettled));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[0][0]).toBe("/api/uploads");
+    const ready = getComposerAttachments(chatId);
+    expect(ready.map((attachment) => attachment.status)).toEqual(["ready", "ready"]);
+    expect(ready[0].uploaded?.path).toBe(`/w/data/uploads/x/${ID_A}.json`);
   });
 
-  it("keeps the block, with a warning, when the file cannot be written", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    stubFetch(() => Promise.resolve(new Response(JSON.stringify({ detail: "disk full" }), { status: 500 })));
-    const text = `Explain this element:\n\n${BIG}\n\n`;
-    expect(await spillOversizeElementReferences(text)).toBe(text);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
-    warn.mockRestore();
-  });
-
-  it("ignores an oversize block that is not a reference envelope", async () => {
-    stubFetch(() => Promise.reject(new Error("must not be called")));
-    const other = jsonBlock({ other: "y".repeat(ELEMENT_REFERENCE_BLOCK_LIMIT) });
-    expect(await spillOversizeElementReferences(other)).toBe(other);
-    expect(fetchSpy).not.toHaveBeenCalled();
+  it("answers an empty text for a block on its own", () => {
+    expect(stageElementReferences(chatId, BLOCK_A)).toBe("");
+    expect(getComposerAttachments(chatId)).toHaveLength(1);
   });
 });

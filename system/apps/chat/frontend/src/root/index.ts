@@ -56,7 +56,6 @@ import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import { intakeTokenFromSearch, rootPathFor, selectionFromSearch } from "./selection";
-import { spillOversizeElementReferences } from "../models/elementReferences";
 import { prependToComposer } from "../views/MessageInput";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
@@ -142,7 +141,8 @@ function settleIntake(chatId: string | null): void {
 }
 
 /** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
- *  its persisted draft on mount. */
+ *  its persisted draft on mount. Either way an element reference in it is attached as a file (the page's
+ *  ``prependToComposer`` does it, and so does this document's, which the page's store reads on load). */
 function draftInto(chatId: string, text: string): void {
   if (pool?.draftInto(chatId, text) === true) return;
   prependToComposer(chatId, text);
@@ -173,17 +173,11 @@ function launchWithFirstMessage(chatId: string, text: string): void {
   openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
 }
 
-/** Put ``text`` in a chat's composer after the spill (element-reference-menu plan section 7.2): a reference block too
- *  large for the composer goes to a file first, and the composer takes its pointer form. */
-function draftIntoAfterSpill(chatId: string, text: string): void {
-  void spillOversizeElementReferences(text).then((spilled) => draftInto(chatId, spilled));
-}
-
 /** A reference drafted from the root's own chrome (the rail, the empty slot): into the selected chat's composer,
  *  else through the shell, which lands it in the chat on screen (element-reference-menu plan section 3.4). */
 function draftReference(text: string): void {
   if (selectedChatId !== null) {
-    draftIntoAfterSpill(selectedChatId, text);
+    draftInto(selectedChatId, text);
     return;
   }
   connection?.draftText(text);
@@ -199,7 +193,7 @@ function isReferenceDraftAvailable(): boolean {
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
-  if (applied.composerText !== null) draftIntoAfterSpill(applied.chatId, applied.composerText);
+  if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) launchWithFirstMessage(applied.chatId, applied.firstMessage);
 }
 

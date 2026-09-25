@@ -356,7 +356,7 @@ describe("the element menu", () => {
     (document.querySelector('[data-menu-row="explain-element"]') as HTMLElement).click();
     await settle();
     const launch = api.calls.find((call) => call.startsWith("launch:home:buddy:draft:")) ?? "";
-    expect(launch).toContain("Explain this element:");
+    expect(launch).toContain("Explain what I attached in REF-");
     expect(launch).toContain('\\"window_id\\":null');
     expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
     expect(launch).toContain('\\"app\\":\\"system_interface\\"');

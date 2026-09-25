@@ -22,7 +22,6 @@ import { initShellPermissionResolutions } from "./views/permission-card";
 import { connectChatToShell, getShellHandshake, isFrameRendered } from "./shell";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
-import { spillOversizeElementReferences } from "./models/elementReferences";
 import { prependToComposer } from "./views/MessageInput";
 
 declare global {
@@ -72,13 +71,12 @@ async function bootstrap(): Promise<void> {
     path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
   });
   // The element menu (element-reference-menu plan section 7.3): a chat page drafts a reference straight into its
-  // own composer, whoever frames it; a sub-agent view has no composer and asks the shell, through the root.
+  // own composer (which attaches it as a file), whoever frames it; a sub-agent view has no composer and asks the
+  // shell, through the root.
   installElementContextMenu({
     connection,
     handshake: getShellHandshake,
-    draft: isChatPage
-      ? (text) => void spillOversizeElementReferences(text).then((spilled) => prependToComposer(chatId, spilled))
-      : undefined,
+    draft: isChatPage ? (text) => prependToComposer(chatId, text) : undefined,
     isDraftAvailable: isChatPage ? () => true : undefined,
     open: createContextMenuOpener().open,
   });

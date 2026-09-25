@@ -7,13 +7,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeElement, referenceBlock } from "./element_reference";
 import {
-  EXPLAIN_PROMPT,
-  MODIFY_PROMPT,
   NO_SHELL_DRAFT_REASON,
   draftTextOf,
   elementMenuRows,
   elementReferenceRows,
+  explainPromptOf,
   joinRowGroups,
+  modifyPromptOf,
   standardContextMenuRows,
   targetOfEvent,
   type ContextMenuRow,
@@ -146,22 +146,29 @@ describe("standardContextMenuRows", () => {
 });
 
 describe("elementReferenceRows", () => {
-  it("copies the block, and drafts the prompt over the block with room to type", () => {
+  it("copies the block, and drafts a prompt naming the reference over the block", () => {
     const reference = describeElement(byId("para"), CLICK, SCOPE);
     const draft = vi.fn();
     const rows = elementReferenceRows(reference, draft, true);
     expect(keysOf(rows)).toEqual(["copy-element-path", "explain-element", "modify-element"]);
+    expect(rows.map((row) => (row.kind === "divider" ? "|" : row.label))).toEqual([
+      "Copy reference",
+      "Explain...",
+      "Modify...",
+    ]);
     const [copy, explain, modify] = rows as { onSelect: () => void; isDisabled?: boolean }[];
     expect(explain.isDisabled).toBe(false);
     copy.onSelect();
     expect(clipboard.writeText).toHaveBeenCalledWith(referenceBlock(reference));
     explain.onSelect();
     modify.onSelect();
+    const id = reference.reference_id;
     expect(draft.mock.calls).toEqual([
-      [draftTextOf(EXPLAIN_PROMPT, referenceBlock(reference))],
-      [draftTextOf(MODIFY_PROMPT, referenceBlock(reference))],
+      [draftTextOf(explainPromptOf(id), referenceBlock(reference))],
+      [draftTextOf(modifyPromptOf(id), referenceBlock(reference))],
     ]);
-    expect(draftTextOf(EXPLAIN_PROMPT, "B")).toBe("Explain this element:\n\nB\n\n");
+    expect(draftTextOf(explainPromptOf("REF-abc"), "B")).toBe("Explain what I attached in REF-abc\n\nB");
+    expect(modifyPromptOf("REF-abc")).toBe("Change REF-abc to ");
   });
 
   it("greys Explain and Modify with the reason when no draft can go", () => {

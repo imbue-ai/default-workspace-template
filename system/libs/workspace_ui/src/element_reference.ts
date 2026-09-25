@@ -1,9 +1,11 @@
 /**
  * The element reference: the JSON description of one element on one page that a right-click
  * hands to a chat (docs/system/blueprint/element-reference-menu/, section 3.1). Built from the
- * DOM as it is -- the element's own attributes, its ancestors, its text, a selector checked to
- * match it alone -- with the scope the shell's handshake gives the page around it, so an agent
- * resolves it by grep and by reading the page, never through a registry.
+ * DOM as it is -- the element's own attributes, a selector checked to match it alone -- with the
+ * scope the shell's handshake gives the page around it, so an agent resolves it by grep and by
+ * reading the page, never through a registry. Each reference carries a random ``reference_id``
+ * (``REF-<11 base-36 characters>``): the name of the file it is attached to a message as, and
+ * the word the message calls it by.
  *
  * Pure over the DOM: no framework, no message primitive. Bundled into the served
  * ``context_menu.js`` beside the menu, and imported from source by the built-in frontends.
@@ -15,14 +17,6 @@ export interface ReferenceBox {
   y: number;
   width: number;
   height: number;
-}
-
-/** One ancestor of the element: what tells it apart, without its text or its own ancestors. */
-export interface ReferenceAncestor {
-  tag: string;
-  id: string | null;
-  classes: string[];
-  attributes: Record<string, string>;
 }
 
 /** The scope a page knows itself by: the shell's handshake, or nothing on a top-level visit. */
@@ -42,6 +36,7 @@ export interface ReferenceClick {
 }
 
 export interface ElementReference {
+  reference_id: string;
   app: string | null;
   window_id: string | null;
   desktop_id: string | null;
@@ -57,45 +52,27 @@ export interface ElementReference {
   attributes: Record<string, string>;
   role: string | null;
   aria_label: string | null;
-  text: string;
   selection_text: string;
   selection_box: ReferenceBox | null;
   input_value: string | null;
   link_href: string | null;
   image_src: string | null;
   selector: string | null;
-  ancestors: ReferenceAncestor[];
-  outer_html: string;
   bounding_box: ReferenceBox;
 }
 
 /** The one key a reference travels under. */
 export const ELEMENT_REFERENCE_KEY = "element_reference";
-/** The key of the pointer form, when the reference went to a file instead. */
-export const ELEMENT_REFERENCE_FILE_KEY = "element_reference_file";
-export const ELEMENT_REFERENCE_SUMMARY_KEY = "element_reference_summary";
-/** The longest block a composer takes as it is (section 3.2); a longer one goes to a file. */
-export const ELEMENT_REFERENCE_BLOCK_LIMIT = 2048;
-/** How much of the reference's text the pointer form's summary keeps. */
-export const SUMMARY_TEXT_LIMIT = 200;
+/** What every reference id starts with; the rest is ``REFERENCE_ID_LENGTH`` base-36 characters. */
+export const REFERENCE_ID_PREFIX = "REF-";
+export const REFERENCE_ID_LENGTH = 11;
+/** A whole reference id, as ``mintReferenceId`` makes one. */
+export const REFERENCE_ID_PATTERN = new RegExp(`^${REFERENCE_ID_PREFIX}[0-9a-z]{${REFERENCE_ID_LENGTH}}$`);
+const REFERENCE_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 /** A reference as it travels: the object under its one key. */
 export interface ElementReferenceEnvelope {
   [ELEMENT_REFERENCE_KEY]: ElementReference;
-}
-
-/** The pointer form: where the full reference was written, and enough to read the chat line. */
-export interface ElementReferencePointer {
-  [ELEMENT_REFERENCE_FILE_KEY]: string;
-  [ELEMENT_REFERENCE_SUMMARY_KEY]: {
-    app: string | null;
-    window_id: string | null;
-    page_path: string;
-    tag: string;
-    id: string | null;
-    selector: string | null;
-    text: string;
-  };
 }
 
 const INPUT_VALUE_TAGS: ReadonlySet<string> = new Set(["input", "textarea", "select"]);
@@ -174,27 +151,6 @@ function classesOf(element: Element): string[] {
   return Array.from(element.classList);
 }
 
-function ancestorOf(element: Element): ReferenceAncestor {
-  return {
-    tag: element.tagName.toLowerCase(),
-    id: idOf(element),
-    classes: classesOf(element),
-    attributes: attributesOf(element),
-  };
-}
-
-/** The element's ancestors from its parent up to and including the body (or the root, outside one). */
-export function ancestorsOf(element: Element): ReferenceAncestor[] {
-  const ancestors: ReferenceAncestor[] = [];
-  let current = element.parentElement;
-  while (current !== null) {
-    ancestors.push(ancestorOf(current));
-    if (current.tagName.toLowerCase() === "body") break;
-    current = current.parentElement;
-  }
-  return ancestors;
-}
-
 function boxOf(rect: DOMRect): ReferenceBox {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
@@ -259,8 +215,22 @@ export function selectionOf(ownerDocument: Document): { text: string; box: Refer
   return { text, box };
 }
 
-function collapsedText(element: Element): string {
-  return (element.textContent ?? "").replace(/\s+/g, " ").trim();
+/** A fresh reference id: the prefix and random base-36 characters, so two references never share a name and no
+ *  counter has to be kept anywhere. */
+export function mintReferenceId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(REFERENCE_ID_LENGTH));
+  const characters = Array.from(bytes, (byte) => REFERENCE_ID_ALPHABET[byte % REFERENCE_ID_ALPHABET.length]);
+  return `${REFERENCE_ID_PREFIX}${characters.join("")}`;
+}
+
+/** The name of the file a reference is attached to a message as. */
+export function referenceFileNameOf(referenceId: string): string {
+  return `${referenceId}.json`;
+}
+
+/** Whether a file name is a reference file's, as ``referenceFileNameOf`` names one. */
+export function isReferenceFileName(fileName: string): boolean {
+  return fileName.endsWith(".json") && REFERENCE_ID_PATTERN.test(fileName.slice(0, -".json".length));
 }
 
 /** Build the reference of ``element`` for a right-click at ``click`` on a page with ``scope``. */
@@ -269,6 +239,7 @@ export function describeElement(element: Element, click: ReferenceClick, scope: 
   const view = ownerDocument.defaultView;
   const selection = selectionOf(ownerDocument);
   return {
+    reference_id: mintReferenceId(),
     app: scope.app,
     window_id: scope.windowId,
     desktop_id: scope.desktopId,
@@ -284,15 +255,12 @@ export function describeElement(element: Element, click: ReferenceClick, scope: 
     attributes: attributesOf(element),
     role: element.getAttribute("role"),
     aria_label: element.getAttribute("aria-label"),
-    text: collapsedText(element),
     selection_text: selection.text,
     selection_box: selection.box,
     input_value: inputValueOf(element),
     link_href: linkHrefOf(element),
     image_src: imageSrcOf(element),
     selector: uniqueSelectorFor(element),
-    ancestors: ancestorsOf(element),
-    outer_html: element.outerHTML,
     bounding_box: boxOf(element.getBoundingClientRect()),
   };
 }
@@ -319,7 +287,8 @@ export function scopeOfHandshake(handshake: ReferenceHandshake | null): Referenc
   };
 }
 
-/** A fenced ``json`` block holding one object on one line: how a reference (or its pointer form) travels. */
+/** A fenced ``json`` block holding one object on one line: how a reference travels as text (a draft through the
+ *  shell, the clipboard) until a chat attaches it as a file. */
 export function jsonBlock(value: unknown): string {
   return "```json\n" + JSON.stringify(value) + "\n```";
 }
@@ -329,25 +298,22 @@ export function referenceBlock(reference: ElementReference): string {
   return jsonBlock({ [ELEMENT_REFERENCE_KEY]: reference });
 }
 
-/** Whether a block (fences included) is longer than a composer takes as it is. */
-export function isOversizeBlock(block: string): boolean {
-  return block.length > ELEMENT_REFERENCE_BLOCK_LIMIT;
+/** The envelope as its file holds it: pretty-printed, with a final newline. */
+export function referenceFileText(envelope: ElementReferenceEnvelope): string {
+  return JSON.stringify(envelope, null, 2) + "\n";
 }
 
-/** The pointer form for a reference written to ``path`` (section 3.2). */
-export function pointerFormOf(reference: ElementReference, path: string): ElementReferencePointer {
-  return {
-    [ELEMENT_REFERENCE_FILE_KEY]: path,
-    [ELEMENT_REFERENCE_SUMMARY_KEY]: {
-      app: reference.app,
-      window_id: reference.window_id,
-      page_path: reference.page_path,
-      tag: reference.tag,
-      id: reference.id,
-      selector: reference.selector,
-      text: reference.text.length > SUMMARY_TEXT_LIMIT ? reference.text.slice(0, SUMMARY_TEXT_LIMIT) : reference.text,
-    },
-  };
+/** One short line saying what a reference points at, for a chip or a tooltip: the element as a selector-like
+ *  name (``button#save.primary``, the first three classes at most), then the app and the page it is on. */
+export function referenceSummaryOf(reference: ElementReference): string {
+  const id = reference.id === null ? "" : `#${reference.id}`;
+  const classes = reference.classes
+    .slice(0, 3)
+    .map((name) => `.${name}`)
+    .join("");
+  const element = `${reference.tag}${id}${classes}`;
+  const place = reference.app === null ? reference.page_path : `${reference.app} ${reference.page_path}`;
+  return place === "" ? element : `${element} in ${place}`;
 }
 
 /** The envelope a block's JSON is, when it is one; null for any other block. */

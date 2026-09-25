@@ -225,17 +225,18 @@ What gets generated:
   module script that connects the page to the workspace shell framing it,
   reports where the page is on the handshake (so the shell reopens this
   app's window at the place it was showing), and installs the **element
-  context menu**: the right-click menu whose last rows ("Copy path to
-  element", "Explain this element...", "Modify this element...") hand the
-  clicked element to a chat as a JSON description an agent can resolve
-  (`docs/system/blueprint/element-reference-menu/`). Keep the script on
+  context menu**: the right-click menu whose last rows ("Copy reference",
+  "Explain...", "Modify...") hand the clicked element to a chat as a
+  `REF-<id>.json` attachment an agent can resolve
+  (`.agents/shared/references/element-references.md`,
+  `docs/system/blueprint/element-reference-menu/`). Keep the script on
   every page the app serves. An app that drops it always reopens at its
   origin and gets the browser's own menu. The runner serves the two modules
   the script imports from its own origin at `/_static/app_contract.js` and
   `/_static/context_menu.js` (a module import is a fetch without cookies,
   which the forwarder refuses across origins); keep that route too.
   A reference names an element by what its markup carries -- its `id`, its
-  `data-*` attributes, its classes, its text, a selector -- so give a list
+  `data-*` attributes, its classes, a selector -- so give a list
   row the `id` or a `data-*` attribute of the record it shows, and an
   interactive control a stable `id` or a first class that names it, and a
   reference resolves to one thing.

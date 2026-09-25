@@ -2,7 +2,7 @@
  * The rows of a page's element menu (docs/system/blueprint/element-reference-menu/, section
  * 3.3): the standard rows the browser's own menu would have offered the target (Cut, Copy,
  * Paste, Select All, the link rows, the image row) and the reference rows that hand the
- * element to a chat (Copy path to element, Explain, Modify).
+ * element to a chat (Copy reference, Explain, Modify).
  *
  * A row here is structurally an ``ActionRow`` or a ``DividerRow`` of the shared Menu component,
  * so a Mithril page passes the rows straight to ``createMenu`` and the framework-free renderer
@@ -45,9 +45,14 @@ export interface ContextMenuTarget {
   click: ReferenceClick;
 }
 
-/** The prompt line each reference row drafts above the block. */
-export const EXPLAIN_PROMPT = "Explain this element:";
-export const MODIFY_PROMPT = "Modify this element:";
+/** The prompt each reference row drafts beside the block, calling the reference by its id: the chat attaches the
+ *  block as a file of that name, so the message names what it attached. */
+export function explainPromptOf(referenceId: string): string {
+  return `Explain what I attached in ${referenceId}`;
+}
+export function modifyPromptOf(referenceId: string): string {
+  return `Change ${referenceId} to `;
+}
 /** Why Explain and Modify are greyed on a page no shell frames. */
 export const NO_SHELL_DRAFT_REASON = "Open this page in the workspace to draft into a chat";
 
@@ -67,9 +72,10 @@ export function targetOfEvent(event: MouseEvent, ownerDocument: Document): Conte
   };
 }
 
-/** The draft text a reference row hands over: the prompt, the block, and a blank line to type under. */
+/** The draft text a reference row hands over: the prompt, a blank line, the block. A chat takes the block out
+ *  and attaches it as a file, leaving the prompt in the composer. */
 export function draftTextOf(prompt: string, block: string): string {
-  return `${prompt}\n\n${block}\n\n`;
+  return `${prompt}\n\n${block}`;
 }
 
 function reportFailure(what: string, error: unknown): void {
@@ -221,9 +227,9 @@ export function elementReferenceRows(
     onSelect: () => draft(draftTextOf(prompt, block)),
   });
   return [
-    { kind: "action", key: "copy-element-path", label: "Copy path to element", onSelect: () => void copyText(block) },
-    draftRow("explain-element", "Explain this element...", EXPLAIN_PROMPT),
-    draftRow("modify-element", "Modify this element...", MODIFY_PROMPT),
+    { kind: "action", key: "copy-element-path", label: "Copy reference", onSelect: () => void copyText(block) },
+    draftRow("explain-element", "Explain...", explainPromptOf(reference.reference_id)),
+    draftRow("modify-element", "Modify...", modifyPromptOf(reference.reference_id)),
   ];
 }
 

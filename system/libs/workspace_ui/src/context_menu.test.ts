@@ -12,7 +12,7 @@ import {
   installElementContextMenu,
   type ContextMenuConnection,
 } from "./context_menu";
-import { EXPLAIN_PROMPT } from "./context_menu_rows";
+import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
 
@@ -80,7 +80,10 @@ describe("installElementContextMenu", () => {
     expect(card()).toBeNull();
     expect(connection.draftText).toHaveBeenCalledTimes(1);
     const text = connection.draftText.mock.calls[0][0] as string;
-    expect(text.startsWith(`${EXPLAIN_PROMPT}\n\n\`\`\`json\n`)).toBe(true);
+    const [prompt, blank, fence] = text.split("\n");
+    expect(prompt.startsWith("Explain what I attached in REF-")).toBe(true);
+    expect(prompt.slice("Explain what I attached in ".length)).toMatch(REFERENCE_ID_PATTERN);
+    expect([blank, fence]).toEqual(["", "```json"]);
     expect(text).toContain('"app":"docs"');
     expect(text).toContain('"window_id":"win-1"');
     expect(text).toContain('"id":"para"');

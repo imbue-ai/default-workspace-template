@@ -22,9 +22,9 @@ describe("createContextMenuOpener", () => {
     const onSelect = vi.fn();
     opener.open(
       [
-        { kind: "action", key: "explain-element", label: "Explain this element...", onSelect },
+        { kind: "action", key: "explain-element", label: "Explain...", onSelect },
         { kind: "divider" },
-        { kind: "action", key: "copy-element-path", label: "Copy path to element", onSelect: () => undefined },
+        { kind: "action", key: "copy-element-path", label: "Copy reference", onSelect: () => undefined },
       ],
       { x: 12, y: 34 },
     );
