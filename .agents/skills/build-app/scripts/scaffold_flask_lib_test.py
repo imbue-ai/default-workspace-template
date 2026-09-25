@@ -85,6 +85,34 @@ def _make_workspace(
     return root
 
 
+# The browser CDP proxy's port, which ``_pick_port`` reserves without any config
+# declaring it. Named here so the expectation below steps over the same port the
+# picker does.
+_RESERVED_INTERNAL_PORT = 8083
+
+
+def _expected_auto_port(held_by_config: set[int]) -> int:
+    """The port the auto pick must land on, given the ports the fixture's config holds.
+
+    The picker steps over three things: the ports the supervisord config and the
+    registry declare, the reserved internal port, and any port already bound on
+    *this host*. Only the first is the fixture's; the last is whatever the
+    workspace running the suite happens to have listening, and every workspace
+    with apps of its own has something in the auto-pick range. Asserting a
+    literal port therefore pins these to an empty host, so the expectation is
+    computed the same way -- the property under test, that a config-held port is
+    never handed out, still fails if the picker stops reading the config.
+    """
+    port = scaffold_flask_lib.LOWEST_AUTO_PORT
+    while (
+        port in held_by_config
+        or port == _RESERVED_INTERNAL_PORT
+        or scaffold_flask_lib._is_port_bound(port)
+    ):
+        port += 1
+    return port
+
+
 def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess[str]:
     icon = root.parent / "icon.svg"
     icon.write_text(_ICON)
@@ -180,24 +208,24 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     )
 
     # 8080 is held by the main config and 8081 by the drop-in, so the auto pick
-    # lands on 8082 -- it would answer 8080 if the main config went unread.
+    # steps over both -- it would answer 8080 if the main config went unread.
     ok = _scaffold(root, "news")
     assert ok.returncode == 0, ok.stderr
     assert (
-        "http://localhost:8082"
+        f"http://localhost:{_expected_auto_port({8080, 8081})}"
         in (root / "system/supervisord.conf.d/news.conf").read_text()
     )
 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:
-    """8080 and 8081 are taken by drop-ins alone, so the next app gets 8082."""
+    """8080 and 8081 are taken by drop-ins alone, so the next app gets a later port."""
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "dashboard": 8080})
 
     result = _scaffold(root, "news")
     assert result.returncode == 0, result.stderr
 
     assert (
-        "http://localhost:8082"
+        f"http://localhost:{_expected_auto_port({8080, 8081})}"
         in (root / "system/supervisord.conf.d/news.conf").read_text()
     )
 
@@ -218,9 +246,10 @@ def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
     result = _scaffold(root, "news")
 
     assert result.returncode == 0, result.stderr
-    # The real drop-in beside it was still scanned: 8080 is taken, so the new app gets 8081.
+    # The real drop-in beside it was still scanned: 8080 is taken, so the new app
+    # gets the next port the picker considers free.
     assert (
-        "http://localhost:8081"
+        f"http://localhost:{_expected_auto_port({8080})}"
         in (root / "system/supervisord.conf.d/news.conf").read_text()
     )
 
