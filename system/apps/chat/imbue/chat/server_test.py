@@ -281,6 +281,18 @@ def test_an_element_reference_that_is_not_an_envelope_is_refused(client: FlaskCl
     assert malformed.status_code == 400
 
 
+def test_an_element_reference_that_cannot_be_written_is_a_server_error(tmp_path: Path) -> None:
+    state = build_test_state()
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    state.element_references_directory = blocker / "element_references"
+    client = create_application(state).test_client()
+    envelope = {"element_reference": {"app": "docs", "tag": "a", "text": "Read the intro"}}
+    response = client.post("/api/element-references", json={"reference": envelope})
+    assert response.status_code == 500
+    assert "could not write" in response.get_json()["detail"]
+
+
 def test_upload_attachment_without_file_returns_400(client: FlaskClient) -> None:
     """Posting with no file part is a 400."""
     response = client.post("/api/uploads", data={}, content_type="multipart/form-data")
