@@ -72,16 +72,6 @@ def test_losing_the_lease_refuses_the_very_next_frame() -> None:
     assert "ls" in reason
 
 
-def test_losing_the_lease_still_lets_the_client_resume_a_paused_target() -> None:
-    # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
-    # or popup until that client sends Runtime.runIfWaitingForDebugger. After a handoff the
-    # agent's socket stays open and its resume is the one frame that must still land: refuse
-    # it and the new target stays paused, freezing the opener that shares its renderer.
-    proxy, _ = _proxy(allowed=False)
-    assert _screen(proxy, "Runtime.runIfWaitingForDebugger") is None
-    assert _screen(proxy, "Runtime.evaluate") is not None
-
-
 class _Upstream:
     """Stands in for Chromium's socket, recording every frame the proxy forwards."""
 
@@ -115,8 +105,11 @@ class _Client:
     [(False, "Runtime.runIfWaitingForDebugger", False), (True, "Page.navigate", True)],
 )
 def test_a_resume_reaches_chromium_without_moving_the_pane(allowed: bool, method: str, pane_follows: bool) -> None:
-    # Playwright resumes every target it auto-attaches to, iframes and workers included; a
-    # lease-less agent's resume must not pull the human's view onto one of them.
+    # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
+    # or popup until that client sends Runtime.runIfWaitingForDebugger. After a handoff the
+    # agent's socket stays open and its resume must still land: refuse it and the new target
+    # stays paused, freezing the opener that shares its renderer. Playwright resumes iframes
+    # and workers too, so a lease-less agent's resume must not pull the human's view onto one.
     proxy, _ = _proxy(allowed=allowed)
     proxy._sessions["session-1"] = "target-1"
     upstream = _Upstream()
