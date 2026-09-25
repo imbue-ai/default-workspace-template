@@ -50,8 +50,17 @@ function storageKey(chatId: string): string {
   return `${STORAGE_KEY_PREFIX}${chatId}`;
 }
 
-let _nextLocalId = 0;
 const _attachmentsByChat: Record<string, ComposerAttachment[]> = {};
+
+/** A fresh local id. Random rather than counted, since the stored list is shared by every document of the origin
+ *  (the root and a page, two tabs) and each mints its own: a counter would collide across them. */
+function _mintLocalId(): string {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${LOCAL_ID_PREFIX}${random}`;
+}
 
 /** What a ready attachment persists as: the fields a chip and a send need, none of the in-flight ones. */
 type StoredAttachment = Pick<ComposerAttachment, "localId" | "fileName" | "isImage" | "summary"> & {
@@ -92,19 +101,9 @@ function _persist(chatId: string, attachments: readonly ComposerAttachment[]): v
   }
 }
 
-/** Keep minted ids clear of the ones a stored list brought back from an earlier document. */
-function _reserveLocalIds(attachments: readonly StoredAttachment[]): void {
-  for (const attachment of attachments) {
-    const suffix = Number(attachment.localId.slice(LOCAL_ID_PREFIX.length));
-    if (Number.isInteger(suffix) && suffix >= _nextLocalId) _nextLocalId = suffix + 1;
-  }
-}
-
 /** The stored list of ``chatId`` as ready attachments, adopted once into memory (the first read after a load). */
 function _hydrate(chatId: string): ComposerAttachment[] {
-  const stored = _storedAttachmentsOf(chatId);
-  _reserveLocalIds(stored);
-  return stored.map((attachment) => ({ ...attachment, status: "ready" as const }));
+  return _storedAttachmentsOf(chatId).map((attachment) => ({ ...attachment, status: "ready" as const }));
 }
 
 export function getComposerAttachments(chatId: string): ComposerAttachment[] {
@@ -139,10 +138,8 @@ function _patchAttachment(chatId: string, localId: string, patch: Partial<Compos
 function _takeStoredChanges(chatId: string): void {
   const held = _attachmentsByChat[chatId];
   if (held === undefined) return;
-  const stored = _hydrate(chatId);
-  const storedIds = new Set(stored.map((attachment) => attachment.localId));
-  const inFlight = held.filter((attachment) => attachment.status !== "ready" && !storedIds.has(attachment.localId));
-  _attachmentsByChat[chatId] = [...stored, ...inFlight];
+  const inFlight = held.filter((attachment) => attachment.status !== "ready");
+  _attachmentsByChat[chatId] = [..._hydrate(chatId), ...inFlight];
   m.redraw();
 }
 
@@ -154,7 +151,7 @@ if (typeof window !== "undefined") {
 }
 
 function _startUpload(chatId: string, file: File, summary: string | undefined): void {
-  const localId = `${LOCAL_ID_PREFIX}${_nextLocalId++}`;
+  const localId = _mintLocalId();
   const item: ComposerAttachment = {
     localId,
     fileName: file.name,
