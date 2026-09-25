@@ -1,5 +1,5 @@
-"""The real tree against the test selection's mapping: CI runs this on every change, and a
-workspace whenever the selector or its override file changes."""
+"""The real tree against the test selection's mapping: every tracked path that is not
+documentation classifies, and every suite the override file names exists."""
 
 from pathlib import Path
 
