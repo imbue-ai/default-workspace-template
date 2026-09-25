@@ -329,8 +329,9 @@ clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
 (`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path
 is posted the params for the page it answers), minimized with
-`--minimized`, and prints the window's id; an `open` with no client to target
-still writes the window, unplaced. A close is posted to the app's registered
+`--minimized` or on the right half beside a window (`--beside [window]`, bare
+the caller's own chat, which takes the left half), and prints the window's id;
+an `open` with no client to target still writes the window, unplaced. A close is posted to the app's registered
 `window_closed_path`, when it has one, so an app whose resources live as long
 as their windows (the terminal, the browser) can collect at once
 (`docs/system/specs/window-bound-resources.md`). Only `refresh` and the
