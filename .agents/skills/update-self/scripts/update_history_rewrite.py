@@ -110,7 +110,9 @@ def _worktrees(repo: Path) -> list[_Worktree]:
         fields = dict(line.partition(" ")[::2] for line in block.splitlines() if line)
         if "worktree" in fields and "HEAD" in fields and "bare" not in fields:
             worktrees.append(
-                _Worktree(Path(fields["worktree"]), fields["HEAD"], fields.get("branch"))
+                _Worktree(
+                    Path(fields["worktree"]), fields["HEAD"], fields.get("branch")
+                )
             )
     return worktrees
 
@@ -119,15 +121,28 @@ def _stripped_tree(repo: Path, commit: str, scratch: Path) -> str:
     env = {"GIT_INDEX_FILE": str(scratch / "strip.index")}
     for args in (
         ["read-tree", commit],
-        ["rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--", *REWRITTEN_PATHS],
+        [
+            "rm",
+            "-r",
+            "-q",
+            "-f",
+            "--cached",
+            "--ignore-unmatch",
+            "--",
+            *REWRITTEN_PATHS,
+        ],
     ):
         result = _run(["git", *args], repo, env)
         if result.returncode != 0:
-            raise HistoryRewriteError(f"could not strip {commit}: {result.stderr.strip()}")
+            raise HistoryRewriteError(
+                f"could not strip {commit}: {result.stderr.strip()}"
+            )
     return _run(["git", "write-tree"], repo, env).stdout.strip()
 
 
-def _graft_shallow_boundaries(repo: Path, mirror: Path, target: str, scratch: Path) -> None:
+def _graft_shallow_boundaries(
+    repo: Path, mirror: Path, target: str, scratch: Path
+) -> None:
     """Graft each shallow boundary onto its twin in ``target``: the commit whose tree
     is the boundary's minus :data:`REWRITTEN_PATHS`, so the filter drops the boundary as empty."""
     shallow = mirror / "shallow"
@@ -138,7 +153,9 @@ def _graft_shallow_boundaries(repo: Path, mirror: Path, target: str, scratch: Pa
         tree, _, commit = line.partition(" ")
         twins.setdefault(tree, commit)
     for boundary in dict.fromkeys(shallow.read_text().split()):
-        if not _git(repo, "for-each-ref", "--contains", boundary, "refs/heads", "refs/tags"):
+        if not _git(
+            repo, "for-each-ref", "--contains", boundary, "refs/heads", "refs/tags"
+        ):
             continue
         twin = twins.get(_stripped_tree(repo, boundary, scratch))
         if twin is None:
@@ -158,7 +175,9 @@ def _rewrite_in_mirror(repo: Path, target: str, scratch: Path) -> Path:
     try:
         result = _run([*FILTER_REPO_COMMAND, *FILTER_REPO_ARGS], mirror)
     except FileNotFoundError as error:
-        raise HistoryRewriteError(f"cannot run {FILTER_REPO_COMMAND[0]}: {error}") from error
+        raise HistoryRewriteError(
+            f"cannot run {FILTER_REPO_COMMAND[0]}: {error}"
+        ) from error
     if result.returncode != 0:
         raise HistoryRewriteError(
             f"git-filter-repo failed (exit {result.returncode}): {result.stderr.strip()[-2000:]}"
@@ -179,7 +198,9 @@ def _fetch_rewritten_refs(repo: Path, mirror: Path) -> dict[str, str]:
         f"+refs/tags/*:{_REWRITTEN_REFS}tags/*",
     )
     rewritten: dict[str, str] = {}
-    listing = _git(repo, "for-each-ref", "--format=%(refname) %(objectname)", _REWRITTEN_REFS)
+    listing = _git(
+        repo, "for-each-ref", "--format=%(refname) %(objectname)", _REWRITTEN_REFS
+    )
     for line in listing.splitlines():
         ref, _, oid = line.partition(" ")
         rewritten["refs/" + ref.removeprefix(_REWRITTEN_REFS)] = oid
@@ -193,7 +214,11 @@ def _drop_rewritten_refs(repo: Path) -> None:
 
 
 def _exclude_left_behind_paths(repo: Path) -> None:
-    exclude = Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "info" / "exclude"
+    exclude = (
+        Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        / "info"
+        / "exclude"
+    )
     text = exclude.read_text() if exclude.exists() else ""
     existing = text.splitlines()
     missing = [f"/{path}/" for path in REWRITTEN_PATHS if f"/{path}/" not in existing]
@@ -244,7 +269,9 @@ def rewrite_history(repo: Path, target: str, scratch: Path) -> HistoryRewrite:
 
     branch = _run(["git", "symbolic-ref", "-q", "HEAD"], repo).stdout.strip()
     if not branch:
-        raise HistoryRewriteError("HEAD is detached; check out the workspace's branch first")
+        raise HistoryRewriteError(
+            "HEAD is detached; check out the workspace's branch first"
+        )
     if _git(repo, "status", "--porcelain"):
         raise HistoryRewriteError("the working tree has uncommitted changes")
 
@@ -262,7 +289,11 @@ def rewrite_history(repo: Path, target: str, scratch: Path) -> HistoryRewrite:
         live = dict(
             line.partition(" ")[::2]
             for line in _git(
-                repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags"
+                repo,
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/heads",
+                "refs/tags",
             ).splitlines()
         )
         moves = {ref: oid for ref, oid in rewritten.items() if live.get(ref) != oid}
@@ -277,7 +308,8 @@ def rewrite_history(repo: Path, target: str, scratch: Path) -> HistoryRewrite:
         }
         journal_path.write_text(json.dumps(journal))
         transaction = "".join(
-            f"update {ref} {oid} {live.get(ref, _ZERO_OID)}\n" for ref, oid in moves.items()
+            f"update {ref} {oid} {live.get(ref, _ZERO_OID)}\n"
+            for ref, oid in moves.items()
         )
         _git(repo, "update-ref", "--stdin", stdin=transaction)
     finally:
