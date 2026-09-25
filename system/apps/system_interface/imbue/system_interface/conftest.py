@@ -29,14 +29,13 @@ from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.testing import FORTRESS_CHROMIUM_PATH
 from imbue.system_interface.testing import FakeSupervisorServer
-from imbue.system_interface.testing import PIPELINE_BASE_URL
 from imbue.system_interface.testing import PIPELINE_CLIENT_ID
 from imbue.system_interface.testing import PIPELINE_DEFAULT_DESKTOP_ID
-from imbue.system_interface.testing import PIPELINE_PORT
 from imbue.system_interface.testing import PIPELINE_SEEDED_APP_NAME
 from imbue.system_interface.testing import PIPELINE_STUB_APP_NAME
 from imbue.system_interface.testing import PipelineHarness
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_server_answering
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.testing import stand_in_app
@@ -318,8 +317,10 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
     """A workspace server over a registry of two stand-in apps, one declaring launch paths, and a started shell:
     what ``test_layout_pipeline.py`` drives ``layout.py`` against."""
     registry_path = tmp_path / "apps.toml"
+    port = find_free_port()
+    base_url = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
-    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", PIPELINE_BASE_URL)
+    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
 
     with serve_app(stand_in_app()) as seeded, serve_app(stand_in_app()) as stub:
         write_registry(
@@ -335,23 +336,23 @@ def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[
         )
 
         broadcaster = WebSocketBroadcaster()
-        config = Config(system_interface_host="127.0.0.1", system_interface_port=PIPELINE_PORT)
+        config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
         state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
         app = create_application(state)
 
-        server = make_threaded_server("127.0.0.1", PIPELINE_PORT, app)
+        server = make_threaded_server("127.0.0.1", port, app)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             wait_for(
-                lambda: is_server_answering(PIPELINE_BASE_URL),
+                lambda: is_server_answering(base_url),
                 timeout=5.0,
                 poll_interval=0.05,
-                error_message=f"workspace server did not come up at {PIPELINE_BASE_URL}",
+                error_message=f"workspace server did not come up at {base_url}",
             )
             state.shell.start()
             try:
-                yield PipelineHarness(base_url=PIPELINE_BASE_URL, broadcaster=broadcaster, registry_path=registry_path)
+                yield PipelineHarness(base_url=base_url, broadcaster=broadcaster, registry_path=registry_path)
             finally:
                 state.shell.stop()
         finally:
