@@ -61,6 +61,24 @@ fi
 # the seed, and the grep guard skips work when the entry is already present.
 # The npm_config_* vars reach the npm that `pi install` shells out to, and keep
 # the fallback off npm's audit round trip -- see setup_system.sh for why.
+
+# Edit ~/.pi/agent/settings.json in place with a jq filter, creating an empty
+# object first when the file is missing or empty. Merge, never clobber -- other
+# settings keys are preserved, and a failed edit leaves the file as it was.
+# $1 names the edit for the warning; the rest are jq's arguments.
+merge_pi_settings() {
+    merge_label="$1"
+    shift
+    mkdir -p /home/user/.pi/agent
+    [ -s /home/user/.pi/agent/settings.json ] || printf '{}\n' > /home/user/.pi/agent/settings.json
+    if jq "$@" /home/user/.pi/agent/settings.json > /home/user/.pi/agent/settings.json.tmp; then
+        mv /home/user/.pi/agent/settings.json.tmp /home/user/.pi/agent/settings.json
+    else
+        rm -f /home/user/.pi/agent/settings.json.tmp
+        echo "seed_home_skeleton: warning: failed to ${merge_label}" >&2
+    fi
+}
+
 if command -v pi >/dev/null 2>&1; then
     if [ -d /opt/pi-extensions/npm/node_modules ] && [ ! -d /home/user/.pi/agent/npm ]; then
         mkdir -p /home/user/.pi/agent
@@ -71,17 +89,9 @@ if command -v pi >/dev/null 2>&1; then
         if ! grep -q "\"${pi_ext}\"" /home/user/.pi/agent/settings.json 2>/dev/null; then
             if [ -d /home/user/.pi/agent/npm/node_modules ] && command -v jq >/dev/null 2>&1; then
                 # Tree already present (baked copy above, or a prior install):
-                # register the package pin without touching npm. Merge, never
-                # clobber -- other settings keys are preserved.
-                mkdir -p /home/user/.pi/agent
-                [ -s /home/user/.pi/agent/settings.json ] || printf '{}\n' > /home/user/.pi/agent/settings.json
-                if jq --arg ext "${pi_ext}" '.packages = ((.packages // []) + [$ext] | unique)' \
-                    /home/user/.pi/agent/settings.json > /home/user/.pi/agent/settings.json.tmp; then
-                    mv /home/user/.pi/agent/settings.json.tmp /home/user/.pi/agent/settings.json
-                else
-                    rm -f /home/user/.pi/agent/settings.json.tmp
-                    echo "seed_home_skeleton: warning: failed to register pi extension ${pi_ext}" >&2
-                fi
+                # register the package pin without touching npm.
+                merge_pi_settings "register pi extension ${pi_ext}" \
+                    --arg ext "${pi_ext}" '.packages = ((.packages // []) + [$ext] | unique)'
             else
                 npm_config_audit=false npm_config_fund=false \
                     PI_CODING_AGENT_DIR=/home/user/.pi/agent pi install "${pi_ext}" \
@@ -95,14 +105,7 @@ if command -v pi >/dev/null 2>&1; then
     # Set only when neither key exists, so a default the user saved from pi's
     # model picker (Ctrl+S) survives every boot.
     if command -v jq >/dev/null 2>&1; then
-        mkdir -p /home/user/.pi/agent
-        [ -s /home/user/.pi/agent/settings.json ] || printf '{}\n' > /home/user/.pi/agent/settings.json
-        if jq 'if has("defaultProvider") or has("defaultModel") then . else . + {defaultProvider: "openrouter", defaultModel: "z-ai/glm-5.3"} end' \
-            /home/user/.pi/agent/settings.json > /home/user/.pi/agent/settings.json.tmp; then
-            mv /home/user/.pi/agent/settings.json.tmp /home/user/.pi/agent/settings.json
-        else
-            rm -f /home/user/.pi/agent/settings.json.tmp
-            echo "seed_home_skeleton: warning: failed to seed the pi default model" >&2
-        fi
+        merge_pi_settings "seed the pi default model" \
+            'if has("defaultProvider") or has("defaultModel") then . else . + {defaultProvider: "openrouter", defaultModel: "z-ai/glm-5.3"} end'
     fi
 fi
