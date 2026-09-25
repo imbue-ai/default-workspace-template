@@ -68,18 +68,7 @@ def template(tmp_path: Path) -> Path:
         "Start the template",
         {".gitignore": "data/\n", "README.md": "one\n", VENDORED_FILE: "v1\n"},
     )
-    # A commit only upstream carries (a pull request's head), named in a later message.
-    _git(template, "checkout", "-q", "-b", "proposal")
-    _commit(template, "Propose a readme", {"README.md": "proposal\n"})
-    proposal = _git(template, "rev-parse", "HEAD")
-    _git(template, "update-ref", "refs/pull/1/head", proposal)
-    _git(template, "checkout", "-q", "main")
-    _git(template, "branch", "-q", "-D", "proposal")
-    _commit(
-        template,
-        "Improve the readme",
-        {"README.md": f"two\n\nSupersedes {proposal[:10]}.\n"},
-    )
+    _commit(template, "Improve the readme", {"README.md": "two\n"})
     _commit(template, "Refresh vendored mngr", {VENDORED_FILE: "v2\n"})
     _git(template, "tag", "-a", "minds-v1", "-m", "minds-v1")
     return template
