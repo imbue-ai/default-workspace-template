@@ -502,8 +502,6 @@ def _cmd_bridge_history(args: argparse.Namespace) -> int:
     if args.drop:
         print(drop_history_bridge(repo_root, state).to_json())
         return 0
-    if args.ref is None:
-        raise HistoryBridgeError("--ref is required unless --drop is given")
     print(bridge_history(repo_root, args.ref, state).to_json())
     return 0
 
@@ -807,8 +805,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "the target's history while they share no commit; drop the graft after.",
         parents=[common],
     )
-    bridge_parser.add_argument("--ref", default=None, help="The resolved target ref.")
-    bridge_parser.add_argument(
+    bridge_mode = bridge_parser.add_mutually_exclusive_group(required=True)
+    bridge_mode.add_argument("--ref", help="The resolved target ref.")
+    bridge_mode.add_argument(
         "--drop",
         action="store_true",
         help="Only remove a graft this subcommand recorded, whatever the histories.",
