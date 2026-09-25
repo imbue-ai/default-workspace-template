@@ -543,9 +543,9 @@ class _SendAccepted(FrozenModel):
 def _send_to_chat(
     state: ChatAppState, chat_id: ChatId, send_message_request: SendMessageRequest, message_id: str
 ) -> _SendAccepted | Response:
-    """The ordinary send path, shared by the message route and the intake: hold the send while the chat converges,
-    else deliver it to the active agent; either way record the client's activity and the chat's last message. A
-    send that could not be taken answers the route's own failure response."""
+    """The ordinary send path, shared by the message route, the intake, and the secret-request notice: hold the send
+    while the chat converges, else deliver it to the active agent; either way record the client's activity and the
+    chat's last message. A send that could not be taken answers the route's own failure response."""
     agent_manager: AgentManager = state.agent_manager
     # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
     # persisted on the record, and delivered in order once the successor runs.
