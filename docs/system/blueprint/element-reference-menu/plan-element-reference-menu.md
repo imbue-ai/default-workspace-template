@@ -229,8 +229,8 @@ The shell accepts `shell:draft-text` only from a frame it created, as it accepts
 
 - `pages/livePages.ts`: the handshake carries `app` (the page's window's app); a `shell:draft-text` handler, `takeDraftText`, mirrors `takeStartWithText` and calls `store.draftText`.
 - `store/DesktopStore.ts`: `draftText(text)`: `draftIntoPinnedWindow(text)`; when that answers false (no pinned app on the active desktop takes a draft), the first free-text row whose launch path declares a `draft_param` runs with the text through `runFreeText`; with none, the user is told `NO_DRAFT_APP_REASON`, "No app on this machine can take a draft".
-- `views/App.ts`: the generic listener of section 4.1 on the shell's own document, opening a sixth kind of the desktop's one menu, `element`, whose rows are the standard rows and the reference rows for the captured target; the entry, shortcut, desktops, and desktop menus append the reference rows after a divider (section 4.4).
-  The window menu opens from a button, not a right-click, and is unchanged.
+- `views/App.ts`: the generic listener of section 4.1 on the shell's own document, opening a sixth kind of the desktop's one menu, `element`, whose rows are the standard rows and the reference rows for the captured target; the entry, shortcut, and desktop menus append the reference rows after a divider (section 4.4).
+  The window and desktops menus open from a button, not a right-click, and are unchanged.
   The shell's draft route is `store.draftText`.
 - The context menu callbacks of `TaskbarEntry`, `FloatingEntries`, `ShortcutIcon`, `DesktopsWidget`, and the views that thread them gain the event's target element beside the click position.
 - `server.py` serves `/_static/context_menu.js` beside `/_static/app_contract.js`, with the same permissive CORS header, for the e2e stub pages.
@@ -277,7 +277,7 @@ In `system/libs/workspace_ui/src/`:
   The default renderer is framework-free, for pages without Mithril: a fixed card of buttons with inline styles, closed by a press outside, Escape, or a pick.
   It returns an uninstaller, and a second install on a document already carrying its marker is a no-op that answers the first's uninstaller.
   Built as a second library entry of `vite.contract.config.ts` into `_static/context_menu.js`, bundling the two modules above and nothing else.
-- `components/contextMenuOpener.ts`: `createContextMenuOpener()` answers an `open` for the built-ins, backed by `createMenu` and rendered through the page's mounted tree, so every Mithril page draws the shared Menu and none repeats the capture logic.
+- `components/contextMenuOpener.ts`: `createContextMenuOpener()` answers an `open` for the built-ins, backed by `createMenu` and rendered through a render root of its own under `<body>`, so every Mithril page draws the shared Menu without a slot for it and none repeats the capture logic.
 - `components/menu.ts` is unchanged.
 
 `app_manifest.registry` gains `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` beside the contract's, and the built-in apps that serve the contract module serve this one the same way.
