@@ -70,6 +70,8 @@ dev = [
     "mngr-cli-contract",
     # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
+    # Stops a test run on macOS, where these suites cannot run faithfully.
+    "pytest-linux-only",
 ]
 
 [tool.uv]
@@ -102,6 +104,7 @@ host-backup = { workspace = true }
 share-gateway = { workspace = true }
 mngr-cli-contract = { workspace = true }
 pytest-executable-tmp = { workspace = true }
+pytest-linux-only = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
