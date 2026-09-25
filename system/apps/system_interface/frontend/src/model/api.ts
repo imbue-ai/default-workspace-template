@@ -8,16 +8,18 @@
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { HttpError, errorDetailFromResponse, postJson } from "@imbue/workspace-ui/src/models/http";
 import {
+  parseClientArrival,
   parseAvatarCatalog,
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
-  parseDesktops,
+  parseInventory,
   parseLayout,
   parseWallpaperListings,
   parseWindow,
 } from "./records";
 import type {
+  ClientArrival,
   AvatarCatalog,
   AvatarMood,
   ClientRecord,
@@ -26,9 +28,9 @@ import type {
   EntryPresentation,
   GridCell,
   IfPresent,
+  Inventory,
   Layout,
   Placement,
-  SharingMode,
   Wallpaper,
   WallpaperListing,
   WindowRecord,
@@ -49,11 +51,6 @@ function desktopUrl(desktopId: string, suffix: string = ""): string {
   return apiUrl(`/api/desktops/${encodeURIComponent(desktopId)}${suffix}`);
 }
 
-export async function fetchDesktops(): Promise<Desktop[]> {
-  const data = (await getJson(apiUrl("/api/desktops"))) as { desktops?: unknown };
-  return parseDesktops(data.desktops);
-}
-
 export async function createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
   return parseDesktop(await postJson<unknown>(apiUrl("/api/desktops"), { name, color, glyph }));
 }
@@ -63,9 +60,8 @@ export async function updateDesktopSettings(
   name: string,
   color: string,
   glyph: number,
-  sharing: SharingMode,
 ): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name, color, glyph, sharing }));
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name, color, glyph }));
 }
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
@@ -100,8 +96,6 @@ export interface WindowOpenRequest {
   readonly path: string;
   readonly clientId: string;
   readonly ifPresent: IfPresent;
-  /** The launch path the path was built from, when it was; it marks the window as settling. */
-  readonly launch: string | null;
 }
 
 export interface WindowOpenOutcome {
@@ -117,9 +111,45 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
     client_id: request.clientId,
     if_present: request.ifPresent,
   };
-  if (request.launch !== null) body.launch = request.launch;
   const data = await postJson<{ window: unknown; is_new: boolean }>(desktopUrl(desktopId, "/windows"), body);
   return { window: parseWindow(data.window), isNew: data.is_new === true };
+}
+
+/** Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at the path (else
+ *  a new one), or a named window this client points at it. */
+export type LaunchTarget =
+  { readonly kind: "new" } | { readonly kind: "focus" } | { readonly kind: "window"; readonly windowId: string };
+
+export interface LaunchRequest {
+  readonly app: string;
+  readonly launch: string;
+  readonly params: Readonly<Record<string, string>>;
+  readonly clientId: string;
+  readonly target: LaunchTarget;
+}
+
+export interface LaunchOutcome {
+  /** The window showing the page, as this client sees it. */
+  readonly window: WindowRecord;
+  /** The page path the launch resolved to. */
+  readonly path: string;
+  /** True when a window was opened for the page. */
+  readonly isNew: boolean;
+}
+
+/** Run a launch path for this client (post-launch-paths plan section 5.3): the shell resolves the page (built for a
+ *  GET launch path, asked of the app for a POST one) and opens or navigates a window there. */
+export async function launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome> {
+  const target: Record<string, unknown> = { kind: request.target.kind };
+  if (request.target.kind === "window") target.window_id = request.target.windowId;
+  const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
+    app: request.app,
+    launch: request.launch,
+    params: request.params,
+    client_id: request.clientId,
+    target,
+  });
+  return { window: parseWindow(data.window), path: data.path, isNew: data.is_new === true };
 }
 
 export async function closeWindow(desktopId: string, windowId: string): Promise<void> {
@@ -172,6 +202,18 @@ export async function savePlacements(desktopId: string, request: PlacementsSaveR
     throw error;
   }
   return data.updated_at ?? null;
+}
+
+/** Tell the shell this client's page has loaded; it answers the desktop to land on (a first-time user's is seeded). */
+export async function arriveClient(clientId: string): Promise<ClientArrival> {
+  return parseClientArrival(
+    await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/arrive`), {}),
+  );
+}
+
+/** The desktops, the apps, and the clients in one read: what a page boots from once it has arrived. */
+export async function fetchInventory(): Promise<Inventory> {
+  return parseInventory(await getJson(apiUrl("/api/inventory")));
 }
 
 export async function fetchClients(): Promise<ClientRecord[]> {

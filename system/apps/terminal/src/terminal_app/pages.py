@@ -3,7 +3,8 @@
 The wrapper (desktop-interface plan section 9.2) is what a window of the terminal shows:
 ``/?session=<name>`` frames ``https://<pty origin>/?arg=...`` for that session, reports its path
 and the session's title to the shell, and re-points the frame when the shell asks it to
-navigate. ``/new`` allocates a terminal and redirects to its page. The pty's origin is derived
+navigate. ``POST /new`` allocates a terminal and answers the path of its page (a POST launch path,
+docs/system/blueprint/post-launch-paths/). The pty's origin is derived
 in the browser from the label this module reads out of the registry, the way every app page
 derives another app's origin; the contract module the page speaks to the shell with is served
 from this origin (``APP_CONTRACT_ROUTE``, the shell's build output).
@@ -19,7 +20,7 @@ from typing import Final
 from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
 from app_manifest.shell_windows import window_query_value
-from flask import Blueprint, Response, jsonify, redirect, request, send_file
+from flask import Blueprint, Response, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -50,10 +51,10 @@ WINDOW_CLOSED_PATH: Final[str] = "/api/window-closed"
 HTTP_NO_CONTENT: Final[int] = 204
 SESSION_API_PATH: Final[str] = "/api/sessions/<name>"
 
-# The one parameter the ``new`` launch path takes (system/apps/terminal/app.toml).
+# The one parameter the ``new`` launch path takes (system/apps/terminal/app.toml); the shell posts it in a JSON
+# object beside its own envelope fields, which are ignored here.
 WORKDIR_PARAM: Final[str] = "workdir"
 
-HTTP_FOUND: Final[int] = 302
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_INTERNAL_ERROR: Final[int] = 500
@@ -236,8 +237,8 @@ class PageConfig(FrozenModel):
 def closed_window_terminal(hint_body: object) -> TmuxSessionName | None:
     """The terminal a closed window showed, from the ``path`` of the shell's hint.
 
-    None for a window at a launch path (``/new?...`` names no terminal), a path naming something that is not a
-    session name, or a body of another shape than the shell posts.
+    None for a path with no session (the root, or one naming something that is not a session name), or a body of
+    another shape than the shell posts.
     """
     if not isinstance(hint_body, dict):
         return None
@@ -274,14 +275,24 @@ def render_page(config: PageConfig) -> str:
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
 
-def _workdir(raw: str) -> Workdir | None:
-    """The ``workdir`` a ``new`` request names, or None for the default; a bad one is a 400."""
-    if raw == "":
+def _workdir(raw: object) -> Workdir | None:
+    """The ``workdir`` a ``new`` request's body names, or None for the default (absent or ""); a bad one is a 400."""
+    if raw is None or raw == "":
         return None
+    if not isinstance(raw, str):
+        raise InvalidTerminalValueError(f"invalid {WORKDIR_PARAM!r}: must be a string")
     try:
         return Workdir(raw)
     except InvalidTerminalValueError as e:
         raise InvalidTerminalValueError(f"invalid {WORKDIR_PARAM!r}: {e}") from e
+
+
+def _launch_body() -> dict[str, object]:
+    """The JSON object a ``new`` launch posts; anything else is a 400."""
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidTerminalValueError("the launch body must be a JSON object")
+    return body
 
 
 def build_pages_blueprint(
@@ -292,7 +303,8 @@ def build_pages_blueprint(
     # named none); the sweeper's ``request_sweep``.
     on_window_closed: Callable[[TmuxSessionName | None], None],
 ) -> Blueprint:
-    """The wrapper page, the ``new`` launch path, the per-session JSON the page refreshes from, the health probe, and
+    """The wrapper page, the ``new`` launch path (a POST answering the new session's page path), the per-session JSON
+    the page refreshes from, the health probe, and
     the app contract module at ``contract_path`` (the shell's build output, served from this origin)."""
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
@@ -315,10 +327,10 @@ def build_pages_blueprint(
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @blueprint.get(NEW_PATH)
+    @blueprint.post(NEW_PATH)
     def new_terminal() -> ResponseReturnValue:
-        created = source.create_terminal(_workdir(request.args.get(WORKDIR_PARAM, "")))
-        return redirect(session_page_path(created.name), code=HTTP_FOUND)
+        created = source.create_terminal(_workdir(_launch_body().get(WORKDIR_PARAM)))
+        return jsonify({"path": session_page_path(created.name)})
 
     @blueprint.get(SESSION_API_PATH)
     def session_json(name: str) -> ResponseReturnValue:

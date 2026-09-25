@@ -282,9 +282,10 @@ Since phase 7 every auto-minted name is a lane-neutral "Chat N" (`naming.py`'s o
 ### 4.5 Addressing a chat from inside the workspace
 
 Every chat agent the chat app creates carries `MINDS_CHAT_ID=<chat id>` in its env file (`mngr create --env`), the first agent included.
-Agents created outside the chat app (a `mngr create --template chat` from a terminal, the minds app's assist and update-self chats, automations) carry no such variable and are their own chats, so consumers fall back to `MNGR_AGENT_ID`.
+Agents created outside the chat app (a `mngr create --template chat` from a terminal, automations) carry no such variable and are their own chats, so consumers fall back to `MNGR_AGENT_ID`.
 Those creates are no longer unbound: a create that names no harness and no account resolves the workspace's default account through `.mngr/settings.local.toml` (written by the chat app's `create_defaults.py` from the account store), carries its `account=<id>` label, and is refused by `system/scripts/require_create_account.py` when no account is signed in.
 That changes what they run on, not what they are: they remain own chats with no `MINDS_CHAT_ID`.
+The minds app's assist and update-self chats are created *through* the chat app since the branch that followed phase 4 (`system/scripts/message_chat.py --create`, posting to `/api/chats/create` with the window-surfacing labels, the claude version-check waiver, and a wait for the create to finish), so they are chat-app chats like any other, `MINDS_CHAT_ID` included; only on a template whose script predates that mode does the minds app fall back to the bare create above.
 
 - `layout.py` builds the requester address from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`.
   The shell resolves `self` and attributes ops to clients through that address, so an archived or successor agent's ops land on the chat's tab and client.
@@ -347,12 +348,13 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
     "activity_state": "THINKING",
     "model_choice": {"...": "..."},
     "queued_messages": [],
-    "shoulder_tap_available": false
+    "shoulder_tap_available": false,
+    "is_connecting": false
   }
 }
 ```
 
-- `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, and the tap button from.
+- `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, the tap button, and "Connecting…" beside the model bar (`is_connecting`: a send is waiting for the agent to come up) from.
   It carries no `lane`: the lane is the account's, and the page reads it off the account row it already holds for `account_id`, which is all the switch rule needs (5.1: any account but the chat's own is a switch; the kind, a rebind or a handoff, is read by harness and lane, since two lanes can share one harness).
   The frontend never calls an agent-keyed route.
 - `handoff` is `null` except while converging (section 5.4, section 6): one shape for both kinds of switch, since the page renders them the same way.
@@ -428,7 +430,7 @@ As landed in phase 8, which revised the flow above after use:
 - Pressing an account on the chat's own harness and lane (a rebind, section 6) asks nothing: the agent keeps its conversation and its model, so the press arms the switch at once, and the next send carries it out rather than the press cutting short a turn in progress. Only a switch that will write a summary gets the dialog.
 - Armed, the composer shows a strip ("Your next message switches this chat to OpenAI (Codex), GPT-6 Astra · High") with Cancel and, for a handoff, Change (which reopens the dialog); the model bar's chip and card read as the target, with a Model row only for a handoff; and Switch and send carries the switch out with no second confirmation.
 - A chat with no genuine user turn (by the rule `has_user_turn` shares with the summary freshness check) gets no dialog: the switch runs at once as a fresh start (5.5, 5.8), with the draft left in the composer.
-- The handoff is one node in the transcript rather than a chip and a write: "Handing off to Codex…" while it runs (from the snapshot until the summary request is on the stream, then anchored on it), "Handed off from Claude Code to Codex" once the `agent_switch` event lands, expandable to the summary turn and the successor's handoff prompt, "Handoff called off" for a cancelled one. Only the live switch's own request anchors the live node: a request older than `started_at` (4.6) belongs to a switch that was called off and keeps reading "Handoff called off" while a later one runs, which is also why it does not stand in for the live switch's request, and a timestamp that does not parse reads as the live switch's. A landed switch draws a rule under the node, so the boundary between the two agents' segments reads at a glance. A switch with nothing behind it (a fresh start: no summary request, no summary turn, no handoff prompt) shows no node once it has landed: the live node stands in while it runs and comes down with it, and the successor's segment follows the retiring agent's with no rule between them. The held bubbles read "Sending…" like any send.
+- The handoff is one node in the transcript rather than a chip and a write: "Handing off to Codex…" while it runs (from the snapshot until the summary request is on the stream, then anchored on it), "Handed off from Claude Code to Codex" once the `agent_switch` event lands, expandable to the summary turn and the successor's handoff prompt, "Handoff called off" for a cancelled one. Only the live switch's own request anchors the live node: a request older than `started_at` (4.6) belongs to a switch that was called off and keeps reading "Handoff called off" while a later one runs, which is also why it does not stand in for the live switch's request, and a timestamp that does not parse reads as the live switch's. A landed switch draws a rule under the node, so the boundary between the two agents' segments reads at a glance. A switch with nothing behind it (a fresh start: no summary request, no summary turn, no handoff prompt) shows no node once it has landed: the live node stands in while it runs and comes down with it, and the successor's segment follows the retiring agent's with no rule between them. The held bubbles render as an ordinary sent message, like any send.
 - "Switch to another provider" under an auth-failed turn begins the same switch: it opens the provider chooser, where a signed-in account can be picked outright (the chat's own is listed as "Not working" and refused), and the pick goes through the menu's path, so a handoff asks and a rebind is armed. "+ Add a provider" does the same with the chat's own account refused as "Current".
 - The failed page names the step: "Could not start Codex" or "Could not set the model on Codex".
 - The page names a harness by the backend's own table (`HARNESS_LABEL`, the one the account labels and the handoff prompt use), carried on each catalog of `GET /api/harnesses` as `label`; the frontend keeps no table of its own, so "Claude Code" reads the same in the node, the phase text, the dialog, and the account row.
@@ -719,7 +721,7 @@ Where the minds repo is touched, the paired branch is named.
 | minds e2e runner (`e2e_workspace_runner.py`) | finds the chat frame by `/agent-<hex>/` | unchanged (chat ids keep the prefix) | unchanged |
 | minds_evals bridge (`minds_bridge.py`) | `/api/agents/create-chat`, `/api/agents/<id>/message`, `/events`, `/model` | served by the aliases | `/api/chats/create` (answering `chat_id`), `/api/chats/<chat_id>/...`; the `/api/agents` listing as before |
 | minds deployment tests (`test_litellm_via_workspace.py`) | `/api/agents/create-chat` | the alias | `/api/chats/create` |
-| minds assist and update-self chats | a bare `mngr create --template chat` inside the workspace, bound to the default account and harness through `.mngr/settings.local.toml`, carrying `account=<default>` | own chats, no `MINDS_CHAT_ID` | unchanged |
+| minds assist and update-self chats | a bare `mngr create --template chat` inside the workspace, bound to the default account and harness through `.mngr/settings.local.toml`, carrying `account=<default>` | own chats, no `MINDS_CHAT_ID`; then, after phase 4, created through the chat app by `message_chat.py --create` (4.5), so they are chat-app chats with `MINDS_CHAT_ID` | unchanged |
 | the `automation` template prompt | `app:chat?instance=$MNGR_AGENT_ID` | `$MINDS_CHAT_ID` with fallback | unchanged |
 | the shell | instance keys, addresses, `/api/client-activity` keys | chat ids, which equal today's keys | unchanged |
 | the minds chrome's permission routing | request `agent_id` = chat frame URL | chat id | unchanged |

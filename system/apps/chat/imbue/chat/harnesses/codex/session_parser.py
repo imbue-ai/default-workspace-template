@@ -64,6 +64,7 @@ from imbue.chat.harnesses.codex.tool_labels import shell_commands
 from imbue.chat.harnesses.codex.tool_labels import tool_labels
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
@@ -142,14 +143,14 @@ def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     return "" if raw is None else str(raw)
 
 
-def _tk_output_text(output: str) -> str:
-    """Unwrap code-mode command results for decoration, keeping raw detail unchanged.
+def _unwrap_command_result_envelopes(output: str) -> str:
+    """Unwrap code-mode command results for the structured facts, keeping raw detail unchanged.
 
     ``text(result)`` prints a JSON envelope; ``text(result.output)`` prints plain stdout.
     Adjacent calls can concatenate envelopes on one line. Decode only complete command
     result envelopes, never arbitrary JSON embedded in prose or a command's stdout.
     """
-    if "-step-" not in output:
+    if '"chunk_id"' not in output:
         return output
     decoder = json.JSONDecoder()
     lines: list[str] = []
@@ -160,7 +161,7 @@ def _tk_output_text(output: str) -> str:
             try:
                 value, end = decoder.raw_decode(remaining)
             except (json.JSONDecodeError, RecursionError) as exc:
-                logger.warning("Could not decode code-mode task output: {}", exc)
+                logger.warning("Could not decode a code-mode command result envelope: {}", exc)
                 break
             if not isinstance(value, dict) or not isinstance(value.get("chunk_id"), str):
                 break
@@ -358,6 +359,18 @@ def _item_content_text(content: Any) -> str | None:
     return text or None
 
 
+def _extract_compaction_summary(item: dict[str, Any]) -> str | None:
+    """Extract a text summary from a ContextCompaction item, or None."""
+    for key in ("summary", "text", "body"):
+        val = item.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    content_text = _item_content_text(item.get("content"))
+    if content_text and content_text.strip():
+        return content_text.strip()
+    return None
+
+
 def _synthetic_event_id(kind: str, timestamp: str, payload: dict[str, Any]) -> str:
     """A position-independent id for a rollout line codex gave no id of its own.
 
@@ -414,7 +427,7 @@ def _user_message_events(timestamp: str, text: str | None, client_id: str | None
     return [build_user_turn_event(timestamp, text, event_id)]
 
 
-# --- Queue ledger (the codex analogue of Claude's queue-operation records) ---
+# Queue ledger (the codex analogue of Claude's queue-operation records)
 #
 # A message the user submits while a turn is running is held in codex's TUI queue and
 # does not reach the rollout until the turn ends. The patched codex binary writes a full
@@ -444,7 +457,7 @@ def parse_lines(
         return []
     payload_type = payload.get("type")
 
-    # --- turn_context: the per-turn effective model/effort (§4b) ---
+    # turn_context: the per-turn effective model/effort (§4b)
     # Not a transcript event (returns []), but its ``model`` / ``effort`` are the truth of what the
     # turn ran on. Record them in ``turn_state`` so the following assistant messages are stamped and
     # the watcher can reflect a fallback in the model bar.
@@ -457,7 +470,7 @@ def parse_lines(
                 turn_state["effort"] = context_effort if isinstance(context_effort, str) and context_effort else None
         return []
 
-    # --- event_msg: the clean human prompt + the turn-abort marker ---
+    # event_msg: the clean human prompt + the turn-abort marker
     if outer == "event_msg":
         # The clean human prompt. Older codex emitted it as ``user_message``; newer
         # codex folds every display echo into ``item_completed`` carrying a typed
@@ -478,14 +491,40 @@ def parse_lines(
             )
         if payload_type == "item_completed":
             item = payload.get("item")
-            if isinstance(item, dict) and item.get("type") == "UserMessage":
-                # Rollouts use snake_case; the live app-server item uses clientId.
-                client_id = item.get("client_id")
-                return _user_message_events(
-                    timestamp,
-                    _item_content_text(item.get("content")),
-                    client_id if isinstance(client_id, str) else None,
-                )
+            if isinstance(item, dict):
+                if item.get("type") == "UserMessage":
+                    # Rollouts use snake_case; the live app-server item uses clientId.
+                    client_id = item.get("client_id")
+                    return _user_message_events(
+                        timestamp,
+                        _item_content_text(item.get("content")),
+                        client_id if isinstance(client_id, str) else None,
+                    )
+                if item.get("type") == "ContextCompaction":
+                    turn_id = payload.get("turn_id")
+                    item_id = item.get("id")
+                    if isinstance(item_id, str) and item_id:
+                        event_id = f"codex-compaction-{item_id}"
+                    elif isinstance(turn_id, str) and turn_id:
+                        event_id = f"codex-turn-{turn_id}-context_compacted"
+                    else:
+                        event_id = _synthetic_event_id("context_compacted", timestamp, payload)
+
+                    event: dict[str, Any] = {
+                        "timestamp": timestamp,
+                        "type": "user_message",
+                        "event_id": event_id,
+                        "source": SOURCE,
+                        "role": "system",
+                        "content": "Context was compacted",
+                        "message_uuid": event_id,
+                        "display": DisplayKind.STATUS,
+                        "non_turn_tail": True,
+                    }
+                    summary = _extract_compaction_summary(item)
+                    if summary:
+                        event["display_body"] = summary
+                    return [event]
             # Other item_completed items (AgentMessage, CommandExecution, Reasoning)
             # are display duplicates of the response_item lines we already parse; skip.
             return []
@@ -547,7 +586,7 @@ def parse_lines(
         # session_meta / other non-content records -> drop (turn_context handled above).
         return []
 
-    # --- reasoning: codex's readable thinking summaries ---
+    # reasoning: codex's readable thinking summaries
     # A reasoning item precedes the assistant output it belongs to. It is not itself a
     # transcript event; the watcher consumes this internal marker to remember the line as
     # the NEXT assistant event's thinking source (has_thinking + the detail endpoint).
@@ -560,7 +599,7 @@ def parse_lines(
     effective_model = turn_state.get("model") if turn_state is not None else None
     effective_model = effective_model if isinstance(effective_model, str) and effective_model else _UNKNOWN_MODEL
 
-    # --- response_item: assistant messages + tool calls/results ---
+    # response_item: assistant messages + tool calls/results
     if payload_type == "message":
         if payload.get("role") == "assistant":
             # codex re-serialises history; each copy shares the message ``id``, so
@@ -607,7 +646,8 @@ def parse_lines(
         # The structured facts lifted from the full output, which itself stays off the
         # event (the payload-free wire contract): the permission-request object the card
         # renders from, the tk stamp the step view reads, and the error snippet.
-        permission_request = find_permission_request(raw_output)
+        unwrapped_output = _unwrap_command_result_envelopes(raw_output)
+        permission_request = find_permission_request(unwrapped_output)
         # A failed code-mode script writes output starting with "Script failed".
         is_error = raw_output.startswith("Script failed")
         event: dict[str, Any] = {
@@ -626,7 +666,7 @@ def parse_lines(
         snippet = error_snippet(raw_output) if is_error else ""
         if snippet:
             event["error_snippet"] = snippet
-        stamped_tk = tk_stamp(_tk_output_text(raw_output))
+        stamped_tk = tk_stamp(unwrapped_output)
         if stamped_tk:
             event["tk_stamp"] = stamped_tk
         return [event]
