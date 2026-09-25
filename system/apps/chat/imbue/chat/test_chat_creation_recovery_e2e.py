@@ -371,8 +371,8 @@ def _is_chat_listed(base_url: str, chat_id: str) -> bool:
 def test_a_chat_the_root_created_stays_shown_when_its_replay_lands_after_the_create(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
 ) -> None:
-    """The root keeps the chat it created selected and shown through a replayed chat list that predates the
-    create, and the chat's composer is there once the agent registers."""
+    """The root keeps the chat its New chat button created selected and shown through a replayed chat list
+    that predates the create, and the chat's composer is there once the agent registers."""
     with _serving_workspace(
         tmp_path,
         monkeypatch,
@@ -380,7 +380,8 @@ def test_a_chat_the_root_created_stays_shown_when_its_replay_lands_after_the_cre
         broadcaster=WebSocketBroadcaster(),
         manager_class=_LateReplayListAgentManager,
     ) as base_url:
-        page.goto(f"{base_url}/new")
+        page.goto(f"{base_url}/")
+        page.get_by_role("button", name="New chat").click()
         expect(page).to_have_url(re.compile(r"\?chat=agent-"), timeout=_RECOVERY_TIMEOUT_MS)
         chat_id = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)["chat"][0]
         wait_for(
