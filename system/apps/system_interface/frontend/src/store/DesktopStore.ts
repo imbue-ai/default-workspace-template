@@ -1023,7 +1023,7 @@ export class DesktopStore {
   /** Place a window at a fraction of the backdrop -- the size menu's halves and quarters, which no
    *  window state stands for. Normal, shown and raised, as a drag that ends away from an edge leaves it. */
   setWindowFrame(windowId: string, frame: Frame): void {
-    if (this.state.modes.isCompact || this.deferWhileSettling(windowId)) return;
+    if (this.state.modes.isCompact) return;
     this.dispatch({ type: "window_frame_set", windowId, frame });
   }
 
