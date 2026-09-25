@@ -505,7 +505,7 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
 
 
 class _ServerSecretRequestBridge(SecretRequestChatBridge):
-    """The router's side of the secret-request routes: chats resolved and notices delivered the way the message route does it."""
+    """The router's side of the secret-request routes: chats resolved, and notices sent through the ordinary send path."""
 
     def lookup_chat(self, chat_id: str) -> ChatLookup:
         if not get_state().agent_manager.is_agent_list_known():
@@ -515,22 +515,12 @@ class _ServerSecretRequestBridge(SecretRequestChatBridge):
         return ChatLookup.KNOWN
 
     def deliver_notice(self, chat_id: str, text: str) -> None:
-        state = get_state()
-        agent_manager: AgentManager = state.agent_manager
         message_id = uuid4().hex
-        if agent_manager.hold_send(ChatId(chat_id), message_id, text, HeldSendOrigin.SCRIPT) is not None:
-            agent_manager.record_message_sent(ChatId(chat_id))
-            return
-        agent_info = _find_active_agent(chat_id)
-        if agent_info is None:
-            raise NoticeDeliveryError(f"Chat '{chat_id}' not found")
-        try:
-            outcome = _deliver_message(state, agent_info, text, message_id)
-        except SendFailedError as send_failure:
-            raise NoticeDeliveryError(send_failure.detail) from send_failure
-        if outcome is not SendOutcome.OK:
-            raise NoticeDeliveryError(f"Agent '{agent_info.name}' did not take the message ({outcome.name})")
-        agent_manager.record_message_sent(ChatId(chat_id))
+        accepted = _send_to_chat(
+            get_state(), ChatId(chat_id), SendMessageRequest(message=text, message_id=message_id), message_id
+        )
+        if isinstance(accepted, Response):
+            raise NoticeDeliveryError(accepted.get_json()["detail"])
 
 
 def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:

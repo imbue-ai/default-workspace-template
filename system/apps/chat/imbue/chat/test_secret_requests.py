@@ -105,6 +105,26 @@ def test_a_request_filed_by_the_script_is_answered_into_the_file_and_the_chat(tm
     assert value not in completed.stdout
 
 
+def test_a_notice_the_agent_refuses_keeps_the_file_and_answers_undelivered(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger(succeeds=False)
+    with _running_chat_app(tmp_path, messenger) as (base_url, _):
+        completed = _run_request_script(
+            tmp_path, base_url, "--file", "svc", "--var", "SVC_TOKEN", "--rationale", "to call the widget API"
+        )
+        assert completed.returncode == 0, completed.stderr
+        filed = json.loads(completed.stdout)
+        response = httpx.post(
+            f"{base_url}/api/secret-requests/{filed['request_id']}/submit",
+            json={"values": {"SVC_TOKEN": "v"}},
+            timeout=30,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["is_notice_delivered"] is False
+
+    assert len(messenger.sent) == 1
+    assert (tmp_path / "data" / ".secrets" / "svc.env").read_text() == "SVC_TOKEN='v'\n"
+
+
 def test_the_script_fails_plainly_when_no_chat_app_answers(tmp_path: Path) -> None:
     completed = _run_request_script(
         tmp_path, "http://127.0.0.1:9", "--file", "svc", "--var", "SVC_TOKEN", "--rationale", "why"
