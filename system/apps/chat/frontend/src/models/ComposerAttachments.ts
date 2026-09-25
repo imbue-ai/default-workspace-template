@@ -83,7 +83,8 @@ function _isStoredAttachment(value: unknown): value is StoredAttachment {
     typeof uploaded.path === "string" &&
     typeof uploaded.name === "string" &&
     typeof uploaded.size === "number" &&
-    typeof uploaded.isImage === "boolean"
+    typeof uploaded.isImage === "boolean" &&
+    typeof uploaded.url === "string"
   );
 }
 

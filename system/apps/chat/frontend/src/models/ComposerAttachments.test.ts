@@ -108,11 +108,22 @@ describe("persistence", () => {
       localId: "composer-att-901",
       fileName: "plan.pdf",
       isImage: false,
-      uploaded: { path: "/w/data/uploads/y/plan.pdf", name: "plan.pdf", size: 3, isImage: false },
+      uploaded: { path: "/w/data/uploads/y/plan.pdf", name: "plan.pdf", size: 3, isImage: false, url: "/u/plan.pdf" },
+    };
+    const withoutUrl = {
+      localId: "composer-att-903",
+      fileName: "shot.png",
+      isImage: true,
+      uploaded: { path: "/w/data/uploads/y/shot.png", name: "shot.png", size: 3, isImage: true },
     };
     localStorage.setItem(
       `${STORAGE_KEY_PREFIX}${otherChatId}`,
-      JSON.stringify([{ localId: "composer-att-902", fileName: "lost.txt", isImage: false }, good, "junk"]),
+      JSON.stringify([
+        { localId: "composer-att-902", fileName: "lost.txt", isImage: false },
+        good,
+        withoutUrl,
+        "junk",
+      ]),
     );
     expect(getComposerAttachments(otherChatId).map((attachment) => attachment.fileName)).toEqual(["plan.pdf"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("not in shape"), expect.any(Array));
