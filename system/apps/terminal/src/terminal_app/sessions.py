@@ -269,9 +269,9 @@ class TmuxSessionSource(MutableModel):
     def sweep_windows(self, window_paths: Sequence[str]) -> list[TmuxSessionName]:
         """Mark every remembered terminal a window shows, and delete the ones a window showed once and none shows now.
 
-        ``window_paths`` is what the shell reports for this app; a path naming no session (a window still
-        settling at ``/new``) shows nothing. A terminal no window has ever shown is left alone, so a session
-        made by hand or opened by an agent with nobody watching outlives any sweep. Answers what was collected.
+        ``window_paths`` is what the shell reports for this app; a path naming no session shows nothing. A
+        terminal no window has ever shown is left alone, so a session made by hand or opened by an agent with
+        nobody watching outlives any sweep. Answers what was collected.
         """
         shown_names = {
             name for path in window_paths if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None

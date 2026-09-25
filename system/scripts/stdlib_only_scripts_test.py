@@ -31,7 +31,6 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "require_create_account.py",
     "seed_welcome_chat.py",
     "tool_env.py",
-    "welcome_count.py",
 )
 
 
