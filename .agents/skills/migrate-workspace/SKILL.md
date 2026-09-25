@@ -116,16 +116,26 @@ grep "migrate-workspace" /tmp/migrate-inflight.txt
 ```
 
 **Back up both sides -- in the background.** A backup runs for minutes, and
-nothing in Steps 4 and 5 depends on one, so start both (`run_in_background:
-true`) and carry on detecting the layout and building the inventory while they
-run. Collect them before Step 6, which dispatches the first thing that writes
-anything.
+nothing in Steps 4 and 5 depends on one, so start both through
+`system/scripts/run_in_background.py` and carry on detecting the layout and
+building the inventory while they run:
 
 ```bash
-uv run host-backup-now --timeout 600
-ssh -i /tmp/mind_key -p <port> <user>@<host> \
+python3 system/scripts/run_in_background.py --description "Back up this workspace" \
+    --task-dir data/.tasks/migrate-workspace/backup-this -- \
+    uv run host-backup-now --timeout 600
+python3 system/scripts/run_in_background.py --description "Back up the old workspace" \
+    --task-dir data/.tasks/migrate-workspace/backup-source -- \
+    ssh -i /tmp/mind_key -p <port> <user>@<host> \
     'cd <source-repo-root> && uv run host-backup-now --timeout 600'
 ```
+
+Collect both before Step 6, which dispatches the first thing that writes
+anything: each task dir's `exit_code` and `output.log` hold a finished backup's
+result. A dir with no `exit_code` yet is a backup still running, so end your
+turn there; its result arrives as a message and starts your next one, and you
+pick up at Step 6. A result message for a backup you have already collected
+needs nothing more.
 
 **Bound both waits explicitly.** An older `host-backup-now` ends its wait only on
 a restic outcome, so a tick that never reaches restic -- most likely one skipped
@@ -135,7 +145,7 @@ runs; see [references/pre-declutter-layout.md](references/pre-declutter-layout.m
 ("The 30-minute `host-backup-now` hang") for the events-log fallback that reads
 the tick's real outcome.
 
-Confirm each prints `restic_backup_succeeded`. If the *source* reports
+Confirm each `output.log` has `restic_backup_succeeded`. If the *source* reports
 `tick_skipped_due_to_missing_secrets` -- or times out having printed nothing,
 which on an old source means the same thing until you check the events log -- it
 has no restore point: tell the user plainly and get their explicit go-ahead. This
@@ -245,9 +255,10 @@ it.
 ## 6. Dispatch the worker
 
 **First, collect Step 3's backups.** The worker is the first step that writes
-anything, so this is where a restore point has to exist. If either is still
-running, wait for it; if the source's had no restore point to take, you have
-already settled that with the user.
+anything, so this is where a restore point has to exist. If either task dir has
+no `exit_code` yet, that backup is still running: end your turn and resume here
+when its result message arrives. If the source's had no restore point to take,
+you have already settled that with the user.
 
 Then open the tracking ticket, write the task file, launch, and background-poll.
 
@@ -304,7 +315,7 @@ BODY_EOF
 
 Write the user's answers to `data/.tasks/migrate-workspace/decisions.md` before
 launching, then launch with the plain `worker` template and background-poll
-(`run_in_background: true`), re-arming per
+(through `system/scripts/run_in_background.py`), re-arming per
 `.agents/shared/references/lead-proxy.md`:
 
 ```bash
@@ -312,7 +323,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name migrate-workspace --template worker \
     --runtime-dir data/.tasks/migrate-workspace/ --task-file data/.tasks/migrate-workspace/task.md
 
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name migrate-workspace --task-file data/.tasks/migrate-workspace/task.md --timeout 90m
 ```
 

@@ -48,21 +48,32 @@ _LAUNCHER_FLAGS_AT_FLOOR: dict[str, frozenset[str]] = {
 
 _FENCED_CODE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
+# Where the report poll runs from: staged out of the target release, since the
+# workspace's own tree may predate ``system/scripts/run_in_background.py``.
+_STAGED_RUNNER = "data/.tasks/update-self/run_in_background.py"
+
+
+def _fenced_commands(text: str) -> list[str]:
+    """Every command in the fenced code blocks; a block may hold several, each
+    possibly line-continued."""
+    return [
+        command
+        for block in _FENCED_CODE.findall(text)
+        for command in re.split(r"\n(?=\S)", block.replace("\\\n", " "))
+    ]
+
 
 def _launcher_invocations(text: str) -> list[list[str]]:
     """Every ``create_worker.py <subcommand> ...`` argv in the fenced code blocks."""
     invocations: list[list[str]] = []
-    for block in _FENCED_CODE.findall(text):
-        # A block may hold several commands; each launcher call is one
-        # (possibly line-continued) command.
-        for command in re.split(r"\n(?=\S)", block.replace("\\\n", " ")):
-            if "create_worker.py" not in command:
-                continue
-            words = shlex.split(command, comments=True)
-            for index, word in enumerate(words):
-                if word.endswith("create_worker.py") and index + 1 < len(words):
-                    invocations.append(words[index + 1 :])
-                    break
+    for command in _fenced_commands(text):
+        if "create_worker.py" not in command:
+            continue
+        words = shlex.split(command, comments=True)
+        for index, word in enumerate(words):
+            if word.endswith("create_worker.py") and index + 1 < len(words):
+                invocations.append(words[index + 1 :])
+                break
     return invocations
 
 
@@ -90,3 +101,40 @@ def test_update_self_prose_uses_only_the_floor_launcher_interface() -> None:
             "against the workspace's own launcher, so do this with plain mngr "
             "commands instead"
         )
+
+
+def test_update_self_waits_through_the_runner_staged_from_the_target() -> None:
+    """The floor release has no ``system/scripts/run_in_background.py``, so the report poll
+    runs the copy staged from ``$REF``; the workspace's own path would fail on exactly the
+    workspaces the update exists for."""
+    commands = [
+        command
+        for prose in _PROSE_FILES
+        for command in _fenced_commands(prose.read_text())
+    ]
+    await_commands = [
+        shlex.split(command, comments=True)
+        for command in commands
+        if "create_worker.py await" in command
+    ]
+    assert await_commands, (
+        "the update-self prose no longer runs await; this guard is vacuous"
+    )
+    for words in await_commands:
+        assert words[:2] == ["python3", _STAGED_RUNNER], (
+            f"`{shlex.join(words)}` does not wait through the runner staged from $REF"
+        )
+    staging_commands = [
+        shlex.split(command, comments=True)
+        for command in commands
+        if command.startswith("git show")
+    ]
+    assert [
+        "git",
+        "show",
+        "$REF:system/scripts/run_in_background.py",
+        ">",
+        _STAGED_RUNNER,
+    ] in staging_commands, (
+        f"the update-self prose no longer stages {_STAGED_RUNNER} from $REF"
+    )

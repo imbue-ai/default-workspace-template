@@ -6,14 +6,20 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 """
 
 import importlib.util
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from imbue.chat.harnesses.events import DisplayKind
+from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import is_non_turn_tail
+from imbue.chat.harnesses.message_display import split_background_task_reports
 
 _SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
@@ -98,14 +104,14 @@ def test_a_task_notification_summary_drops_a_zero_exit_code_and_keeps_any_other(
     """Every ordinary completion carries "(exit code 0)", so it says nothing "completed" has
     not; a non-zero one is the whole news."""
     zero = classify_user_message(
-        "<task-notification>\n<summary>Background command \"build\" completed (exit code 0)</summary>\n"
+        '<task-notification>\n<summary>Background command "build" completed (exit code 0)</summary>\n'
         "</task-notification>"
     )
     assert zero is not None
     assert zero.display_body == 'Background command "build" completed'
 
     failed = classify_user_message(
-        "<task-notification>\n<summary>Background command \"build\" completed (exit code 2)</summary>\n"
+        '<task-notification>\n<summary>Background command "build" completed (exit code 2)</summary>\n'
         "</task-notification>"
     )
     assert failed is not None
@@ -329,16 +335,113 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.request_id == "evt-9"
 
 
-def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() -> None:
-    """``system/scripts/message_chat.py --system`` wraps a nudge in the tag this module recognises; the script
-    is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
-    script = Path(__file__).resolve().parents[5] / "scripts" / "message_chat.py"
-    spec = importlib.util.spec_from_file_location("message_chat_for_tag_pin", script)
+def _load_system_script(filename: str) -> Any:
+    """A standard-library-only script from ``system/scripts/``, which this package cannot import."""
+    script = Path(__file__).resolve().parents[5] / "scripts" / filename
+    spec = importlib.util.spec_from_file_location(f"{script.stem}_for_tag_pin", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() -> None:
+    """``system/scripts/message_chat.py --system`` wraps a nudge in the tag this module recognises; the script
+    is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
+    module = _load_system_script("message_chat.py")
 
     assert module.SYSTEM_MESSAGE_TAG == BROWSER_FLEET_TAG
     decision = classify_user_message(module.wrap_system_message("Browser b1 was handed back to you."))
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
+
+
+def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None:
+    """``system/scripts/run_in_background.py`` is standard-library only and cannot import this package,
+    so its copy of the tag is pinned here by classifying a report it composed."""
+    module = _load_system_script("run_in_background.py")
+    report = module.compose_report(
+        description="Wait for the background agent",
+        command=["uv", "run", "create_worker.py", "await", "--name", "fix-login"],
+        returncode=0,
+        output="---\ntype: status\nname: done\n---\nThe login flow is rebuilt.\n",
+        output_path=Path("data/.tasks/run-in-background/x/output.log"),
+    )
+
+    assert module.BACKGROUND_TASK_REPORT_TAG == BACKGROUND_TASK_REPORT_TAG
+    decision = classify_user_message(report)
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background task"
+    assert decision.display_body == "Wait for the background agent (finished)"
+    assert is_non_turn_tail(report) is False
+
+
+def _compose_report(description: str, command: Sequence[str] = ("make",), output: str = "built\n") -> str:
+    """A report composed by the real ``run_in_background.py``, for a command that finished."""
+    return _load_system_script("run_in_background.py").compose_report(
+        description=description,
+        command=command,
+        returncode=0,
+        output=output,
+        output_path=Path("data/.tasks/run-in-background/x/output.log"),
+    )
+
+
+def test_text_that_merely_mentions_the_background_task_tag_is_a_human_turn() -> None:
+    assert classify_user_message(f"why did the <{BACKGROUND_TASK_REPORT_TAG}> message show up twice?") is None
+
+
+def test_a_stopped_queue_keeps_the_users_text_and_gives_up_its_reports() -> None:
+    """Reports composed by the real script, joined with the user's queued text the way a Stop hands a queue back."""
+    reports = [_compose_report(description, output="<output> of its own\n") for description in ("Build", "Test")]
+    block = "\n".join(["fix the header too", reports[0], "and the footer", reports[1]])
+
+    assert split_background_task_reports(block) == ("fix the header too\nand the footer", tuple(reports))
+    assert split_background_task_reports(reports[0]) == ("", (reports[0],))
+    assert split_background_task_reports("only my words") == ("only my words", ())
+
+
+def test_a_stopped_queue_splits_only_whole_line_reports() -> None:
+    """A report's output is the command's raw text, so a search over this code can print the closing
+    tag mid-line; only a tag on a line of its own ends the report. A report the user quotes mid-line
+    is the user's text."""
+    tag = BACKGROUND_TASK_REPORT_TAG
+    report = _compose_report(
+        "Search the chat app",
+        command=["rg", tag],
+        output=f'QueuedMessageView.test.ts:106:  "<{tag}>\\n<summary>Wait</summary>\\n</{tag}>";\n',
+    )
+    quoting = f"why is <{tag}><summary>Build</summary>it failed</{tag}> shown twice?"
+
+    assert split_background_task_reports("\n".join([quoting, report])) == (quoting, (report,))
+
+
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+@pytest.mark.parametrize("words_between_reports", [False, True])
+def test_a_report_flushed_into_the_users_turn_shows_only_the_users_words(
+    separator: str, words_between_reports: bool
+) -> None:
+    """codex's tap resend, pi's flush, and antigravity's queue each send the queue as one message."""
+    build, test = _compose_report("Build"), _compose_report("Test")
+    pieces = (
+        [build, "fix the header too", test]
+        if words_between_reports
+        else ["fix the header too", build, "and the footer"]
+    )
+    words = "fix the header too" if words_between_reports else "fix the header too\nand the footer"
+
+    decision = classify_user_message(separator.join(pieces))
+
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == words
+
+
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+def test_reports_flushed_together_show_one_notice_naming_each(separator: str) -> None:
+    decision = classify_user_message(separator.join([_compose_report("Build"), _compose_report("Test")]))
+
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_body == "Build (finished); Test (finished)"

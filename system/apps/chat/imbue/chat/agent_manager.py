@@ -86,6 +86,7 @@ from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
@@ -464,6 +465,19 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
         "--label",
         f"display_name={name}",
     ]
+
+
+def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
+    """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
+    queued = QueuedMessageState.model_validate(entry)
+    decision = classify_user_message(queued.content)
+    if decision is None:
+        return queued
+    return queued.model_copy_update(
+        to_update(queued.field_ref().display, decision.display),
+        to_update(queued.field_ref().display_label, decision.display_label),
+        to_update(queued.field_ref().display_body, decision.display_body),
+    )
 
 
 def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
@@ -3792,7 +3806,7 @@ class AgentManager:
         are never rendered. A live mid-turn agent derives non-IDLE (its transcript
         signals are seeded before the watcher starts) and the snapshot stands.
         """
-        queued = tuple(QueuedMessageState.model_validate(entry) for entry in snapshot)
+        queued = tuple(_queued_message_state(entry) for entry in snapshot)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
@@ -4028,7 +4042,7 @@ class AgentManager:
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
         if idle_handler is not None:
-            drained = tuple(QueuedMessageState.model_validate(entry) for entry in idle_handler())
+            drained = tuple(_queued_message_state(entry) for entry in idle_handler())
             with self._lock:
                 idle_agent_state = self._agents.get(agent_id)
                 if idle_agent_state is not None and idle_agent_state.queued_messages != drained:

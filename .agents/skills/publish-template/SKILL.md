@@ -639,12 +639,12 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
-**Background-await the report** (Bash `run_in_background: true` -- never block
-on it), then continue with whatever else you were doing:
+**Background-await the report** (through `system/scripts/run_in_background.py`
+-- never block on it), then continue with whatever else you were doing:
 
 ```bash
-# Run with Bash run_in_background: true
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name <slug> \
     --task-file data/.tasks/launch-task/<slug>/task.md
 ```
@@ -937,23 +937,26 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 
 Tell the user in chat that a GitHub approval is waiting for them in minds (say
 so once, and mention that a second one follows when you are filing both),
-then poll the probes **as a background task, bounded** (mirror `launch-task`'s
-background-await pattern; a foreground `while` loop can be killed by your own
-tool-execution timeout):
+then poll the probes **in the background, bounded** (through
+`system/scripts/run_in_background.py`, as `launch-task`'s background-await does;
+a foreground `while` loop can be killed by your own tool-execution timeout), and
+end your turn. The poll's result arrives as a message that starts your next
+turn: exit 0 means both are permitted, exit 1 that the ~5 minutes ran out.
 
 ```bash
-# Run with Bash run_in_background: true -- bounded (~5 minutes), one wait, no re-arm thrash
-for _ in $(seq 1 30); do
-    if latchkey curl -sf https://api.github.com/user >/dev/null 2>&1 \
-        && latchkey curl http://latchkey-self.invalid/permissions/self \
-           | jq -e '[.rules[]? | to_entries[] | select((.key | test("^github-git(:|$)")) or .key == "any") | select(any(.value[]?; . == "github-git-write" or . == "any"))] | length > 0' >/dev/null; then
-        echo "github access: permitted (api + git push)"
-        exit 0
-    fi
-    sleep 10
-done
-echo "github access: still not permitted" >&2
-exit 1
+python3 system/scripts/run_in_background.py --description "Wait for the GitHub approval" -- bash -c '
+    for _ in $(seq 1 30); do
+        if latchkey curl -sf https://api.github.com/user >/dev/null 2>&1 \
+            && latchkey curl http://latchkey-self.invalid/permissions/self \
+               | jq -e "[.rules[]? | to_entries[] | select((.key | test(\"^github-git(:|\$)\")) or .key == \"any\") | select(any(.value[]?; . == \"github-git-write\" or . == \"any\"))] | length > 0" >/dev/null; then
+            echo "github access: permitted (api + git push)"
+            exit 0
+        fi
+        sleep 10
+    done
+    echo "github access: still not permitted" >&2
+    exit 1
+'
 ```
 
 If the user never approves, surface a clear message and stop, leaving the

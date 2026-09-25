@@ -61,9 +61,11 @@ from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.registry import get_model_state_path
@@ -2571,6 +2573,17 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
         assert "agent-1" not in agent_manager._activity_tracker_by_agent
 
 
+def _plain_queued_wire(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The wire shape of queued entries whose content gets no render decision."""
+    return [{**entry, "display": None, "display_label": None, "display_body": None} for entry in snapshot]
+
+
+_QUEUED_BACKGROUND_TASK_REPORT = (
+    f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Wait for the worker (finished)</summary>\n"
+    f"Exit code: 0\n</{BACKGROUND_TASK_REPORT_TAG}>"
+)
+
+
 def test_update_queued_messages_caches_broadcasts_and_serializes(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -2595,8 +2608,69 @@ def test_update_queued_messages_caches_broadcasts_and_serializes(
         assert latest is not None
         agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
-        assert agents[0]["queued_messages"] == snapshot
-        assert [q.model_dump() for q in agent_manager.get_chat_snapshots()[0].active_agent.queued_messages] == snapshot
+        assert agents[0]["queued_messages"] == _plain_queued_wire(snapshot)
+        assert [
+            q.model_dump() for q in agent_manager.get_chat_snapshots()[0].active_agent.queued_messages
+        ] == _plain_queued_wire(snapshot)
+    finally:
+        agent_manager.stop()
+
+
+def test_a_queued_background_task_report_carries_its_notice_decision(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Waiting in the queue, a report already carries the decision its transcript turn will get,
+    so the page can show its one-line notice rather than the raw report."""
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages(
+            "agent-1",
+            [{"queued_id": "q1", "content": _QUEUED_BACKGROUND_TASK_REPORT, "timestamp": "2026-08-07T00:00:01.000Z"}],
+        )
+
+        latest = _last_chats_updated(_drain(listener))
+        assert latest is not None
+        [queued] = latest["chats"][0]["active_agent"]["queued_messages"]
+        assert queued["content"] == _QUEUED_BACKGROUND_TASK_REPORT
+        assert queued["display"] == DisplayKind.NOTICE.value
+        assert queued["display_label"] == "Background task"
+        assert queued["display_body"] == "Wait for the worker (finished)"
+    finally:
+        agent_manager.stop()
+
+
+def test_a_queued_report_keeps_its_notice_decision_through_an_idle_sweep_that_keeps_the_queue(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """agy's idle handler hands its queue back unchanged (it sends off-thread), so the swept
+    snapshot must carry the same decision the arriving one did."""
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    snapshot = [
+        {"queued_id": "q1", "content": _QUEUED_BACKGROUND_TASK_REPORT, "timestamp": "2026-08-07T00:00:01.000Z"}
+    ]
+    idle_calls: list[bool] = []
+
+    def _keep_queue_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return snapshot
+
+    agent_manager.register_queue_idle_handler("agent-1", _keep_queue_handler)
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        assert idle_calls == [True]
+        latest = _last_chats_updated(_drain(listener))
+        assert latest is not None
+        [queued] = latest["chats"][0]["active_agent"]["queued_messages"]
+        assert queued["display"] == DisplayKind.NOTICE.value
+        assert queued["display_body"] == "Wait for the worker (finished)"
     finally:
         agent_manager.stop()
 
@@ -2825,7 +2899,7 @@ def test_queued_snapshot_arriving_mid_turn_is_kept(
         assert latest is not None
         agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
-        assert agents[0]["queued_messages"] == snapshot
+        assert agents[0]["queued_messages"] == _plain_queued_wire(snapshot)
     finally:
         agent_manager.stop()
 
@@ -2849,7 +2923,7 @@ def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
 
         latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        assert latest["chats"][0]["active_agent"]["queued_messages"] == snapshot
+        assert latest["chats"][0]["active_agent"]["queued_messages"] == _plain_queued_wire(snapshot)
         assert latest["chats"][0]["active_agent"]["activity_state"] == ActivityState.IDLE.value
         with agent_manager._lock:
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
@@ -2879,7 +2953,7 @@ def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
 
         latest = _last_chats_updated(_drain(listener))
         assert latest is not None
-        assert latest["chats"][0]["active_agent"]["queued_messages"] == snapshot
+        assert latest["chats"][0]["active_agent"]["queued_messages"] == _plain_queued_wire(snapshot)
         assert latest["chats"][0]["active_agent"]["activity_state"] == ActivityState.THINKING.value
         with agent_manager._lock:
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
@@ -2929,9 +3003,9 @@ def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(
         agents = [chat["active_agent"] for chat in latest["chats"]]
         assert isinstance(agents, list)
         assert agents[0]["agent_id"] == str_id
-        assert agents[0]["queued_messages"] == [
-            {"queued_id": "q1", "content": "hi", "timestamp": "t", "is_sending": False}
-        ]
+        assert agents[0]["queued_messages"] == _plain_queued_wire(
+            [{"queued_id": "q1", "content": "hi", "timestamp": "t", "is_sending": False}]
+        )
     finally:
         agent_manager.stop()
 

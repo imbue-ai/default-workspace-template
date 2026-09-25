@@ -166,11 +166,16 @@ def _dispatcher_candidates() -> list[Path]:
     return sorted(_SKILLS_ROOT.glob("*/SKILL.md"))
 
 
+def _block_commands(block: str) -> list[str]:
+    """Every command in a fenced block, with its line continuations joined."""
+    return re.split(r"\n(?=\S)", block.replace("\\\n", " "))
+
+
 def _launcher_invocations(block: str) -> list[list[str]]:
     """Every ``create_worker.py <argv...>`` command in a fenced block, as the
     argv after the script path (line continuations joined, comments dropped)."""
     invocations: list[list[str]] = []
-    for command in re.split(r"\n(?=\S)", block.replace("\\\n", " ")):
+    for command in _block_commands(block):
         if "create_worker.py" not in command:
             continue
         words = shlex.split(command, comments=True)
@@ -285,6 +290,44 @@ def test_prose_launcher_invocation_is_accepted_by_the_real_parser(
             f"{prose}: `create_worker.py {' '.join(argv)}` is rejected by the "
             f"script's own parser (exit {exc.code})"
         ) from exc
+
+
+def _prose_await_commands() -> list[tuple[str, str]]:
+    """Every fenced command that runs ``create_worker.py await``, line continuations joined."""
+    return [
+        (str(prose.relative_to(_REPO_ROOT)), command)
+        for prose in _prose_files()
+        for block in _fenced_blocks(prose.read_text(encoding="utf-8"))
+        for command in _block_commands(block)
+        if "create_worker.py await" in command
+    ]
+
+
+def test_every_prose_await_is_started_through_the_harness_neutral_runner() -> None:
+    """A lead must be woken by its worker's report on every harness, and a harness's own
+    background tool does not wake its agent on most of them; ``run_in_background.py``
+    delivers the result to the lead's chat instead."""
+    await_commands = _prose_await_commands()
+    assert await_commands, "no prose runs create_worker.py await; this guard is vacuous"
+    for prose, command in await_commands:
+        assert "run_in_background.py" in command.split("create_worker.py await")[0], (
+            f"{prose}: `{command.strip()}` is not started through run_in_background.py"
+        )
+
+
+def test_no_prose_waits_through_a_harness_own_background_tool() -> None:
+    """A wait an agent must be woken from goes through ``run_in_background.py``: the
+    ``run_in_background`` flag is claude's alone, and no other harness has a background tool
+    that starts a turn when its command finishes."""
+    offenders = [
+        f"{prose.relative_to(_REPO_ROOT)}:{number}: {line.strip()}"
+        for prose in _prose_files()
+        for number, line in enumerate(
+            prose.read_text(encoding="utf-8").splitlines(), start=1
+        )
+        if re.search(r"run_in_background(?!\.py)\b", line)
+    ]
+    assert not offenders, "\n".join(offenders)
 
 
 def _run_task_block(dispatcher: _Dispatcher, cwd: Path) -> Path:

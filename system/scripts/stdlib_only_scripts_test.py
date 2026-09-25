@@ -29,6 +29,7 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "provision_backups.py",
     "refresh_workspace_view.py",
     "require_create_account.py",
+    "run_in_background.py",
     "seed_welcome_chat.py",
     "tool_env.py",
 )

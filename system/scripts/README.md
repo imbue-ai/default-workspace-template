@@ -28,7 +28,10 @@ Provisioning and utility scripts:
   desktop's window and shortcut ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`; `--create` makes a new chat there
-  the same way, with `mngr create` as the backoff), `seed_welcome_chat.py`
+  the same way, with `mngr create` as the backoff), `run_in_background.py` (run a
+  command detached and, when it exits, send its exit code and output to the
+  caller's own chat as a message that starts the agent's next turn, on any
+  harness; how a lead waits for a worker's report), `seed_welcome_chat.py`
   (open the workspace's first chat on the conversation the Mind app had before
   the workspace existed; run through `mngr exec` by the Mind app),
   `require_create_account.py` (the
