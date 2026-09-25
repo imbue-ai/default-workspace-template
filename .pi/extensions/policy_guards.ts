@@ -11,7 +11,8 @@
 // identity are prepended only once they all pass, so no guard ever sees the prefix.
 //
 // See system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md for
-// what each one enforces and how the other harnesses reach it.
+// what each one enforces, and tool-call-policies-state-of-things.md beside it for how
+// the other harnesses reach it.
 
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { appendFileSync } from "node:fs";
