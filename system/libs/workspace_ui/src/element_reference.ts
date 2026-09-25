@@ -197,7 +197,8 @@ export function uniqueSelectorFor(element: Element): string | null {
   let matches: NodeListOf<Element>;
   try {
     matches = element.ownerDocument.querySelectorAll(selector);
-  } catch {
+  } catch (error) {
+    console.warn(`[element-reference] the selector built for the element is not valid: ${selector}`, error);
     return null;
   }
   return matches.length === 1 && matches[0] === element ? selector : null;
