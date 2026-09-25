@@ -222,7 +222,7 @@ The shell accepts `shell:draft-text` only from a frame it created, as it accepts
 ## 6. The shell
 
 - `pages/livePages.ts`: the handshake carries `app` (the page's window's app); a `shell:draft-text` handler, `takeDraftText`, mirrors `takeStartWithText` and calls `store.draftText`.
-- `store/DesktopStore.ts`: `draftText(text)`: `draftIntoPinnedWindow(text)`; when that answers false (no pinned app on the active desktop takes a draft), the first free-text row whose launch path declares a `draft_param` runs with the text through `runFreeText`; with none, the user is told `NO_DRAFT_APP_REASON`, "No app on this machine can take a draft".
+- `store/DesktopStore.ts`: `draftText(text)`: when `draftTargetOf` names a pinned window on the active desktop that takes a draft, `draftIntoPinnedWindow(text)` runs there (a launch the shell refuses ends the draft; it is not retried elsewhere); with no such window, the first free-text row whose launch path declares a `draft_param` runs with the text through `runFreeText`; with none, the user is told `NO_DRAFT_APP_REASON`, "No app on this machine can take a draft".
 - `views/App.ts`: the generic listener of section 4.1 on the shell's own document, opening a sixth kind of the desktop's one menu, `element`, whose rows are the standard rows and the reference rows for the captured target; the entry, shortcut, and desktop menus append the reference rows after a divider (section 4.4).
   The window and desktops menus open from a button, not a right-click, and are unchanged.
   The shell's draft route is `store.draftText`.
