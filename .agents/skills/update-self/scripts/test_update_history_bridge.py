@@ -150,6 +150,12 @@ def _merge_release(workspace: Path) -> None:
     _git(workspace, "merge", "-q", "--no-ff", "--no-edit", "minds-v2")
 
 
+def _merge_base_exit(repo: Path, *args: str) -> int:
+    return subprocess.run(
+        ["git", "merge-base", *args], cwd=repo, capture_output=True
+    ).returncode
+
+
 def _replace_refs(repo: Path) -> list[str]:
     return _git(repo, "replace", "-l").splitlines()
 
@@ -175,12 +181,7 @@ def test_bridge_history_makes_the_old_fork_point_the_merge_base(
 ) -> None:
     old_fork = _git(template, "rev-parse", "minds-v1^{commit}")
     old_head = _git(workspace, "rev-parse", "HEAD")
-    assert (
-        subprocess.run(
-            ["git", "merge-base", "HEAD", "minds-v2"], cwd=workspace
-        ).returncode
-        == 1
-    )
+    assert _merge_base_exit(workspace, "HEAD", "minds-v2") == 1
 
     result = _bridge(workspace, capsys)
 
@@ -200,12 +201,7 @@ def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
 
     _merge_release(workspace)
 
-    assert (
-        subprocess.run(
-            ["git", "merge-base", "--is-ancestor", old_head, "HEAD"], cwd=workspace
-        ).returncode
-        == 0
-    )
+    assert _merge_base_exit(workspace, "--is-ancestor", old_head, "HEAD") == 0
     assert not (workspace / VENDORED_FILE).exists()
     assert (workspace / "notes.md").read_text() == "mine\n"
     assert (workspace / "pyproject.toml").read_text() == "mngr = 'git'\n"
@@ -358,12 +354,7 @@ def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
     assert result["dropped"] == twin
     assert _replace_refs(workspace) == []
     assert list((workspace / DEFAULT_STATE_PATH).parent.iterdir()) == []
-    assert (
-        subprocess.run(
-            ["git", "merge-base", "HEAD", "minds-v2"], cwd=workspace
-        ).returncode
-        == 1
-    )
+    assert _merge_base_exit(workspace, "HEAD", "minds-v2") == 1
 
 
 def test_bridge_history_drop_forgets_a_record_whose_graft_is_gone(
