@@ -184,6 +184,22 @@ def last_snapshot_with(
     )
 
 
+def newest_snapshot_before(
+    snapshots: "deque[Snapshot]", chosen_at: float | None
+) -> Snapshot:
+    """The newest snapshot taken before ``chosen_at``, the state earlyoom chose
+    from; the newest of all when ``chosen_at`` is None or no snapshot is that
+    old."""
+    return next(
+        (
+            snapshot
+            for snapshot in reversed(snapshots)
+            if chosen_at is None or snapshot.taken_at < chosen_at
+        ),
+        snapshots[-1],
+    )
+
+
 def judge_kill(
     victim_pid: int, ranking: list[RankedProcess], tolerance_kib: int
 ) -> KillJudgement:
@@ -358,7 +374,11 @@ def _judge_record(
     pid = int(record.get("pid", 0))
     chosen_at, kill_line = kill_lines.get(pid, (None, None))
     snapshot = last_snapshot_with(pid, snapshots, tolerance_kib, chosen_at)
-    samples = snapshot.samples if snapshot is not None else snapshots[-1].samples
+    samples = (
+        snapshot.samples
+        if snapshot is not None
+        else newest_snapshot_before(snapshots, chosen_at).samples
+    )
     judgement = judge_kill(
         pid, predict_ranking(samples, total_kib, avoid_regex, excluded), tolerance_kib
     )
