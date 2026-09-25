@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
 
@@ -200,3 +201,56 @@ def test_a_reply_that_merely_quotes_an_error_is_not_one() -> None:
     assert event["is_auth_error"] is False
     assert event["is_api_error"] is False
     assert "You are seeing" in event["text"]
+
+
+def test_compaction_record_becomes_status_event_with_summary() -> None:
+    record = {
+        "type": "compaction",
+        "id": "7fbf1163",
+        "parentId": "856337c7",
+        "timestamp": "2026-09-21T22:31:30.122Z",
+        "summary": "## Goal\n- Write a small poem\n\n## Progress\n- Done",
+        "firstKeptEntryId": "047bc953",
+        "tokensBefore": 60654,
+    }
+    events = parse_record(record)
+    assert len(events) == 1
+    event = events[0]
+    assert event["type"] == "user_message"
+    assert event["role"] == "system"
+    assert event["event_id"] == "pi-7fbf1163"
+    assert event["message_uuid"] == "pi-7fbf1163"
+    assert event["content"] == "Context was compacted"
+    assert event["display"] == DisplayKind.STATUS
+    assert event["non_turn_tail"] is True
+    assert event["timestamp"] == "2026-09-21T22:31:30.122Z"
+    assert event["display_body"] == "## Goal\n- Write a small poem\n\n## Progress\n- Done"
+
+
+def test_compaction_record_without_summary_or_blank_summary() -> None:
+    record_no_summary = {
+        "type": "compaction",
+        "id": "c1",
+        "timestamp": "2026-09-21T22:31:30.122Z",
+    }
+    events = parse_record(record_no_summary)
+    assert len(events) == 1
+    assert "display_body" not in events[0]
+    assert events[0]["content"] == "Context was compacted"
+    assert events[0]["display"] == DisplayKind.STATUS
+
+    record_blank_summary = {
+        "type": "compaction",
+        "id": "c2",
+        "timestamp": "2026-09-21T22:31:30.122Z",
+        "summary": "   \n  ",
+    }
+    events2 = parse_record(record_blank_summary)
+    assert len(events2) == 1
+    assert "display_body" not in events2[0]
+
+
+def test_compaction_record_without_valid_id_is_skipped() -> None:
+    assert parse_record({"type": "compaction", "timestamp": "t", "summary": "hi"}) == []
+    assert parse_record({"type": "compaction", "id": "", "timestamp": "t", "summary": "hi"}) == []
+

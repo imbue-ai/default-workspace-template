@@ -12,15 +12,23 @@ from flask.testing import FlaskClient
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.errors import LaunchUnavailableError
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPost
+from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
+from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -232,8 +240,30 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     assert [desktop["id"] for desktop in document["desktops"]] == ["home"]
     assert [window["id"] for window in document["desktops"][0]["windows"]] == [window["id"]]
     assert {entry["name"]: entry["launch_paths"] for entry in document["apps"]} == {
-        "terminal": [{"id": "new", "label": "New terminal", "path": "/new", "params": [], "text_param": None}],
-        "files": [{"id": "open", "label": "Open Files", "path": "/", "params": [], "text_param": None}],
+        "terminal": [
+            {
+                "id": "new",
+                "label": "New terminal",
+                "path": "/new",
+                "method": "GET",
+                "params": ["workdir"],
+                "presets": {},
+                "text_param": None,
+                "draft_param": None,
+            }
+        ],
+        "files": [
+            {
+                "id": "open",
+                "label": "Open Files",
+                "path": "/",
+                "method": "GET",
+                "params": [],
+                "presets": {},
+                "text_param": None,
+                "draft_param": None,
+            }
+        ],
     }
     by_id = {entry["id"]: entry for entry in document["clients"]}
     assert by_id["c1"]["active_desktop"] == "home" and by_id["c1"]["shown"] == [window["id"]]
@@ -364,7 +394,7 @@ def test_every_desktop_holds_one_pinned_window_per_pinned_app_and_a_new_desktop_
     (home,) = client.get("/api/desktops").get_json()["desktops"]
     (pinned,) = home["windows"]
     assert (pinned["app"], pinned["path"], pinned["is_pinned"], pinned["scope"]) == ("buddy", "/", True, "linked")
-    assert pinned["title"] == "" and pinned["is_settling"] is False
+    assert pinned["title"] == ""
     # The reconcile that created it was announced once, after the read; a second read announces nothing.
     assert [message["type"] for message in drain_messages(client_queue)] == ["desktops_updated"]
     assert client.get("/api/desktops").get_json()["desktops"][0]["windows"] == [pinned]
@@ -676,7 +706,7 @@ def test_the_default_desktop_is_seeded_from_the_registry_on_the_first_read(clien
     desktops = client.get("/api/desktops").get_json()["desktops"]
     assert [desktop["id"] for desktop in desktops] == ["home"]
     (home,) = desktops
-    assert home["name"] == "Home" and home["sharing"] == "shared" and home["wallpaper"] is None
+    assert home["name"] == "Home" and home["wallpaper"] is None and "sharing" not in home
     assert home["windows"] == []
     assert home["shortcuts"] == [
         {
@@ -701,14 +731,11 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert client.post("/api/desktops", json={"name": "research!", "color": "#12B5A5", "glyph": 4}).status_code == 409
     assert client.post("/api/desktops", json={"name": "Bad", "color": "red", "glyph": 4}).status_code == 400
     settled = client.post(
-        "/api/desktops/research/settings",
-        json={"name": "Research 2", "color": "#222222", "glyph": 2, "sharing": "personal"},
+        "/api/desktops/research/settings", json={"name": "Research 2", "color": "#222222", "glyph": 2}
     )
-    assert settled.status_code == 200 and settled.get_json()["sharing"] == "personal"
+    assert settled.status_code == 200 and settled.get_json()["name"] == "Research 2"
     assert (
-        client.post(
-            "/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2, "sharing": "shared"}
-        ).status_code
+        client.post("/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2}).status_code
         == 404
     )
 
@@ -783,11 +810,11 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
     first_queue = _register_client(app, "c1", "home")
     second_queue = _register_client(app, "c2", "home")
 
-    opened = _open_window(client, "terminal", "/new?workdir=%2Ftmp", launch="new")
+    opened = _open_window(client, "terminal", "/new?workdir=%2Ftmp")
     assert opened.status_code == 201 and opened.get_json()["is_new"] is True
     window = opened.get_json()["window"]
     assert window["app"] == "terminal" and window["path"] == "/new?workdir=%2Ftmp"
-    assert window["title"] == "" and window["is_settling"] is True
+    assert window["title"] == "" and "is_settling" not in window
     (placed,) = _placements(client, "c1")
     assert placed["window_id"] == window["id"] and placed["is_minimized"] is False and placed["state"] == "NORMAL"
     assert placed["frame"] == {"x": 0.05, "y": 0.06, "width": 0.6, "height": 0.7}
@@ -808,7 +835,6 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
     assert [placement["frame"]["x"] for placement in _placements(client, "c1")] == [0.05, 0.08]
 
     assert _open_window(client, "nope", "/").status_code == 400
-    assert _open_window(client, "terminal", "/new", launch="nope").status_code == 400
     assert _open_window(client, "terminal", "//evil").status_code == 400
     assert (
         client.post(
@@ -817,13 +843,13 @@ def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient,
         == 404
     )
 
-    # A location report replaces the path and title, ends the settling, and is silent when it changes nothing.
+    # A location report replaces the path and title, and is silent when it changes nothing.
     located = client.post(
         f"/api/desktops/home/windows/{window['id']}/location",
         json={"client_id": "c1", "path": "/?session=terminal-1", "title": "  Build log  "},
     )
     assert located.status_code == 200
-    assert located.get_json()["title"] == "Build log" and located.get_json()["is_settling"] is False
+    assert located.get_json()["title"] == "Build log" and located.get_json()["path"] == "/?session=terminal-1"
     drain_messages(first_queue)
     again = client.post(
         f"/api/desktops/home/windows/{window['id']}/location",
@@ -937,13 +963,15 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     assert opened.status_code == 200 and opened.get_json()["desktop_id"] == "home"
     first_id = opened.get_json()["window_id"]
     (first,) = opened.get_json()["desktop"]["windows"]
-    assert first["path"] == "/new?workdir=%2Ftmp" and first["is_settling"] is True
+    assert first["path"] == "/new?workdir=%2Ftmp"
     assert [placement["window_id"] for placement in opened.get_json()["layout"]["placements"]] == [first_id]
     second_id = _op(client, "open", {"app": "terminal", "path": "/?session=terminal-7"}, requester).get_json()[
         "window_id"
     ]
-    assert [window["is_settling"] for window in _desktop_windows(client)] == [True, False]
+    assert [window["path"] for window in _desktop_windows(client)] == ["/new?workdir=%2Ftmp", "/?session=terminal-7"]
     assert _op(client, "open", {"app": "terminal", "path": "/x", "launch": "new"}, requester).status_code == 400
+    # A param the launch path does not declare is refused before anything opens.
+    assert _op(client, "open", {"app": "terminal", "params": {"nope": "1"}}, requester).status_code == 400
 
     # The window verbs, named by id, by app (the most recently focused window of it), and by ``self``.
     focused = _op(client, "focus", {"window": first_id}, requester)
@@ -1423,6 +1451,137 @@ def test_a_show_without_an_app_and_paths_it_can_use_is_a_400(
     assert fragment in refused.get_json()["detail"]
 
 
+# The arrival (desktop plan section 3.10)
+
+_ALICE = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
+_BOB = RequestIdentity(owner=False, user_id="user-bob", email="bob@example.com")
+_OWNER = RequestIdentity(owner=True, user_id="user-owner", email="owner@example.com")
+
+
+def _arrive(client: FlaskClient, client_id: str, identity: RequestIdentity | None) -> dict[str, Any]:
+    headers = {} if identity is None else identity_headers(identity)
+    response = client.post(f"/api/clients/{client_id}/arrive", headers=headers)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.get_json()
+
+
+def test_an_arrival_before_the_registry_is_read_lands_nowhere_and_records_nothing(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The default desktop is only created once the registry has been read, so until then there is no desktop to
+    land on, none to seed a visitor's from, and no record to write."""
+    unread = AppInventory(
+        registry_path=write_two_app_registry(tmp_path), broadcaster=broadcaster, liveness_prober=FakeLivenessProber()
+    )
+    app = shell_application(tmp_path, unread, broadcaster)
+    assert _arrive(app.test_client(), "c-early", _ALICE) == {
+        "desktop_id": None,
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    assert _shell(app).clients.get_client("c-early") is None
+    assert _shell(app).users.list_users() == []
+    assert _shell(app).list_desktops() == []
+
+
+def test_the_owner_and_an_anonymous_client_arrive_on_their_recorded_desktop_or_the_first(
+    client: FlaskClient, app: Flask
+) -> None:
+    assert _arrive(client, "c-new", None) == {
+        "desktop_id": "home",
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    _record_client(app, "c-owner", "research")
+    assert _arrive(client, "c-owner", _OWNER)["desktop_id"] == "research"
+    # Arriving makes no desktop and records no user for either of them, but the client is recorded on its landing.
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == ["home", "research"]
+    assert _shell(app).users.list_users() == []
+    new_client = _shell(app).clients.get_client("c-new")
+    assert new_client is not None and new_client.active_desktop == "home" and new_client.user_id is None
+
+
+def test_a_browser_that_last_arrived_as_the_owner_is_no_returning_client_of_a_visitor(
+    client: FlaskClient, app: Flask
+) -> None:
+    _arrive(client, "c-alice", _ALICE)
+    _record_client(app, "c-alice", "home")
+    # The owner signs in on that browser: the record forgets the visitor and lands where the owner was.
+    assert _arrive(client, "c-alice", _OWNER)["desktop_id"] == "home"
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.user_id is None
+    # The visitor signing in again there is not returning to a desktop of theirs: they land on their own.
+    assert _arrive(client, "c-alice", _ALICE)["desktop_id"] == "alice"
+
+
+def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_clients_land_on_it(
+    client: FlaskClient, app: Flask
+) -> None:
+    shell = _shell(app)
+    client_queue = _register_client(app, "c-owner", "home")
+    opened = _open_window(client, "terminal", "/?session=terminal-1", client_id="c-owner").get_json()["window"]
+    drain_messages(client_queue)
+
+    arrival = _arrive(client, "c-alice-laptop", _ALICE)
+    created = arrival["created_desktop"]
+    assert arrival["desktop_id"] == "alice" and arrival["replaced_desktop_name"] is None
+    # Named after her email's local part: the shell of this test can reach no connector for her profile.
+    assert created["id"] == "alice" and created["name"] == "alice" and created["glyph"] == 1
+    home = client.get("/api/desktops").get_json()["desktops"][0]
+    assert created["shortcuts"] == home["shortcuts"]
+    (copied,) = created["windows"]
+    assert copied["id"] != opened["id"] and (copied["app"], copied["path"]) == ("terminal", "/?session=terminal-1")
+    assert home["windows"] == [opened]
+    # Everyone hears of the new desktop; the client's record names the user and the desktop.
+    assert "desktops_updated" in {message["type"] for message in drain_messages(client_queue)}
+    record = shell.clients.get_client("c-alice-laptop")
+    assert record is not None and record.user_id == "user-alice" and record.active_desktop == "alice"
+    stored = shell.users.get_user(UserId("user-alice"))
+    assert stored is not None and stored.desktop_id == "alice" and stored.display_name is None
+
+    # A second client of the same user lands on the same desktop; nothing new is made.
+    second = _arrive(client, "c-alice-phone", _ALICE)
+    assert second == {"desktop_id": "alice", "created_desktop": None, "replaced_desktop_name": None}
+    # A returning client of hers keeps the desktop it moved to.
+    _record_client(app, "c-alice-laptop", "home")
+    assert _arrive(client, "c-alice-laptop", _ALICE)["desktop_id"] == "home"
+    # Another user gets their own.
+    bob = _arrive(client, "c-bob", _BOB)
+    assert bob["desktop_id"] == "bob" and bob["created_desktop"]["glyph"] == 2
+    # A browser context that last arrived as Bob, or anonymously, is no returning client of Alice's: it lands on
+    # her desktop, not on the one it was on.
+    assert _arrive(client, "c-bob", _ALICE)["desktop_id"] == "alice"
+    _record_client(app, "c-shared", "home")
+    assert _arrive(client, "c-shared", _ALICE)["desktop_id"] == "alice"
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
+        "home",
+        "alice",
+        "bob",
+    ]
+
+
+def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_reported(
+    client: FlaskClient, app: Flask
+) -> None:
+    _arrive(client, "c-alice", _ALICE)
+    # She renames her desktop and comes back once, so the shell knows it by the new name when it goes.
+    renamed = client.post("/api/desktops/alice/settings", json={"name": "Alice's Lab", "color": "#16A34A", "glyph": 1})
+    assert renamed.status_code == 200
+    assert _arrive(client, "c-alice", _ALICE) == {
+        "desktop_id": "alice",
+        "created_desktop": None,
+        "replaced_desktop_name": None,
+    }
+    assert client.post("/api/desktops/alice/delete").status_code == 200
+    again = _arrive(client, "c-alice", _ALICE)
+    assert again["desktop_id"] == "alice" and again["replaced_desktop_name"] == "Alice's Lab"
+    assert again["created_desktop"]["name"] == "alice"
+    # A client of hers that had a record was moved along with her.
+    record = _shell(app).clients.get_client("c-alice")
+    assert record is not None and record.active_desktop == "alice"
+
+
 # The update notice
 
 
@@ -1520,3 +1679,216 @@ def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
         assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
     assert read_stub_update_self_calls(_repo_root(application)) == []
     assert client.get("/api/updates/pending").get_json() is not None
+
+
+# The launch route (post-launch-paths plan section 5.3)
+
+
+class _RecordingLaunchPoster:
+    """Answers the shell's POST launches from a queue of outcomes and keeps every post it was handed."""
+
+    def __init__(self, outcomes: list[LaunchPostOutcome | LaunchUnavailableError]) -> None:
+        self.outcomes = list(outcomes)
+        self.posts: list[LaunchPost] = []
+
+    def __call__(self, post: LaunchPost) -> LaunchPostOutcome:
+        self.posts.append(post)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, LaunchUnavailableError):
+            raise outcome
+        return outcome
+
+
+def _launching_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: _RecordingLaunchPoster) -> Flask:
+    """The shell over the two-app registry plus a pinned ``buddy`` app declaring a POST launch path ``new`` at
+    ``/api/intake`` with a preset, a declared param, and a text param, the way the chat's manifest does."""
+    registry_path = write_two_app_registry(
+        tmp_path,
+        registry_row_toml(
+            "buddy",
+            "http://localhost:7002",
+            pin=("/", "plain", "independent", "bar"),
+            launch_paths=(("root", "Buddy", "/"), ("new", "New buddy", "/api/intake")),
+            launch_params={"new": ["message", "account_id"]},
+            launch_text_params={"new": "message"},
+            launch_methods={"new": "POST"},
+            launch_presets={"new": {"target": "new_chat"}},
+        ),
+    )
+    return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster, launch_poster=poster)
+
+
+def _launch(client: FlaskClient, body: dict[str, Any]) -> Any:
+    return client.post("/api/desktops/home/launch", json={"client_id": "c1", **body})
+
+
+def test_a_get_launch_path_opens_a_window_at_its_path_with_the_params_as_the_query(
+    client: FlaskClient, app: Flask
+) -> None:
+    _register_client(app, "c1", "home")
+
+    opened = _launch(
+        client, {"app": "terminal", "launch": "new", "params": {"workdir": "/tmp"}, "target": {"kind": "new"}}
+    )
+    assert opened.status_code == 201
+    assert opened.get_json()["path"] == "/new?workdir=%2Ftmp" and opened.get_json()["is_new"] is True
+    window = opened.get_json()["window"]
+    assert (window["app"], window["path"]) == ("terminal", "/new?workdir=%2Ftmp")
+    assert [placement["window_id"] for placement in _placements(client, "c1")] == [window["id"]]
+    # ``focus`` answers the window already at that path; ``new`` opens another.
+    focused = _launch(
+        client, {"app": "terminal", "launch": "new", "params": {"workdir": "/tmp"}, "target": {"kind": "focus"}}
+    )
+    assert focused.status_code == 200 and focused.get_json()["window"]["id"] == window["id"]
+    assert focused.get_json()["is_new"] is False
+    another = _launch(
+        client, {"app": "terminal", "launch": "new", "params": {"workdir": "/tmp"}, "target": {"kind": "new"}}
+    )
+    assert another.status_code == 201 and another.get_json()["window"]["id"] != window["id"]
+    # The synthesized ``open`` of an app declaring no launch path is a GET at its root.
+    files = _launch(client, {"app": "files", "launch": "open", "target": {"kind": "new"}})
+    assert files.status_code == 201 and files.get_json()["path"] == "/"
+    # A param the launch path does not declare, an unknown launch path, an unknown app, and a window target with
+    # no window are refused.
+    refused = _launch(client, {"app": "terminal", "launch": "new", "params": {"nope": "1"}, "target": {"kind": "new"}})
+    assert refused.status_code == 400 and "declares no param 'nope'" in refused.get_json()["detail"]
+    assert _launch(client, {"app": "terminal", "launch": "nope", "target": {"kind": "new"}}).status_code == 400
+    assert _launch(client, {"app": "nope", "launch": "new", "target": {"kind": "new"}}).status_code == 400
+    assert _launch(client, {"app": "terminal", "launch": "new", "target": {"kind": "window"}}).status_code == 400
+
+
+def test_a_post_launch_path_is_posted_with_its_presets_params_and_envelope_and_lands_where_it_answers(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    poster = _RecordingLaunchPoster(
+        [
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-1"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-2"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-2"}),
+        ]
+    )
+    app = _launching_shell(tmp_path, broadcaster, poster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+    (pinned,) = _desktop_windows(client)
+
+    # A new window: the post carries the preset, the param, and the client and desktop, but no window path.
+    opened = _launch(client, {"app": "buddy", "launch": "new", "params": {"message": "hi"}, "target": {"kind": "new"}})
+    assert opened.status_code == 201, opened.get_json()
+    assert opened.get_json()["path"] == "/?chat=agent-1"
+    assert (opened.get_json()["window"]["app"], opened.get_json()["window"]["path"]) == ("buddy", "/?chat=agent-1")
+    (first_post,) = poster.posts
+    assert first_post.url == "http://localhost:7002/api/intake" and first_post.app == "buddy"
+    assert first_post.body == {"target": "new_chat", "message": "hi", "client_id": "c1", "desktop_id": "home"}
+
+    # The pinned window as the target: this client's view of it is pointed at the answered path (the shared
+    # record keeps the home path), and the post carries the window's path as this client saw it.
+    navigated = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "again"},
+            "target": {"kind": "window", "window_id": pinned["id"]},
+        },
+    )
+    assert navigated.status_code == 200, navigated.get_json()
+    assert navigated.get_json()["is_new"] is False and navigated.get_json()["path"] == "/?chat=agent-2"
+    assert navigated.get_json()["window"]["id"] == pinned["id"]
+    assert navigated.get_json()["window"]["path"] == "/?chat=agent-2"
+    assert poster.posts[1].body == {
+        "target": "new_chat",
+        "message": "again",
+        "client_id": "c1",
+        "desktop_id": "home",
+        "window_path": "/",
+    }
+    assert client.get("/api/placements/home?client=c1").get_json()["window_paths"] == {
+        pinned["id"]: {"path": "/?chat=agent-2", "title": ""}
+    }
+    assert _desktop_windows(client)[0]["path"] == "/"
+    assert client.get("/api/placements/home?client=c2").get_json()["window_paths"] == {}
+    # Launched into again, the post carries where this client's page now is.
+    _launch(
+        client,
+        {"app": "buddy", "launch": "new", "params": {}, "target": {"kind": "window", "window_id": pinned["id"]}},
+    )
+    assert poster.posts[2].body["window_path"] == "/?chat=agent-2"
+    # A window of another app cannot be the target.
+    terminal = _open_window(client, "terminal", "/?session=t1").get_json()["window"]
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "window", "window_id": terminal["id"]}}
+        ).status_code
+        == 400
+    )
+    # Nothing was posted for the refused launches.
+    assert len(poster.posts) == 3
+
+
+def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_nothing(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    poster = _RecordingLaunchPoster(
+        [
+            LaunchPostOutcome(status_code=400, body={"detail": "no account is signed in"}),
+            LaunchPostOutcome(status_code=404, body=None),
+            LaunchPostOutcome(status_code=500, body={"detail": "boom"}),
+            LaunchPostOutcome(status_code=200, body={"nope": True}),
+            LaunchPostOutcome(status_code=200, body={"path": "//evil"}),
+            LaunchUnavailableError("buddy could not be reached for the launch: refused"),
+        ]
+    )
+    app = _launching_shell(tmp_path, broadcaster, poster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    body = {"app": "buddy", "launch": "new", "params": {"message": "hi"}, "target": {"kind": "new"}}
+
+    refused = _launch(client, body)
+    assert refused.status_code == 400
+    assert refused.get_json()["detail"] == "buddy refused the launch: no account is signed in"
+    # A 4xx with no detail is not a refusal the app wrote (a missing route answers 404 as HTML): the app could
+    # not be asked.
+    unrouted = _launch(client, body)
+    assert unrouted.status_code == 502 and "no refusal detail" in unrouted.get_json()["detail"]
+    assert _launch(client, body).status_code == 502
+    assert _launch(client, body).status_code == 502
+    assert _launch(client, body).status_code == 502
+    unreachable = _launch(client, body)
+    assert unreachable.status_code == 502 and "could not be reached" in unreachable.get_json()["detail"]
+    # Only the pinned window stands: nothing opened for any of them.
+    assert len(_desktop_windows(client)) == 1
+
+
+def test_an_open_op_at_a_post_launch_path_posts_for_its_page_with_and_without_a_client(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    poster = _RecordingLaunchPoster(
+        [
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-3"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-4"}),
+        ]
+    )
+    app = _launching_shell(tmp_path, broadcaster, poster)
+    client = app.test_client()
+    first_queue = _register_client(app, "c1", "home")
+
+    opened = _op(client, "open", {"app": "buddy", "launch": "new", "params": {"message": "from an agent"}}, None)
+    assert opened.status_code == 200, opened.get_json()
+    assert poster.posts[0].body == {
+        "target": "new_chat",
+        "message": "from an agent",
+        "client_id": "c1",
+        "desktop_id": "home",
+    }
+    windows = {window["id"]: window["path"] for window in opened.get_json()["desktop"]["windows"]}
+    assert windows[opened.get_json()["window_id"]] == "/?chat=agent-3"
+    # With no client to target the open lands unplaced, and the post carries no envelope at all.
+    _shell(app).broadcaster.unregister(first_queue)
+    _register_client(app, "c2", "home")
+    _register_client(app, "c3", "home")
+    unplaced = _op(client, "open", {"app": "buddy", "launch": "new", "params": {"message": "later"}}, None)
+    assert unplaced.status_code == 200, unplaced.get_json()
+    assert unplaced.get_json()["client_id"] is None
+    assert poster.posts[1].body == {"target": "new_chat", "message": "later"}

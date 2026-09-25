@@ -58,6 +58,16 @@ class DesktopValueError(ShellError, ValueError):
     """A desktop's name, colour, glyph, shortcut, wallpaper, or a window's app or path is not usable."""
 
 
+class LaunchRefusedError(ShellError, ValueError):
+    """The app refused a POST launch (a 4xx with its own detail), or the launch's params are not what the path
+    declares (answered 400)."""
+
+
+class LaunchUnavailableError(ShellError, RuntimeError):
+    """A POST launch could not be completed: the app could not be reached, timed out, or answered something other
+    than a page path (answered 502)."""
+
+
 class WindowNotFoundError(ShellError, LookupError):
     """No window on the desktop has the given id."""
 

@@ -22,21 +22,16 @@ observe`, its own supervised service) writes, and serves:
   ordered by recency, with rename, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
-  params) serves the same document, and the root creates the chat and selects
-  it client-side; `GET /send` (the `send` launch path, `message` param) serves
-  it too, and the root sends the text through its ordinary send to the one chat
-  there is, or to the chat picked from a picker it opens over them when there
-  are more (with no chat it starts a new one with the text), selects that chat,
-  and reports the selection alone, so a reload sends nothing again. A `draft` query parameter on the root (the `root` launch
-  path's one param, what the desktop's "Design your own..." hands the pinned
-  chat window) puts its text, unsent, into the composer of the chat the URL
-  selects (else the shown one, else the most recently active one, else a chat
-  the root creates for it), and the root then reports the selection alone, so
-  a reload drafts nothing again. The root drives its inner frames through the
-  page's same-origin embed API (`frontend/src/embedApi.ts`) and forwards their
-  `minds:`, `shell:focused`, and `shell:open` messages through
-  `frontend/src/root/relay.ts`, the one module the embed ratchet allows.
+  chat's title. The page is pure: nothing is created or sent by loading it. An
+  `intake` query parameter names a pending intake (below) the root applies once
+  (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
+  unsent, a chat is picked from a picker the root opens over the list, or a chat
+  awaiting its first message is launched through the provider chooser; the root
+  then reports the selection alone, so a reload applies nothing again. The root
+  drives its inner frames through the page's same-origin embed API
+  (`frontend/src/embedApi.ts`) and forwards their `minds:`, `shell:focused`, and
+  `shell:open` messages through `frontend/src/root/relay.ts`, the one module the
+  embed ratchet allows.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -213,6 +208,48 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+The intake route is how a text enters a chat from outside a chat page
+(`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
+text, how the receiving chat is chosen (`target`: `new_chat`, `current_chat` from
+the `window_path` the text was typed into, else the most recently messaged chat;
+`chat_selector`, the one chat there is or the user's pick; or `chat` with a
+`chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
+sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
+manifest declares the desktop's `new`, `send`, and `draft` launch paths as POSTs
+onto it with those fields preset, so the launcher's rows, the Getting Started
+tiles, the avatar dialog's "Design your own...", and `layout.py open chat
+--launch new --param message=...` all arrive here through the shell. The route
+answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
+a send or a create it finished on the server (a send is delivered in the
+background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a
+draft or a first message the page has to finish, and `/?intake=<token>` for a
+choice. A pending intake (`chat_intakes.py`) is held in memory under its one-time
+token for fifteen minutes: `GET /api/chats/intakes/<token>` says what the root has
+to do, `POST /api/chats/intakes/<token>/apply` (with the picked `chat_id` when a
+pick was needed) consumes it and answers the chat plus either `composer_text` or
+`first_message`, and `DELETE` drops it. A `new_chat` intake with nothing signed in,
+or a draft into a new chat, mints an unseeded provisional chat in the
+`awaiting_first_send` phase ("Chat N", the intake's account or none, no record, so a
+restart of this app drops it); its page shows an empty conversation over the
+composer, and its first send launches it as a seeded chat's does.
+
+The create route is likewise how a chat is made from outside the chat page:
+`message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
+and update chats go through it, run inside the workspace by `mngr exec`). Beside
+`name`, `account_id`, and `message`, the request takes `labels` for the chat's
+agent (`auto_open=true` has the shell surface its window; the labels the app sets
+itself are refused), `is_installation_check_skipped` (a waiver of the claude
+version check the in-container mngr would otherwise fail the create on, which the
+script sends on every create so the update chat that repairs it can be made), and
+`should_wait`, which holds the answer until `mngr create` has finished:
+the chat's identity when it landed, a 500 carrying the create's own reason when
+it failed, a 504 if it is still running at the wait's ceiling. The script falls
+back to a plain `mngr create --template chat` on the send's terms plus one of
+its own: a chat app that cannot be reached, one with no create route, and one
+whose create route predates these fields, which it tells apart by the 400 naming
+the field it does not know (a workspace that has taken a template update and has
+not restarted its chat app yet).
+
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
 `system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
@@ -225,14 +262,21 @@ first member, and the chat is listed as a provisional chat in the
 it. The user's first message is what launches the chat's first real agent
 (the provider chooser opens then if nothing is signed in), which joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
-handoff's successor carries. The seed survives a restart of this app because
+handoff's successor carries. That agent is launched with the seeded
+conversation ahead of the user's message, as one message: the seed is a segment
+this app renders from a file, not a transcript any harness could read, so an
+agent handed the message alone could not tell what a reply like "1" picked out
+of the options the last seeded turn offered. The page strips that context block
+and shows the user's own words alone (`prompt_with_context` in
+`harnesses/message_display.py`). A first message that is a slash command goes
+out as typed, since a harness runs a command only when the slash leads the
+message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
-Every chat that starts with no message is greeted: the `welcome` create
-template (`.mngr/settings.toml`) sends `/welcome`, and the skill varies what it
-says by how many times it has run (`system/scripts/welcome_count.py`). Fast mode
-is a per-chat setting with three modes (`chat_fast_mode.py`, kept in the chat's
-folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+A chat that starts with no message sends nothing and waits for the user's
+first one. Fast mode is a per-chat setting with three modes
+(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`,
+`GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 **off** (standard speed throughout), **auto** (fast for the first
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
 (fast throughout). A new chat starts in the workspace's default mode
@@ -260,8 +304,9 @@ above). `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
-harness and no account -- the chats the Mind app starts from outside, workers,
-automations, the caretaker -- through `.mngr/settings.local.toml`, mngr's
+harness and no account -- workers, automations, the caretaker, and the bare
+create the Minds app's chats fall back to on a template whose script has no
+create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
 account's harness as `type`, its binding (`env__extend` for claude, an

@@ -27,10 +27,11 @@ from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
+from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import SaveId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import ShortcutTargetKind
 from imbue.system_interface.shell.primitives import ShowOutcome
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
@@ -59,10 +60,27 @@ class ClientRecord(FrozenModel):
 
     id: ClientId = Field(description="The client's stored id")
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
-    last_seen: AwareDatetime = Field(description="When the client last reported")
+    last_seen: AwareDatetime = Field(description="When the client last arrived or reported")
+    user_id: UserId | None = Field(
+        default=None,
+        description="The signed-in visitor the client last arrived as; None for the owner or an anonymous client",
+    )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
+
+
+class UserRecord(FrozenModel):
+    """What the shell keeps about one signed-in visitor: the desktop made for them (desktop plan section 3.10)."""
+
+    user_id: UserId = Field(description="The account's user id, as the identity header carries it")
+    desktop_id: DesktopId = Field(description="The desktop made for the user, where their new clients land")
+    desktop_name: str = Field(
+        description="That desktop's name as of the user's last arrival, for the notice when it is gone"
+    )
+    email: str | None = Field(default=None, description="The verified email as of the user's last arrival")
+    display_name: str | None = Field(default=None, description="The display name as of the user's last arrival")
+    last_seen: AwareDatetime = Field(description="When a client of the user last arrived")
 
 
 class AppInventoryEntry(FrozenModel):
@@ -179,8 +197,11 @@ def launch_path_wire_json(launch_path: RegistryLaunchPath) -> dict[str, Any]:
         "id": str(launch_path.id),
         "label": str(launch_path.label),
         "path": str(launch_path.path),
+        "method": launch_path.method.value,
         "params": [str(param) for param in launch_path.params],
+        "presets": {str(name): value for name, value in launch_path.presets.items()},
         "text_param": str(launch_path.text_param) if launch_path.text_param is not None else None,
+        "draft_param": str(launch_path.draft_param) if launch_path.draft_param is not None else None,
     }
 
 
@@ -246,7 +267,6 @@ class Window(FrozenModel):
     path: WindowPath = Field(description="The path under the app origin the page is at (with its query string)")
     title: WindowTitle = Field(description="What the page last reported; empty means the app's display name")
     opened_at: AwareDatetime = Field(description="When the window was opened")
-    is_settling: bool = Field(description="True from an open at a launch path until the page's first location report")
     is_pinned: bool = Field(
         default=False, description="Whether this is the app's pinned window on the desktop: permanent, never closed"
     )
@@ -263,7 +283,6 @@ class Desktop(FrozenModel):
     name: str = Field(description="Free-form name shown in the UI")
     color: str = Field(description="Accent colour as a '#RRGGBB' string")
     glyph: int = Field(description="Index into the frontend's glyph table")
-    sharing: SharingMode = Field(description="Shared or personal; stored and shown, enforced by nothing in V1")
     wallpaper: Wallpaper | None = Field(description="The backdrop image; None draws the theme's default")
     shortcuts: tuple[DesktopShortcut, ...] = Field(description="At most one per (app, launch), in insertion order")
     windows: tuple[Window, ...] = Field(description="Every window on the desktop, in opening order")
@@ -309,14 +328,47 @@ class WindowOpenRequest(FrozenModel):
     """The body of ``POST /api/desktops/<id>/windows`` (desktop contracts.md section 5.3)."""
 
     app: AppName = Field(description="The app to open a page of")
-    path: WindowPath = Field(description="The path under the app origin, with a query string for a launch path")
+    path: WindowPath = Field(description="The path under the app origin the page is at, query string included")
     client_id: ClientId = Field(description="The requesting client, whose placement is written at once")
     if_present: IfPresent = Field(
         default=IfPresent.FOCUS, description="Focus a window already at the path, or open another"
     )
-    launch: LaunchPathId | None = Field(
-        default=None, description="The launch path the path was built from, when it was"
+
+
+class LaunchTarget(FrozenModel):
+    """Where a launch's page goes (post-launch-paths plan section 3.3)."""
+
+    kind: LaunchTargetKind = Field(description="A new window, a window already at the path, or a named window")
+    window_id: WindowId | None = Field(
+        default=None, description="The window this client points at the page; required for the window kind"
     )
+
+    @model_validator(mode="after")
+    def _check_window_named_for_the_window_kind(self) -> "LaunchTarget":
+        if (self.kind is LaunchTargetKind.WINDOW) != (self.window_id is not None):
+            raise InvalidShellValueError("a launch target names a window exactly when its kind is 'window'")
+        return self
+
+
+class LaunchRequest(FrozenModel):
+    """The body of ``POST /api/desktops/<id>/launch`` (post-launch-paths plan section 5.3)."""
+
+    app: AppName = Field(description="The app whose launch path runs")
+    launch: LaunchPathId = Field(description="The launch path's id (the synthesized ``open`` included)")
+    params: dict[str, str] = Field(default_factory=dict, description="The caller's values for the declared params")
+    client_id: ClientId = Field(description="The requesting client, whose placement or page follows the launch")
+    target: LaunchTarget = Field(description="Where the page the launch answers goes")
+    minimized: bool = Field(
+        default=False, description="Whether a window this launch opens is placed minimized for the client"
+    )
+
+
+class LaunchOutcome(FrozenModel):
+    """What a launch came to: the window showing the page, the page's path, and whether the window was opened."""
+
+    window: Window = Field(description="The window opened, focused, or navigated, as the requesting client sees it")
+    path: WindowPath = Field(description="The page path the launch resolved to")
+    is_new: bool = Field(description="True when a window was opened for the page")
 
 
 class StoredWindowPath(FrozenModel):
@@ -387,6 +439,16 @@ class PlacementsEditOutcome(FrozenModel):
 
     layout: DesktopLayout = Field(description="The layout after the edit, stamped when it was written")
     is_written: bool = Field(description="Whether the edit changed the layout and was written")
+
+
+class ClientArrivalOutcome(FrozenModel):
+    """What a client's arrival came to: the desktop it lands on, and the desktop made for its user when one was."""
+
+    desktop_id: DesktopId = Field(description="Where the client lands")
+    created_desktop: Desktop | None = Field(description="The desktop seeded for a first-time user, else None")
+    replaced_desktop_name: str | None = Field(
+        description="The name of the user's earlier desktop when it had been deleted and a fresh one was seeded"
+    )
 
 
 class DesktopDeleteOutcome(FrozenModel):

@@ -21,13 +21,16 @@ from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import cascade_frame
+from imbue.system_interface.shell.identity import IDENTITY_HEADER
+from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import SharingMode
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
 from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
 from imbue.system_interface.testing import build_test_state
@@ -53,11 +56,16 @@ def registry_row_toml(
     display_name: str | None = None,
     label: str = "",
     launcher_rank: int | None = None,
-    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id, and
-    # ``launch_text_params`` the param of each that takes typed text.
+    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id,
+    # ``launch_text_params`` the param of each that takes typed text, ``launch_draft_params`` the param of each
+    # that takes drafted text, ``launch_methods`` the method of each that is not a GET, and ``launch_presets``
+    # the presets of each that declares any.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
     launch_text_params: Mapping[str, str] | None = None,
+    launch_draft_params: Mapping[str, str] | None = None,
+    launch_methods: Mapping[str, str] | None = None,
+    launch_presets: Mapping[str, Mapping[str, str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
@@ -102,6 +110,15 @@ def registry_row_toml(
         text_param = (launch_text_params or {}).get(launch_id)
         if text_param is not None:
             lines.append(f'text_param = "{text_param}"')
+        draft_param = (launch_draft_params or {}).get(launch_id)
+        if draft_param is not None:
+            lines.append(f'draft_param = "{draft_param}"')
+        method = (launch_methods or {}).get(launch_id)
+        if method is not None:
+            lines.append(f'method = "{method}"')
+        presets = (launch_presets or {}).get(launch_id)
+        if presets:
+            lines.append("presets = {" + ", ".join(f'{name} = "{value}"' for name, value in presets.items()) + "}")
     return "\n".join(lines) + "\n"
 
 
@@ -122,6 +139,7 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
             program="terminal",
             default_shortcut=("new", "new"),
             launch_paths=[("new", "New terminal", "/new")],
+            launch_params={"new": ["workdir"]},
             window_closed_path=TEST_TERMINAL_WINDOW_CLOSED_PATH,
         ),
         registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcut=("open", "focus")),
@@ -130,7 +148,11 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
 
 
 def shell_application(
-    tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster, is_preview: bool = False
+    tmp_path: Path,
+    inventory: AppInventory,
+    broadcaster: WebSocketBroadcaster,
+    is_preview: bool = False,
+    launch_poster: LaunchPoster | None = None,
 ) -> Flask:
     """The shell app over ``inventory``, its state under ``tmp_path/state`` and the update notice's workspace at
     ``tmp_path/repo``, sharing the inventory's broadcaster as in production.
@@ -145,6 +167,7 @@ def shell_application(
         is_preview=is_preview,
         repo_root=tmp_path / "repo",
         static_directory=tmp_path / "static",
+        launch_poster=launch_poster,
     )
     return create_application(state)
 
@@ -201,6 +224,11 @@ def message_handling_app(received: list[dict[str, Any]], path: str, status: int)
     return app
 
 
+def identity_headers(identity: RequestIdentity) -> dict[str, str]:
+    """The ``X-Imbue-Identity`` header a share gateway stamps on a request, as a test client sends it."""
+    return {IDENTITY_HEADER: identity.model_dump_json()}
+
+
 def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, Any]]:
     """Every message a registered fake client has been sent so far, parsed."""
     messages: list[dict[str, Any]] = []
@@ -215,7 +243,6 @@ def window_record(
     window_id: WindowId,
     app: str,
     path: str,
-    is_settling: bool = False,
     is_pinned: bool = False,
     scope: LocationScope = LocationScope.LINKED,
     title: str = "",
@@ -227,7 +254,6 @@ def window_record(
         path=WindowPath(path),
         title=WindowTitle(title),
         opened_at=TEST_NOW,
-        is_settling=is_settling,
         is_pinned=is_pinned,
         scope=scope,
     )
@@ -247,7 +273,6 @@ def desktop_with_windows(*windows: Window) -> Desktop:
         name="Home",
         color="#2f6b4f",
         glyph=0,
-        sharing=SharingMode.SHARED,
         wallpaper=None,
         shortcuts=(),
         windows=windows,
@@ -281,7 +306,9 @@ if sys.argv[1:] == ["confirm-last"]:
 if sys.argv[1:] == ["rollback-last"]:
     current = json.loads(record.read_text())
     current["progress"] = "Reverting the update"
-    record.write_text(json.dumps(current))
+    scratch = record.with_name(record.name + ".tmp")
+    scratch.write_text(json.dumps(current))
+    os.replace(scratch, record)
     threading.Event().wait({rollback_hold_seconds})
 sys.exit(0)
 """
@@ -299,24 +326,22 @@ def write_rollback_point(
     """The record an apply run with ``--keep-rollback-point`` leaves, in the apply's own shape (its extra
     fields included), under ``repo_root``."""
     path = repo_root / LAST_GOOD_RECORD_REL
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
-                "rollback_to": "def5678def5678def5678def5678def5678def56",
-                "applied_at": 1_780_000_000.0,
-                "driven_by": "mngr/update-widgets",
-                "snapshots": [
-                    {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
-                ],
-                "programs": list(programs) if programs is not None else list(apps),
-                "apps": list(apps),
-                "needs_system_services_restart": needs_system_services_restart,
-                "progress": progress,
-                "outcome": outcome,
-            }
-        )
+    write_json_atomic(
+        path,
+        {
+            "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
+            "rollback_to": "def5678def5678def5678def5678def5678def56",
+            "applied_at": 1_780_000_000.0,
+            "driven_by": "mngr/update-widgets",
+            "snapshots": [
+                {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
+            ],
+            "programs": list(programs) if programs is not None else list(apps),
+            "apps": list(apps),
+            "needs_system_services_restart": needs_system_services_restart,
+            "progress": progress,
+            "outcome": outcome,
+        },
     )
     return path
 

@@ -10,8 +10,10 @@ like every Python app with a manifest):
   pty origin, reports its path and the session's title to the shell through the app
   contract (the shell's built module, served from this origin at
   `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
-  and passes the shell's `ttyd-focus` grant on to ttyd; `/new[?workdir=]` allocates
-  the lowest free `terminal-N`, creates its tmux session, and redirects to its page;
+  and passes the shell's `ttyd-focus` grant on to ttyd; `POST /new` (the manifest's
+  `new` launch path, posted by the shell with an optional `workdir`) allocates the
+  lowest free `terminal-N`, creates its tmux session, and answers `{"path"}`, the
+  page the shell then opens a window at (`docs/system/blueprint/post-launch-paths/`);
   `/api/sessions/<name>` is what the page refreshes from, `/api/health` the probe, and
   `POST /api/window-closed` (the manifest's `window_closed_path`) where the shell
   posts a closed window of the terminal so the window sweep below runs at once.
@@ -96,8 +98,8 @@ session in its URL, and a reload reattaches to that session.
 `TmuxSessionSource.sweep_windows`: a remembered terminal some window shows is
 marked window-seen in the store (`is_window_seen`), and one that was marked and
 no window shows any more is deleted. A terminal no window has ever shown (a
-hand-made session, one an agent opened with nobody watching, a window still
-settling at `/new`) is never collected, and a shell that cannot be read is a
+hand-made session, one an agent opened with nobody watching) is never collected,
+and a shell that cannot be read is a
 skipped sweep, never an empty desktop. The sweep runs every 90 seconds and at
 once whenever the shell posts a closed window to `/api/window-closed`; the
 terminal the posted path names is marked window-seen first

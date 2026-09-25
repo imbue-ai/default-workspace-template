@@ -7,8 +7,8 @@ critical = true
 priority = "chat"
 launcher_rank = 10
 
-# A desktop shortcut opens the chat list; a chat is created only from inside it (or by the
-# launcher's seeded prompts through ``new``).
+# A desktop shortcut opens the chat list; a chat is created only from inside it, or through the
+# intake route below.
 [default_shortcut]
 launch = "root"
 mode = "new"
@@ -21,36 +21,51 @@ style = "avatar"
 scope = "independent"
 default_mode = "floating"
 
-# The desktop interface opens a window at a launch path; the params ride as query parameters.
+# The chat list: a pure page, the launcher's "Chat" row (which raises the pinned window) and the shortcut.
 [[launch_paths]]
 id = "root"
 label = "Chat"
 path = "/"
-# A draft lands in the composer of the selected chat (else the most recent, else a new one), unsent:
-# what the desktop's "Design your own..." hands the pinned chat window.
-params = [
-    {name = "draft", label = "Draft message", required = false},
-]
 
+# Every text that enters a chat from outside a chat page goes through the intake route
+# (docs/system/blueprint/post-launch-paths/): the shell posts the params and the presets and opens a window
+# at the path the route answers. ``target`` says which chat receives the text, ``is_draft`` whether it is put
+# in the composer unsent.
+
+# The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
 [[launch_paths]]
 id = "new"
 label = "New Chat"
-path = "/new"
+path = "/api/chats/intake"
+method = "POST"
 params = [
     {name = "account_id", label = "Provider account", required = false},
     {name = "message", label = "First message", required = false},
 ]
-# The launcher's primary free-text row: what is typed into the desktop's field becomes the first message.
+presets = {target = "new_chat"}
 text_param = "message"
 
-# The launcher's secondary free-text row (Ctrl+Enter): the root offers a picker over the chats and sends the text
-# to the one picked, through its ordinary send.
+# The launcher's secondary free-text row (Ctrl+Enter): the text goes to the one chat there is, or to the chat
+# picked from a picker the root opens over them.
 [[launch_paths]]
 id = "send"
 label = "Send to chat..."
-path = "/send"
+path = "/api/chats/intake"
+method = "POST"
 params = [{name = "message", label = "Message to send", required = false}]
+presets = {target = "chat_selector"}
 text_param = "message"
+
+# A draft lands in the composer of the chat on screen (else the most recent, else a new one), unsent: what the
+# desktop's "Design your own..." hands the pinned chat window.
+[[launch_paths]]
+id = "draft"
+label = "Draft into chat"
+path = "/api/chats/intake"
+method = "POST"
+params = [{name = "message", label = "Draft message", required = false}]
+presets = {target = "current_chat", is_draft = "true"}
+draft_param = "message"
 
 # The Mind app's ask to show a chat (its chat notifications): the shell posts it here, and this app asks the
 # shell's ``show`` op for the window (desktop-interface contracts.md section 8).

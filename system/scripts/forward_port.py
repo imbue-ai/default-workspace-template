@@ -23,10 +23,11 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 and copies its static fields onto the row: ``display_name``, ``critical``,
 ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
-the names of the params, and ``text_param`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, and ``message_handlers`` (type and path); the
-icon is read from the file the manifest names, relative to the manifest. Every manifest field is
-authoritative on every call, so a re-registration with a changed manifest updates the row.
+the names of the params, and ``method``, ``presets``, ``text_param``, and
+``draft_param`` when given), ``pin`` (path, and style, scope, and
+default_mode when given), ``window_closed_path``, and ``message_handlers`` (type and path);
+the icon is read from the file the manifest names, relative to the manifest. Every manifest
+field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
@@ -124,7 +125,7 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # the first label of every standalone supervisord program with a hyphen in
 # its name: an app named ``share`` would claim ``share-gateway`` as its
 # ``share-<role>`` sidecar when its footprint is computed.
-RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "agent"})
+RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
 # (icons in this repo run a few hundred bytes) while keeping apps.toml small:
@@ -187,6 +188,8 @@ _MANIFEST_OWNED_KEYS = (
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
 # required. The row carries only what the manifest wrote, and the reader fills the defaults.
 _PIN_OPTIONAL_STRING_KEYS = ("style", "scope", "default_mode")
+# The optional string keys of a launch path entry, copied when the manifest wrote them; the reader fills the defaults.
+_LAUNCH_PATH_OPTIONAL_STRING_KEYS = ("method", "text_param", "draft_param")
 
 # The TOML basic-string escapes for the characters that have a short form;
 # every other control character is written as ``\uXXXX``.
@@ -397,7 +400,8 @@ def _toml_inline_table(table: dict[str, object]) -> str:
 
 
 def _toml_inline_table_value(value: object) -> str:
-    """A value inside an inline table: a scalar, or an array of strings (a launch path's param names)."""
+    """A value inside an inline table: a scalar, an array of strings (a launch path's param names), or a table of
+    strings (a launch path's presets)."""
     if isinstance(value, list):
         for item in value:
             if not isinstance(item, str):
@@ -405,6 +409,21 @@ def _toml_inline_table_value(value: object) -> str:
                     f"the registry cannot hold an inline-table array element of type {type(item).__name__}: {item!r}"
                 )
         return "[" + ", ".join(_toml_string(item) for item in value) + "]"
+    if isinstance(value, dict):
+        for nested_key, nested_value in value.items():
+            if not isinstance(nested_key, str) or not isinstance(nested_value, str):
+                raise UnsupportedRegistryValueError(
+                    f"the registry cannot hold a nested table entry of type {type(nested_value).__name__}: {nested_value!r}"
+                )
+        # Quoted: a preset's name is the manifest's to choose, and a bare key allows only letters, digits, ``_``, and ``-``.
+        return (
+            "{"
+            + ", ".join(
+                f"{_toml_string(nested_key)} = {_toml_string(nested_value)}"
+                for nested_key, nested_value in value.items()
+            )
+            + "}"
+        )
     return _toml_scalar(value)
 
 
@@ -439,8 +458,9 @@ def dump_registry(apps: list[dict[str, object]]) -> str:
     """Render the registry as ``[[apps]]`` tables, one key per line, in the order given.
 
     The output is what ``tomllib`` reads back byte-for-byte equal in every
-    value (icons carry newlines and quotes; both survive the escaping). Keys are
-    bare, which every registry key is.
+    value (icons carry newlines and quotes; both survive the escaping). Row and
+    inline-table keys are bare, which every one the contract names is; a
+    preset's name, which the manifest chooses, is written quoted.
     """
     chunks: list[str] = []
     for app in apps:
@@ -630,9 +650,10 @@ def _copied_pin(pin: Any, path: Path) -> tuple[dict[str, object] | None, str | N
 def _copied_launch_path(
     launch_path: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
-    """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``,
-    ``params`` (the param names) when it declares any, and ``text_param`` when it names one. Returns
-    ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, ``method`` when
+    given, ``params`` (the param names) when it declares any, ``presets`` when it declares any, and
+    ``text_param`` and ``draft_param`` when it names them. Returns ``(copied, None)``, or ``(None, error)``
+    when the entry is not shaped as the manifest requires."""
     if not (
         isinstance(launch_path, dict)
         and isinstance(launch_path.get("id"), str)
@@ -648,16 +669,25 @@ def _copied_launch_path(
         "label": launch_path["label"],
         "path": launch_path["path"],
     }
+    for key in _LAUNCH_PATH_OPTIONAL_STRING_KEYS:
+        value = launch_path.get(key)
+        if value is not None:
+            if not isinstance(value, str):
+                return None, f"manifest {str(path)!r}: a launch path's {key} must be a string"
+            copied[key] = value
     param_names, params_error = _copied_param_names(launch_path.get("params"), path, "launch path")
     if param_names is None:
         return None, params_error
     if param_names:
         copied["params"] = param_names
-    text_param = launch_path.get("text_param")
-    if text_param is not None:
-        if not isinstance(text_param, str):
-            return None, f"manifest {str(path)!r}: a launch path's text_param must be a string"
-        copied["text_param"] = text_param
+    presets = launch_path.get("presets")
+    if presets is not None:
+        if not isinstance(presets, dict) or not all(
+            isinstance(name, str) and isinstance(value, str) for name, value in presets.items()
+        ):
+            return None, f"manifest {str(path)!r}: a launch path's presets must be a table of strings"
+        if presets:
+            copied["presets"] = dict(presets)
     return copied, None
 
 

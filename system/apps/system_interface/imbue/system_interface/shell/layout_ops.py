@@ -94,7 +94,10 @@ class DesktopOpArguments(FrozenModel):
         default=None,
         description="The launch path an ``open`` runs (None for the app's default) or a shortcut op names",
     )
-    params: dict[str, str] = Field(default_factory=dict, description="The launch path's query parameters")
+    params: dict[str, str] = Field(
+        default_factory=dict,
+        description="The launch path's params: a GET launch path's query, a POST launch path's body",
+    )
     if_present: IfPresent = Field(
         default=IfPresent.FOCUS, description="Focus a window already at the path, or open another"
     )

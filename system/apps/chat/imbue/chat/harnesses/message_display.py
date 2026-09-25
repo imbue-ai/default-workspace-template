@@ -14,9 +14,10 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome,
-   model-bar traffic, a latchkey resolution) -> that decision. Explicit detectors WIN over
-   ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet deliberately surfaces as a chip.
+1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome, a
+   seeded chat's context block, model-bar traffic, a latchkey resolution) -> that decision.
+   Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet
+   deliberately surfaces as a chip.
 2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
    whole family, present and future.
 3. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
@@ -39,6 +40,12 @@ from imbue.imbue_common.pure import pure
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
+# Cross-layer contract: the tag the chat app wraps a seeded chat's context in when it launches
+# that chat's first agent (``chat_seed.seed_context_message``). The agent reads the whole
+# message -- the conversation the chat opened on, then the user's own words -- while the page
+# shows only the words, so the block is stripped here and the rest travels as ``display_body``.
+SEED_CONTEXT_TAG = "chat-seed-context"
+
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
 _SKILL_NAME_RE = re.compile(r"skills/([^\n/]+)")
 _STOP_HOOK_PREFIX = "Stop hook feedback:\n"
@@ -49,6 +56,9 @@ _ZERO_EXIT_CODE_RE = re.compile(r"\s*\(exit code 0\)")
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
 _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
+# Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own words
+# follow it). Non-greedy, since the block never nests.
+_SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT_TAG}>\s*")
 # The composer's model bar drives its harness with /model, /effort, and /fast slash
 # commands; the harness records the command plus a <local-command-stdout> confirmation,
 # and never a model reply -- neither is a conversational turn.
@@ -133,8 +143,9 @@ class MessageDisplay(FrozenModel):
     display: DisplayKind
     # Chip title (CHIP) or skill name (SKILL_EXPANSION); omitted otherwise.
     display_label: str | None = None
-    # The body to display when a wrapper sentinel was stripped (a fleet nudge); omitted
-    # when the raw content is already the display body.
+    # The body to display when a wrapper sentinel was stripped (a fleet nudge), or the user's
+    # own words behind a stripped context block (PROMPT_WITH_CONTEXT); omitted when the raw
+    # content is already the display body.
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error.
     resolution: str | None = Field(default=None, pattern="^(granted|denied|error)$")
@@ -149,10 +160,24 @@ class MessageDisplay(FrozenModel):
 
 
 def _match_welcome(content: str) -> MessageDisplay | None:
-    """The seeded ``/welcome`` invocation the desktop client sends every new agent."""
+    """The ``/welcome`` greeting chats used to open with, still in older chats' transcripts."""
     if content.strip() != "/welcome":
         return None
     return MessageDisplay(display=DisplayKind.HIDDEN)
+
+
+def _match_seed_context(content: str) -> MessageDisplay | None:
+    """A seeded chat's first send: the context block the chat app prefixed, then the user's words.
+
+    The words alone are what the page shows, so they travel as ``display_body``. They can come
+    out empty here and still be there in the whole message, since an attachment block was
+    stripped before the detectors ran; :func:`classify_user_message` settles that once the block
+    is back on.
+    """
+    match = _SEED_CONTEXT_RE.match(content)
+    if match is None:
+        return None
+    return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=content[match.end() :].strip())
 
 
 def _match_skill_expansion(content: str) -> MessageDisplay | None:
@@ -287,6 +312,7 @@ def _match_permission_resolution(content: str) -> MessageDisplay | None:
 
 # Most-specific first; classify_user_message takes the first match.
 _DETECTORS = (
+    _match_seed_context,
     _match_welcome,
     _match_skill_expansion,
     _match_stop_hook,
@@ -303,7 +329,7 @@ _DETECTORS = (
 
 @pure
 def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisplay | None:
-    """The render decision for one user message, or ``None`` for a genuine human turn.
+    """The render decision for one user message, or ``None`` for a genuine human turn shown as it arrived.
 
     ``None`` means the parser emits no ``display`` field and the frontend renders the
     baseline user bubble. Detectors run on the attachment-stripped text (see
@@ -323,6 +349,15 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
     # classification, show the message text rather than the raw attachment markdown.
     if decision.display is DisplayKind.CHIP and decision.display_body is None and visible != content:
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
+    # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble as
+    # an inline image or a download link. Put back what ``_visible_text`` took off the end, and
+    # only then judge whether any of the user's message is left; a context block with nothing
+    # after it is not one this app built, and renders whole rather than as an empty bubble.
+    if decision.display is DisplayKind.PROMPT_WITH_CONTEXT:
+        spoken = f"{decision.display_body}{content[len(visible) :]}" if visible != content else decision.display_body
+        if not spoken or not spoken.strip():
+            return None
+        decision = decision.model_copy_update(to_update(decision.field_ref().display_body, spoken))
     return decision
 
 
