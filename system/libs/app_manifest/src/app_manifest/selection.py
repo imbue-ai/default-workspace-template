@@ -25,6 +25,7 @@ from enum import auto
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Final
+from typing import assert_never
 
 import pathspec
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -622,23 +623,29 @@ def _own_unit_requests(
             if is_test_file_name(path)
             else []
         )
-    if unit.kind == UnitKind.FLAT_SCRIPTS:
-        if PurePosixPath(path).name == _CONFTEST_FILENAME:
-            whole = _whole_request(layout, unit.directory, is_browser_included=False, reason=reason)
+    match unit.kind:
+        case UnitKind.FLAT_SCRIPTS:
+            if PurePosixPath(path).name == _CONFTEST_FILENAME:
+                whole = _whole_request(
+                    layout, unit.directory, is_browser_included=False, reason=reason
+                )
+                return [whole] if whole is not None else []
+            paired = find_paired_tests(path, unit.directory, layout.test_files)
+            return [
+                request
+                for request in (_file_request(layout, test, reason) for test in paired)
+                if request is not None
+            ]
+        case UnitKind.PACKAGE | UnitKind.SKILL:
+            whole = _whole_request(
+                layout,
+                unit.directory,
+                is_browser_included=unit.directory in layout.own_root_units,
+                reason=reason,
+            )
             return [whole] if whole is not None else []
-        paired = find_paired_tests(path, unit.directory, layout.test_files)
-        return [
-            request
-            for request in (_file_request(layout, test, reason) for test in paired)
-            if request is not None
-        ]
-    whole = _whole_request(
-        layout,
-        unit.directory,
-        is_browser_included=unit.directory in layout.own_root_units,
-        reason=reason,
-    )
-    return [whole] if whole is not None else []
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _owning_npm_package(layout: RepoLayout, path: str) -> NpmPackage | None:
@@ -779,23 +786,29 @@ def _select_for_owning_unit(context: _SelectionContext, path: str) -> _PathOutco
     unit = find_owning_unit(path)
     if unit is None:
         return _PathOutcome()
-    if unit.kind == UnitKind.PACKAGE:
-        return _PathOutcome(
-            classes=(ChangedPathClass.PACKAGE,),
-            pytest_requests=tuple(_select_for_package(context, path, unit)),
-        )
-    if unit.kind == UnitKind.SKILL:
-        reason = _reason(path, ChangedPathClass.SKILL, f"changed in {unit.directory}")
-        return _PathOutcome(
-            classes=(ChangedPathClass.SKILL,),
-            pytest_requests=tuple(_own_unit_requests(layout, path, reason)),
-        )
-    paired = _own_unit_requests(
-        layout, path, _reason(path, ChangedPathClass.PAIRED_SCRIPT, "paired by filename")
-    )
-    if not paired:
-        return _PathOutcome()
-    return _PathOutcome(classes=(ChangedPathClass.PAIRED_SCRIPT,), pytest_requests=tuple(paired))
+    match unit.kind:
+        case UnitKind.PACKAGE:
+            return _PathOutcome(
+                classes=(ChangedPathClass.PACKAGE,),
+                pytest_requests=tuple(_select_for_package(context, path, unit)),
+            )
+        case UnitKind.SKILL:
+            reason = _reason(path, ChangedPathClass.SKILL, f"changed in {unit.directory}")
+            return _PathOutcome(
+                classes=(ChangedPathClass.SKILL,),
+                pytest_requests=tuple(_own_unit_requests(layout, path, reason)),
+            )
+        case UnitKind.FLAT_SCRIPTS:
+            paired = _own_unit_requests(
+                layout, path, _reason(path, ChangedPathClass.PAIRED_SCRIPT, "paired by filename")
+            )
+            if not paired:
+                return _PathOutcome()
+            return _PathOutcome(
+                classes=(ChangedPathClass.PAIRED_SCRIPT,), pytest_requests=tuple(paired)
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _select_for_package(
