@@ -337,6 +337,10 @@ class InputRouter:
     def close(self) -> None:
         self.release_all()
         try:
+            # A round trip first: closing straight after a flush dropped or delayed the events
+            # still in flight (measured: 1 paste in 5 lost its Ctrl+V, or its Ctrl release, which
+            # left Ctrl held in X).
+            self._display.sync()
             self._display.close()
         except Xlib.error.ConnectionClosedError:
             # The browser's X server is already gone (e.g. teardown on daemon restart):

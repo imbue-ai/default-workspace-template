@@ -105,6 +105,10 @@ _FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 # env.d unit. Each subdirectory holding a manifest.json is passed via --load-extension.
 _EXTENSIONS_DIR = "/opt/fortress/extensions"
 
+# The fleet's own unpacked extensions, shipped in this package (open_popups_as_tabs: the
+# window guardian keeps one browser window, so a window.open pop-up has to be a tab).
+_BUNDLED_EXTENSIONS_DIR = Path(__file__).parent / "extensions"
+
 # The fleet's CDP proxy: ONE websocket server for every browser, addressed by
 # ``/<browser-name>/<token>``. Deliberately its own loopback port and deliberately NOT
 # mounted on the Flask app -- that app's port is registered with ``forward_port.py`` and
@@ -657,14 +661,19 @@ class LiveBrowser(MutableModel):
         return self._audio_source or None
 
     def _extension_paths(self) -> "tuple[str, ...]":
-        """Vendored, version-pinned unpacked extensions to load, if the env.d unit put
-        them there. browser-use used to download these from the Chrome Web Store at
-        runtime, unpinned, into the browser holding the human's real logins; they are now
-        pinned alongside Fortress (see the env.d unit) and simply passed as a flag."""
-        root = Path(os.environ.get("BROWSER_EXTENSIONS_DIR", _EXTENSIONS_DIR))
-        if not root.is_dir():
-            return ()
-        return tuple(str(d) for d in sorted(root.iterdir()) if (d / "manifest.json").is_file())
+        """Unpacked extensions to load: the fleet's own (shipped in this package), then the
+        vendored, version-pinned ones, if the env.d unit put them there. browser-use used to
+        download those from the Chrome Web Store at runtime, unpinned, into the browser
+        holding the human's real logins; they are now pinned alongside Fortress (see the
+        env.d unit) and simply passed as a flag."""
+        roots = [_BUNDLED_EXTENSIONS_DIR, Path(os.environ.get("BROWSER_EXTENSIONS_DIR", _EXTENSIONS_DIR))]
+        return tuple(
+            str(d)
+            for root in roots
+            if root.is_dir()
+            for d in sorted(root.iterdir())
+            if (d / "manifest.json").is_file()
+        )
 
     async def start(self, restore_tabs: list[str] | None = None, active_tab: int = 0) -> None:
         """Launch the headful Chromium and bring up the fleet's own CDP channel.

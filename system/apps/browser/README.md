@@ -82,6 +82,12 @@ background agent, which is its own chat -- or the human).
   which the viewer, when framed, imports to report `/?session=<name>` and
   `Browser N` as its location; it declares no navigation capability, since a
   session switch is a whole new stream, so the shell reloads the frame to move it.
+- **One window, so pop-ups are tabs**: the stream shows a single browser window, and the
+  window guardian (`window_guardian.py`) closes any other (Ctrl+N, a tab dragged out). A page's
+  `window.open` pop-up -- the shape of most "Sign in with ..." buttons -- opens as a tab in
+  that window instead, keeping `window.opener`, so an OAuth callback can still hand its result
+  back and close itself. The fleet's own extension (`extensions/open_popups_as_tabs/`, loaded
+  alongside the vendored ones) does this by adding `popup=0` to the call's features.
 - **Persistence**: the fleet survives a workspace stop/restart. Each browser gets
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium

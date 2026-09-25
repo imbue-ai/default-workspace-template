@@ -16,21 +16,28 @@ Three kinds:
 
 import asyncio
 import contextlib
+import http.server
 import json
 import os
 import socket
 import threading
 import time
 import urllib.request
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
 import simple_websocket
-from browser import manifest, runner
+import websockets
+from browser import manifest, mediastream, runner
 from browser import session as bsession
+from browser.cdp_client import CdpError
 from browser.cdp_proxy import ProxyServer
 from browser.wsgi import make_threaded_server
+from browser.xinput import InputRouter
 from playwright.async_api import Error as PlaywrightError
+from Xlib import X, Xatom
+from Xlib.display import Display
 
 # Real Chromium launches but its CDP connection never completes on the GitHub Actions
 # runner -- the launch hangs (manifesting as a pytest-timeout + a NoneType CDP-session
@@ -452,6 +459,348 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
 def _profile_dir_for(browser_id: str):
     # Helper kept tiny so the tripwire reads clearly above.
     return bsession._profile_dir(browser_id)
+
+
+# --- popups, handoff and paste, against real Chromium -------------------------
+
+
+class _PageServer:
+    """Serve fixed HTML pages from 127.0.0.1 on an ephemeral port. Real http(s) pages, because
+    extension content scripts do not run in a top-level data: URL."""
+
+    def __init__(self, pages: dict[str, str]) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            """Answers each path with its fixed page, or 404."""
+
+            def do_GET(self) -> None:
+                body = pages.get(self.path.split("?")[0])
+                if body is None:
+                    self.send_error(404)
+                    return
+                encoded = body.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.origin = f"http://127.0.0.1:{self._server.server_address[1]}"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def __enter__(self) -> "_PageServer":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self._server.shutdown()
+        self._thread.join(timeout=5)
+
+
+async def _page_session(browser: "bsession.LiveBrowser", target_id: str) -> str:
+    assert browser._cdp is not None
+    return (await browser._cdp.send("Target.attachToTarget", {"targetId": target_id, "flatten": True}))["sessionId"]
+
+
+async def _evaluate(browser: "bsession.LiveBrowser", session_id: str, expression: str) -> Any:
+    """Evaluate in a page through the fleet's own CDP client, which raises CdpError after 5s
+    when the page does not answer (a paused or hung renderer)."""
+    assert browser._cdp is not None
+    result = await browser._cdp.send(
+        "Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": True}, session_id=session_id
+    )
+    return result.get("result", {}).get("value")
+
+
+async def _only_page_session(browser: "bsession.LiveBrowser", url: str) -> str:
+    """Point the browser's single tab at ``url`` and return a CDP session on it."""
+    assert browser._cdp is not None
+    (page,) = await browser._cdp.page_targets()
+    await browser._cdp.navigate(page["targetId"], url)
+    session_id = await _page_session(browser, page["targetId"])
+    for _ in range(50):
+        if await _evaluate(browser, session_id, "document.readyState") == "complete":
+            return session_id
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{url} never finished loading")
+
+
+async def _new_page_target(browser: "bsession.LiveBrowser", before: "set[str]", url: str | None = None) -> "dict[str, Any]":
+    """The page target opened since ``before`` (once it has navigated to ``url``, if given)."""
+    assert browser._cdp is not None
+    for _ in range(50):
+        for target in await browser._cdp.page_targets():
+            if target["targetId"] not in before and url in (None, target["url"]):
+                return target
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"no new page target reached {url or 'any url'}")
+
+
+async def _eventually(check: "Callable[[], Awaitable[Any]]", timeout: float = 2.0) -> bool:
+    """Poll the async ``check`` until it returns True or ``timeout`` seconds pass."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if await check():
+            return True
+        await asyncio.sleep(0.1)
+    return bool(await check())
+
+
+async def _assert_one_browser_window_throughout(display: str, seconds: float) -> None:
+    """Fail as soon as a second browser window maps; a popup window can show up a beat after
+    its tab, so the check has to cover a window of time rather than one instant."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        assert _browser_window_count(display) == 1, "a second browser window opened"
+        await asyncio.sleep(0.1)
+
+
+class _AutoResumingAgent:
+    """An agent's CDP client, reduced to what Playwright does on attach: auto-attach to every
+    target with ``waitForDebuggerOnStart`` and resume each one as it attaches. Python
+    Playwright's own ``connect_over_cdp`` cannot stand in -- it sends
+    ``Browser.setDownloadBehavior``, which the proxy refuses, so its attach fails."""
+
+    def __init__(self, attach_url: str) -> None:
+        self._attach_url = attach_url
+        self._ws: Any = None
+        self._reader: "asyncio.Task[None] | None" = None
+        self._next_id = 0
+        self._replies: dict[int, asyncio.Future[dict[str, Any]]] = {}
+
+    async def __aenter__(self) -> "_AutoResumingAgent":
+        # Off the loop: the proxy answering this discovery request runs on this same loop.
+        def discover() -> str:
+            with urllib.request.urlopen(f"{self._attach_url}/json/version/", timeout=5) as r:
+                return json.loads(r.read())["webSocketDebuggerUrl"]
+
+        self._ws = await websockets.connect(await asyncio.to_thread(discover), max_size=None, ping_interval=None)
+        self._reader = asyncio.create_task(self._read())
+        reply = await self._call("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
+        assert "error" not in reply, reply
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        assert self._reader is not None
+        self._reader.cancel()
+        await self._ws.close()
+
+    async def _send(self, method: str, params: "dict[str, Any]", session_id: str | None = None) -> "asyncio.Future[dict[str, Any]]":
+        self._next_id += 1
+        reply: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._replies[self._next_id] = reply
+        frame: dict[str, Any] = {"id": self._next_id, "method": method, "params": params}
+        if session_id:
+            frame["sessionId"] = session_id
+        await self._ws.send(json.dumps(frame))
+        return reply
+
+    async def _call(self, method: str, params: "dict[str, Any]") -> "dict[str, Any]":
+        return await asyncio.wait_for(await self._send(method, params), timeout=10)
+
+    async def _read(self) -> None:
+        async for raw in self._ws:
+            message = json.loads(raw)
+            reply = self._replies.pop(message.get("id", -1), None)
+            if reply is not None:
+                reply.set_result(message)
+            elif message.get("method") == "Target.attachedToTarget" and message["params"].get("waitingForDebugger"):
+                await self._send("Runtime.runIfWaitingForDebugger", {}, message["params"]["sessionId"])
+
+
+def _browser_window_count(display: str) -> int:
+    """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
+    disp = Display(display)
+    try:
+        window_type = disp.intern_atom("_NET_WM_WINDOW_TYPE")
+        normal = disp.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL")
+        count = 0
+        for window in disp.screen().root.query_tree().children:
+            attrs = window.get_attributes()
+            if attrs.map_state != X.IsViewable or attrs.override_redirect:
+                continue
+            prop = window.get_full_property(window_type, Xatom.ATOM)
+            if prop is None or not prop.value or normal in prop.value:
+                count += 1
+        return count
+    finally:
+        disp.close()
+
+
+def _held_keycodes(display: str) -> list[int]:
+    disp = Display(display)
+    try:
+        bits = disp.query_keymap()
+        return [code for code in range(8, 256) if bits[code // 8] & (1 << (code % 8))]
+    finally:
+        disp.close()
+
+
+@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.timeout(120)
+def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> None:
+    # A window.open with a features string is a popup: Chromium makes a second top-level
+    # window, which the window guardian closes ("multiple windows are not supported"), so
+    # every popup-based sign-in (Continue with Google, ...) failed. The bundled extension
+    # makes it a tab in the main window instead, keeping window.opener, which the OAuth
+    # callback page needs to hand its result back and close itself.
+    other_origin = _PageServer({"/frame": (
+        "<script>addEventListener('message', () =>"
+        " window.open(location.hash.slice(1) + '/child#from-frame', 'fromframe', 'width=400,height=400'))</script>"
+    )})
+    with other_origin:
+        opener = _PageServer({"/": "<title>opener</title>", "/child": "<title>child</title>"})
+        with opener:
+            async def go() -> None:
+                manager = bsession.BrowserSessionManager()
+                try:
+                    browser = await _create_running(manager)
+                except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+                    pytest.skip(f"Chromium unavailable in this environment: {e}")
+                try:
+                    _require_running(browser)
+                    assert browser._cdp is not None and browser._display is not None
+                    session_id = await _only_page_session(browser, f"{opener.origin}/")
+                    await _evaluate(browser, session_id, (
+                        "new Promise(done => { const f = document.createElement('iframe');"
+                        f" f.src = '{other_origin.origin}/frame#{opener.origin}'; f.onload = done;"
+                        " document.body.appendChild(f); })"
+                    ))
+                    cases = [
+                        ("popup", f"window.open('{opener.origin}/child#popup', 'p', 'width=500,height=600'); 1", True),
+                        ("noopener", f"window.open('{opener.origin}/child#noopener', '', 'noopener,width=500,height=600'); 1", False),
+                        ("from-frame", "document.querySelector('iframe').contentWindow.postMessage('open', '*'); 1", True),
+                    ]
+                    for label, expression, keeps_opener in cases:
+                        before = {t["targetId"] for t in await browser._cdp.page_targets()}
+                        await _evaluate(browser, session_id, expression)
+                        created = await _new_page_target(browser, before, f"{opener.origin}/child#{label}")
+                        await _assert_one_browser_window_throughout(browser._display, seconds=1.5)
+                        child = await _page_session(browser, created["targetId"])
+                        assert await _evaluate(browser, child, "window.opener !== null") is keeps_opener, label
+                        await browser._cdp.close_target(created["targetId"])
+                finally:
+                    await manager.shutdown()
+
+            asyncio.run(go())
+
+
+@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.timeout(120)
+def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
+    # until that client resumes it, and a handoff leaves the agent's socket connected. Its
+    # resume then went through a proxy that refused every frame from a client without the
+    # lease: the tab stayed paused, and the page that opened it -- same renderer -- froze.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake_method)
+    pages = _PageServer({"/": "<title>opener</title>", "/child": "<title>child</title>"})
+    with pages:
+        async def go() -> None:
+            manager = bsession.BrowserSessionManager()
+            proxy = ProxyServer(port=0)
+            await proxy.start()
+            bsession.set_proxy_server(proxy)
+            try:
+                browser = await _create_running(manager)
+            except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+                await proxy.stop()
+                bsession.set_proxy_server(None)
+                pytest.skip(f"Chromium unavailable in this environment: {e}")
+            try:
+                _require_running(browser)
+                assert browser._cdp is not None
+                session_id = await _only_page_session(browser, f"{pages.origin}/")
+                attach = await browser.attach_for("agent-under-test", "Tester")
+                assert attach["ok"], attach
+                async with _AutoResumingAgent(attach["attach_url"]):
+                    assert await browser.handoff("agent-under-test", "Tester", "sign in")
+                    before = {t["targetId"] for t in await browser._cdp.page_targets()}
+                    # Opened the way a click does it: from the page, not from any CDP client.
+                    await _evaluate(browser, session_id, f"setTimeout(() => window.open('{pages.origin}/child'), 0); 1")
+                    await _new_page_target(browser, before)
+                    try:
+                        assert await _evaluate(browser, session_id, "document.title") == "opener"
+                        created = await _new_page_target(browser, before, f"{pages.origin}/child")
+                        child = await _page_session(browser, created["targetId"])
+                        assert await _evaluate(browser, child, "document.title") == "child"
+                    except CdpError as e:
+                        raise AssertionError(f"a page stopped answering after the handoff: {e}") from e
+            finally:
+                await manager.shutdown()
+                await proxy.stop()
+                bsession.set_proxy_server(None)
+
+        asyncio.run(go())
+
+
+@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.timeout(180)
+def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
+    # Paste-in injects Ctrl+V on a short-lived X connection. Closing it straight after the
+    # flush dropped or delayed the keystrokes (about 1 in 5 pastes never arrived, while the
+    # viewer still said "Pasted"), and a late Ctrl release left Ctrl held in X, so the
+    # human's scroll zoomed and their clicks became Ctrl+clicks.
+    rounds = 20
+    pages = _PageServer({"/": (
+        "<input id=i style='position:absolute;left:100px;top:100px;width:600px;height:60px'>"
+    )})
+    with pages:
+        async def go() -> None:
+            manager = bsession.BrowserSessionManager()
+            try:
+                browser = await _create_running(manager)
+            except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+                pytest.skip(f"Chromium unavailable in this environment: {e}")
+            try:
+                _require_running(browser)
+                display = browser._display
+                assert display is not None
+                session_id = await _only_page_session(browser, f"{pages.origin}/")
+                x, y = await _evaluate(browser, session_id, (
+                    "(() => { const r = document.getElementById('i').getBoundingClientRect();"
+                    " const top = window.screenY + window.outerHeight - window.innerHeight;"
+                    " return [Math.round(window.screenX + r.left + 20), Math.round(top + r.top + r.height / 2)]; })()"
+                ))
+                def paste(text: str) -> int:
+                    with runner.application.test_request_context():
+                        response = mediastream.clipboard_paste(browser.browser_id, browser, text.encode(), "text/plain")
+                    return response.status_code
+
+                def viewer_sink(_message: str) -> None:
+                    """The paste route refuses without a registered viewer; this one ignores copy-outs."""
+
+                # The viewer's own input connection stays open for its whole life; only the
+                # paste's is short-lived.
+                viewer_input = InputRouter(display)
+                mediastream._register_clip_sink(browser.browser_id, display, viewer_sink)
+                try:
+                    for message in (f"m,{x},{y},0,0", f"m,{x},{y},1,0", f"m,{x},{y},0,0"):
+                        viewer_input.handle(message)
+                    assert await _eventually(lambda: _evaluate(browser, session_id, "document.activeElement.id === 'i'"))
+                    missed = []
+                    for n in range(rounds):
+                        await _evaluate(browser, session_id, "document.getElementById('i').value = ''")
+                        token = f"paste{n}"
+                        assert await asyncio.to_thread(paste, token) == 200
+                        value_is_token = f"document.getElementById('i').value === '{token}'"
+                        if not await _eventually(lambda: _evaluate(browser, session_id, value_is_token)):
+                            missed.append(token)
+                    assert missed == [], f"{len(missed)}/{rounds} pastes never reached the page: {missed}"
+
+                    async def no_keys_held() -> bool:
+                        return _held_keycodes(display) == []
+
+                    assert await _eventually(no_keys_held), "a paste left keys held down in X"
+                finally:
+                    mediastream._unregister_clip_sink(browser.browser_id, viewer_sink)
+                    viewer_input.close()
+            finally:
+                await manager.shutdown()
+
+        asyncio.run(go())
 
 
 # --- boot-a-server: cast WS dual-direction + disconnect-as-lease over a real socket ---

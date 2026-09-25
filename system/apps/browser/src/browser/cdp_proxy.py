@@ -59,6 +59,13 @@ _ALWAYS_BLOCKED = {
 # Refused only when it would close the browser's last remaining page.
 _LAST_PAGE_GUARDED = {"Target.closeTarget", "Page.close"}
 
+# Forwarded even from a client that no longer holds the lease. Playwright auto-attaches with
+# waitForDebuggerOnStart, so Chromium holds every new tab or popup until that client resumes
+# it -- and after a handoff the agent's socket is still attached. Refusing its resume leaves the
+# target paused, which freezes the page that opened it (they share a renderer). A resume is not
+# the agent acting on a tab, so it does not move the pane either.
+_ALWAYS_FORWARDED = {"Runtime.runIfWaitingForDebugger"}
+
 # Pane-follow debounce. CDP is orders of magnitude chattier than one call per verb, so the
 # "agent acts -> pane follows" foregrounding is coalesced rather than fired per frame.
 _FOLLOW_DEBOUNCE_S = 0.25
@@ -194,7 +201,8 @@ class BrowserProxy:
                 await client.send(_error(frame.get("id"), frame.get("sessionId"), verdict))
                 continue
             await upstream.send(raw)
-            self._schedule_follow(frame)
+            if frame.get("method") not in _ALWAYS_FORWARDED:
+                self._schedule_follow(frame)
 
     async def _browser_to_client(self, client: Any, upstream: Any) -> None:
         async for raw in upstream:
@@ -215,6 +223,8 @@ class BrowserProxy:
     async def _screen(self, frame: dict[str, Any], token: str) -> str | None:
         """Reason to refuse this frame, or None to forward it."""
         method = frame.get("method", "")
+        if method in _ALWAYS_FORWARDED:
+            return None
         if not await self._is_allowed(token):
             # The lease moved (a human took control, it expired, or another agent holds it).
             # Refuse rather than disconnect: a dropped socket poisons the CLI session forever.
