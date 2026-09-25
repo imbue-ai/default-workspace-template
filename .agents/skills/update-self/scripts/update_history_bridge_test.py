@@ -287,3 +287,50 @@ def test_bridge_history_refuses_a_workspace_it_cannot_match_and_changes_nothing(
     assert "shares no history" in capsys.readouterr().err
     assert _replace_refs(stranger) == []
     assert not (stranger / "data/.state/update-self/history-bridge.json").exists()
+
+
+def test_bridge_history_drop_removes_a_live_graft(tmp_path, capsys) -> None:
+    template = _template(tmp_path)
+    upstream = _rewritten_upstream(tmp_path, template)
+    workspace = _workspace(tmp_path, template, upstream)
+    twin = _bridge(workspace, capsys)["twin"]
+
+    assert (
+        update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out)["dropped"] == twin
+    assert _replace_refs(workspace) == []
+    assert (
+        subprocess.run(
+            ["git", "merge-base", "HEAD", "minds-v2"], cwd=workspace
+        ).returncode
+        == 1
+    )
+
+
+def test_a_descendant_with_the_fork_tree_is_the_merge_base(tmp_path, capsys) -> None:
+    template = _template(tmp_path)
+    upstream = _rewritten_upstream(tmp_path, template)
+    workspace = tmp_path / "workspace"
+    _git(
+        tmp_path,
+        "clone",
+        "-q",
+        "--branch",
+        "minds-v1",
+        template.as_uri(),
+        str(workspace),
+    )
+    _git(workspace, "checkout", "-q", "-B", "main")
+    # The release's vendor refresh undone: HEAD's tree is the twin's plus the older vendored copy.
+    _commit(workspace, "Put the vendored copy back", {VENDORED_FILE: "v1\n"})
+    _git(workspace, "remote", "add", "upstream", str(upstream))
+    _git(workspace, "fetch", "-q", "upstream", "--tags", "--force")
+
+    result = _bridge(workspace, capsys)
+
+    assert result["fork_point"] == _git(workspace, "rev-parse", "HEAD")
+    _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
+    assert not (workspace / VENDORED_FILE).exists()

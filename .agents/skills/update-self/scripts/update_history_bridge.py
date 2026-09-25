@@ -34,7 +34,7 @@ class HistoryBridgeError(Exception):
 @dataclass(frozen=True)
 class HistoryBridge:
     is_bridged: bool
-    fork_point: str
+    fork_point: str | None
     twin: str | None
     dropped: str | None
 
@@ -50,20 +50,29 @@ class HistoryBridge:
 
 
 def _run(
-    repo: Path, args: Sequence[str], env: Mapping[str, str] | None = None
+    repo: Path,
+    args: Sequence[str],
+    env: Mapping[str, str] | None = None,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         cwd=repo,
         env=None if env is None else {**os.environ, **env},
+        input=stdin,
         capture_output=True,
         text=True,
         check=False,
     )
 
 
-def _git(repo: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
-    result = _run(repo, args, env)
+def _git(
+    repo: Path,
+    *args: str,
+    env: Mapping[str, str] | None = None,
+    stdin: str | None = None,
+) -> str:
+    result = _run(repo, args, env, stdin)
     if result.returncode != 0:
         raise HistoryBridgeError(
             f"git {' '.join(args)} failed (exit {result.returncode}): {result.stderr.strip()}"
@@ -134,10 +143,6 @@ def _stripped_tree(repo: Path, commit: str, index: Path) -> str:
     return _git(repo, "write-tree", env=env)
 
 
-def _is_rewritten_only(path: str) -> bool:
-    return any(path == root or path.startswith(f"{root}/") for root in REWRITTEN_PATHS)
-
-
 def _newest_equivalent(repo: Path, fork: str) -> str:
     """The newest commit between ``fork`` and HEAD that differs from it only in :data:`REWRITTEN_PATHS`.
 
@@ -145,12 +150,31 @@ def _newest_equivalent(repo: Path, fork: str) -> str:
     followed by vendor refreshes has the same twin as the last of them, and the
     last one is the base that matches the workspace's own vendored copy.
     """
-    for commit in _git(
-        repo, "rev-list", "--topo-order", "--ancestry-path", f"{fork}..HEAD"
-    ).splitlines():
-        changed = _git(repo, "diff", "--name-only", fork, commit).splitlines()
-        if changed and all(_is_rewritten_only(path) for path in changed):
-            return commit
+    descendants = _commits(repo, "--topo-order", "--ancestry-path", f"{fork}..HEAD")
+    if not descendants:
+        return fork
+    fork_tree = _git(repo, "rev-parse", f"{fork}^{{tree}}")
+    headers = [f"{fork_tree} {commit.tree}" for commit in descendants]
+    diff = _git(
+        repo,
+        "diff-tree",
+        "--stdin",
+        "-r",
+        "--name-only",
+        "--",
+        ".",
+        *(f":(exclude){root}" for root in REWRITTEN_PATHS),
+        stdin="\n".join(headers) + "\n",
+    )
+    changed: list[list[str]] = []
+    for line in diff.splitlines():
+        if len(changed) < len(headers) and line == headers[len(changed)]:
+            changed.append([])
+        else:
+            changed[-1].append(line)
+    for commit, paths in zip(descendants, changed):
+        if not paths:
+            return commit.oid
     return fork
 
 
@@ -218,3 +242,8 @@ def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
             f"the graft on {twin[:12]} gives a merge base of {bridged}, not the fork point {fork[:12]}"
         )
     return HistoryBridge(True, fork, twin, None)
+
+
+def drop_history_bridge(repo: Path, state: Path) -> HistoryBridge:
+    """Remove the graft :func:`bridge_history` recorded, if any; the next pass rebuilds it if still needed."""
+    return HistoryBridge(False, None, None, _drop_recorded_graft(repo, state))
