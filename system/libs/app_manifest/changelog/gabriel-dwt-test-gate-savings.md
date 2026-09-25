@@ -8,4 +8,6 @@ Added `app-manifest select-tests`, which prints the test commands a change calls
 
 - A path nothing classifies brings in the full root suite and is listed, so a gap in the mapping costs time rather than coverage.
 
+- `test_repo_test_selection.py` holds the tree to the mapping: it fails when a tracked path that is not documentation maps to no suite, or when the override file names a suite that does not exist. CI runs it on every change; the fix is a mapping in the override file.
+
 `scope.py` gained `list_changed_files`, `list_tracked_files`, `read_file_at_revision` and `load_app_manifests`, which `footprint` and `select-tests` share.
