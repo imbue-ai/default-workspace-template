@@ -418,12 +418,21 @@ def test_a_stopped_queue_splits_only_whole_line_reports() -> None:
 
 
 @pytest.mark.parametrize("separator", ["\n", "\n\n"])
-def test_a_report_flushed_into_the_users_turn_shows_only_the_users_words(separator: str) -> None:
+@pytest.mark.parametrize("words_between_reports", [False, True])
+def test_a_report_flushed_into_the_users_turn_shows_only_the_users_words(
+    separator: str, words_between_reports: bool
+) -> None:
     """codex's tap resend, pi's flush, and antigravity's queue each send the queue as one message."""
-    report = _compose_report("Build")
+    build, test = _compose_report("Build"), _compose_report("Test")
+    pieces = (
+        [build, "fix the header too", test]
+        if words_between_reports
+        else ["fix the header too", build, "and the footer"]
+    )
+    words = "fix the header too" if words_between_reports else "fix the header too\nand the footer"
 
-    decision = classify_user_message(separator.join(["fix the header too", report, "and the footer"]))
+    decision = classify_user_message(separator.join(pieces))
 
     assert decision is not None
     assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
-    assert decision.display_body == "fix the header too\nand the footer"
+    assert decision.display_body == words

@@ -252,6 +252,11 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
     match = _BACKGROUND_TASK_REPORT_RE.match(content)
     if match is None:
         return None
+    # The match can run from one report to another with the user's words between them (a flushed
+    # queue); those are the user's turn, which the merged-report detector shows.
+    words, reports = split_background_task_reports(content)
+    if reports and words:
+        return None
     return MessageDisplay(
         display=DisplayKind.NOTICE, display_label="Background task", display_body=match.group(1).strip()
     )
