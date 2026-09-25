@@ -27,6 +27,38 @@ def test_shed_record_round_trip_distinguishes_agent_from_subprocess(
     assert sub_record["agent_name"] is None
 
 
+def test_shed_record_carries_why_earlyoom_picked_the_victim(runtime: Path) -> None:
+    ledger.append_shed_record(
+        pid=333,
+        comm="pytest",
+        agent_name=None,
+        is_worker=None,
+        oom_score_adj=900,
+        badness_kib=7390000,
+        vm_rss_kib=20000,
+        ordering="kernel_badness",
+    )
+    # What stock earlyoom (a not-yet-updated workspace) reports: none of it.
+    ledger.append_shed_record(pid=444, comm="python3", agent_name=None, is_worker=None)
+
+    fork_record, stock_record = ledger.read_records()
+    assert (
+        fork_record["oom_score_adj"],
+        fork_record["badness_kib"],
+        fork_record["vm_rss_kib"],
+        fork_record["ordering"],
+    ) == (900, 7390000, 20000, "kernel_badness")
+    assert [
+        stock_record[key]
+        for key in ("oom_score_adj", "badness_kib", "vm_rss_kib", "ordering")
+    ] == [
+        None,
+        None,
+        None,
+        None,
+    ]
+
+
 def test_pending_shed_is_cleared_by_a_delivered_notice(runtime: Path) -> None:
     ledger.append_shed_record(pid=1, comm="claude", agent_name="alpha", is_worker=False)
     first = ledger.pending_shed_timestamps(ledger.read_records(), "alpha")

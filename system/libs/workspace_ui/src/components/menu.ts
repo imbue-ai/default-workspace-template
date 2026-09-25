@@ -9,6 +9,10 @@
  *   against its anchor instead). An invisible sheet sits under it while it is open, so the
  *   press that dismisses it cannot also land on a button underneath, and the surface below
  *   cannot be scrolled or hovered through it.
+ * - The one exception is a menu opened from a HOVER TRIGGER (`hoverTriggerAttrs`): a control
+ *   that already does something on its click and offers the menu as the slower way in. That
+ *   menu opens and closes on the pointer exactly as a submenu does, and lays no sheet, so the
+ *   chrome its trigger sits in stays hoverable. A press outside and Escape still close it.
  * - A row may open one SUBMENU. It opens on hover (after a short intent delay) or on keyboard
  *   focus, and closes when the pointer leaves the menu-and-submenu pair -- unless the caller
  *   says it is holding unfinished work (`holdsSubmenuOpen`), in which case only a click or
@@ -334,6 +338,13 @@ export interface Menu {
   dispose(): void;
   /** Spread onto the element that opens the menu: the click toggles it at that element. */
   triggerAttrs(): m.Attributes;
+  /** Spread onto an element whose HOVER opens the menu -- a control that already does
+   *  something on its click, and offers the menu as the slower way in. It opens after the same
+   *  intent delay a submenu waits out and closes when the pointer leaves the control and the
+   *  card alike, exactly as a submenu does; a press outside, Escape, and `close` still take it
+   *  down. `onBeforeOpen` runs when the delay elapses, before the menu opens, for a caller
+   *  that must say what the menu is about to be about. */
+  hoverTriggerAttrs(onBeforeOpen?: () => void): m.Attributes;
   /** The open menu -- sheet, card and submenu -- portalled to <body>; null when closed. For a
    *  caller rendering inside a mounted mithril tree. */
   view(rows: readonly MenuRow[]): m.Children;
@@ -373,6 +384,14 @@ export function createMenu(options: MenuOptions): Menu {
   // enter -- the delay is what stops that seam reading as a departure.
   let stackLeaveTimer: number | null = null;
 
+  // The trigger a hover-opened menu belongs to: non-null exactly while the open menu was
+  // opened by the pointer resting on it rather than by a click. Such a menu answers the
+  // pointer leaving the trigger-and-card pair the way a submenu does, and lays no sheet under
+  // itself, so the chrome the trigger sits in stays hoverable on the way past.
+  let hoverTrigger: HTMLElement | null = null;
+  let triggerHoverTimer: number | null = null;
+  let hoverLeaveTimer: number | null = null;
+
   function cancelHoverIntent(): void {
     if (hoverIntentTimer !== null) {
       window.clearTimeout(hoverIntentTimer);
@@ -386,6 +405,42 @@ export function createMenu(options: MenuOptions): Menu {
       window.clearTimeout(stackLeaveTimer);
       stackLeaveTimer = null;
     }
+  }
+
+  function cancelTriggerHover(): void {
+    if (triggerHoverTimer !== null) {
+      window.clearTimeout(triggerHoverTimer);
+      triggerHoverTimer = null;
+    }
+  }
+
+  function cancelHoverLeave(): void {
+    if (hoverLeaveTimer !== null) {
+      window.clearTimeout(hoverLeaveTimer);
+      hoverLeaveTimer = null;
+    }
+  }
+
+  /** The pointer has left a hover-opened menu's trigger or its card: it closes once the same
+   *  grace a submenu gets runs out, so the seam between the two boxes does not read as leaving. */
+  function scheduleHoverClose(): void {
+    if (hoverTrigger === null) return;
+    cancelHoverLeave();
+    hoverLeaveTimer = window.setTimeout(() => {
+      hoverLeaveTimer = null;
+      close();
+    }, SUBMENU_LEAVE_DELAY_MS);
+  }
+
+  /** A press outside a hover-opened menu dismisses it: with no sheet under it, the press has
+   *  to be caught here instead. A press on the trigger is its own business (it may toggle
+   *  whatever it does on a click), so it is left alone. */
+  function onHoverPointerDown(event: PointerEvent): void {
+    const target = event.target as Element | null;
+    if (target === null) return;
+    if (target.closest(`[${MENU_PART_ATTR}="menu"], [${MENU_PART_ATTR}="submenu"]`) !== null) return;
+    if (hoverTrigger !== null && hoverTrigger.contains(target)) return;
+    close();
   }
 
   function clearSafeApex(): void {
@@ -436,11 +491,16 @@ export function createMenu(options: MenuOptions): Menu {
     redraw();
   }
 
-  function open(next: MenuAnchor | HTMLElement): void {
+  function open(next: MenuAnchor | HTMLElement, trigger: HTMLElement | null = null): void {
     if (anchor === null) {
       window.addEventListener("keydown", onKeydown, true);
       window.addEventListener("resize", onResize);
     }
+    if (hoverTrigger === null && trigger !== null) window.addEventListener("pointerdown", onHoverPointerDown, true);
+    else if (hoverTrigger !== null && trigger === null)
+      window.removeEventListener("pointerdown", onHoverPointerDown, true);
+    hoverTrigger = trigger;
+    cancelHoverLeave();
     anchorElement = next instanceof HTMLElement ? next : null;
     const rect = next instanceof HTMLElement ? next.getBoundingClientRect() : next;
     anchor = { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width };
@@ -453,9 +513,13 @@ export function createMenu(options: MenuOptions): Menu {
     if (anchor === null) return;
     window.removeEventListener("keydown", onKeydown, true);
     window.removeEventListener("resize", onResize);
+    if (hoverTrigger !== null) window.removeEventListener("pointerdown", onHoverPointerDown, true);
+    hoverTrigger = null;
     anchor = null;
     anchorElement = null;
     menuRect = null;
+    cancelTriggerHover();
+    cancelHoverLeave();
     cancelHoverIntent();
     cancelStackLeave();
     setSubmenu(null);
@@ -781,8 +845,14 @@ export function createMenu(options: MenuOptions): Menu {
         style: `left: 0; top: 0; ${sizing}`,
         oncreate: place,
         onupdate: place,
-        onmouseenter: cancelStackLeave,
-        onmouseleave: handleStackLeave,
+        onmouseenter: () => {
+          cancelStackLeave();
+          cancelHoverLeave();
+        },
+        onmouseleave: () => {
+          handleStackLeave();
+          scheduleHoverClose();
+        },
         // A right-click on the card is handled here, like one on the sheet: the page's element menu
         // yields to it rather than describing one of this menu's own rows, and the browser's own stays away.
         oncontextmenu: (event: MouseEvent) => {
@@ -846,9 +916,13 @@ export function createMenu(options: MenuOptions): Menu {
         onmouseenter: () => {
           cancelStackLeave();
           cancelHoverIntent();
+          cancelHoverLeave();
           clearSafeApex();
         },
-        onmouseleave: handleStackLeave,
+        onmouseleave: () => {
+          handleStackLeave();
+          scheduleHoverClose();
+        },
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
         },
@@ -883,7 +957,9 @@ export function createMenu(options: MenuOptions): Menu {
       openSubmenu === null
         ? null
         : (rows.find((row): row is SubmenuRow => row.kind === "submenu" && row.key === openSubmenu) ?? null);
-    return [sheet(), menuCard(rows), submenu === null ? null : submenuCard(submenu)];
+    // No sheet under a hover-opened menu: it would swallow the hover of whatever the trigger
+    // sits beside, and the press it exists to catch is caught by `onHoverPointerDown` instead.
+    return [hoverTrigger === null ? sheet() : null, menuCard(rows), submenu === null ? null : submenuCard(submenu)];
   }
 
   function toggle(next: MenuAnchor | HTMLElement): void {
@@ -907,6 +983,8 @@ export function createMenu(options: MenuOptions): Menu {
       close();
       // A hover still counting down, or a submenu still on its way out, would otherwise fire
       // into a component that is gone and redraw it.
+      cancelTriggerHover();
+      cancelHoverLeave();
       cancelHoverIntent();
       cancelStackLeave();
       clearSafeApex();
@@ -919,6 +997,29 @@ export function createMenu(options: MenuOptions): Menu {
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           toggle(event.currentTarget as HTMLElement);
+        },
+      };
+    },
+    hoverTriggerAttrs(onBeforeOpen?: () => void): m.Attributes {
+      return {
+        [MENU_PART_ATTR]: "trigger",
+        "aria-haspopup": options.role === "dialog" ? "dialog" : "menu",
+        // No `aria-expanded`: one menu serves many hover triggers, and these attributes are
+        // built before it is known which of them the open menu belongs to.
+        onmouseenter: (event: MouseEvent) => {
+          const element = event.currentTarget as HTMLElement;
+          cancelHoverLeave();
+          if (hoverTrigger === element) return;
+          cancelTriggerHover();
+          triggerHoverTimer = window.setTimeout(() => {
+            triggerHoverTimer = null;
+            onBeforeOpen?.();
+            open(element, element);
+          }, SUBMENU_HOVER_DELAY_MS);
+        },
+        onmouseleave: () => {
+          cancelTriggerHover();
+          scheduleHoverClose();
         },
       };
     },

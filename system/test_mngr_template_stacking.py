@@ -206,7 +206,7 @@ def test_chat_template_marks_the_agent_role() -> None:
     They stay silent for anything else, so a chat that stopped carrying the
     role would simply never remind its agent to tell the user it finished --
     a silent loss, which is what this pins. The role also has to survive the
-    `welcome` and `fast` templates the chat app stacks on top.
+    `fast` template the chat app stacks on top.
     """
     assert "MNGR_AGENT_ROLE=chat" in _apply(("chat",))["env"]
-    assert "MNGR_AGENT_ROLE=chat" in _apply(("chat", "welcome", "fast"))["env"]
+    assert "MNGR_AGENT_ROLE=chat" in _apply(("chat", "fast"))["env"]

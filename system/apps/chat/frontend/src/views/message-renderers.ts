@@ -96,9 +96,9 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
  * Hide auth-error turns from the pre-login prefix once login has recovered.
  *
  * A fresh chat with no Claude credentials produces a run of "Not logged in"
- * assistant messages before the user authenticates. Once login succeeds and
- * /welcome is resent, the first visible turn should be the friendly greeting,
- * not the prior failed attempts.
+ * assistant messages before the user authenticates. Once login succeeds, the
+ * first visible turn should be the first successful reply, not the prior
+ * failed attempts.
  *
  * Restricted to the PREFIX of the transcript (turns that occurred before any
  * successful assistant message). A mid-session token expiration -- where the
@@ -257,6 +257,63 @@ export function renderAssistantMessage(
       key: event.event_id,
     },
     m(StableAssistantMessage, { event, toolResults, chatId }),
+  );
+}
+
+/** Whether this call renders as a sub-agent card. Gated on the description,
+ *  which rides the tool input, so the card stands as soon as the Agent call is
+ *  issued -- before its subagent session is linked -- showing a non-clickable
+ *  "Running…" until `subagent_metadata.session_id` arrives. A sub-agent is a
+ *  whole conversation, not an action, so it never joins the chips. */
+function isSubagentCardCall(toolCall: ToolCall): boolean {
+  return toolCall.tool_name === "Agent" && Boolean(toolCall.subagent_metadata || toolCall.description);
+}
+
+/** Whether a call renders as a card of its own instead of joining the chip row.
+ *  Naming the rule once keeps {@link isChipOnlyEvent} from drifting away from
+ *  what appendEventParts actually does with a call. */
+function rendersAsCard(toolCall: ToolCall, result: ToolResultEvent | null): boolean {
+  return isSubagentCardCall(toolCall) || isFiledPermissionRequest(toolCall, result);
+}
+
+/** Whether an event's entire contribution to a run is chips: no thinking
+ *  toggle, no prose, and every call one that chips rather than cards. Nothing
+ *  in such an event can break a chip row, which is what lets a consecutive run
+ *  of them share one (see buildRows). */
+export function isChipOnlyEvent(event: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): boolean {
+  if (event.has_thinking) return false;
+  if (event.text) return false;
+  const toolCalls = event.tool_calls || [];
+  if (toolCalls.length === 0) return false;
+  return toolCalls.every((call) => !rendersAsCard(call, toolResults.get(call.tool_call_id) ?? null));
+}
+
+/**
+ * A run of assistant events as ONE top-level row.
+ *
+ * A harness emits an event per model response, so what a reader sees as one
+ * message -- a line of intent, then the calls that carry it out -- arrives as
+ * several. A row each sets them a full message gap apart and stacks a lone chip
+ * per row; handing the run to renderAssistantRun lays them out exactly as they
+ * would have laid out had the harness sent them as one event: prose, then the
+ * single wrapping chip row tucked under it. Both are what a step's revealed
+ * work already gets.
+ *
+ * Unmemoized, unlike {@link renderAssistantMessage}, which is why buildRows
+ * sends a lone event there instead. The cost is a shallow vnode diff per
+ * redraw: MarkdownContent guards its own re-parse on unchanged content, so the
+ * markdown is not re-rendered either way.
+ */
+export function renderAssistantRunRow(
+  events: AssistantMessageEvent[],
+  toolResults: Map<string, ToolResultEvent>,
+  chatId: string,
+): m.Vnode {
+  const key = events[0].event_id;
+  return m(
+    "div",
+    { id: key, class: "message message-assistant mb-5", key },
+    renderAssistantRun(events, toolResults, chatId),
   );
 }
 
@@ -566,11 +623,8 @@ function appendEventParts(
     }
   }
   for (const toolCall of toolCalls) {
-    // Render the rich card as soon as we have the Agent call's description (from the tool
-    // input), even before its subagent session is linked; the card shows a non-clickable
-    // "Running…" state until subagent_metadata.session_id arrives. A sub-agent is a whole
-    // conversation, not an action, so it stays a card rather than joining the chips.
-    if (toolCall.tool_name === "Agent" && (toolCall.subagent_metadata || toolCall.description)) {
+    const result = toolResults.get(toolCall.tool_call_id) ?? null;
+    if (isSubagentCardCall(toolCall)) {
       // The Agent call's tool result arrives only when the sub-agent finishes, so its
       // absence is our signal that the sub-agent is still actively working.
       const subagentRunning = !toolResults.has(toolCall.tool_call_id);
@@ -578,7 +632,6 @@ function appendEventParts(
       children.push(renderSubagentCard(toolCall, chatId, subagentRunning));
       continue;
     }
-    const result = toolResults.get(toolCall.tool_call_id) ?? null;
     // A permission request renders as its own card (the request, a verdict or
     // button, and the raw call) rather than a chip: it is something to ACT on,
     // so it must not be one click away behind a chip.

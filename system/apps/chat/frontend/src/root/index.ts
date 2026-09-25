@@ -76,6 +76,9 @@ let pendingToken: string | null = null;
 let pendingPick: { token: string; intake: PendingIntake } | null = null;
 // The chats started from this root: on top of the list until their first message.
 const startedHere = new Set<string>();
+// The chats this root created that no push has named yet. The socket's connect-time replay can land after the create
+// returned, with a chat list from before it, and the chat's provisional record only follows that replay.
+const awaitingListing = new Set<string>();
 const compactQuery = window.matchMedia(`(max-width: ${COMPACT_MAX_WIDTH_PX}px)`);
 
 function selectedTitle(): string {
@@ -115,6 +118,7 @@ async function createAndSelect(accountId: string): Promise<void> {
   try {
     const created = await createChat("", accountId);
     startedHere.add(created.chatId);
+    awaitingListing.add(created.chatId);
     select(created.chatId);
   } catch (error) {
     alert(`Failed to create chat: ${(error as Error).message}`);
@@ -251,13 +255,15 @@ function onChatsUpdated(): void {
   for (const chatId of startedHere) {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
+  const listed = new Set(rows.map((row) => row.chatId));
+  for (const chatId of listed) awaitingListing.delete(chatId);
+  const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
-    const listed = new Set(rows.map((row) => row.chatId));
     for (const heldId of pool.heldChatIds()) {
-      if (!listed.has(heldId)) pool.destroy(heldId);
+      if (!isKept(heldId)) pool.destroy(heldId);
     }
   }
-  if (selectedChatId !== null && !rows.some((row) => row.chatId === selectedChatId)) select(null);
+  if (selectedChatId !== null && !isKept(selectedChatId)) select(null);
   else reportLocation();
 }
 
