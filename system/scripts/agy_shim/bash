@@ -80,8 +80,7 @@ if [ -z "$PAYLOAD" ]; then
 fi
 
 # claude's PreToolUse order (.claude/settings.json), on the command the agent actually wrote --
-# the rewrite happens after, so no guard ever inspects a prefixed command. Getting that ordering
-# for free is the one thing this shim has over pi, which needs `mngrOriginalCommand` for it.
+# the rewrite happens after, so no guard ever inspects a prefixed command.
 for guard in \
     agent_prevent_commit_rewrite.sh \
     agent_block_pipe_tail_head.sh \

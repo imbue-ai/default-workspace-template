@@ -50,7 +50,8 @@ _POLICY_GUARDS = _EXTENSIONS_DIR / "policy_guards.ts"
 _TK_WORKFLOW = _EXTENSIONS_DIR / "tk_workflow.ts"
 
 # Node driver: load one extension by absolute path, register its handlers against a
-# fake `pi`, fire a single event, and report the handler's return value as JSON.
+# fake `pi`, fire a single event, and report the handler's return value and the event
+# payload (which a handler may mutate) as JSON.
 _DRIVER_MJS = """
 import { pathToFileURL } from "node:url";
 const [, , extensionPath, specJson] = process.argv;
@@ -59,8 +60,9 @@ const handlers = {};
 const mod = await import(pathToFileURL(extensionPath).href);
 mod.default({ on: (name, handler) => { (handlers[name] ||= []).push(handler); } });
 let result;
-for (const handler of (handlers[spec.event] || [])) { result = await handler(spec.payload ?? {}, {}); }
-process.stdout.write(JSON.stringify({ result: result ?? null }));
+const payload = spec.payload ?? {};
+for (const handler of (handlers[spec.event] || [])) { result = await handler(payload, {}); }
+process.stdout.write(JSON.stringify({ result: result ?? null, payload }));
 """
 
 # Stub `ticket`: its `steps` output is driven by env so a test can model any step
@@ -87,12 +89,6 @@ exit 0
 _HOST = "http://latchkey-self.invalid/permission-requests"
 # The canonical filing, exactly as the latchkey skill documents it.
 _REQUEST = f"latchkey curl -XPOST {_HOST} -H 'Content-Type: application/json' -d '{{\"agent_id\": \"a1\"}}'"
-# What mngr's lifecycle extension turns a command into when it rewrites `input.command`
-# (see its `rewriteBashCommand`): two commands prepended, `;`-joined.
-_MNGR_REWRITE_PREFIX = (
-    "export GIT_AUTHOR_NAME='ann' GIT_COMMITTER_NAME='ann'; "
-    "test -w /proc/self/oom_score_adj && echo 900 > /proc/self/oom_score_adj 2>/dev/null; "
-)
 
 
 @functools.cache
@@ -161,16 +157,24 @@ def _event_result(proc: subprocess.CompletedProcess[str]) -> Any:
     return json.loads(proc.stdout)["result"]
 
 
-def _guard_result(tmp_path: Path, command: str, **extra_payload: Any) -> Any:
-    """Fire a bash ``tool_call`` through policy_guards.ts against the real checkers."""
-    payload: dict[str, Any] = {
-        "toolName": "bash",
-        "input": {"command": command},
-        **extra_payload,
-    }
-    return _event_result(
-        _run_event(tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT)
+def _guard_call(
+    tmp_path: Path, command: str, env: dict[str, str] | None = None
+) -> tuple[Any, str]:
+    """Fire a bash ``tool_call`` through policy_guards.ts against the real scripts.
+
+    Returns the handler's result and the command pi would run afterwards.
+    """
+    payload = {"toolName": "bash", "input": {"command": command}}
+    proc = _run_event(
+        tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT, env=env
     )
+    assert proc.returncode == 0, f"event driver failed:\n{proc.stdout}\n{proc.stderr}"
+    out = json.loads(proc.stdout)
+    return out["result"], out["payload"]["input"]["command"]
+
+
+def _guard_result(tmp_path: Path, command: str) -> Any:
+    return _guard_call(tmp_path, command)[0]
 
 
 def _tk_work_dir(tmp_path: Path) -> Path:
@@ -217,6 +221,8 @@ def _tk_result(
         pytest.param("tk start wor-1", id="standalone-tk-start"),
         pytest.param("cd /tmp && echo hi", id="chained-command-no-checker-cares-about"),
         pytest.param(f"latchkey curl {_HOST} | jq .", id="reading-the-queue"),
+        pytest.param("cat notes.md | " + "head -120", id="cat-of-files-into-head"),
+        pytest.param("git commit -m 'rebase notes'", id="plain-git-commit"),
     ],
 )
 def test_guards_allow_what_the_checkers_allow(tmp_path: Path, command: str) -> None:
@@ -239,12 +245,27 @@ def test_guards_allow_what_the_checkers_allow(tmp_path: Path, command: str) -> N
         pytest.param(
             "cd /tmp && tk start wor-1", "runs before it", id="chained-tk-start"
         ),
+        pytest.param(
+            "pytest | " + "tail -20",
+            "Do not pipe commands through tail or head",
+            id="pipe-into-tail",
+        ),
+        pytest.param(
+            "git rebase -i HEAD~2",
+            "git rebase commands are not allowed",
+            id="git-rebase",
+        ),
+        pytest.param(
+            "git commit --amend -m x",
+            "--amend or --fixup is not allowed",
+            id="git-commit-amend",
+        ),
     ],
 )
 def test_guards_block_with_the_checkers_own_reason(
     tmp_path: Path, command: str, expected_in_reason: str
 ) -> None:
-    """The refusal carries the checker's stderr, so the agent reads the same guidance
+    """The refusal carries the script's stderr, so the agent reads the same guidance
     it would get from the PreToolUse hook on claude or codex."""
     result = _guard_result(tmp_path, command)
     assert result is not None and result["block"] is True
@@ -263,16 +284,35 @@ def test_guards_ignore_a_non_bash_tool(tmp_path: Path) -> None:
     )
 
 
-def test_guards_check_the_command_the_agent_wrote_not_the_rewritten_one(
+def test_an_allowed_command_runs_with_the_oom_tag_and_git_identity_prefix(
     tmp_path: Path,
 ) -> None:
-    """mngr's extension rewrites `input.command` in place and pi does not order the two
-    extensions, so the guard prefers the pre-rewrite command mngr records. Without it the
-    prefix reads as a command chained ahead of the request and every filing is refused."""
-    rewritten = _MNGR_REWRITE_PREFIX + _REQUEST
-    blocked = _guard_result(tmp_path, rewritten)
-    assert blocked is not None and blocked["block"] is True
-    assert _guard_result(tmp_path, rewritten, mngrOriginalCommand=_REQUEST) is None
+    """The guards judge the command the agent wrote -- a prefixed `tk start` would read
+    as chained and be refused -- and only then is the prefix put in front of it."""
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+    (host_dir / "data.json").write_text(json.dumps({"host_id": "host-9"}))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "data.json").write_text(json.dumps({"name": "test-agent"}))
+    env = {
+        "MNGR_AGENT_ID": "agent-x",
+        "MNGR_HOST_DIR": str(host_dir),
+        "MNGR_AGENT_STATE_DIR": str(state_dir),
+    }
+    result, command = _guard_call(tmp_path, "tk start wor-1", env=env)
+    assert result is None
+    prefix = command.removesuffix("tk start wor-1")
+    assert prefix != command
+    assert "GIT_AUTHOR_NAME=test-agent" in prefix
+    assert "GIT_AUTHOR_EMAIL=agent-x@host-9" in prefix
+    assert "oom_score_adj" in prefix
+
+
+def test_a_refused_command_is_left_as_written(tmp_path: Path) -> None:
+    result, command = _guard_call(tmp_path, "git rebase -i HEAD~2")
+    assert result is not None and result["block"] is True
+    assert command == "git rebase -i HEAD~2"
 
 
 # --- tk_workflow.ts ----------------------------------------------------------

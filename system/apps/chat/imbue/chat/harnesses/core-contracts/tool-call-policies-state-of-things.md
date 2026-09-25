@@ -114,9 +114,8 @@ result), rewrite (prepend, then `exec`), and inform.
 
 The shim feeds the **same scripts claude runs**, unmodified, by synthesising the payload they
 parse on stdin (`{"tool_name":"Bash","tool_input":{"command":…}}`) -- so editing a guard
-updates claude, codex and agy together. It runs them in claude's order on the command the
-agent wrote, then applies the rewrite prefix, so no guard ever inspects a prefixed command;
-pi needs `mngrOriginalCommand` for that property, the shim gets it from statement order.
+updates claude, codex, agy and pi together. It runs them in claude's order on the command the
+agent wrote, then applies the rewrite prefix, so no guard ever inspects a prefixed command.
 
 Three things about it are load-bearing:
 * **The shebang is `#!/bin/bash`, absolute.** Every other script here uses
@@ -155,54 +154,45 @@ The hook has nothing to protect there, and it appears exactly once in this repo 
 given to codex or pi either. This paragraph records why, so it is not "fixed" later.
 
 ### pi  (wiring: `.pi/extensions/policy_guards.ts` in this repo)
-Pi has **no shell-hook surface** — its only extension point is a TypeScript module. It
-therefore cannot run a hook *wrapper* (those read a hook payload on stdin, which pi has no
-equivalent of), and splits our rules two ways:
+Pi has **no shell-hook surface** — its only extension point is a TypeScript module, which pi
+auto-discovers from `.pi/extensions/` in the project. Two extensions here carry our rules:
 
-* **This repo's guards** live in `.pi/extensions/policy_guards.ts`, which pi auto-discovers
-  from the project. It spawns the same `*_check.py` files claude and codex reach through
-  their wrappers, passing the agent's command as `$1` and blocking on exit 2 with the
-  checker's stderr as the reason. pi calls every extension's `tool_call` handler and blocks
-  when any returns `{block, reason}`, so this runs alongside mngr's lifecycle extension.
-  One checker file, three harnesses.
-* **This repo's tk step discipline** lives in `.pi/extensions/tk_workflow.ts` — the
-  require-steps nudge on `tool_result`, the open-steps carryover on `before_agent_start`,
-  and the stop nudge on `agent_settled`. pi composes across extensions (`tool_result`
-  handlers chain like middleware, `before_agent_start` chains the system prompt), so it
-  runs alongside mngr's without either clobbering the other. Reminder *text* is copied
-  verbatim from the scripts so all three harnesses read identically, and step state comes
-  from the same vendored `ticket` binary they read.
-* **Rules that hold for any pi agent** (the pipe-into-`tail`/`head` block, the git
-  history-rewrite block, and the OOM/git-identity rewrite) stay re-expressed in mngr's
-  lifecycle extension against the pi SDK event that matches.
+* **The command guards and the rewrite** live in `.pi/extensions/policy_guards.ts`. Like the
+  agy shim, it feeds the **same scripts claude runs** the claude-shaped payload they parse on
+  stdin, in claude's order, and refuses the call (`{block, reason}`) on exit 2 with the
+  script's stderr as the reason. Once every guard passes it prepends the output of
+  `agent_rewrite_bash_command.py --prefix-only` to `input.command`. Editing a guard script
+  updates pi along with claude, codex and agy.
+* **The tk step discipline** lives in `.pi/extensions/tk_workflow.ts` — the require-steps
+  nudge on `tool_result`, the open-steps carryover on `before_agent_start`, and the stop
+  nudge on `agent_settled`. pi composes across extensions (`tool_result` handlers chain like
+  middleware, `before_agent_start` chains the system prompt), so it runs alongside mngr's
+  lifecycle extension without either clobbering the other. Reminder *text* is copied
+  verbatim from the scripts so all harnesses read identically, and step state comes from the
+  same vendored `ticket` binary they read.
+
+mngr's own pi extension carries no command policy: pi's guards are this repo's, exactly as
+claude's and codex's are.
 
 **Which command a guard sees.** The "rewriter runs last so blockers see the original" story is
-only true on **agy**, where the shim runs the guards and the rewrite as statements in one
-script. It is belt-and-braces everywhere else and should not be relied on: claude runs a
-matcher's hooks in PARALLEL (`agent_rewrite_bash_command.py` says so in its own comment), and
-codex does not thread `updatedInput` into later hooks of the same event (measured: a rewriting
-hook placed first, a logging hook second, and the logger saw the original). On pi the order is
-deterministic and is the UNSAFE one -- CLI `-e` extensions load before project ones -- which is
-why mngr's lifecycle extension runs the blockers and the rewrite inside a single `tool_call`
-handler, blockers first.
-pi offers no such ordering: it calls every extension's `tool_call` handler on one shared,
-mutable event, and mngr's rewrite prepends the OOM tag and git identity as their own
-`;`-joined commands — which our checkers would refuse as "another command runs before it",
-blocking every permission request and every `tk start`/`tk close`. So mngr's handler records
-the pre-rewrite command on the event as **`mngrOriginalCommand`**, and
-`policy_guards.ts` prefers it, falling back to `input.command` (the untouched value) when it
-is absent because this extension ran first. Either order gives the guards the agent's own
-command. Keep the two ends of that contract in step.
+only true on **agy** and **pi**, where the guards and the rewrite run in sequence in one
+script (agy) or one `tool_call` handler (pi). It is belt-and-braces on claude and codex and
+should not be relied on there: claude runs a matcher's hooks in PARALLEL
+(`agent_rewrite_bash_command.py` says so in its own comment), and codex does not thread
+`updatedInput` into later hooks of the same event (measured: a rewriting hook placed first, a
+logging hook second, and the logger saw the original). On pi, keep the rewrite inside
+`policy_guards.ts`'s handler: pi calls every extension's `tool_call` handler on one shared,
+mutable event, so a rewrite in another extension could land before the guards read the
+command, and the prefix (its own `;`-joined commands) would make the tk and permission-request
+checkers refuse every `tk start`/`tk close` and every filing as chained.
 
 The SDK is documented in the package's `dist/core/extensions/types.d.ts`; we do NOT modify it.
 
-**Which pi runs which extension.** mngr's lifecycle extension is loaded via the `-e` flag mngr
-adds *only* to a managed agent's launch command (`plugin.py::assemble_command`), so a user
-running plain `pi`, or a nested `pi` the agent spawns via the bash tool, never runs its
-handlers. This repo's two extensions are the opposite by design: pi auto-discovers
-`.pi/extensions/` from the project (it is one of the cwd trust inputs pi asks about), so any pi
-that runs *here* — managed or not — is held to the guards and the step discipline. Normal pi
-behavior and the pi SDK are untouched either way.
+**Which pi runs which extension.** This repo's two extensions are auto-discovered from
+`.pi/extensions/` (it is one of the cwd trust inputs pi asks about), so any pi that runs *here*
+and trusts the project — managed or not — is held to the guards and the step discipline.
+mngr's lifecycle extension, which carries no policy, is loaded only via the `-e` flag mngr adds
+to a managed agent's launch command (`plugin.py::assemble_command`).
 
 ## Output contracts (the reference the mapping below relies on)
 
@@ -244,20 +234,22 @@ are the routes around them that are worth knowing; all were measured.
   `run_command` launched is not itself a tool call, so nothing sees it. No event exists to hook.
 - **agy nested shells (open, deliberate).** Only the outermost `bash -c` is guarded; policing the
   whole tree would block third-party build scripts and re-apply the rewrite per level.
-- **pi nested or plain `pi` (open).** mngr's lifecycle extension loads only via `-e` on a managed
-  launch, so a nested pi gets no P1/P2/P4. Worse, `.pi/extensions/` is **trust-gated**: pi loads
-  project extensions only `if (projectTrusted)`, and trust resolves to false for a
-  non-interactive run with no stored decision -- so a nested `pi -p` started from a subdirectory
-  gets NO guards at all. mngr seeds trust for the work dir, which covers the normal case.
+- **pi in an untrusted project (open).** `.pi/extensions/` is **trust-gated**: pi loads project
+  extensions only `if (projectTrusted)`, and trust resolves to false for a non-interactive run
+  with no stored decision -- so a nested `pi -p` started from a subdirectory gets NO guards at
+  all. mngr seeds trust for the work dir, which covers the normal case.
 - **`sh -c` / `eval` (open on every harness, including claude).** The blockers anchor on the
   command text, so re-entering through another interpreter evades them by construction.
 
 ## Keeping the harnesses in step
 
 When a rule changes, update every harness that carries it:
-- **Safety 1–2** (`agent_block_pipe_tail_head.sh`, `agent_prevent_commit_rewrite.sh`): the
-  scripts (shared by claude **and** codex) and `commandBlockReason()` in mngr's
-  `mngr_pi_lifecycle.ts` (pi) — these hold for any pi agent, so mngr still carries them.
+- **Safety 1–4 and workflow 6** (`agent_prevent_commit_rewrite.sh`,
+  `agent_block_pipe_tail_head.sh`, `agent_latchkey_request_standalone.sh`,
+  `agent_tk_standalone.sh`, `agent_rewrite_bash_command.py`): the scripts alone. claude and
+  codex run them as hooks, and agy's shim and pi's `policy_guards.ts` feed them the same
+  payload. Keep the rewrite **last** in both hook configs and in pi's handler — a blocker that
+  inspects the rewritten command refuses everything (see "Which command a guard sees" above).
 - **Workflow 5 and 7** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
   `agent_open_tickets_stop_nudge.sh`): the scripts (claude **and** codex) and the matching
   handler in **this repo's** `.pi/extensions/tk_workflow.ts` (pi). The step discipline is
@@ -265,18 +257,12 @@ When a rule changes, update every harness that carries it:
 - **Workflow 8** (finish notification): no script on any harness. The rule is in `AGENTS.md`
   and the `notify-user` skill, which every harness reads (see P8 above for why the claude Stop
   hook was removed).
-- **Safety 3** (`agent_latchkey_request_check.py`) and **workflow 6**
-  (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
-  their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
-- **Safety 4** (`agent_rewrite_bash_command.py`): shared by claude and codex; pi mirrors its
-  prefix logic in `rewriteBashCommand()`. Keep it **last** in both hook configs, and keep
-  mngr recording `mngrOriginalCommand` for pi — a blocker that inspects the rewritten
-  command refuses everything (see "Which command a guard sees" above).
 - codex, pi and agy wiring lives in **this repo**: `.codex/hooks.json`,
   `.pi/extensions/policy_guards.ts` and `system/scripts/agy_shim/bash`. A guard added to
-  `.claude/settings.json` needs the matching entry in all three, and nothing in mngr. agy is
-  the cheapest of the three: adding a guard to the shim's loop is one line, because it runs
-  the claude script itself. mngr's only contribution is the PATH entry.
-- claude and codex share one runtime (shell + JSON) so they share files; pi is a separate
-  runtime (in-process TypeScript), so its copy is unavoidable — but small, and its rules and
-  reminder text are verbatim copies.
+  `.claude/settings.json` needs the matching entry in all three, and nothing in mngr. For agy
+  and pi that entry is one line, because both run the claude script itself
+  (`agent_hook_wiring_test.py` checks pi's list against claude's). mngr's only contributions
+  are agy's PATH entry and seeding pi's project trust.
+- The tk reminders are the one place pi carries copies: they ride pi events no shell script
+  can answer (`tool_result`, `before_agent_start`), so `tk_workflow.ts` restates their text
+  verbatim.

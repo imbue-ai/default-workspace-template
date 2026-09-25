@@ -1,1 +1,3 @@
 The tool-call policy for piping into `tail`/`head` (P1) now records its one exemption: a command that is nothing but `cat FILE... | head` (or `tail`) is allowed, because the files already hold the full output and can be re-read. Any other shape, including a compound command that contains such a pipeline, is still blocked.
+
+`tool-call-policies-state-of-things.md` now records that pi reaches every command guard and the OOM/git-identity rewrite through this repo's `.pi/extensions/policy_guards.ts`, which runs the same scripts as the other harnesses. mngr's pi extension no longer carries any command policy, and the `mngrOriginalCommand` handoff between the two extensions is gone.

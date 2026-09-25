@@ -1,13 +1,13 @@
 """Tests that every hook script this repo wires up actually exists.
 
 The `agent_*` scripts here are reached three different ways -- `.claude/settings.json`
-for claude, `.codex/hooks.json` for codex, and `.pi/extensions/policy_guards.ts`, which
-spawns the `*_check.py` checkers directly, for pi. All three name the scripts as plain
-strings, and a name that no longer resolves fails *silently*: the hook never runs and
-the guard is simply gone. So a rename that misses one of these files, or a guard added
+for claude, `.codex/hooks.json` for codex, and `.pi/extensions/policy_guards.ts` for pi.
+All three name the scripts as plain strings, and a name that no longer resolves fails
+*silently*: the hook never runs and the guard is simply gone. So a rename that misses one of these files, or a guard added
 to one harness and forgotten on another, is invisible without this test.
 
-See tool-call-policies.md; "Keeping the three in step" is the invariant asserted here.
+See tool-call-policies-state-of-things.md; "Keeping the harnesses in step" is the invariant
+asserted here.
 """
 
 from __future__ import annotations
@@ -27,8 +27,11 @@ _PI_POLICY_GUARDS = _REPO_ROOT / ".pi" / "extensions" / "policy_guards.ts"
 # A `system/scripts/<name>` path inside a hook command, however the harness spells the
 # work-dir prefix (`${MNGR_AGENT_WORK_DIR:-.}/`, `"$MNGR_AGENT_WORK_DIR/`, `./`).
 _SCRIPT_REF_RE = re.compile(r"system/scripts/([A-Za-z0-9_]+\.(?:sh|py))")
-# The checker paths policy_guards.ts builds, as `join(SCRIPTS, "<name>")`.
-_PI_CHECKER_RE = re.compile(r'join\(SCRIPTS,\s*"([^"]+)"\)')
+# The script paths policy_guards.ts builds, as `join(SCRIPTS, "<name>")`.
+_PI_SCRIPT_RE = re.compile(r'join\(SCRIPTS,\s*"([^"]+)"\)')
+# pi's step nudge is a `tool_result` handler in tk_workflow.ts rather than a
+# `tool_call` guard, because the reminder has to ride the tool's result.
+_PRETOOLUSE_SCRIPTS_PI_CARRIES_ELSEWHERE = {"agent_require_steps_pretool.sh"}
 
 
 def _hook_commands(config: dict[str, Any], event: str) -> list[str]:
@@ -76,15 +79,14 @@ def test_claude_and_codex_run_the_same_pretooluse_guards() -> None:
     assert claude_guards == codex_guards
 
 
-def test_pi_spawns_checkers_that_exist() -> None:
-    """pi reaches the same checkers without a hook wrapper, so its paths need the same
-    check. Asserting the count guards against the regex silently matching nothing if
-    the extension stops building its paths with `join(SCRIPTS, ...)`."""
-    checkers = _PI_CHECKER_RE.findall(_PI_POLICY_GUARDS.read_text())
-    assert len(checkers) == 2, (
-        f"expected 2 checkers in policy_guards.ts, found {checkers}"
-    )
-    for name in checkers:
+def test_pi_runs_the_same_pretooluse_scripts_as_claude() -> None:
+    """policy_guards.ts reaches the hook scripts without a hook config, so a guard
+    added to `.claude/settings.json` and forgotten there is otherwise invisible."""
+    claude = json.loads(_CLAUDE_SETTINGS.read_text())
+    claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse"))
+    pi_guards = set(_PI_SCRIPT_RE.findall(_PI_POLICY_GUARDS.read_text()))
+    assert pi_guards == claude_guards - _PRETOOLUSE_SCRIPTS_PI_CARRIES_ELSEWHERE
+    for name in pi_guards:
         assert (_SCRIPTS_DIR / name).is_file(), (
-            f"policy_guards.ts spawns a missing checker: {name}"
+            f"policy_guards.ts runs a missing script: {name}"
         )
