@@ -1,6 +1,6 @@
 Added `bin/memory_candidates.py`, which a lead runs after one of its agents reports a shed. It lists what could be stopped to free memory, next to the free memory `/proc/meminfo` reports. It only lists and never stops anything.
 
-- Idle chats and workers: from `mngr list`, a local chat or worker that is `WAITING` and has had no activity for 15 minutes. Each shows its last activity and the summed RSS of its processes (the pid mngr reports plus every pid the agent-pid registry holds for it).
+- Idle chats and workers: from `mngr list --provider local` with a `--format` template (the same listing the bug-report collector uses, which still answers inside a workspace container), a chat or worker that is `WAITING` and has had no activity for 15 minutes. Each shows its last activity and the summed RSS of its processes (the pid mngr reports plus every pid the agent-pid registry holds for it).
 
 - Browsers no window shows: a running browser the shell's desktops do not name, with the RSS of its Chromium processes.
 

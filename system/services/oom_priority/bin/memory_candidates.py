@@ -8,9 +8,9 @@ command only reads: it never stops, kills, or re-tags anything.
 It joins three sources, each read independently so one failing leaves the others intact:
 
 - free memory, from ``/proc/meminfo`` (``MemAvailable``, else ``MemFree``; the field read is named);
-- agents, from ``mngr list --format jsonl``: a chat (``user_created``) or worker (``agent_created``)
-  on the local host whose state is ``WAITING`` and whose latest activity is at least
-  ``IDLE_AFTER_SECONDS`` old. Its memory is the summed RSS of its process trees, rooted at the pid
+- agents, from ``mngr list --provider local`` rendered through a ``--format`` template: a chat
+  (``user_created``) or worker (``agent_created``) whose state is ``WAITING`` and whose latest
+  activity is at least ``IDLE_AFTER_SECONDS`` old. Its memory is the summed RSS of its process trees, rooted at the pid
   mngr reports plus every live pid the agent-pid registry holds for it;
 - browsers, from the browser service's ``GET /browsers``: a ``running`` browser that no desktop
   window shows, per the shell's ``GET /api/desktops``. Its memory is the summed RSS of every
@@ -56,13 +56,40 @@ from oom_priority.registry import live_pids_by_agent_id
 # still reading its reply.
 IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
-# Only agents on this host hold memory here; mngr reports a remote agent's pid in its own host's
-# pid namespace.
-LOCAL_PROVIDER_NAME: Final[str] = "local"
 CHAT_KIND: Final[str] = "chat"
 WORKER_KIND: Final[str] = "worker"
 
-MNGR_LIST_ARGV: Final[tuple[str, ...]] = ("mngr", "list", "--format", "jsonl", "--on-error", "continue")
+# The fields each listed agent is rendered with, in column order. The display name goes last because
+# it is the one free-text value, so a separator inside it cannot shift the other columns.
+MNGR_LIST_FIELDS: Final[tuple[str, ...]] = (
+    "id",
+    "name",
+    "state",
+    "pid",
+    "user_activity_time",
+    "agent_activity_time",
+    "start_time",
+    f"labels.{PRIMARY_LABEL}",
+    f"labels.{CHAT_LABEL}",
+    f"labels.{WORKER_LABEL}",
+    "labels.display_name",
+)
+MNGR_LIST_FIELD_SEPARATOR: Final[str] = "|"
+# A template rather than ``--format json``/``jsonl``, and scoped to the local provider, as
+# system/scripts/collect_bug_report_diagnostics.py lists agents: inside a workspace container the
+# template path still answers from local state where the json path has failed outright, and
+# without ``--provider local`` mngr probes every cloud provider in the settings, none of which
+# can answer from in here. Every agent in the workspace is the local provider's.
+MNGR_LIST_ARGV: Final[tuple[str, ...]] = (
+    "mngr",
+    "list",
+    "--provider",
+    "local",
+    "--on-error",
+    "continue",
+    "--format",
+    MNGR_LIST_FIELD_SEPARATOR.join(f"{{{field}}}" for field in MNGR_LIST_FIELDS),
+)
 MNGR_LIST_TIMEOUT_SECONDS: Final[float] = 60.0
 HTTP_TIMEOUT_SECONDS: Final[float] = 10.0
 
@@ -102,6 +129,18 @@ class FreeMemory(NamedTuple):
     field: str
     free_kib: int
     total_kib: int | None
+
+
+class ListedAgent(NamedTuple):
+    """One agent as the ``mngr list`` template renders it."""
+
+    agent_id: str
+    name: str
+    state: str
+    pid: int | None
+    last_activity: datetime | None
+    labels: Mapping[str, str]
+    display_name: str | None
 
 
 class AgentCandidate(NamedTuple):
@@ -218,37 +257,58 @@ def process_trees_rss_kib(root_pids: Iterable[int], proc_dir: Path) -> int | Non
 # Agents
 
 
-def run_mngr_list(run_command: RunCommand) -> tuple[list[Mapping[str, Any]] | None, list[str]]:
-    """The agent records ``mngr list`` printed, or None when it could not run, plus notes on what went wrong.
+def parse_listed_agent(line: str) -> ListedAgent | None:
+    """One rendered ``mngr list`` line, or None when it is not one (the wrong number of columns, or
+    no id or name). mngr renders a null field, and a label the agent does not carry, as empty."""
+    columns = line.split(MNGR_LIST_FIELD_SEPARATOR, len(MNGR_LIST_FIELDS) - 1)
+    if len(columns) != len(MNGR_LIST_FIELDS):
+        return None
+    values = dict(zip(MNGR_LIST_FIELDS, (column.strip() for column in columns)))
+    if not values["id"] or not values["name"]:
+        return None
+    activity_times = [
+        parsed
+        for parsed in (
+            _parse_timestamp(values[field]) for field in ("user_activity_time", "agent_activity_time", "start_time")
+        )
+        if parsed is not None
+    ]
+    label_prefix = "labels."
+    return ListedAgent(
+        agent_id=values["id"],
+        name=values["name"],
+        state=values["state"],
+        pid=int(values["pid"]) if values["pid"].isdigit() else None,
+        last_activity=max(activity_times) if activity_times else None,
+        labels={
+            field.removeprefix(label_prefix): value
+            for field, value in values.items()
+            if field.startswith(label_prefix) and value
+        },
+        display_name=values["labels.display_name"] or None,
+    )
 
-    With ``--on-error continue`` mngr still prints every agent it could list when one provider
-    fails, then exits non-zero; those agents are kept and each error line becomes a note.
+
+def run_mngr_list(run_command: RunCommand) -> tuple[list[ListedAgent] | None, list[str]]:
+    """The agents ``mngr list`` rendered, or None when it could not tell, plus notes on what went wrong.
+
+    With ``--on-error continue`` mngr still renders every agent it could list when something fails,
+    reports the failure on stderr, and exits non-zero; those agents are kept with the failure as a
+    note. A non-zero exit with no agents at all is "unknown", not "no agents".
     """
     try:
         result = run_command(MNGR_LIST_ARGV, MNGR_LIST_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as error:
-        return None, [f"could not run `{' '.join(MNGR_LIST_ARGV)}`: {error}"]
-    records: list[Mapping[str, Any]] = []
-    notes: list[str] = []
-    for line in result.stdout.splitlines():
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(parsed, dict):
-            continue
-        if parsed.get("resource_type") == "agent":
-            records.append(parsed)
-        elif parsed.get("event") == "error":
-            notes.append(f"mngr list reported: {parsed.get('message', parsed)}")
-    if result.returncode != 0 and not notes:
-        stderr_lines = result.stderr.strip().splitlines()
-        detail = stderr_lines[-1] if stderr_lines else "no output"
-        notes.append(f"mngr list exited {result.returncode}: {detail}")
-    return records, notes
+        return None, [f"could not run `mngr list`: {error}"]
+    agents = [agent for agent in (parse_listed_agent(line) for line in result.stdout.splitlines()) if agent is not None]
+    if result.returncode == 0:
+        return agents, []
+    stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+    note = f"mngr list exited {result.returncode}: {'; '.join(stderr_lines) or 'no output'}"
+    return (agents if agents else None), [note]
 
 
-def agent_kind(labels: Mapping[str, Any]) -> str | None:
+def agent_kind(labels: Mapping[str, str]) -> str | None:
     """``chat`` or ``worker`` by the agent's labels, in the launch wrapper's order; None for the
     primary services agent and for anything carrying neither label (never a candidate)."""
     if is_label_true(labels, PRIMARY_LABEL):
@@ -260,8 +320,9 @@ def agent_kind(labels: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
+def _parse_timestamp(value: str) -> datetime | None:
+    """A timestamp as mngr renders a datetime (``2026-09-24 11:00:00.123456+00:00``); None when empty."""
+    if not value:
         return None
     try:
         parsed = datetime.fromisoformat(value)
@@ -270,62 +331,34 @@ def _parse_timestamp(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
-def last_activity_time(record: Mapping[str, Any]) -> datetime | None:
-    """The latest of the agent's reported user activity, agent activity, and process start."""
-    times = [
-        parsed
-        for parsed in (
-            _parse_timestamp(record.get(key)) for key in ("user_activity_time", "agent_activity_time", "start_time")
-        )
-        if parsed is not None
-    ]
-    return max(times) if times else None
-
-
-def _is_local_agent(record: Mapping[str, Any]) -> bool:
-    host = record.get("host")
-    return isinstance(host, dict) and host.get("provider_name") == LOCAL_PROVIDER_NAME
-
-
 def idle_agent_candidates(
-    records: Sequence[Mapping[str, Any]],
+    agents: Sequence[ListedAgent],
     registry_pids: Mapping[str, Sequence[int]],
     proc_dir: Path,
     now: datetime,
 ) -> list[AgentCandidate]:
-    """The idle local chats and workers, largest memory first."""
+    """The idle chats and workers, largest memory first."""
     candidates: list[AgentCandidate] = []
-    for record in records:
-        labels = record.get("labels")
-        kind = agent_kind(labels if isinstance(labels, dict) else {})
-        agent_id = record.get("id")
-        name = record.get("name")
-        state = record.get("state")
-        if kind is None or not isinstance(agent_id, str) or not isinstance(name, str):
+    for agent in agents:
+        kind = agent_kind(agent.labels)
+        if kind is None or agent.state != IDLE_AGENT_STATE or agent.last_activity is None:
             continue
-        if state != IDLE_AGENT_STATE or not _is_local_agent(record):
-            continue
-        last_activity = last_activity_time(record)
-        if last_activity is None:
-            continue
-        idle_seconds = (now - last_activity).total_seconds()
+        idle_seconds = (now - agent.last_activity).total_seconds()
         if idle_seconds < IDLE_AFTER_SECONDS:
             continue
 
         # The pid mngr reports plus every pid the agent registered (codex registers two).
-        reported_pid = record.get("pid")
-        root_pids = set(registry_pids.get(agent_id, ()))
-        if isinstance(reported_pid, int):
-            root_pids.add(reported_pid)
-        display_name = labels.get("display_name") if isinstance(labels, dict) else None
+        root_pids = set(registry_pids.get(agent.agent_id, ()))
+        if agent.pid is not None:
+            root_pids.add(agent.pid)
         candidates.append(
             AgentCandidate(
-                name=name,
-                agent_id=agent_id,
-                display_name=display_name if isinstance(display_name, str) and display_name else None,
+                name=agent.name,
+                agent_id=agent.agent_id,
+                display_name=agent.display_name,
                 kind=kind,
-                state=IDLE_AGENT_STATE,
-                last_activity=last_activity,
+                state=agent.state,
+                last_activity=agent.last_activity,
                 idle_seconds=idle_seconds,
                 pids=tuple(sorted(root_pids)),
                 rss_kib=process_trees_rss_kib(root_pids, proc_dir) if root_pids else None,
@@ -335,11 +368,11 @@ def idle_agent_candidates(
 
 
 def collect_agent_section(sources: Sources) -> AgentSection:
-    records, notes = run_mngr_list(sources.run_command)
-    if records is None:
+    agents, notes = run_mngr_list(sources.run_command)
+    if agents is None:
         return AgentSection(candidates=None, notes=tuple(notes))
     registry_pids = live_pids_by_agent_id(is_alive=lambda pid: (sources.proc_dir / str(pid)).is_dir())
-    candidates = idle_agent_candidates(records, registry_pids, sources.proc_dir, sources.now)
+    candidates = idle_agent_candidates(agents, registry_pids, sources.proc_dir, sources.now)
     return AgentSection(candidates=tuple(candidates), notes=tuple(notes))
 
 

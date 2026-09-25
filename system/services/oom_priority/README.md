@@ -259,11 +259,16 @@ It lists:
 - **Free memory**, from `/proc/meminfo`: `MemAvailable`, or `MemFree` when
   there is no `MemAvailable`. The output names the field it read. Under gVisor
   the two are equal.
-- **Idle chats and workers**, from `mngr list --format jsonl`. A candidate:
+- **Idle chats and workers**, from `mngr list --provider local`, rendered
+  through a `--format` template (the columns are `MNGR_LIST_FIELDS`). This is
+  how `system/scripts/collect_bug_report_diagnostics.py` lists agents too:
+  inside a workspace container the template path answers from local state
+  where `--format json` has failed, and without `--provider local` mngr probes
+  every cloud provider in the settings, none of which can answer from in there.
+  A candidate:
   - is a chat (`user_created=true`) or a worker (`agent_created=true`). The
     primary services agent and any agent with neither label (an automation, for
     example) are never listed;
-  - is on the local host;
   - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
     a `STOPPED` or `DONE` agent holds no memory to free;
   - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
