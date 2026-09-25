@@ -63,9 +63,6 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
 
 
 def test_only_claude_adds_the_billing_line_to_the_fast_mode_notice() -> None:
-    # The turn-limit notice's extra line is declared on the popup, not chosen by the
-    # frontend from the harness name. Claude Code bills fast mode through the API even on
-    # a subscription; codex's fast tier has no such split, so its notice has nothing to add.
     bodies = {
         harness: popup.notice_body
         for harness in HARNESS_SPECS
