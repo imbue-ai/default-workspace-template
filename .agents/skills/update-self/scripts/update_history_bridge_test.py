@@ -277,7 +277,7 @@ def test_bridge_history_refuses_a_workspace_it_cannot_match_and_changes_nothing(
 
     assert "shares no history" in capsys.readouterr().err
     assert _replace_refs(stranger) == []
-    assert not (stranger / "data/.state/update-self/history-bridge.json").exists()
+    assert not (stranger / "data").exists()
 
 
 def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
@@ -290,6 +290,7 @@ def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
 
     assert json.loads(capsys.readouterr().out)["dropped"] == twin
     assert _replace_refs(workspace) == []
+    assert list((workspace / "data/.state/update-self").iterdir()) == []
     assert (
         subprocess.run(
             ["git", "merge-base", "HEAD", "minds-v2"], cwd=workspace
