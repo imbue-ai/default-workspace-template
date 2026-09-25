@@ -10,6 +10,7 @@
  */
 
 import {
+  contentEditableRegionOf,
   describeElement,
   elementOfTarget,
   isEditableElement,
@@ -112,6 +113,16 @@ function fieldSelectionOf(element: Element): string {
   return element.value.slice(start, end);
 }
 
+/** The text selected inside a contenteditable target's own region, or "": a selection elsewhere on the page is
+ *  not the target's, so Cut does not offer to delete it. */
+function regionSelectionOf(element: Element, selectionText: string): string {
+  const region = contentEditableRegionOf(element);
+  if (region === null || selectionText === "") return "";
+  const selection = element.ownerDocument.getSelection();
+  if (selection === null || selection.rangeCount === 0) return "";
+  return region.contains(selection.getRangeAt(0).commonAncestorContainer) ? selectionText : "";
+}
+
 /** Cut fails whole, as the native row does: nothing is deleted unless the copy landed. */
 async function cutFrom(element: Element, selectionText: string): Promise<void> {
   if (isFieldElement(element)) {
@@ -166,8 +177,9 @@ export function standardContextMenuRows(target: ContextMenuTarget): ContextMenuR
   const isEditable = isEditableElement(element);
   const fieldSelection = fieldSelectionOf(element);
   const hasSelection = selectionText !== "" || fieldSelection !== "";
-  // Cut acts on the target's own selection: a field's, or the document's inside a contenteditable region.
-  const ownSelection = isFieldElement(element) ? fieldSelection : selectionText;
+  // Cut acts on the target's own selection: a field's, or the document's when it lies inside the target's
+  // contenteditable region.
+  const ownSelection = isFieldElement(element) ? fieldSelection : regionSelectionOf(element, selectionText);
   const editRows: ContextMenuRow[] = [];
   if (isEditable && ownSelection !== "") {
     editRows.push({ kind: "action", key: "cut", label: "Cut", onSelect: () => void cutFrom(element, selectionText) });

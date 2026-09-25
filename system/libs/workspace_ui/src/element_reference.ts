@@ -103,16 +103,16 @@ export function isEditableElement(element: Element): boolean {
   if (element instanceof HTMLInputElement) {
     return !BUTTON_INPUT_TYPES.has(element.type) && !element.disabled && !element.readOnly;
   }
-  return element instanceof HTMLElement && isInContentEditable(element);
+  return element instanceof HTMLElement && contentEditableRegionOf(element) !== null;
 }
 
-/** Whether the element sits in a ``contenteditable`` region, read off the attributes (``isContentEditable``
- *  is a rendering fact some environments never compute). */
-function isInContentEditable(element: HTMLElement): boolean {
+/** The ``contenteditable`` region the element sits in, or null outside one; read off the attributes
+ *  (``isContentEditable`` is a rendering fact some environments never compute). */
+export function contentEditableRegionOf(element: Element): Element | null {
   const region = element.closest("[contenteditable]");
-  if (region === null) return false;
+  if (region === null) return null;
   const value = region.getAttribute("contenteditable");
-  return value === "" || value === "true" || value === "plaintext-only";
+  return value === "" || value === "true" || value === "plaintext-only" ? region : null;
 }
 
 /** The value of a field, or null for an element that has none. */

@@ -50,9 +50,19 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.getSelection()?.removeAllRanges();
   document.body.innerHTML = "";
   delete (document as { execCommand?: unknown }).execCommand;
 });
+
+/** Make the document's selection the contents of ``element``. */
+function selectContentsOf(element: Element): void {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = document.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
 
 describe("standardContextMenuRows", () => {
   it("offers nothing for a plain element with nothing selected", () => {
@@ -70,10 +80,17 @@ describe("standardContextMenuRows", () => {
     expect(keysOf(standardContextMenuRows(targetOf(field)))).toEqual(["cut", "copy", "paste", "select-all"]);
   });
 
-  it("offers Copy but not Cut on a field when the selection lies elsewhere on the page", () => {
+  it("offers Copy but not Cut on an editable target when the selection lies elsewhere on the page", () => {
     const field = byId("field") as HTMLInputElement;
     field.setSelectionRange(0, 0);
     expect(keysOf(standardContextMenuRows(targetOf(field, "plain words")))).toEqual(["copy", "paste", "select-all"]);
+    selectContentsOf(byId("para"));
+    expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "plain words")))).toEqual([
+      "copy",
+      "paste",
+      "select-all",
+    ]);
+    selectContentsOf(byId("note"));
     expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "editable")))).toEqual([
       "cut",
       "copy",
