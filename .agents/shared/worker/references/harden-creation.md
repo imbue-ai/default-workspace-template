@@ -269,13 +269,13 @@ selector leaves out, that is a mapping to add (below).
 
 **An unclassified path.** When the output ends with an `# unclassified` block,
 each listed path is one the selector could not map, and the full root suite is
-among the lines in its place: run the lines as printed. Then decide which
-suites can actually observe a change to that path, record it in
-`system/config/test_selection_overrides.toml`
-(a `[[consumer]]` entry; an empty `suites` when no suite beyond the always-run
-set can observe it) as part of your change, and re-run `select-tests` to confirm the
-path is classified, so the next change to it runs only what it needs. When the
-path is built-in
+among the lines in its place: run the lines as printed. That run fails
+`test_every_tracked_path_is_classified` for the same paths, and the mapping is
+the fix. Decide which suites can actually observe a change to that path, record
+it in `system/config/test_selection_overrides.toml` (a `[[consumer]]` entry; an
+empty `suites` when no suite beyond the always-run set can observe it) as part
+of your change, and re-run `select-tests` to confirm the path is classified, so
+the next change to it runs only what it needs. When the path is built-in
 (AGENTS.md, "Updates", has the test), name it in your `done` report under
 `Selector gaps:`, one line each with the mapping you added: your lead includes
 it in its report of built-in issues for the pass.
