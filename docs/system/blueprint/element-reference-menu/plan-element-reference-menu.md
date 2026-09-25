@@ -186,7 +186,7 @@ The link rows resolve the `href` against the document, so a relative link copies
 
 ### 4.3 The reference rows
 
-Copy path to element writes the reference block to the clipboard, the full block when it fits and the pointer form otherwise: a page other than the chat cannot write a reference file itself, so on those pages Copy path to element always copies the full block, however large, and the pointer form is made only where a draft enters a composer (section 7.2).
+Copy path to element writes the full reference block to the clipboard, however large, on every page: no page can make a pointer form for the clipboard (only the chat app writes a reference file), and the pointer form is made only where a draft enters a composer (section 7.2).
 Explain and Modify hand the draft text of section 3.3 to the surface's draft route (section 3.4).
 
 ### 4.4 A page's own menus
