@@ -102,7 +102,10 @@ class _Client:
 
 @pytest.mark.parametrize(
     ("allowed", "method", "pane_follows"),
-    [(False, "Runtime.runIfWaitingForDebugger", False), (True, "Page.navigate", True)],
+    [
+        pytest.param(False, "Runtime.runIfWaitingForDebugger", False, id="resume-without-the-lease"),
+        pytest.param(True, "Page.navigate", True, id="leased-command-control"),
+    ],
 )
 def test_a_resume_reaches_chromium_without_moving_the_pane(allowed: bool, method: str, pane_follows: bool) -> None:
     # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
