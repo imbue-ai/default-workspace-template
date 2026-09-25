@@ -183,6 +183,18 @@ describe("installElementContextMenu", () => {
     expect(card()).toBeNull();
   });
 
+  it("takes an open card down with its listeners when uninstalled", () => {
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    rightClick(document.getElementById("para") as Element);
+    expect(card()).not.toBeNull();
+    uninstall();
+    uninstall = null;
+    expect(card()).toBeNull();
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    document.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+  });
+
   it("yields to a mark another copy of the module left, and its uninstaller leaves that mark alone", () => {
     document.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
     const noop = installElementContextMenu({ connection, handshake: () => HANDSHAKE });

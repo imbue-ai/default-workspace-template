@@ -92,7 +92,9 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   const existing = uninstallerByDocument.get(ownerDocument);
   if (existing !== undefined) return existing;
   if (ownerDocument.documentElement.hasAttribute(CONTEXT_MENU_INSTALLED_ATTR)) return () => undefined;
-  const open = options.open ?? createDefaultRenderer(ownerDocument);
+  // A page's own renderer is its owner's to close; the default one is closed here on uninstall.
+  const renderer: ContextMenuRenderer =
+    options.open === undefined ? createDefaultRenderer(ownerDocument) : { open: options.open };
   const { draft, isDraftAvailable } = draftRouteOf(options);
   const scopeOf = options.scope ?? (() => scopeOfHandshake(options.handshake?.() ?? null));
 
@@ -107,12 +109,13 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
       isDraftAvailable(),
       options.extraRows?.(target) ?? [],
     );
-    open(rows, { x: event.clientX, y: event.clientY });
+    renderer.open(rows, { x: event.clientX, y: event.clientY });
   };
 
   ownerDocument.addEventListener("contextmenu", onContextMenu);
   ownerDocument.documentElement.setAttribute(CONTEXT_MENU_INSTALLED_ATTR, "");
   const uninstall = (): void => {
+    renderer.close?.();
     ownerDocument.removeEventListener("contextmenu", onContextMenu);
     ownerDocument.documentElement.removeAttribute(CONTEXT_MENU_INSTALLED_ATTR);
     uninstallerByDocument.delete(ownerDocument);
@@ -152,10 +155,15 @@ const DIVIDER_STYLE = "margin: 4px 0; border: 0; border-top: 1px solid rgba(0, 0
 /** Gap kept between the card and each viewport edge. */
 const EDGE_MARGIN = 6;
 
+/** What draws the menu: ``open`` puts the rows at the point; ``close``, when the renderer has one, takes an open
+ *  menu down with the listeners it holds. */
+interface ContextMenuRenderer {
+  open: (rows: readonly ContextMenuRow[], point: ContextMenuPoint) => void;
+  close?: () => void;
+}
+
 /** A renderer that draws the rows as a fixed card and closes it on a press outside, Escape, or a pick. */
-export function createDefaultRenderer(
-  ownerDocument: Document,
-): (rows: readonly ContextMenuRow[], point: ContextMenuPoint) => void {
+export function createDefaultRenderer(ownerDocument: Document): Required<ContextMenuRenderer> {
   let card: HTMLElement | null = null;
 
   const close = (): void => {
@@ -175,7 +183,7 @@ export function createDefaultRenderer(
     close();
   };
 
-  return (rows, point) => {
+  const open = (rows: readonly ContextMenuRow[], point: ContextMenuPoint): void => {
     close();
     const view = ownerDocument.defaultView;
     const next = ownerDocument.createElement("div");
@@ -233,4 +241,5 @@ export function createDefaultRenderer(
     ownerDocument.addEventListener("mousedown", onPressOutside, true);
     ownerDocument.addEventListener("keydown", onKeydown, true);
   };
+  return { open, close };
 }
