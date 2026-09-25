@@ -21,9 +21,10 @@ MAX_APP_NAME_LENGTH: Final[int] = 32
 # ``app-watcher``, ``owner-exec``, ``vm-exec-register``, ``host-backup``,
 # ``env-converge``, ``agent-observer``): an app named after one would claim that
 # program as its ``<name>-<role>`` sidecar. ``system/test_app_manifests.py`` keeps this
-# set in step with ``system/supervisord.conf``.
+# set in step with ``system/supervisord.conf``. ``github`` is the one it cannot see:
+# ``github-sync`` is only written once GitHub sync is enabled.
 RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset(
-    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "agent"}
+    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"}
 )
 RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
@@ -201,6 +202,11 @@ class PriorityName(str):
         return core_schema.no_info_after_validator_function(
             cls, core_schema.str_schema()
         )
+
+
+class LaunchParamName(NonEmptyStr):
+    """The name of a launch path's param or preset, as the manifest declares it and the shell sends it (a GET launch
+    path's query, a POST launch path's body)."""
 
 
 class ProgramName(NonEmptyStr):

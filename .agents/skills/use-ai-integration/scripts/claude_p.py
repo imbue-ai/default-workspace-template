@@ -40,7 +40,10 @@ handles the things that are easy to get wrong by hand:
   hooks (which otherwise bleed into -- and intermittently hijack -- the answer).
   ``system`` is required: it frames the task and is the neutralizing instruction.
   (``--bare`` would also strip that project context, but it cannot authenticate
-  without an API key, so the isolated cwd is the keyless workaround.)
+  without an API key, so the isolated cwd is the keyless workaround.) Its session
+  is not persisted (``--no-session-persistence``): claude files a persisted
+  session under a ``projects/`` directory named for the cwd, so every call would
+  leave one more directory behind.
 
 - ``claude_p_task(prompt, *, append_system=None, system=None, model=...,
   permission_mode="bypassPermissions")`` -- a one-shot agentic task that needs
@@ -162,8 +165,10 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     # see the account the chat is bound to. Outside one -- a supervisord service, a cron
     # job -- nothing sets it and ~/.claude holds no credential, so fall back to the
     # workspace's default account rather than to nothing.
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or _default_account_dir() or os.path.expanduser(
-        "~/.claude"
+    config_dir = (
+        os.environ.get("CLAUDE_CONFIG_DIR", "")
+        or _default_account_dir()
+        or os.path.expanduser("~/.claude")
     )
     settings_path = os.path.join(config_dir, "settings.json")
     try:
@@ -263,6 +268,7 @@ def _build_argv(
     append_system: str | None,
     tools: str | None,
     permission_mode: str | None,
+    is_session_persisted: bool,
 ) -> list[str]:
     """Assemble the ``claude -p`` argv. Pure, so flag emission is unit-testable.
 
@@ -281,7 +287,47 @@ def _build_argv(
         argv += ["--tools", tools]
     if permission_mode is not None:
         argv += ["--permission-mode", permission_mode]
+    if not is_session_persisted:
+        argv.append("--no-session-persistence")
     return argv
+
+
+def _completion_argv(prompt: str, *, system: str, model: str) -> list[str]:
+    """The argv of one non-agentic completion.
+
+    Not persisted: every completion runs from its own throwaway cwd, and claude files a
+    persisted session under a ``projects/`` directory named for that cwd, so each call
+    would leave a directory behind in the account's projects tree for good.
+    """
+    return _build_argv(
+        prompt,
+        model=model,
+        system=system,
+        append_system=None,
+        tools="",
+        permission_mode=None,
+        is_session_persisted=False,
+    )
+
+
+def _task_argv(
+    prompt: str,
+    *,
+    system: str | None,
+    append_system: str | None,
+    model: str,
+    permission_mode: str | None,
+) -> list[str]:
+    """The argv of one agentic task, persisted like any session run from the repo."""
+    return _build_argv(
+        prompt,
+        model=model,
+        system=system,
+        append_system=append_system,
+        tools=None,
+        permission_mode=permission_mode,
+        is_session_persisted=True,
+    )
 
 
 class _UsageModel(BaseModel):
@@ -393,14 +439,7 @@ def claude_p_completion(
 ) -> ClaudeResult:
     """One non-agentic completion. ``system`` is required (see module docstring)."""
     env = _child_env(strip_mngr_agent_vars)
-    argv = _build_argv(
-        prompt,
-        model=model,
-        system=system,
-        append_system=None,
-        tools="",
-        permission_mode=None,
-    )
+    argv = _completion_argv(prompt, system=system, model=model)
     # Isolated cwd: claude -p auto-discovers CLAUDE.md / .claude hooks from the
     # working directory, so a throwaway dir keeps that project context out of the
     # answer. Credentials come from the env, not the cwd, so auth is unaffected.
@@ -424,12 +463,11 @@ def claude_p_task(
     default agent here).
     """
     env = _child_env(strip_mngr_agent_vars)
-    argv = _build_argv(
+    argv = _task_argv(
         prompt,
-        model=model,
         system=system,
         append_system=append_system,
-        tools=None,
+        model=model,
         permission_mode=permission_mode,
     )
     return _run_blocking(argv, env=env, cwd=None)

@@ -69,15 +69,28 @@ def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
 
 @pytest.mark.timeout(60, func_only=False)
 def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
-    """The chat reaches the shell's inventory as an app: running, with the ``new`` launch path of its manifest and
-    its default shortcut, and nothing about the chats inside it."""
+    """The chat reaches the shell's inventory as an app: running, with the launch paths of its manifest (the ``root``
+    page, and ``new``, ``send``, and ``draft`` as POSTs onto its intake route with their presets and text or draft
+    params) and its default shortcut, and nothing about the chats inside it."""
     with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         listed = _wait_for_the_chat_app(workspace.shell_url)
         assert listed["display_name"] == "Chat"
         assert listed["critical"] is True
-        assert [(launch["id"], launch["path"]) for launch in listed["launch_paths"]] == [("new", "/new")]
-        assert listed["default_shortcut"]["launch"] == "new"
-        assert listed["default_shortcut"]["mode"] == "new"
+        assert [(launch["id"], launch["path"], launch["method"]) for launch in listed["launch_paths"]] == [
+            ("root", "/", "GET"),
+            ("new", "/api/chats/intake", "POST"),
+            ("send", "/api/chats/intake", "POST"),
+            ("draft", "/api/chats/intake", "POST"),
+        ]
+        assert [launch["text_param"] for launch in listed["launch_paths"]] == [None, "message", "message", None]
+        assert [launch["draft_param"] for launch in listed["launch_paths"]] == [None, None, None, "message"]
+        assert [launch["presets"] for launch in listed["launch_paths"]] == [
+            {},
+            {"target": "new_chat"},
+            {"target": "chat_selector"},
+            {"target": "current_chat", "is_draft": "true"},
+        ]
+        assert listed["default_shortcut"] == {"launch": "root", "mode": "new"}
 
 
 @pytest.mark.timeout(60, func_only=False)

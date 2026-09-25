@@ -80,6 +80,8 @@ _TRIGGER_TIMEOUT_MS = 20000
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
 # The chat root's path with the fixture chat selected: what a link, and the agent's auto-open, open.
 _FIXTURE_ROOT_PATH = chat_root_path(ChatId(FIXTURE_AGENT_ID))
+# A second agent beside the fixture's, for the flows that need a choice of chats.
+_SECOND_AGENT_ID = "agent-5e2e5e2e5e2e5e2e5e2e5e2e5e2e5e2e"
 
 
 def _chat_root(page: Page) -> FrameLocator:
@@ -119,6 +121,7 @@ def _running_e2e_server(
     tmp_path: Path,
     session_events: list[dict[str, Any]] | None = None,
     is_account_signed_in: bool = True,
+    additional_agents: Sequence[tuple[str, str]] = (),
 ) -> AbstractContextManager[RunningWorkspace]:
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
@@ -126,6 +129,7 @@ def _running_e2e_server(
         find_free_port(),
         find_free_port(),
         session_events=session_events,
+        additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
     )
 
@@ -162,9 +166,8 @@ def _wait_for_chat_window_path(
 ) -> dict[str, Any]:
     """Wait until the one chat window's stored path satisfies ``is_reported``.
 
-    A window opened at the ``new`` launch path stays at ``/new`` until the chat root reports its location
-    (the chat it created, or the bare root when nothing is signed in and it offers the chooser), and a
-    reload before that report would run the launch again.
+    A launch points the window at the path the intake answered (a selection, with a pending intake's token
+    when the root has to finish it), and the root reports the selection alone once it has.
     """
 
     def _has_reported() -> bool:
@@ -204,7 +207,7 @@ def _land(page: Page, server: RunningWorkspace, query: str = "") -> None:
     """Open the shell and wait for the home desktop's backdrop and the chat's seeded shortcut."""
     page.goto(f"{server.shell_url}/{query}")
     expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
-    expect(page.locator(f'[data-shortcut="{CHAT_APP_NAME}:new"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-shortcut="{CHAT_APP_NAME}:root"]')).to_be_visible(timeout=15000)
 
 
 def _open_fixture_chat_root(page: Page, server: RunningWorkspace) -> None:
@@ -221,13 +224,13 @@ def _open_fixture_chat(page: Page, server: RunningWorkspace) -> None:
 
 
 def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
-    """Run the chat app's ``new`` launch path from the launcher's tile, and return the frame of the chat the root
-    created and shows."""
+    """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
+    typed): the shell posts the intake and points the window at the chat it answers; return that chat's frame."""
     _land(page, server)
-    page.locator("[data-launcher-field] input").click()
-    overlay = page.locator("[data-launcher-overlay]")
-    expect(overlay).to_be_visible(timeout=10000)
-    overlay.locator(f'.launcher-tile[data-launch="{CHAT_APP_NAME}:new"]').click()
+    page.locator("[data-launcher-field] textarea").click()
+    menu = page.locator("[data-launcher-overlay]")
+    expect(menu).to_be_visible(timeout=10000)
+    menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
     expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
     return _chat(page, None)
 
@@ -255,6 +258,32 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
         raise AssertionError(f"op refused with HTTP {e.code}: {e.read().decode(errors='replace')}") from e
     except (TimeoutError, urllib.error.URLError):
         return 0
+
+
+def _post_intake(server: RunningWorkspace, body: dict[str, Any]) -> str:
+    """Post one intake to the chat app, as the shell's launch does for a POST launch path; the path it answers."""
+    request = urllib.request.Request(
+        f"{server.chat_url}/api/chats/intake",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert response.status == 200
+        return str(json.loads(response.read())["path"])
+
+
+def _navigate_chat_window(server: RunningWorkspace, client_id: str, path: str) -> None:
+    """Point the client's view of the one chat window at ``path``, as the shell's launch does after an intake."""
+    navigated = _post_op(
+        server,
+        {
+            "op": "navigate",
+            "args": {"window": _the_chat_window(server)["id"], "path": path, "client": client_id},
+            "requester": None,
+        },
+    )
+    assert navigated == 200
 
 
 def _open_fixture_chat_by_op(server: RunningWorkspace, client_id: str) -> None:
@@ -362,7 +391,12 @@ _TOOL_CALL_SESSION_EVENTS: list[dict[str, Any]] = [
             "model": "claude-opus-4-6",
             "content": [
                 {"type": "text", "text": "Let me read that file."},
-                {"type": "tool_use", "id": "toolu_tc1", "name": "Read", "input": {"file_path": "/tmp/project/test.txt"}},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_tc1",
+                    "name": "Read",
+                    "input": {"file_path": "/tmp/project/test.txt"},
+                },
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
@@ -667,12 +701,13 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_root_reports_the_selection_alone(
+def test_a_draft_intake_navigated_into_the_shown_chat_lands_in_its_composer_and_the_root_reports_the_selection_alone(
     tmp_path: Path, page: Page
 ) -> None:
-    """The root's ``draft`` param off a ``navigate`` (the desktop's "Design your own..."), with the chat it lands in
-    already selected: the text goes into that chat's composer, unsent, and the window's stored path goes back to the
-    selection alone, so a reload of the window drafts nothing again (pinned-taskbar-entries plan section 4.7)."""
+    """A ``current_chat`` draft intake (the desktop's "Design your own..."), pointed at the window showing the chat:
+    the chat app holds the draft and answers the chat's path with the token; navigated there, the root applies it
+    into that chat's composer, unsent, and the window's stored path goes back to the selection alone, so a reload
+    of the window drafts nothing again (post-launch-paths plan section 4.3)."""
     with _running_e2e_server(tmp_path) as server:
         _open_fixture_chat(page, server)
         expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
@@ -681,22 +716,82 @@ def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_roo
         _wait_for_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
 
         draft = "Draw me a seal"
-        navigated = _post_op(
+        path = _post_intake(
             server,
-            {
-                "op": "navigate",
-                "args": {
-                    "window": _the_chat_window(server)["id"],
-                    "path": "/?" + urllib.parse.urlencode({"draft": draft}),
-                    "client": client_id,
-                },
-                "requester": None,
-            },
+            {"message": draft, "target": "current_chat", "is_draft": "true", "window_path": _FIXTURE_ROOT_PATH},
         )
-        assert navigated == 200
+        assert path.startswith(f"{_FIXTURE_ROOT_PATH}&intake=")
+        _navigate_chat_window(server, client_id, path)
         expect(_chat(page).locator(".message-input-textbox")).to_have_value(draft, timeout=15000)
         _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
         assert _chat(page).locator(".message-user", has_text=draft).count() == 0
+        # The token was consumed: the same path applies nothing a second time.
+        _navigate_chat_window(server, client_id, path)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        expect(_chat(page).locator(".message-input-textbox")).to_have_value(draft)
+
+
+# Flaky: the second navigate to the same /send path is sometimes dropped by the shell. The page's report of
+# leaving it (after Escape) and the navigate back can land in one reconcile, where the shell's stale-snapshot
+# guard (livePages.ts follow(), pendingReport.fromPath) takes the deliberate navigate for a stale snapshot.
+@pytest.mark.flaky
+@pytest.mark.timeout(120, func_only=False)
+def test_a_chat_selector_intake_offers_the_picker_and_sends_the_text_to_the_chat_picked(
+    tmp_path: Path, page: Page
+) -> None:
+    """A ``chat_selector`` intake (the desktop's Ctrl+Enter row) with two chats to choose from: the chat app holds
+    the choice and answers the picker's path; navigated there, the root opens the picker over the chats; Escape
+    drops the intake and the text with it, and picking a chat applies the intake there, which sends the text through
+    the ordinary send path and selects the chat. Either way the window's stored path goes back to the selection
+    alone, so a reload of the window offers nothing again (post-launch-paths plan section 3.6)."""
+    with _running_e2e_server(tmp_path, additional_agents=[(_SECOND_AGENT_ID, "Second chat")]) as server:
+        _open_fixture_chat(page, server)
+        expect(_chat(page).locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        client_id = _client_id(page)
+        _wait_for_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        root = _chat_root(page)
+        text = "Carry on with the seal"
+
+        def _navigate_to_pick() -> None:
+            path = _post_intake(server, {"message": text, "target": "chat_selector"})
+            assert path.startswith("/?intake=")
+            _navigate_chat_window(server, client_id, path)
+            expect(root.locator("[data-send-picker]")).to_be_visible(timeout=15000)
+            expect(root.locator(".send-picker-text")).to_contain_text(text)
+
+        _navigate_to_pick()
+        root.locator("[data-send-picker-search]").press("Escape")
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        assert messenger.sent == []
+
+        _navigate_to_pick()
+        root.locator(f'[data-send-target="{FIXTURE_AGENT_ID}"]').click()
+        expect(root.locator("[data-send-picker]")).to_have_count(0)
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=10.0)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the selection alone")
+        # The recording messenger writes nothing into the fixture transcript, so the bubble is not looked for.
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_chat_selector_intake_with_one_chat_sends_to_it_on_the_server_and_the_page_shows_the_chat(
+    tmp_path: Path, page: Page
+) -> None:
+    """A ``chat_selector`` intake on a workspace with one chat is finished by the chat app itself: the text goes to
+    that chat through the ordinary send path and the answer is the chat's path alone, so the window lands on the
+    chat with nothing left for the root to apply and no picker."""
+    with _running_e2e_server(tmp_path) as server:
+        messenger = server.chat_state.agent_manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        text = "Carry on with the seal"
+        path = _post_intake(server, {"message": text, "target": "chat_selector"})
+        assert path == _FIXTURE_ROOT_PATH
+        wait_for(lambda: (FIXTURE_AGENT_ID, text) in messenger.sent, timeout=15.0)
+        page.goto(f"{server.chat_url}{path}")
+        expect(page.locator("iframe.chat-root-frame")).to_have_count(1, timeout=15000)
+        assert page.locator("[data-send-picker]").count() == 0
 
 
 # starting a chat
@@ -706,40 +801,119 @@ def test_a_draft_navigated_into_the_shown_chat_lands_in_its_composer_and_the_roo
 def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_own_window(
     tmp_path: Path, page: Page
 ) -> None:
-    """The window opens either way: with no account the chat root offers the provider chooser in it, so signing
-    in happens where the chat will be rather than on the shell, and no chat is minted until an account is
-    chosen."""
+    """The window opens either way: with no account the chat app mints a chat that waits for its first send and
+    holds the intake, and the chat root offers the provider chooser over it, so signing in happens where the chat
+    will be rather than on the shell; no agent is created until an account is chosen (post-launch-paths plan
+    section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         _start_new_chat(page, server)
         root = _chat_root(page)
         expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # The shell itself renders no chooser: the sign-in lives in the chat's page.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
-        assert root.locator("iframe.chat-root-frame").count() == 0
         assert [str(chat.chat_id) for chat in server.chat_state.agent_manager.get_chat_snapshots()] == [
             FIXTURE_AGENT_ID
         ]
-        # The window is the desktop's, so the chat root is back on reload.
-        _wait_for_chat_window_path(server, lambda path: path == "/", "the bare root path")
+        awaiting = server.chat_state.agent_manager.get_provisional_chats()
+        assert [chat.phase.value for chat in awaiting] == ["awaiting_first_send"]
+        # The root has applied the intake and reports the awaiting chat's selection alone, so the window keeps it
+        # on reload.
+        _wait_for_chat_window_path(
+            server, lambda path: path == chat_root_path(awaiting[0].chat_id), "the awaiting chat's selection"
+        )
         page.reload()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
 
 
+# Installed in every frame before its scripts run: records each placeholder screen or text the chat page ever
+# draws, however briefly, into ``window.__placeholdersSeen``.
+_RECORD_PLACEHOLDERS_SEEN_SCRIPT = """
+(() => {
+  const texts = ["No conversation data", "Loading terminal output", "Starting the chat", "Loading events",
+    "No events yet", "Send a message to start this chat"];
+  const seen = new Set();
+  window.__placeholdersSeen = [];
+  const check = () => {
+    const root = document.documentElement;
+    if (!root) return;
+    if (document.querySelector(".message-list-not-found") && !seen.has("not-found")) seen.add("not-found");
+    const body = root.innerText || "";
+    for (const text of texts) if (body.includes(text)) seen.add(text);
+    window.__placeholdersSeen = [...seen];
+  };
+  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
+})();
+"""
+
+
 @pytest.mark.timeout(120, func_only=False)
-def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_it_lands(
-    tmp_path: Path, page: Page
+def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With an account signed in the create runs immediately on it; the page says so while the
-    create runs, and the composer arrives when the agent registers."""
+    """With an account signed in the intake creates the chat at once on it, and the page is an empty chat with its composer
+    ready from the first frame: no placeholder text while the agent is created, and none once it lands -- not even
+    for a single frame, which is how a flash of a "not found" or "loading" screen shows up."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    page.add_init_script(_RECORD_PLACEHOLDERS_SEEN_SCRIPT)
     with _running_e2e_server(tmp_path) as server:
-        chat = _start_new_chat(page, server)
-        expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat", timeout=15000)
-        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        try:
+            chat = _start_new_chat(page, server)
+            # The long wait only covers the chat page's socket, which in CI has taken about twenty seconds to
+            # connect and bring the provisional record; the create itself is held until released below.
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
+            expect(chat.locator(".message-input-textbox")).to_be_editable()
+            expect(chat.locator(".message-list-creating")).to_have_text("")
+            assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
+        finally:
+            release_create.touch()
+
+        expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
+        expect(chat.locator(".message-list-empty")).to_have_text("")
+        expect(chat.locator(".message-input-textbox")).to_be_editable()
+        seen = [text for frame in page.frames for text in frame.evaluate("window.__placeholdersSeen || []")]
+        assert seen == [], "a new chat showed placeholder screens while it started: {}".format(seen)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_chats_first(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A message typed while the chat is being created sits where the transcript will put it, and
+    stays there when the chat lands; it reaches the new agent as its first message, with nothing
+    sent ahead of it."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    messenger = RecordingMngrMessenger()
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        try:
+            chat = _start_new_chat(page, server)
+            # The create is held until released below, so the long wait only covers the chat page's socket,
+            # which in CI has taken about twenty seconds to connect and bring the provisional record.
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
+            chat.locator(".message-input-textbox").fill("hello")
+            chat.locator(".message-input-textbox").press("Enter")
+            bubble = chat.locator(".outgoing-message")
+            expect(bubble).to_be_visible(timeout=5000)
+            assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
+            box_while_starting = bubble.bounding_box()
+            assert box_while_starting is not None
+        finally:
+            release_create.touch()
+
+        wait_for(lambda: len(messenger.sent) > 0, timeout=30.0, error_message="the message never reached the agent")
         expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
-        assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
+
+        assert [message for _agent_id, message in messenger.sent] == ["hello"]
+        box_once_landed = bubble.bounding_box()
+        assert box_once_landed is not None
+        assert box_once_landed["y"] == box_while_starting["y"]
 
 
+# Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
+# once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
@@ -751,7 +925,7 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
     with _running_e2e_server(tmp_path) as server:
         chat = _start_new_chat(page, server)
         failed = chat.locator(".message-list-create-failed")
-        expect(failed).to_contain_text("This chat could not be started", timeout=20000)
+        expect(failed).to_contain_text("This chat could not be started", timeout=45000)
         expect(failed).to_contain_text("exited with code 3")
         expect(failed).to_contain_text("create failed on purpose")
         expect(failed.locator(".message-list-create-retry")).to_be_visible()

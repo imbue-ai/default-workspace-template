@@ -7,6 +7,7 @@ from typing import Final
 from typing import Self
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
+from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
 from pydantic import Field
@@ -19,6 +20,7 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import IconPath
+from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PreviewName
@@ -38,6 +40,11 @@ DEFAULT_PRIORITY: Final[PriorityName] = PriorityName("user")
 # The one launch path an app that declares none has, at its root; the shell synthesizes it, so a
 # manifest never declares it but may name it as its default shortcut.
 OPEN_LAUNCH_PATH_ID: Final[LaunchPathId] = LaunchPathId("open")
+
+# The body fields the shell adds to every POST launch beside the params (the post-launch-paths plan,
+# section 3.2): the requesting client, its desktop, and the path of the window the launch is aimed at.
+# A manifest may declare neither a param nor a preset by these names.
+RESERVED_LAUNCH_PARAM_NAMES: Final[frozenset[str]] = frozenset({"client_id", "desktop_id", "window_path"})
 
 # The placeholders a preview table's command, args, and env values may carry
 # (desktop-interface contracts.md): ``{port:<name>}`` for a declared port,
@@ -61,6 +68,14 @@ class ShortcutMode(LowerCaseStrEnum):
 
     FOCUS = auto()
     NEW = auto()
+
+
+class LaunchPathMethod(UpperCaseStrEnum):
+    """How the shell runs a launch path: opens a window at the path (GET), or posts to it and opens a window at the
+    path the app answers (POST)."""
+
+    GET = auto()
+    POST = auto()
 
 
 class PinStyle(LowerCaseStrEnum):
@@ -101,9 +116,9 @@ class Pin(FrozenModel):
 
 
 class LaunchParam(FrozenModel):
-    """One documented query parameter of a launch path."""
+    """One documented parameter of a launch path: a GET launch path's query parameter, a POST launch path's body field."""
 
-    name: NonEmptyStr = Field(description="The query parameter's name")
+    name: LaunchParamName = Field(description="The parameter's name")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
     required: bool = Field(
         default=False, description="Whether the launch path refuses a request without it"
@@ -111,14 +126,57 @@ class LaunchParam(FrozenModel):
 
 
 class LaunchPath(FrozenModel):
-    """A path under the app's origin that the desktop opens a window at (desktop-interface contracts.md section 2)."""
+    """A way of starting something the desktop offers (desktop-interface contracts.md section 2): a page path the
+    shell opens a window at (GET), or a route the shell posts to for the path of the page to open (POST)."""
 
     id: LaunchPathId = Field(description="The id shortcuts and layout.py refer to")
     label: NonEmptyStr = Field(description="The launch path's user-facing label")
     path: LaunchPathValue = Field(description="The path under the app origin, without a query string")
-    params: tuple[LaunchParam, ...] = Field(
-        default=(), description="The query parameters the shell may append, documented"
+    method: LaunchPathMethod = Field(
+        default=LaunchPathMethod.GET,
+        description="GET opens a window at the path with the params as its query; POST posts the params to the path "
+        "and opens a window at the path the app answers (post-launch-paths plan section 3.1)",
     )
+    params: tuple[LaunchParam, ...] = Field(
+        default=(),
+        description="The parameters a caller may supply (the query for a GET, the body for a POST), documented",
+    )
+    presets: dict[LaunchParamName, str] = Field(
+        default_factory=dict,
+        description="Fixed name-value pairs the shell sends with every launch of the path, beside the caller's params",
+    )
+    text_param: LaunchParamName | None = Field(
+        default=None,
+        description="The declared param the launcher fills with typed text; a launch path with one is a free-text "
+        "row of the launcher (launcher-and-getting-started plan section 3.1)",
+    )
+    draft_param: LaunchParamName | None = Field(
+        default=None,
+        description="The declared param the shell fills with text to be drafted rather than sent: a free-text row of "
+        "the launcher too, and what the avatar dialog's draft goes through (post-launch-paths plan section 3.1)",
+    )
+
+    @model_validator(mode="after")
+    def _check_params_presets_and_text_params(self) -> Self:
+        param_names = [str(param.name) for param in self.params]
+        for field_name, chosen in (("text_param", self.text_param), ("draft_param", self.draft_param)):
+            if chosen is not None and chosen not in param_names:
+                raise InvalidManifestValueError(
+                    f"{field_name} {str(chosen)!r} is not one of the launch path's params {param_names}"
+                )
+        if self.text_param is not None and self.draft_param is not None:
+            raise InvalidManifestValueError("a launch path declares at most one of text_param and draft_param")
+        for preset_name in self.presets:
+            if preset_name in param_names:
+                raise InvalidManifestValueError(
+                    f"preset {str(preset_name)!r} is also one of the launch path's params; a name is one or the other"
+                )
+        reserved = sorted(RESERVED_LAUNCH_PARAM_NAMES.intersection([*param_names, *map(str, self.presets)]))
+        if reserved:
+            raise InvalidManifestValueError(
+                f"{reserved[0]!r} is reserved for the shell's launch envelope and cannot be a param or a preset"
+            )
+        return self
 
 
 class AppReference(FrozenModel):

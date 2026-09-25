@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type m from "mithril";
 
 // vi.mock factories are hoisted above module scope, so anything they close over must come from
@@ -17,12 +17,18 @@ const mocks = vi.hoisted(() => {
     loadSnapshotWithStream: vi.fn(async (_chatId: string) => undefined),
     connectToStream: vi.fn(),
     noteLoadedArrivals: vi.fn(),
+    // The page's not-yet-real bubbles, as the outgoing view renders them.
+    outgoingBubbles: [] as unknown[],
+    // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
+    isConversationNotFound: false,
+    isChatListReceived: true,
   };
 });
 
 vi.mock("../models/Chats", () => ({
   getChatById: () => mocks.chat,
   getProvisionalChat: () => mocks.proto,
+  hasReceivedChatList: () => mocks.isChatListReceived,
   launchChat: (chatId: string, accountId: string) => mocks.launchChat(chatId, accountId),
   addChatsUpdatedListener: (listener: () => void) => {
     mocks.chatsUpdatedListener = listener;
@@ -45,7 +51,7 @@ vi.mock("../models/Response", () => ({
   getFirstOffset: () => 0,
   getRenderVersion: () => 0,
   getTotalEventCount: () => 0,
-  isConversationNotFound: () => false,
+  isConversationNotFound: () => mocks.isConversationNotFound,
   noteLoadedArrivals: mocks.noteLoadedArrivals,
 }));
 vi.mock("../models/StreamingMessage", () => ({
@@ -74,12 +80,13 @@ vi.mock("./ActivityIndicator", () => ({ ActivityIndicator: { view: () => null } 
 vi.mock("./TerminalViewToggle", () => ({ TerminalViewToggle: { view: () => null } }));
 vi.mock("./EmptySlot", () => ({ EmptySlot: { view: () => null } }));
 vi.mock("./QueuedMessageView", () => ({ renderQueuedMessages: () => [] }));
-vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => [] }));
+vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => mocks.outgoingBubbles }));
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
+import { MESSAGE_LIST_CLASS } from "./conversation-rows";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown };
 
@@ -152,11 +159,99 @@ function failed(accountId: string, error: string): void {
   };
 }
 
+/** A chat whose create is running. */
+function creating(): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 1",
+    account_id: "acct-1",
+    phase: "creating",
+    error: null,
+    is_seeded: false,
+  };
+}
+
+/** A chat with no seed that waits for its first send (an intake that could not launch it at once). */
+function awaiting(accountId: string): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 2",
+    account_id: accountId,
+    phase: "awaiting_first_send",
+    error: null,
+    is_seeded: false,
+  };
+}
+
+/** The list the page's bubbles sit in: the child of the scroll area's content, by its class. */
+function bubbleListOf(tree: unknown): AnyVnode | undefined {
+  const wrapper = findByClass(tree, "message-list-wrapper");
+  return flatten(wrapper?.children).find((vnode) =>
+    [vnode.attrs?.class, vnode.attrs?.className].includes(MESSAGE_LIST_CLASS),
+  );
+}
+
 describe("ChatPanel over a provisional chat", () => {
   beforeEach(() => {
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
     mocks.launchChat.mockReset();
     mocks.launchChat.mockImplementation(async () => ({}));
     mocks.chat = undefined;
+    mocks.outgoingBubbles = [];
+    mocks.fetchEvents.mockClear();
+  });
+
+  it("shows a chat being created as an empty conversation, with no placeholder text", () => {
+    creating();
+    const tree = mountPanel()();
+
+    expect(renderedText(tree).trim()).toBe("");
+    expect(findByClass(tree, "message-list-creating")).toBeTruthy();
+    expect(bubbleListOf(tree)?.children).toEqual([]);
+  });
+
+  it("draws a created chat with no events as the same empty conversation, with no placeholder text", () => {
+    creating();
+    const render = mountPanel();
+    const starting = render();
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+
+    const started = render();
+
+    expect(renderedText(started).trim()).toBe("");
+    expect(findByClass(started, "message-list-empty")).toBeTruthy();
+    expect(bubbleListOf(started)?.attrs).toEqual(bubbleListOf(starting)?.attrs);
+  });
+
+  it("keeps a message sent while the chat starts where the empty transcript after it puts the message", () => {
+    const bubble = { tag: "div", key: "outgoing-0", attrs: { class: "outgoing-message" }, children: [] };
+    mocks.outgoingBubbles = [bubble];
+    creating();
+    const render = mountPanel();
+
+    const starting = render();
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    const started = render();
+
+    expect(bubbleListOf(starting)?.children).toEqual([bubble]);
+    expect(bubbleListOf(started)?.children).toEqual([bubble]);
+  });
+
+  it("shows an unseeded chat awaiting its first send as an empty conversation with no placeholder, not a failure", () => {
+    awaiting("");
+    const render = mountPanel();
+
+    const tree = render();
+
+    expect(findByClass(tree, "message-list-awaiting")).toBeTruthy();
+    expect(findByClass(tree, "message-list-create-failed")).toBeUndefined();
+    expect(findByClass(tree, "message-list-creating")).toBeUndefined();
+    expect(renderedText(tree).trim()).toBe("");
+    // Nothing to read: the chat has no seed and no agent.
+    expect(mocks.fetchEvents).not.toHaveBeenCalled();
   });
 
   it("shows a failed create's reason and retries it on the record's account", () => {
@@ -202,8 +297,64 @@ describe("ChatPanel over a provisional chat", () => {
   });
 });
 
+describe("ChatPanel over a transcript that 404'd", () => {
+  beforeEach(() => {
+    mocks.proto = undefined;
+    mocks.chat = undefined;
+    mocks.outgoingBubbles = [];
+    mocks.isConversationNotFound = true;
+    mocks.isChatListReceived = true;
+    mocks.loadSnapshotWithStream.mockReset();
+    mocks.loadSnapshotWithStream.mockImplementation(async () => undefined);
+  });
+
+  afterEach(() => {
+    mocks.loadSnapshotWithStream.mockImplementation(async () => undefined);
+  });
+
+  it("draws a chat the page has not been told about yet as an empty chat, not as one with no conversation", () => {
+    // A new chat's page can load, and its transcript 404, before the chat app's list reaches it.
+    mocks.isChatListReceived = false;
+
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).not.toContain("No conversation data");
+    expect(findByClass(tree, "message-list-loading")).toBeTruthy();
+  });
+
+  it("says a chat the app does not list has no conversation", () => {
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).toContain("No conversation data");
+  });
+
+  it("keeps a chat that has just come up empty while its transcript is reloaded", async () => {
+    let finishReload: () => void = () => {};
+    mocks.loadSnapshotWithStream.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          finishReload = () => resolve(undefined);
+        }),
+    );
+    const render = mountPanel();
+    render();
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    mocks.chatsUpdatedListener?.();
+
+    const reloading = render();
+
+    expect(renderedText(reloading)).not.toContain("No conversation data");
+    mocks.isConversationNotFound = false;
+    finishReload();
+    await flushAsync();
+    expect(renderedText(render())).not.toContain("No conversation data");
+  });
+});
+
 describe("ChatPanel over a seeded chat", () => {
   beforeEach(() => {
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
     mocks.fetchEvents.mockClear();
     mocks.loadSnapshotWithStream.mockClear();
     mocks.connectToStream.mockClear();

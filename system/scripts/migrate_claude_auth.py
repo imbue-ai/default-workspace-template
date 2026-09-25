@@ -44,7 +44,10 @@ def _format_env_value(value: str) -> str:
 
 
 def _format_env_file(env: dict[str, str]) -> str:
-    return "\n".join(f"{key}={_format_env_value(value)}" for key, value in env.items()) + "\n"
+    return (
+        "\n".join(f"{key}={_format_env_value(value)}" for key, value in env.items())
+        + "\n"
+    )
 
 
 def _resolve_host_env_path() -> Path:
@@ -62,8 +65,14 @@ def migrate() -> bool:
     Returns True when anything changed.
     """
     host_env_path = _resolve_host_env_path()
-    host_env = parse_env_file(host_env_path.read_text()) if host_env_path.exists() else {}
-    stale_managed = {key: value for key, value in host_env.items() if key in MANAGED_AUTH_ENV_KEYS and value}
+    host_env = (
+        parse_env_file(host_env_path.read_text()) if host_env_path.exists() else {}
+    )
+    stale_managed = {
+        key: value
+        for key, value in host_env.items()
+        if key in MANAGED_AUTH_ENV_KEYS and value
+    }
     if not stale_managed:
         print("Host env file holds no Claude auth keys; nothing to migrate.")
         return False
@@ -72,14 +81,22 @@ def migrate() -> bool:
     account = AuthFlowService.create().adopt_claude_credentials(pasted)
     print(
         "Moved {} into account {} ({} mode).".format(
-            ", ".join(sorted(stale_managed)), account.id, derive_auth_mode(stale_managed).value
+            ", ".join(sorted(stale_managed)),
+            account.id,
+            derive_auth_mode(stale_managed).value,
         )
     )
 
-    remaining = {key: value for key, value in host_env.items() if key not in MANAGED_AUTH_ENV_KEYS}
+    remaining = {
+        key: value
+        for key, value in host_env.items()
+        if key not in MANAGED_AUTH_ENV_KEYS
+    }
     host_env_path.write_text(_format_env_file(remaining))
     print(f"Scrubbed {', '.join(sorted(stale_managed))} from {host_env_path}.")
-    print("Existing chats keep their current credential; new chats will use this account.")
+    print(
+        "Existing chats keep their current credential; new chats will use this account."
+    )
     return True
 
 

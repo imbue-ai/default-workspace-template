@@ -44,6 +44,9 @@ desktop and switches the client to it.
 
 ``open`` opens a window at ``--path``, or at one of the app's *launch paths* (``--launch <id>``
 with ``--param name=value`` for its parameters; with neither, the app's default launch path).
+A GET launch path is the page itself with the params as its query; a POST launch path is posted
+the params by the shell and answers the page to open (the terminal's and the browser's ``new``,
+the chat's ``new``, ``send``, and ``draft``), so the window opens at the page the app answered.
 A window of the app already at that path is focused rather than duplicated unless
 ``--if-present new`` is passed. The window's id (the new one's, or the focused one's) is
 printed to stdout. To open a folder in the file viewer, ``open files --path /notes/``; the
@@ -135,7 +138,7 @@ _RETIRED_VERBS = {
 # than waited for.
 _APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 _MAX_APP_NAME_LENGTH = 32
-_RESERVED_APP_NAMES = frozenset({"localhost", "auth"})
+_RESERVED_APP_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 _RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
 # A window id as the shell mints it.
 _WINDOW_ID_PATTERN = re.compile(r"^win-[0-9a-f]{16}$")
@@ -481,7 +484,6 @@ def _listed_window(window: dict[str, Any]) -> dict[str, Any]:
         "app": window.get("app"),
         "path": window.get("path"),
         "title": window.get("title"),
-        "is_settling": window.get("is_settling"),
         "is_pinned": window.get("is_pinned", False),
         "scope": window.get("scope", "linked"),
         "client_paths": window.get("client_paths", {}),

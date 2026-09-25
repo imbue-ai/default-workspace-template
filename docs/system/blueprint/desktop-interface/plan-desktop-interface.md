@@ -23,7 +23,7 @@ The full definitions are in [concepts.md](concepts.md); this table is the vocabu
 
 | Term | Meaning |
 |---|---|
-| Desktop | A named, shared collection of windows and shortcuts, with a wallpaper and a sharing mode |
+| Desktop | A named, shared collection of windows and shortcuts, with a wallpaper |
 | Window | One app page on one desktop: app, path, title; shared |
 | Placement | One client's frame, state, and minimized flag for one window |
 | Layout | One client's ordered placements for one desktop; the order is the stack |
@@ -31,7 +31,7 @@ The full definitions are in [concepts.md](concepts.md); this table is the vocabu
 | Shortcut | A grid cell on the backdrop that runs a launch path |
 | Launch path | A path under an app's origin that the manifest declares as a way to start something |
 | Taskbar | The bottom bar: launcher field, window entries, system tray |
-| Launcher | The taskbar's text field and the overlay it opens |
+| Launcher | The taskbar's text field and the menu it opens |
 | Tray widget | One component of the system tray; V1: Desktops |
 | Live page | The one iframe a client keeps for one window |
 | Compact mode, touch mode | Render policies from viewport width and pointer type |
@@ -53,9 +53,9 @@ It carries no lists of anything inside an app.
 
 ### 3.2 Desktops
 
-A desktop is `{id, name, color, glyph, sharing, wallpaper, shortcuts, windows}`, stored in `desktops.json` in creation order.
+A desktop is `{id, name, color, glyph, wallpaper, shortcuts, windows}`, stored in `desktops.json` in creation order.
 The id is the slugified name and never changes; two names that shorten to one id conflict.
-`sharing` is `shared` or `personal`; V1 stores and shows it and enforces nothing, since the workspace has one user.
+Every desktop is shared: a window holds a resource (a terminal, a browser) for everyone, so a desktop that only one person could see would still be everyone's, and there is no private mode. What keeps users out of each other's way is that each arriving user gets a desktop of their own (3.10).
 A fresh workspace, and a workspace whose state directory holds no `desktops.json`, gets one desktop named `Home` with the theme's default wallpaper and the seeded shortcuts of 3.6.
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
 Deleting the last desktop is refused with `409`.
@@ -63,8 +63,8 @@ Deleting a desktop closes its windows (their pages are destroyed in every client
 
 ### 3.3 Windows
 
-A window is `{id, app, path, title, opened_at, is_settling}` on exactly one desktop, in `desktops.json` under its desktop, in opening order.
-`is_settling` is true from an open at a launch path until the page's first location report: while it is true, the stored path is the launch path (with its query string), and a client other than the opener creates no page for the window, so a launch path that creates something runs once (section 4.6).
+A window is `{id, app, path, title, opened_at}` on exactly one desktop, in `desktops.json` under its desktop, in opening order.
+Its path is always a page that is safe to load any number of times: a launch path that creates something is a POST the shell makes once, before the window opens at the page the app answers (the post-launch-paths plan), so no window is ever mid-launch.
 The id is `win-<16 hex>`, minted by the shell when the window is opened.
 `path` obeys the rule an instance URL obeyed: a single leading slash, at most 2048 characters, no control characters.
 `title` is what the page last reported, trimmed, at most 256 characters; empty means "show the app's display name".
@@ -91,8 +91,8 @@ Saves work as today: the browser writes its own gestures with a save id and the 
 
 ### 3.5 Clients
 
-A client is `{id, active_desktop, last_seen}` in `clients.json`; the device kind is gone.
-The active desktop is stored on the server so a client resumes where it was and its windows mirror each other.
+A client is `{id, active_desktop, last_seen, user_id}` in `clients.json`; the device kind is gone.
+The active desktop is stored on the server so a client resumes where it was and its windows mirror each other; `user_id` is the signed-in visitor the client last arrived as (3.10), null for the owner.
 A client unseen for 90 days is dropped with every layout it owns, by the sweep that runs at shell start and daily.
 A client whose active desktop no longer exists is moved to the first desktop on its next report.
 
@@ -121,7 +121,8 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | Which apps exist, their display name, icon, launch paths, criticality, priority | Manifest, mirrored into the registry |
 | Whether an app is running; Stop and Start | Shell, via supervisord |
 | What is inside an app, and its own verbs on those things | The app, in its pages |
-| Desktops: name, colour, glyph, sharing, wallpaper, shortcuts and cells | Shell, shared |
+| Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
+| Which desktop was made for which user | Shell, in `users.json` |
 | Which windows a desktop holds; each window's path and title | Shell, shared; the page reports path and title |
 | Each client's placements and stacking order; the active desktop | Shell, per client |
 | Taskbar entries, tray widgets, the launcher's contents | Derived in the browser |
@@ -135,6 +136,17 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 - A page's iframe is created once per window per client and is never re-parented; only a window's close, or its desktop's deletion, destroys it.
 - Rendering never writes: no frame, cell, or state is rewritten by a fit, a clamp, or a compact-mode override.
 - `postMessage` and `message` listeners exist only in the contract module, the shell's relay, the embed module, and an app's own declared relay module (the chat root page's), enforced by `test_embed_ratchets.py`.
+
+### 3.10 Users and their desktops
+
+The shell learns who is asking from the `X-Imbue-Identity` header every request carries (the share identity spec): an `owner` flag, and a `user_id` with an `email` when the workspace is shared and the requester is signed in; what to call them and their profile picture is the account's profile, fetched from imbue_cloud (contracts.md section 5.1).
+A page's first act is to post its arrival (`POST /api/clients/<client_id>/arrive`), and the answer is the desktop the client lands on; it then reads the inventory (`GET /api/inventory`: the desktops, the apps, and the clients in one answer), so it knows every app before it draws a shortcut, and the socket carries the changes from then on.
+The owner, and any request without a `user_id`, land as before: the client's stored desktop, else the first.
+A **visiting user** (`owner` false with a `user_id`) landing on someone else's desktop would open and close that person's windows, so on their first arrival the shell makes them a desktop: named after them (display name, else the email's local part, else `Guest`, made unique), with the next free glyph and its colour, seeded from the first desktop (its shortcuts, its wallpaper, and a new window at the path of each of its windows, so they see what is open without touching the originals).
+The shell remembers it in `users.json` and stamps the client's record with the `user_id`; every later client of that user lands on that desktop, and a returning client keeps the desktop it was on (one that last arrived as someone else, or anonymously, is not returning: it lands on the user's desktop).
+If the desktop was deleted meanwhile, the next arrival seeds another and the page shows a notice naming the deleted one once.
+Every desktop stays shared and visible to everyone in the switcher; the user's desktop is theirs by convention, not by access control.
+Visitors granted a single app never load the shell and are not concerned.
 
 ## 4. Behaviour
 
@@ -200,8 +212,7 @@ A page that differs is navigated: `shell:navigate {path}` when the page declared
 Either way the client records the stored path as that page's last report at once, so a broadcast that arrives before the page has landed does not navigate it twice; the page's own report then confirms it, or, if the page ended up elsewhere, replaces the stored path through the location route.
 The title needs no navigation and updates the title bar and taskbar entry live.
 
-A launch path with params opens the page at the path plus the query string; the page's first report replaces it with wherever the page ended up (`/new?message=...` becomes `/?chat=<id>`), the window's stored path follows, and the window stops settling.
-Until then only the opening client has a page for the window: another client shows its taskbar entry dimmed and defers a restore until the window settles, and a reload of the opener's page while settling runs the launch path again, which is accepted.
+A GET launch path with params opens the page at the path plus the query string; a POST launch path is posted the params by the shell and the window opens at the page the app answers (`/?chat=<id>`, say), so every client has a page for the window from the start and a reload of any of them runs nothing again (the post-launch-paths plan).
 
 ### 4.7 First visit and windows opened elsewhere
 
@@ -212,7 +223,7 @@ A desktop's windows therefore never move anything under a user's pointer except 
 ### 4.8 Desktops: switching, creating, settings, deleting
 
 Switching is a client-state report; the client's pages for the previous desktop stay alive and hidden.
-The Desktops widget's menu creates a desktop (`New desktop`, minting `Desktop <n>` and the next glyph), opens its settings (name, colour, glyph, wallpaper, sharing), and deletes it (confirmed; refused for the last one).
+The Desktops widget's menu creates a desktop (`New desktop`, minting `Desktop <n>` and the next glyph), opens its settings (name, colour, glyph, wallpaper), and deletes it (confirmed; refused for the last one).
 Creating switches the creating client to the new desktop.
 
 ### 4.9 Shortcut gestures
@@ -226,17 +237,18 @@ Left to right: the launcher field; one entry per window of the active desktop in
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
 A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
-The tray's one widget is Desktops (concepts.md 2.8); it is one component with one popover, and adding another is adding a component to a list.
+The tray's widgets are Presence (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible in V1; auto-hide is deferred.
 
 ### 4.11 The launcher
 
-The launcher field is a text input at the taskbar's left.
-Focusing it opens the overlay above it; typing filters.
-Resting content is today's New Tab page with its instance rows replaced by windows: the search field is the taskbar field itself; "Open new" is one tile per launch path of every non-internal app, ranked apps first; "On this desktop" lists the active desktop's windows by title, minimized ones marked; "Start something" and "Start from a template" are unchanged, seeding a chat through the launch path that declares a `message` param.
-Search results are windows across every desktop (title and app name, switching desktop on choice), launch paths, intents, and templates.
-A choice opens a window on the active desktop and closes the overlay; Escape and a click outside close it.
-The overlay is never persisted and never a window.
+The launcher field is a text input at the taskbar's left, with the placeholder "Start app or send message...".
+Focusing it opens a menu above it; typing filters the menu's rows (launcher-and-getting-started plan sections 3.1 and 3.5).
+The rows: one per launch path of every non-internal app, ranked apps first; a row per window of every desktop while typing (title and app name, switching desktop on choice); and, at the foot, the free-text rows, one per launch path that declares a `text_param`, which send the typed text (the chat's new chat as the primary, run by Enter with nothing else highlighted, and its send to an existing chat as the secondary, run by Ctrl+Enter).
+One row is always highlighted; the arrows move it, Enter runs it, a click runs the clicked row.
+A choice opens a window on the active desktop and closes the menu; Escape and a click outside close it.
+The "Start something" intents and the template shelves that were the New Tab page's are the Getting Started app's, which starts a chat with a seeded text through `shell:start-with-text`.
+The menu is never persisted and never a window.
 
 ### 4.12 Compact mode and touch mode
 
@@ -258,7 +270,7 @@ Window cycling and keyboard move and resize are deferred.
 
 ### 5.1 State files
 
-Under `data/.state/system_interface/`: `desktops.json`, `placements/<desktop_id>/<client_id>.json`, `clients.json`, and the client-activity event log as today.
+Under `data/.state/system_interface/`: `desktops.json`, `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
 Under `data/.apps/system_interface/`: `wallpapers/`.
 The old `projects.json`, `layouts/`, and `migrated.json` are ignored and left in place; a `CLEANUP:` note names them for deletion once migration lands.
 The boot-time `migrate_workspace_layouts.py` is removed from bootstrap and the apply, and deleted.
@@ -376,7 +388,7 @@ Each keeps its pages, its own state, and its own verbs, and adopts the contract:
 The chat app serves three kinds of page on its origin:
 
 - `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows its list and an empty slot.
-- `/new` is the root with a chat just created and selected (the `new` launch path; `message` and `account_id` params as today); the root reports `/?chat=<id>` once the chat exists.
+- `POST /api/chats/intake` is where a text enters a chat from outside a chat page (the `new`, `send`, and `draft` launch paths, all POST): it creates or picks the chat and answers the root's path with it selected, `/?chat=<id>`, or with a pending intake for the root to finish (`/?intake=<token>`; the post-launch-paths plan section 3).
 - `/<chat-id>` is one chat and nothing else, exactly today's chat page, for direct launches (an agent's `open chat /<id>`, minds deep links, the inner frame); `/<chat-id>.<agent-id>.<session-id>` is a sub-agent view, also as today.
 
 The root and the chat page share an origin, so the root drives the inner frame directly: it sets its `src`, reads its document title, and forwards `shell:shown` and `shell:hidden` into it by calling into its window rather than by messaging.
@@ -393,7 +405,7 @@ Client-activity reports on send continue, with the client id from the handshake.
 
 ttyd cannot serve a launch path or report a location, so the terminal becomes two registered programs: `terminal` serves a small wrapper page on the app origin, and `terminal-pty`, `internal = true`, is ttyd on its own origin.
 The wrapper at `/?session=<name>` embeds `https://<terminal-pty origin>/?arg=_&arg=session&arg=<name>[&arg=<workdir>]` in an inner frame, reports its path and the session name as its title, and handles `shell:navigate` by re-pointing the inner frame.
-`/new[?workdir=]` allocates the lowest free `terminal-<N>`, creates the tmux session, and redirects to `/?session=terminal-<N>`.
+`POST /new` (the `new` launch path, `workdir` optional) allocates the lowest free `terminal-<N>`, creates the tmux session, and answers `{"path": "/?session=terminal-<N>"}` for the shell to open the window at.
 The wrapper posts the `ttyd-focus` message into its inner frame when the shell grants focus, as the shell does today.
 Session switching inside tmux is no longer reported to the shell; a reload reattaches to the session in the URL.
 The store of remembered terminals, their recreation at startup, and the dispatch scripts stay as they are.
@@ -407,7 +419,7 @@ There is nothing to navigate in-app, so it declares no navigation capability and
 
 ### 9.4 Browser
 
-The browser daemon keeps its pages at `/?session=<name>` and gains `/new[?url=]`, which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) and redirects; the browser is stopped, its profile kept, once a window has shown it and none does any more.
+The browser daemon keeps its pages at `/?session=<name>` and gains `POST /new` (the `new` launch path, `url` optional), which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) as `{"path": "/?session=<name>"}`; the browser is stopped, its profile kept, once a window has shown it and none does any more.
 Its page reports its path and the page title, and handles `shell:navigate` by switching session.
 The fleet CLI and the daemon's own routes are untouched.
 
@@ -457,8 +469,8 @@ The order is additive first: the apps learn the new contract and gain their laun
 - Theme switching and a settings route; V1 ships one theme.
 - Wallpaper upload from the settings dialog; V1 lists files already in the wallpapers directory.
 - Taskbar auto-hide; window cycling and keyboard move and resize; a status signal from pages to the taskbar; a window-targeted shortcut kind.
-- Enforcing the sharing mode once workspaces have more than one user; presence and a multiplayer chat (the avatar is specified by the pinned-taskbar-entries plan).
-- A richer launcher (type-ahead over app contents through an app-declared search route).
+- A multiplayer chat (the avatar is specified by the pinned-taskbar-entries plan; presence ships as the tray's Presence widget).
+- A richer launcher (type-ahead over app contents through an app-declared search route); the launcher's menu lists launch paths, windows, and free-text rows only, and the New Tab sections are the Getting Started app's.
 - Narrowing a per-app share grant to the terminal alone, which needs its pty origin admitted with it.
 - Reporting a terminal's in-tmux session switch as a location, which needs the ttyd client to learn the session name.
 - Full-screen mode for a window.

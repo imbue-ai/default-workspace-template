@@ -77,7 +77,9 @@ def test_project_for_path_maps_libs_services_apps_and_dev(tmp_path: Path) -> Non
     assert gate.project_for_path("README.md", repo) == "dev"
 
 
-def test_gate_flags_agents_change_missing_entry_and_clears_with_one(tmp_path: Path) -> None:
+def test_gate_flags_agents_change_missing_entry_and_clears_with_one(
+    tmp_path: Path,
+) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "checkout", "-q", "-b", "feat/skill")
     skill = repo / ".agents/skills/foo/SKILL.md"

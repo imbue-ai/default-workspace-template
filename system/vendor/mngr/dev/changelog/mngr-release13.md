@@ -1,1 +1,0 @@
-The `minds-launch-to-msg` workflow's `pnpm dist` step now allows 120 minutes (and its job 135), so a dual-arch ToDesktop build that stalls in packaging still completes instead of being killed moments after it finishes.

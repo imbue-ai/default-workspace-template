@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
  * The live-page layer against a real store over the fake shell: pages are created for the shown
- * windows of the active desktop (never for a window settling on another client's open), laid
- * over their windows' content boxes in the interleaved stacking order, inert unless focused,
- * hidden when minimized, destroyed when closed; they are greeted after every load, told shown
- * and hidden, and follow their windows' stored paths in place or by reload; and their own
- * ``shell:location``, ``shell:focused``, and ``shell:open`` reach the store.
+ * windows of the active desktop, laid over their windows' content boxes in the interleaved
+ * stacking order, inert unless focused, hidden when minimized, destroyed when closed; they are
+ * greeted after every load, told shown and hidden, and follow their windows' stored paths in
+ * place or by reload; and their own ``shell:location``, ``shell:focused``, ``shell:open``, and
+ * ``shell:start-with-text`` reach the store.
  */
 import "../testing/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,13 +19,21 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_SHOWN,
+  SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import type { Placement } from "../model/records";
 import { activeFocusedWindowId } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
-import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
-import { appRecord, desktopRecord, placementRecord, themeMetricsRecord, windowRecord } from "../testing/records";
+import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
+import {
+  appRecord,
+  desktopRecord,
+  launchPathRecord,
+  placementRecord,
+  themeMetricsRecord,
+  windowRecord,
+} from "../testing/records";
 import { LivePagesLayer } from "./livePages";
 
 const METRICS = themeMetricsRecord();
@@ -130,7 +138,7 @@ beforeEach(async () => {
       windows: [
         windowRecord("win-1", "docs", "/?doc=1"),
         windowRecord("win-2", "notes", "/b"),
-        windowRecord("win-3", "docs", "/new", { is_settling: true }),
+        windowRecord("win-3", "docs", "/new"),
       ],
     }),
     desktopRecord("work"),
@@ -187,19 +195,18 @@ describe("creating and positioning", () => {
     expect(wrapper.style.pointerEvents).toBe("auto");
   });
 
-  it("creates no page for a minimized window, nor for one settling on another client's open", () => {
+  it("creates no page for a minimized window until it is restored", () => {
     expect(layer.hasPage("win-2")).toBe(false);
     expect(layer.hasPage("win-3")).toBe(false);
     store.restoreWindow("win-2");
     layer.reconcile();
     expect(layer.hasPage("win-2")).toBe(true);
-    // The settling window's restore waits; still no page.
     store.restoreWindow("win-3");
     layer.reconcile();
-    expect(layer.hasPage("win-3")).toBe(false);
+    expect(layer.hasPage("win-3")).toBe(true);
   });
 
-  it("creates the page of a settling window the shell placed in this client's layout (an agent's open)", async () => {
+  it("creates the page of a window the shell placed in this client's layout (an agent's open)", async () => {
     api.writeLayout("home", CLIENT, {
       updated_at: null,
       placements: [
@@ -431,7 +438,7 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_LOCATION, path: "/?doc=2", title: "" });
     await settle();
     // Another window opens (the desktops record changes locally) while the broadcast is still on its way.
-    await store.openWindowAt("notes", "/c", null, "new");
+    await store.openWindowAt("notes", "/c", "new");
     layer.reconcile();
     expect(urls).toEqual([]);
     socket.deliver().onDesktopsUpdated(api.desktops);
@@ -579,10 +586,30 @@ describe("the contract", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     messageFromPage("win-1", { type: SHELL_OPEN, path: "/?doc=3", ifPresent: "new" });
     await settle();
-    expect(api.calls).toContain("openWindow:home:docs:/?doc=3:new:-");
+    expect(api.calls).toContain("openWindow:home:docs:/?doc=3:new");
     messageFromPage("win-1", { type: SHELL_OPEN, address: "app:docs?instance=x" });
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:open ignored"));
+    warn.mockRestore();
+  });
+
+  it("runs a page's shell:start-with-text as the primary text action, and warns when it carries no text", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const textApps = [
+      appRecord("docs", {
+        url: "http://127.0.0.1:7001",
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+      notes,
+    ];
+    offerApps(api, socket, textApps);
+    messageFromPage("win-1", { type: SHELL_START_WITH_TEXT, text: "hello there" });
+    await settle();
+    expect(api.calls).toContain(`launch:home:docs:new:{"message":"hello there"}:new`);
+    expect(api.calls).toContain("openWindow:home:docs:/new?message=hello+there:new");
+    messageFromPage("win-1", { type: SHELL_START_WITH_TEXT });
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:start-with-text ignored"));
     warn.mockRestore();
   });
 

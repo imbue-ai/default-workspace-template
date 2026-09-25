@@ -21,7 +21,7 @@ Windows are positioned boxes that a separate live-page layer mirrors; they are n
 
 | Concept | Was | One line | Owner | Alternatives considered |
 |---|---|---|---|---|
-| Desktop | project, view | A named collection of windows and shortcuts with a wallpaper and a sharing mode | Shell, shared | space, screen, room |
+| Desktop | project, view | A named collection of windows and shortcuts with a wallpaper | Shell, shared | space, screen, room |
 | Window | tab, panel, instance | One app page: an app, a path under its origin, and a title; exists on exactly one desktop | Desktop, shared | pane, frame, card |
 | Placement | layout entry | Where one client keeps one window: frame, state, minimized, and its place in that client's stack | Shell, per client | geometry, arrangement |
 | Layout | layout | One client's ordered placements for one desktop | Shell, per client | arrangement |
@@ -31,7 +31,7 @@ Windows are positioned boxes that a separate live-page layer mirrors; they are n
 | Launch path | action, instance create | A path under an app's origin that an app declares as a way to start something, with a label and optional parameters | Manifest | action, entry point |
 | Title bar | tab header | A window's top strip: icon, title, window menu, and the window controls | Window | header, chrome |
 | Taskbar | -- (the old "dock" was dockview) | The bar along the bottom: the launcher field, one entry per window, the system tray | Rendered, not stored | dock, panel, shelf |
-| Launcher | New Tab page, start menu | The text field at the taskbar's left and the overlay it opens | Client, transient | start menu, spotlight |
+| Launcher | New Tab page, start menu | The text field at the taskbar's left and the menu it opens | Client, transient | start menu, spotlight |
 | System tray | -- | The taskbar's right end, a row of tray widgets | Taskbar | status area |
 | Tray widget | -- | One self-contained thing in the tray; V1 ships Desktops | Taskbar | applet, indicator |
 | Theme | design system tokens | The token table every component reads: colours, type, radii, metrics | Build-time file in V1 | skin |
@@ -41,15 +41,12 @@ The sections below define each one.
 
 ### 2.1 Desktop
 
-A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **sharing mode**, a **wallpaper**, its **shortcuts**, and its **windows**.
+A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **wallpaper**, its **shortcuts**, and its **windows**.
 Everything on a desktop is shared truth: every client sees the same desktops with the same windows, shortcuts, and wallpaper.
 A workspace always has at least one desktop; deleting the last one is refused, and a fresh workspace starts with one default desktop.
 There is no unfiltered "Everything" desktop; the launcher is how you reach everything on the machine.
 
-The sharing mode is `shared` (the default) or `personal`.
-Today, with one user, the mode changes nothing but the menu that shows it.
-It is the flag that will decide, once other people share a workspace, whether they may open and close windows on that desktop.
-There is one window set in either mode, so switching the mode moves no data.
+Every desktop is shared. A private mode was considered and dropped: a window holds a resource for everyone, so nothing about a desktop is actually partitioned, and the concept bought nothing. A visiting user is kept off the owner's desktop by being given one of their own on arrival (the plan's section 3.10).
 
 ### 2.2 Window
 
@@ -94,10 +91,11 @@ A shortcut's target is a tagged union with one V1 variant, a launch path, so a w
 
 ### 2.6 Launch path
 
-An app declares in its manifest the paths that start something: `New Chat` at `/new`, `New Terminal` at `/new`, with optional parameters the shell passes as query parameters.
-A shortcut, a launcher tile, an agent's open, and a page's own request all open a window at a launch path.
+An app declares in its manifest the paths that start something, with optional parameters: a GET launch path is a page the shell opens with the parameters as its query (`File Viewer` at `/` with `path`); a POST launch path is one the shell posts the parameters to, and the app answers the page to open (`Terminal` at `/new`, `New Chat` at `/api/chats/intake`), so a page that creates something is never a page a reload could run again (the post-launch-paths plan).
+A shortcut, a launcher tile, an agent's open, and a page's own request all run a launch path: a window opens at a GET launch path's page, or at the page a POST launch path answers.
 An app that declares none has one, `Open <display name>` at `/`.
-A page that starts something and ends up somewhere else reports its real path, and the window follows.
+A launch path may name one of its parameters as its `text_param` or its `draft_param`: the launcher then offers it as a free-text row that sends (or drafts) whatever was typed into the field (launcher-and-getting-started plan section 3.1; the post-launch-paths plan section 3.1).
+A page that ends up somewhere else reports its real path, and the window follows.
 
 ### 2.7 Title bar and window controls
 
@@ -116,12 +114,13 @@ An entry shows the app icon and the title (icon only in compact mode).
 A pinned window's entry is always there, and a client may draw it in the bar in a style (the app's icon, or the workspace's avatar) or floating above the windows (pinned-taskbar-entries plan section 4.2).
 Clicking an entry restores a minimized window and raises it, minimizes the top window, or raises any other window.
 
-The launcher is the text field and the overlay it opens: typing shows results (windows across desktops, apps and their launch paths, "Start something" intents, templates), and focusing the empty field shows the resting content the New Tab page shows today.
-It is an overlay, one per client, closed by a choice, a click outside, or Escape, and it is not a window.
-Opening something from it opens a window on the active desktop.
+The launcher is the text field and the menu it opens above the field: one row per launch path of every app, window rows (every desktop's windows, while typing), and at the foot the free-text rows, which send the typed text to whichever app declares a launch path with a `text_param` (the chat's new chat, and its send to an existing chat).
+One row is always highlighted; Enter runs it, Ctrl+Enter (Cmd+Enter on macOS) runs the secondary free-text row, and typing filters the rows.
+It is a menu, one per client, closed by a choice, a click outside, or Escape, and it is not a window.
+Opening something from it opens a window on the active desktop; the "Start something" intents and the template shelves the New Tab page showed are the Getting Started app's (launcher-and-getting-started plan section 3.6).
 
 The system tray holds the tray widgets, each a self-contained component with one popover.
-V1 ships one: **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, sharing, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
+V1 ships two: **Presence** (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
 
 ### 2.9 The word "dock"
 
@@ -150,7 +149,7 @@ Nothing branches on a stored device kind, and the client record no longer carrie
 flowchart TB
     subgraph shared["Shared truth (server, every client)"]
         App["App (registry row, manifest, launch paths)"]
-        Desktop["Desktop: name, colour, glyph, sharing, wallpaper"]
+        Desktop["Desktop: name, colour, glyph, wallpaper"]
         Window["Window: id, app, path, title"]
         Shortcut["Shortcut: app, launch path, mode, cell"]
     end
@@ -182,7 +181,7 @@ flowchart TB
 |---|---|
 | Which apps exist, their display name, icon, launch paths; whether an app runs; Stop and Start | Manifest and registry; the shell via supervisord (unchanged) |
 | What is inside an app: its chats, sessions, folders, their names and status | The app, in its own pages (new) |
-| Desktops: name, colour, glyph, sharing mode, wallpaper, shortcuts and cells, windows | Shell, shared |
+| Desktops: name, colour, glyph, wallpaper, shortcuts and cells, windows | Shell, shared |
 | Open and close a window; a window's path and title | Shell, shared; the page reports path and title |
 | Frame, state, minimized, stacking order; the active desktop | Shell, per client |
 | Which taskbar entries show, which tray widgets exist | Derived in the browser from the layout and the inventory |
@@ -190,7 +189,7 @@ flowchart TB
 ## 4. Verbs
 
 Per window: open, raise, minimize, restore, maximize, snap left, snap right, move, resize, navigate, refresh, share, close.
-Per desktop: create, rename, recolour, set the glyph, set the sharing mode, set the wallpaper, delete, switch to, add, move, and remove shortcuts.
+Per desktop: create, rename, recolour, set the glyph, set the wallpaper, delete, switch to, add, move, and remove shortcuts.
 Per app: stop, start.
 The agent-facing `layout.py` speaks the same verbs, targets exactly one client for the per-client ones, and applies every op to the stored files so no browser needs to be connected.
 
@@ -221,15 +220,15 @@ Recorded here so the spec need not re-argue them.
 4. Shortcut cells are shared and fitted to the current grid at render time.
 5. Geometry is fractions of the backdrop.
 6. Taskbar entries are the active desktop's windows in this client; a pinned window's entry may be drawn in the bar with a style or floating above the windows.
-7. The launcher is a text field and an overlay, never a window.
+7. The launcher is a text field and the menu it opens, never a window.
 8. The shell has no instance layer; apps own their things, and the chat app lists its chats inside its own page with an inner frame per selected chat, keeping its single-chat page for direct launches.
 9. A window's close removes it for everyone; minimize is the per-client way to get it out of sight. Whether the app keeps what the window showed is the app's rule (decision 16).
 10. Compact and touch are render policies from media queries, and mobile is in scope for V1.
 11. The `{tab}` placeholder, tab ids on the wire, and the rebind route go.
 12. Agent verbs are window and desktop verbs only; `split` and `move` become `place`.
-13. A desktop's sharing mode is a flag with one window set in both modes.
+13. Every desktop is shared; there is no sharing mode. A visiting user gets a desktop of their own on arrival instead.
 14. A window's URL is followed live by every client, navigated in-app where the page can and by reload otherwise, never echoed back to the client that drove it. The independent scope is the one exception: such a window's path is each client's own, and only an agent's `navigate` moves one client's page.
-15. Every seeded shortcut opens a new window of its app, labelled with the app's name; the app decides what a new window holds (the chat's is its list, never a new chat). The browser's is the one focus-mode shortcut (`docs/system/specs/window-bound-resources.md`).
+15. Every seeded shortcut opens a new window of its app, labelled with the app's name; the app decides what a new window holds (the chat's is its list, never a new chat). The browser's and Getting Started's are the two focus-mode shortcuts, each an app one window is enough of (`docs/system/specs/window-bound-resources.md`, launcher-and-getting-started plan section 3.6).
 16. A terminal and the browser are window-bound: the app collects the resource once a window has shown it and none does any more, told of closes by the shell and sweeping the shell's windows regardless; the shell destroys nothing.
 17. The fleet holds one browser; closing its last window stops it and keeps its profile, and its next window starts it again.
 18. An agent that wants a terminal or a browser opens a window for it, minimized, and with nobody connected the window is still opened, unplaced.

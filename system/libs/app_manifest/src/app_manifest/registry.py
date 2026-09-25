@@ -17,11 +17,13 @@ from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import Pin
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
 from app_manifest.primitives import DisplayName
+from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
@@ -52,13 +54,27 @@ REGISTRATION_TIMEOUT_SECONDS: Final[float] = 15.0
 
 
 class RegistryLaunchPath(FrozenModel):
-    """A launch path as copied onto a registry row: the id, the label, the path, and the names of its params."""
+    """A launch path as copied onto a registry row: the id, the label, the path and its method, the names of its
+    params, its presets, and which param takes typed or drafted text. A row an older release wrote lacks the method,
+    the presets, and the draft param, and reads as the GET launch path it was."""
 
     id: LaunchPathId = Field(description="The declared launch path id")
     label: NonEmptyStr = Field(description="The launch path's user-facing label")
     path: LaunchPathValue = Field(description="The path under the app origin")
-    params: tuple[NonEmptyStr, ...] = Field(
-        default=(), description="The names of the query parameters the shell may append, in manifest order"
+    method: LaunchPathMethod = Field(
+        default=LaunchPathMethod.GET, description="GET opens at the path; POST posts to it for the path to open"
+    )
+    params: tuple[LaunchParamName, ...] = Field(
+        default=(), description="The names of the params a caller may supply, in manifest order"
+    )
+    presets: dict[LaunchParamName, str] = Field(
+        default_factory=dict, description="The fixed name-value pairs sent with every launch of the path"
+    )
+    text_param: LaunchParamName | None = Field(
+        default=None, description="The param the launcher fills with typed text; absent means the path takes none"
+    )
+    draft_param: LaunchParamName | None = Field(
+        default=None, description="The param the shell fills with text to be drafted; absent means the path takes none"
     )
 
 

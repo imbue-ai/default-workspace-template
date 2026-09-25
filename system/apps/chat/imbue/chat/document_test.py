@@ -174,21 +174,22 @@ def test_the_terminal_label_prefers_the_pty_row(tmp_path: Path, monkeypatch: pyt
     assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="terminal-pty-a1b2c3d4">' in response.text
 
 
-def test_the_root_and_new_serve_the_chat_root_document(tmp_path: Path) -> None:
+def test_the_root_serves_the_chat_root_document_and_the_retired_launch_paths_are_not_found(tmp_path: Path) -> None:
     chat_id = _agent_id()
     client, _ = _client(tmp_path, chat_id)
     (tmp_path / "root.html").write_text("<html><head></head><body>root</body></html>")
 
-    root = client.get("/?chat=" + chat_id)
-    new = client.get("/new?message=hello")
-
-    for response in (root, new):
+    for search in ("?chat=" + chat_id, "?chat=" + chat_id + "&intake=tok", "?intake=tok"):
+        response = client.get("/" + search)
         assert response.status_code == 200
         assert response.headers[FRONTEND_BUILT_HEADER] == "true"
         assert response.headers["Cache-Control"] == "no-store"
         assert "root</body>" in response.text
         assert CHAT_ID_META_NAME not in response.text
         assert f'<meta name="{TERMINAL_LABEL_META_NAME}" content="">' in response.text
+    # A page path never creates or sends anything (post-launch-paths plan section 3.9).
+    assert client.get("/new?message=hello").status_code == 404
+    assert client.get("/send?message=hello").status_code == 404
 
 
 def test_the_root_without_a_bundle_is_the_not_built_placeholder(tmp_path: Path) -> None:

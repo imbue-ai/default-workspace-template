@@ -17,11 +17,14 @@ format. In brief:
 - An **app** is a supervised program with a manifest (`app.toml`), a row in
   the registry (`data/.state/apps.toml`), and its own browser origin. It is the
   unit you install, stop, start, and share. Its manifest declares **launch
-  paths** (`new` at `/new`, say, with documented query params); an app that
+  paths** with documented params: a GET launch path is a page opened with
+  the params as its query, a POST launch path (`new` at `/new`, say) is
+  posted the params by the shell and answers the page to open; an app that
   declares none offers `open` at its root.
 - A **desktop** is a named, shared collection of windows and shortcuts over a
-  wallpaper, with a colour, a glyph, and a sharing mode. Everyone sees the
-  same desktops and the same windows on them.
+  wallpaper, with a colour and a glyph. Everyone sees the same desktops and
+  the same windows on them; a signed-in visitor gets a desktop of their own,
+  seeded from the first one, the first time they arrive (see "Who is here").
 - A **window** is one page of one app on one desktop: the app, the path under
   its origin the page is at, and the title the page last reported. That is
   the whole of what the shell knows about what a window shows.
@@ -55,32 +58,38 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
   `/wallpapers/<kind>/<name>`), the per-app Stop and Start
-  (`/api/apps/<name>/stop|start`), clients (`/api/clients`), client activity
-  (`/api/client-activity`), the inventory (`/api/inventory`), the templates
-  catalog (`/api/templates-catalog`), each client's pinned-entry presentation
+  (`/api/apps/<name>/stop|start`), clients (`/api/clients`, and the arrival
+  `/api/clients/<client>/arrive` a page posts first), client activity
+  (`/api/client-activity`), the inventory (`/api/inventory`), each client's
+  pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), and the loopback-only
   op route (`/api/layout/broadcast`).
+- Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
+  right now, with their identity and profile (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
-  `placements_updated`, `active_desktop_changed`, `client_entries_changed`,
-  `avatar_status`, `avatar_selection_changed`, and `layout_op` (contracts
-  section 6); it accepts each client's `client_state` report.
+  `presence_updated`, `placements_updated`, `active_desktop_changed`,
+  `client_entries_changed`, `avatar_status`, `avatar_selection_changed`, and
+  `layout_op` (contracts section 6); it accepts each client's `client_state`
+  report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
 `placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
-own paths for independent windows), `clients.json`, `avatar_selection.json`,
-and the client-activity event log (`events/client_activity/events.jsonl`, what
-`layout.py context` reads). Wallpapers are listed from `static/wallpapers/`
-(bundled) and `data/.apps/system_interface/wallpapers/` (files the user adds);
-avatar designs an agent registers live in
-`data/.apps/system_interface/avatars/catalog.json` beside the seven bundled
-ones (`docs/system/avatar-designs.md`).
+own paths for independent windows), `clients.json`, `users.json` (the desktop
+made for each visiting user), `avatar_selection.json`, and the client-activity
+event log (`events/client_activity/events.jsonl`, what `layout.py context`
+reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
+`data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
+an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
+beside the seven bundled ones (`docs/system/avatar-designs.md`). Presence lives
+beside it under `data/.state/presence/` (`--presence-dir`): the per-user files
+and the profile cache.
 
 ### The desktop model
 
 - **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
-  sharing mode, wallpaper, shortcuts, windows), a `Window` (an app, a path
+  wallpaper, shortcuts, windows), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
   backdrop, state, minimized; the order is the stack).
@@ -97,20 +106,22 @@ ones (`docs/system/avatar-designs.md`).
   but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's `default_shortcut` on the first read after the
-  registry has been read. A client record holds the client's active desktop
-  and when it was last seen; clients unseen for a while are pruned with their
-  placement files.
+  registry has been read. A client record holds the client's active desktop,
+  when it was last seen, and the user it last arrived as; clients unseen for
+  a while are pruned with their placement files. `users.json` holds the
+  desktop made for each visiting user (see "Who is here").
 - **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
   focus, minimize, restore, maximize, snap, place, the shortcut edits) and
   every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
   free cell, reading order, shortcut placement) as pure functions over the
   records. The rules the frontend also applies pass the shared vectors in
   `docs/system/blueprint/desktop-interface/geometry_vectors.json`.
-- **Routes** (`shell/desktop_routes.py`): the desktop, window, placement, and
-  wallpaper routes above. A placements save carries a save id and the stamp it
-  was based on; a save over a newer arrangement is refused with 409 and the
-  browser refetches. `GET /api/inventory` is `{desktops, apps, clients}`, each
-  `app` carrying its `launch_paths`, `default_shortcut`, and `is_running`.
+- **Routes** (`shell/desktop_routes.py`): the desktop, window, placement,
+  arrival, and wallpaper routes above. A placements save carries a save id
+  and the stamp it was based on; a save over a newer arrangement is refused
+  with 409 and the browser refetches. `GET /api/inventory` is
+  `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
+  `default_shortcut`, and `is_running`.
 - **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
@@ -124,10 +135,11 @@ ones (`docs/system/avatar-designs.md`).
   messages.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
-liveness, desktops, placements, wallpapers, clients, client activity, layout
-ops, the pure desktop document editor, the routes with their shared helpers,
-state); the package root holds the process (`main.py`, `server.py`), the
-not-built placeholder, and the update-staleness check. The frontend
+liveness, desktops, placements, wallpapers, clients, users and the request
+identity, client activity, layout ops, the pure desktop document editor, the
+routes with their shared helpers, state); the package root holds the process
+(`main.py`, `server.py`), the not-built placeholder, and the update-staleness
+check. The frontend
 (`frontend/`) is one member of the npm workspace rooted at
 `system/package.json`; the design system, the base helpers, and the contract
 modules it shares with the app pages live in `system/libs/workspace_ui`, and
@@ -141,46 +153,125 @@ app's liveness (supervisord for rows with a `program`, a TCP connect
 otherwise) on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`. That is all it knows of an app: its row (display name,
 icon, launch paths, default shortcut, launcher rank) and whether it is running.
+The page learns the apps from `GET /api/inventory` right after it arrives (one
+read for the desktops, the apps, and the clients), so it never draws a
+shortcut for an app it does not know; the socket's `apps_updated` (sent on
+every connect, and on every change) keeps the list current from then on.
+Until that first read answers, a shortcut whose app the page cannot look up
+draws faint as "Connecting to the workspace..." and running it says the page is
+still connecting; only once the apps are known is a missing app reported as
+not registered.
 
 Stop and Start of the whole app act on its supervisord program and are refused
 for critical apps; the desktop offers them on the window menu
 (`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
-`shell:capabilities`); a page that reports the path it is showing gets it
+`shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
 stored on its window and reopens there, and one that declared `navigation`
 is sent `shell:navigate` when an agent points its window elsewhere.
+
+### Who is here
+
+Every request that reaches the shell carries the requester's identity in the
+`X-Imbue-Identity` header, stamped by whichever proxy admitted it -- the local
+`mngr forward` or the share gateway (the header contract is in
+`system/services/share_gateway/README.md`): `owner`, and on a shared
+workspace the account's `user_id` and `email`. Nothing more: what to call an
+account and what it looks like is its profile, which the shell fetches from
+imbue_cloud (below). The shell page posts `/api/presence/heartbeat` (no body)
+every 30 seconds while the tab is visible, once immediately when it becomes
+visible, and nothing when it goes away. The page sends nothing about who it
+is; the heartbeat's answer is the requester's own identity record, which is
+what the account affordances render. A heartbeat whose identity carries no
+user id -- the owner of an unshared workspace, or a request that came through
+no current proxy -- answers 204 and records nothing: there is nobody to name.
+
+Each user has one file, `data/.state/presence/users/<user_id>.json`, holding
+their identity snapshot (`user_id`, `email`, `owner`, `first_seen`), written
+on first sight and rewritten only when the email or owner flag changes; a
+heartbeat just touches the file's mtime. A user is connected while that mtime
+is within 70 seconds (two missed heartbeats plus slack), and the mtime is
+their last seen. Files are never removed: whoever is not connected is still
+the record of who was last here, and when. Apps read the directory the same
+way. The shell sends the connected set on every WebSocket connect and pushes
+`presence_updated` -- one entry per user, however many tabs -- when a
+heartbeat brings someone in and, from a sweep every 10 seconds, when
+someone's heartbeats have stopped. The taskbar's Presence tray widget draws
+one profile picture per connected user once two or more are connected (one is
+just you): everyone else first, the requester's own entry last with an accent
+ring and "(you)" on its hover text, the own entry being the one whose
+`user_id` the heartbeat's answer names. A changed name or profile picture
+reaches the tray through the profile cache (below) within five minutes. A
+visitor granted a single app never loads the shell and so never appears: they
+are in one app, not in the workspace.
+
+**Profiles.** A user's display name and profile picture come from imbue_cloud,
+not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
+(public; `{"user_id", "display_name", "profile_picture_url"}`) with a 2 second bound,
+where `broker_url` is `SHARE_BROKER_URL` in `data/.secrets/share.env`, the
+file the minds desktop writes while the workspace is shared (read fresh on
+every miss; no file means no profiles). Each answer, and each failure, is
+cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
+a connector outage costs one failed fetch per user per 5 minutes and no
+request ever hangs or fails on it. The profile rides on each present user
+over the wire (`display_name`, `profile_picture_url`, null when there is none)
+and names a visitor's desktop on their first arrival.
+
+The same header decides where a page lands. A shell page posts its arrival
+(`POST /api/clients/<client_id>/arrive`) before it reads the inventory
+(`GET /api/inventory`: the desktops, the apps, and the clients in one answer,
+so the seeded desktop is in it). The
+owner, and any request without a user id, land on the client's recorded
+desktop, else the first. A signed-in visitor would otherwise land on the
+owner's desktop and open and close the owner's windows, so on their first
+arrival the shell makes them a desktop named after them (their profile's
+display name, else the email's local part, else `Guest`, made unique; the
+profile is resolved before the arrival takes the state lock), seeded from the
+first desktop: its shortcuts, its wallpaper, and a new window at the path of
+each window open there. It is remembered in `users.json`, every later client
+of that user lands on it, a returning client keeps the desktop it was on (when
+it last arrived as that same user), and if it has been deleted the next
+arrival seeds another and says so. Every desktop stays shared and in
+everyone's switcher; there is no private mode.
 
 ### The desktop, the taskbar, and the launcher
 
 The backdrop shows the active desktop's shortcuts and windows; each window is
 an iframe of an app page under a title bar with the page's title and the
 window menu. The taskbar shows the desktop switcher, one entry per window of
-the active desktop, the launcher button, and the tray (the desktop
-switcher, the update-staleness banner). A pinned window's entry may float above
+the active desktop, the launcher button, and the tray (the Presence widget,
+the desktop switcher, the update-staleness banner). A pinned window's entry may float above
 the windows instead, drawn as the workspace's avatar (the chat's default); its
 context menu moves it between the bar and the desktop, switches its style, and
 opens the avatar chooser. Desktops are created, renamed, recoloured,
 re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
 removed on the backdrop.
 
-The launcher is the page for starting things, an overlay over the desktop
-rather than a window. Its resting contents: a search field; "Open new" (one
-tile per launch path of every non-internal app, the apps that declare a
-`launcher_rank` in their manifest first in rank order and the rest after
-them); "On this desktop" (the active desktop's windows by title); "Start
-something" (hardcoded intents, each a new chat seeded with a prompt, six at a
-time behind "See more"); and "Start from a template" (the published templates
-by category, in sideways rails, with a detail dialog whose "Make it mine"
-starts a chat that adopts the template). Typing in the search field swaps the
-overlay for results: the matching launch paths and windows, the matching
-intents, the matching templates. A seeded prompt goes to whichever app
-declares a launch path with a `message` param (the chat app's `new`), so the
-shell still names no app. The template catalog is a JSON document the shell
-fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (`catalog/README.md` at
-the repo root describes it), reuses for six hours, keeps the last good copy
-under `data/.state/system_interface/`, and serves to the page at
-`GET /api/templates-catalog`. A fresh install lands on its `Home` desktop with
-the launcher's tiles one click away.
+The launcher is a text field ("Start app or send message...") and the menu it
+opens above itself (`frontend/src/views/LauncherMenu.ts`, its rows computed by
+`reducers/launcherRows.ts`). The rows: one per launch path of every
+non-internal app, the apps that declare a `launcher_rank` in their manifest
+first in rank order and the rest after them; while typing, one per window of
+every desktop (by title, the active desktop's first; choosing one switches
+desktop and raises it); and at the foot the free-text rows, one per launch
+path that names a `text_param` or a `draft_param`, which run that launch path
+through the shell's launch route (`POST /api/desktops/<id>/launch`) with the
+typed text as the param (`model/launch.ts`): a GET launch path opens at its
+path with the params as the query, a POST one is posted the params (and the
+client id, desktop id, and window path as its envelope) and opens at the page
+it answers. The first free-text row is the primary action (Enter with no other
+row highlighted) and the second the secondary (Ctrl+Enter, Cmd+Enter on
+macOS); a free-text row of an app with a pinned window points that window at
+the page rather than opening a new one (this client's view alone when the
+window is independent), and a text whose encoded GET path would pass the
+window path bound is disabled with its reason. One row is always
+highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
+and a run closes the menu and clears the field. A framed page starts a chat
+without naming the chat app through `shell:start-with-text`, which the shell
+answers by running the primary free-text row (the Getting Started app's
+intents and templates use it). The shell names no app in any of this. A
+fresh install lands on its `Home` desktop with the Getting Started window
+open, placed there once by that app for the first client that connects.
 
 ## Running and developing
 
@@ -236,7 +327,8 @@ Every op targets exactly one client (`--client <id>`, else the client that last
 messaged the requesting agent, else the one connected client; refused with the
 clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
-(`--launch`, `--param`; a bare URL is the browser's `new`), minimized with
+(`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path
+is posted the params for the page it answers), minimized with
 `--minimized`, and prints the window's id; an `open` with no client to target
 still writes the window, unplaced. A close is posted to the app's registered
 `window_closed_path`, when it has one, so an app whose resources live as long
@@ -420,9 +512,9 @@ The careful flow's apply (`update_self.py apply --keep-rollback-point`, see
 "Updating the running UI") does not discard its snapshots on success: it leaves
 `data/.state/update-apply/last-good.json`, a record of the merge it landed, the
 copies it kept, and the critical apps and supervisord programs included in rollback.
-A frontend apply includes both chat and shell, even if only one app's source changed,
-because it replaces both bundles. The shell turns that record into a notice only a
-person closes (`shell/update_notice.py`):
+A frontend apply includes both chat and shell (the critical bundle owners), even if only
+one app's source changed, because one build replaces every bundle. The shell turns that
+record into a notice only a person closes (`shell/update_notice.py`):
 one top banner beside the staleness one, naming every app the record names (or
 the workspace, when it names none), saying they were updated a moment ago and
 offering "Roll back" and "Everything seems good". It is one banner rather than a

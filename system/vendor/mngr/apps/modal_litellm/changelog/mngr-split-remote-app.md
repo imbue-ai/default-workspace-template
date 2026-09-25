@@ -1,3 +1,0 @@
-The proxy's app.py now consumes the shared imbue.modal_app_kit deploy conventions instead of its own duplicated copies: deploy env/id readers (with the unset-sentinel rollback safety property), min-containers/scaledown readers, stamped secret names, and direct_database_url (moved to the shared lib along with its tests). The image ships the shared lib via a single trailing add_local_python_source operation.
-
-Added an import-boundary test asserting the entrypoint imports only its pip-installed set, the stdlib, and imbue.modal_app_kit -- any other monorepo import would pass locally and crash the deployed container at import time.

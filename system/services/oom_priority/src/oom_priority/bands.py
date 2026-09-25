@@ -1,9 +1,13 @@
 """Memory-shedding priority bands and the helper that writes them.
 
 Each process is assigned to one band by writing its ``oom_score_adj`` once at
-startup. earlyoom reads ``/proc/<pid>/oom_score`` (the kernel badness, which
-already folds in ``oom_score_adj``) to pick its victim, so a higher band makes a
-process more likely to be shed first.
+startup. The workspace runs the imbue-ai fork of earlyoom, which picks its
+victim by the kernel's badness computed from each process's ``oom_score_adj``
+and memory -- ``VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal)
+/ 1000`` -- rather than reading ``/proc/<pid>/oom_score``, which gVisor serves
+as 0 for every process. So a higher band makes a process more likely to be shed
+first, under gVisor and runc alike: one band point is worth MemTotal/1000 of
+memory.
 
 Bands are positive-only. A negative ``oom_score_adj`` (true "never kill") would
 require ``CAP_SYS_RESOURCE``, which the container's default capability set does
@@ -202,9 +206,10 @@ def chat_agent_oom_score_adj(
 # and are additionally shielded by earlyoom ``--avoid``.
 #
 # This is a best-effort steer, not a hard guarantee. earlyoom picks the highest
-# ``/proc/*/oom_score``, which folds each process's live memory usage in on top
-# of ``oom_score_adj``, so a large enough memory gap between two services can
-# still reorder adjacent bands. The order only decides which service goes when
+# badness, which adds each process's live memory usage on top of its
+# ``oom_score_adj`` (one band point is worth MemTotal/1000 of memory), so a
+# large enough memory gap between two services can still reorder adjacent
+# bands. The order only decides which service goes when
 # earlyoom is forced to shed inside the protected pool -- i.e. once everything
 # more expendable (browsers, agent subprocesses, agents, user services) is gone.
 USER_SERVICE: Final[int] = 200
@@ -264,9 +269,12 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
     # The file viewer: dufs, the tiny static file server the program runs
-    # directly. It holds little memory and supervisord restarts it if shed, so
-    # this is the most expendable built-in service of all.
+    # directly. It holds little memory and supervisord restarts it if shed.
     "files": 75,
+    # The Getting Started page: one static page and a cached catalog. A shed costs
+    # one reload of a window that shows nothing of the user's, so this is the most
+    # expendable built-in service of all.
+    "getting-started": 80,
     "user": USER_SERVICE,
     # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the
@@ -350,7 +358,9 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
 }
 
 
-def supervisord_program_band(program_name: str, priority_by_program: Mapping[str, str]) -> int:
+def supervisord_program_band(
+    program_name: str, priority_by_program: Mapping[str, str]
+) -> int:
     """The band a supervisord program is expected to occupy.
 
     ``priority_by_program`` is the app registry's view (``app_registry``): the

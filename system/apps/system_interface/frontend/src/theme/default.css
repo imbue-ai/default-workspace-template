@@ -13,6 +13,7 @@
   --desk-cell-width: 96px;
   --desk-cell-height: 112px;
   --desk-grid-inset: 16px;
+  --desk-cell-gap: 4px;
   --desk-window-min-width: 320px;
   --desk-window-min-height: 240px;
   --desk-title-min-visible: 120px;
@@ -21,12 +22,25 @@
   --desk-drag-threshold: 4px;
   --desk-touch-target: 32px;
   --desk-window-radius: 12px;
+  /* A title bar control stands this far clear of the bar's top and bottom edges, which sets its
+     box; the bar's own padding gives the outermost one the same clearance from the window edge. */
+  --desk-window-control-inset: 4px;
+  --desk-window-control-size: calc(var(--desk-title-bar-height) - 2 * var(--desk-window-control-inset));
   --desk-window-shadow: var(--shadow-overlay);
-  --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 82%, transparent);
+  --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 70%, transparent);
+  --desk-taskbar-blur: 20px;
   --desk-backdrop: var(--c-bg);
   --desk-default-wallpaper: url(/wallpapers/bundled/dawn);
   --desk-icon-size: 48px;
-  --desk-shortcut-label-shadow: 0 1px 2px rgb(0 0 0 / 0.6);
+  /* The icon tile's corner, as a fraction of the tile: an icon shown larger or smaller keeps
+     the same silhouette rather than growing a corner that is suddenly too tight or too round. */
+  --desk-icon-radius: calc(var(--desk-icon-size) * 0.32);
+  /* The icon tile's own elevation: a wide soft cast under a tight one, the pair the shortcuts
+     want over a photograph -- lighter and further spread than the --shadow-raised the chrome uses. */
+  --desk-icon-shadow: 0 3px 8px 0 rgb(0 0 0 / 0.15), 0 1px 1px 0 rgb(0 0 0 / 0.08);
+  /* Drop shadows rather than a text-shadow: the name is clamped to two lines, so its own box
+     clips anything painted inside it, and a filter draws the same silhouette from outside. */
+  --desk-shortcut-label-shadow: drop-shadow(0 2px 4px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 0.5px rgb(0 0 0 / 0.4));
   --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;
@@ -34,19 +48,24 @@
   --desk-resize-corner: 16px;
   --desk-resize-overhang: 3px;
   --desk-resize-edge-inset: calc(var(--desk-resize-corner) - var(--desk-resize-overhang));
+  --desk-launcher-menu-width: 22rem;
 }
 
 [data-compact] {
   --desk-taskbar-height: 56px;
   --desk-cell-width: 80px;
-  --desk-cell-height: 96px;
+  --desk-cell-height: 104px;
   --desk-grid-inset: 8px;
   --desk-window-radius: 0px;
   --desk-icon-size: 40px;
+  /* The menu spans the taskbar less its padding, since the field it hangs over spans it too. */
+  --desk-launcher-menu-width: calc(100% - var(--spacing) * 4);
 }
 
 [data-touch] {
   --desk-title-bar-height: 44px;
+  /* A finger needs the whole touch target, so the controls fill the taller bar instead. */
+  --desk-window-control-size: var(--desk-touch-target);
   --desk-taskbar-height: 56px;
   --desk-drag-threshold: 8px;
   --desk-touch-target: 44px;

@@ -1,1 +1,0 @@
-- Corrected the `minds-admin env deactivate` docstring: a deactivated shell no longer makes `minds run` refuse to start; `minds run` now defaults to production (the in-repo production `client.toml` and `~/.minds/`), while `minds-admin env deploy` / `destroy` still refuse without an activated env.

@@ -1,19 +1,18 @@
 /**
  * The TypeScript mirrors of the shell's records (desktop-interface contracts.md sections 3 to
- * 5, and the pinned-taskbar-entries plan): what ``GET /api/desktops``, the placements routes
- * (a client's stored window paths included), the client list with each client's entries, the
- * ``apps_updated`` push with each app's pin, the avatar catalog of ``GET /api/avatars``, and the
- * ``avatar_status``, ``avatar_selection_changed``, and ``client_entries_changed`` pushes carry,
- * spelled as the wire spells them (``snake_case``), and the parsers that read a wire document
- * into them. A document of the wrong shape is refused with ``WireShapeError`` rather than read
- * as an empty one: an empty desktop list would be believed.
+ * 5, and the pinned-taskbar-entries plan): what ``GET /api/inventory`` (the desktops, the apps
+ * with each one's pin, and the clients with each one's entries), the placements routes (a
+ * client's stored window paths included), the client list, the ``apps_updated`` and
+ * ``desktops_updated`` pushes, the avatar catalog of ``GET /api/avatars``, and the
+ * ``avatar_status``, ``avatar_selection_changed``, ``client_entries_changed``, and
+ * ``presence_updated`` pushes carry, spelled as the wire spells them (``snake_case``), and the
+ * parsers that read a wire document into them. A document of the wrong shape is refused with
+ * ``WireShapeError`` rather than read as an empty one: an empty desktop list would be believed.
  */
 
 export type WindowState = "NORMAL" | "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZED";
 
 export const WINDOW_STATES: readonly WindowState[] = ["NORMAL", "SNAPPED_LEFT", "SNAPPED_RIGHT", "MAXIMIZED"];
-
-export type SharingMode = "shared" | "personal";
 
 export type ShortcutMode = "focus" | "new";
 
@@ -67,7 +66,6 @@ export interface WindowRecord {
   /** What the page last reported; "" means "show the app's display name". */
   readonly title: string;
   readonly opened_at: string;
-  readonly is_settling: boolean;
   /** The app's pinned window on this desktop: permanent, never closed. */
   readonly is_pinned: boolean;
   readonly scope: LocationScope;
@@ -78,7 +76,6 @@ export interface Desktop {
   readonly name: string;
   readonly color: string;
   readonly glyph: number;
-  readonly sharing: SharingMode;
   readonly wallpaper: Wallpaper | null;
   readonly shortcuts: readonly DesktopShortcut[];
   readonly windows: readonly WindowRecord[];
@@ -111,12 +108,24 @@ export const EMPTY_LAYOUT: Layout = Object.freeze({
   window_paths: Object.freeze({}),
 });
 
+/** How the shell runs a launch path: opens a window at the path, or posts to it for the path of the page to open
+ *  (post-launch-paths plan section 3.1). */
+export type LaunchPathMethod = "GET" | "POST";
+
 export interface LaunchPath {
   readonly id: string;
   readonly label: string;
   readonly path: string;
-  /** The names of the query parameters the shell may append. */
+  readonly method: LaunchPathMethod;
+  /** The names of the params a caller may supply. */
   readonly params: readonly string[];
+  /** The fixed name-value pairs the shell sends with every launch of the path. */
+  readonly presets: Readonly<Record<string, string>>;
+  /** The param the launcher fills with typed text, which makes this a free-text row; null for none. */
+  readonly text_param: string | null;
+  /** The param the shell fills with text to be drafted rather than sent (a free-text row too, and what the avatar
+   *  dialog's draft goes through); null for none. */
+  readonly draft_param: string | null;
 }
 
 export interface DefaultShortcut {
@@ -176,10 +185,39 @@ export interface ClientRecord {
   readonly entries: Readonly<Record<string, EntryPresentation>>;
 }
 
+/** What the shell answers when this client's page arrives (contracts.md section 5.5): where it lands, the desktop
+ *  seeded for a first-time user, and the name of the user's earlier desktop when it had been deleted meanwhile. */
+export interface ClientArrival {
+  readonly desktop_id: string | null;
+  readonly created_desktop: Desktop | null;
+  readonly replaced_desktop_name: string | null;
+}
+
 export interface WallpaperListing {
   readonly kind: WallpaperKind;
   readonly name: string;
   readonly url: string;
+}
+
+/** What a shell page reads once it has arrived (contracts.md section 5.5): every desktop, every registered app,
+ *  and every known client, in one answer, so the page knows the apps before it draws a shortcut. The document's
+ *  ``is_preview`` and each client's ``shown`` are an agent's reading of it and are not kept here. */
+export interface Inventory {
+  readonly desktops: readonly Desktop[];
+  readonly apps: readonly AppRecord[];
+  readonly clients: readonly ClientRecord[];
+}
+
+/** One connected user as the shell serializes it (one entry per user, however many tabs): the identity record
+ * with the account's profile (name and profile picture, from imbue_cloud) beside it. */
+export interface PresentUser {
+  readonly user_id: string;
+  readonly email: string;
+  readonly display_name: string | null;
+  readonly profile_picture_url: string | null;
+  readonly owner: boolean;
+  readonly first_seen: string;
+  readonly last_seen: string;
 }
 
 /** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
@@ -308,7 +346,6 @@ export function parseWindow(raw: unknown): WindowRecord {
     path: asString(record.path, "window.path"),
     title: asString(record.title, "window.title"),
     opened_at: asString(record.opened_at, "window.opened_at"),
-    is_settling: asBoolean(record.is_settling, "window.is_settling"),
     is_pinned: record.is_pinned === undefined ? false : asBoolean(record.is_pinned, "window.is_pinned"),
     scope: record.scope === undefined ? "linked" : asOneOf(record.scope, ["linked", "independent"], "window.scope"),
   };
@@ -321,7 +358,6 @@ export function parseDesktop(raw: unknown): Desktop {
     name: asString(record.name, "desktop.name"),
     color: asString(record.color, "desktop.color"),
     glyph: asNumber(record.glyph, "desktop.glyph"),
-    sharing: asOneOf(record.sharing, ["shared", "personal"], "desktop.sharing"),
     wallpaper: parseWallpaper(record.wallpaper),
     shortcuts: asArray(record.shortcuts, "desktop.shortcuts").map(parseShortcut),
     windows: asArray(record.windows, "desktop.windows").map(parseWindow),
@@ -364,13 +400,25 @@ export function parseLayout(raw: unknown): Layout {
   };
 }
 
+function parsePresets(raw: unknown): Record<string, string> {
+  if (raw === undefined || raw === null) return {};
+  const record = asObject(raw, "launch_path.presets");
+  return Object.fromEntries(
+    Object.entries(record).map(([name, value]) => [name, asString(value, `launch_path.presets.${name}`)]),
+  );
+}
+
 function parseLaunchPath(raw: unknown): LaunchPath {
   const record = asObject(raw, "launch path");
   return {
     id: asString(record.id, "launch_path.id"),
     label: asString(record.label, "launch_path.label"),
     path: asString(record.path, "launch_path.path"),
+    method: record.method === undefined ? "GET" : asOneOf(record.method, ["GET", "POST"], "launch_path.method"),
     params: asArray(record.params ?? [], "launch_path.params").map((param) => asString(param, "launch_path.param")),
+    presets: parsePresets(record.presets),
+    text_param: asOptionalString(record.text_param, "launch_path.text_param"),
+    draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
   };
 }
 
@@ -511,6 +559,27 @@ export function parseAvatarCatalog(raw: unknown): AvatarCatalog {
   };
 }
 
+export function parseClientArrival(raw: unknown): ClientArrival {
+  const record = asObject(raw, "arrival");
+  return {
+    desktop_id: asOptionalString(record.desktop_id, "arrival.desktop_id"),
+    created_desktop:
+      record.created_desktop === null || record.created_desktop === undefined
+        ? null
+        : parseDesktop(record.created_desktop),
+    replaced_desktop_name: asOptionalString(record.replaced_desktop_name, "arrival.replaced_desktop_name"),
+  };
+}
+
+export function parseInventory(raw: unknown): Inventory {
+  const record = asObject(raw, "inventory");
+  return {
+    desktops: parseDesktops(record.desktops),
+    apps: parseAppRecords(record.apps),
+    clients: parseClientRecords(record.clients),
+  };
+}
+
 export function parseWallpaperListings(raw: unknown): WallpaperListing[] {
   return asArray(raw, "wallpapers").map(parseWallpaperListing);
 }
@@ -521,6 +590,24 @@ export function parseWallpaperListing(raw: unknown): WallpaperListing {
     kind: asOneOf(record.kind, ["bundled", "file"], "wallpaper.kind"),
     name: asString(record.name, "wallpaper.name"),
     url: asString(record.url, "wallpaper.url"),
+  };
+}
+
+/** The ``users`` of a ``presence_updated`` message or of ``GET /api/presence``. */
+export function parsePresentUsers(raw: unknown): PresentUser[] {
+  return asArray(raw, "users").map(parsePresentUser);
+}
+
+export function parsePresentUser(raw: unknown): PresentUser {
+  const record = asObject(raw, "user");
+  return {
+    user_id: asString(record.user_id, "user.user_id"),
+    email: asString(record.email, "user.email"),
+    display_name: asOptionalString(record.display_name, "user.display_name"),
+    profile_picture_url: asOptionalString(record.profile_picture_url, "user.profile_picture_url"),
+    owner: asBoolean(record.owner, "user.owner"),
+    first_seen: asString(record.first_seen, "user.first_seen"),
+    last_seen: asString(record.last_seen, "user.last_seen"),
   };
 }
 

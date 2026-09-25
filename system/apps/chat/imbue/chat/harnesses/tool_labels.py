@@ -55,8 +55,19 @@ _MCP_SEPARATOR = "__"
 
 @pure
 def basename(path: str) -> str:
-    """The final path segment, or the whole string when there is no separator."""
-    return path.rstrip("/").rsplit("/", 1)[-1] or path
+    """The final path segment, or the whole string when there is no separator.
+
+    A trailing slash is kept: ``system/apps/chat/`` reads as ``chat/`` rather than
+    ``chat``, so a directory looks like one instead of like a file with no extension.
+    It is the only thing IN a path that says which it is -- ``file_path`` and ``path``
+    carry both, and a directory the agent wrote without the slash still reads bare,
+    because inventing one would be a guess.
+    """
+    trimmed = path.rstrip("/")
+    name = trimmed.rsplit("/", 1)[-1] or path
+    if path.endswith("/") and not name.endswith("/"):
+        return name + "/"
+    return name
 
 
 @pure

@@ -1,1 +1,0 @@
-Bump the remaining Node 20 GitHub Actions in the mirror workflows to their Node 24 majors: `astral-sh/setup-uv` v5 to v7 (matching the version pinned everywhere else in the repo) in the gate workflow, and `actions/create-github-app-token` v1 to v2 in the push workflow. Both v5/v1 run on the deprecated Node 20 runtime and emit a deprecation warning in CI.
