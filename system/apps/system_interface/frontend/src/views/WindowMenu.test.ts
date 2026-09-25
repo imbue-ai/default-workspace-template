@@ -15,17 +15,20 @@ function rowOf(rows: MenuRow[], key: string): ActionRow {
   return row;
 }
 
+const size = { setState: vi.fn(), setFrame: vi.fn() };
+
 describe("windowMenuRows", () => {
-  it("offers Refresh, Share, Stop or Start, and Close for an ordinary running app", () => {
+  it("offers Move and resize, Share, Stop or Start, and Close for an ordinary running app", () => {
     const app = appRecord("docs");
     const setAppLifecycle = vi.fn();
     const rows = windowMenuRows(app, {
-      refresh: vi.fn(),
+      size,
+      onSized: vi.fn(),
       share: vi.fn(),
       setAppLifecycle,
       close: vi.fn(),
     });
-    expect(keysOf(rows)).toEqual(["refresh", "share", "stop", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "|", "share", "stop", "|", "close"]);
     const stop = rowOf(rows, "stop");
     expect(stop.label).toBe("Stop Docs");
     stop.onSelect();
@@ -35,37 +38,66 @@ describe("windowMenuRows", () => {
   it("offers Start instead of Stop for a stopped app", () => {
     const stopped = appRecord("docs", { is_running: false });
     expect(
-      keysOf(windowMenuRows(stopped, { refresh: vi.fn(), share: null, setAppLifecycle: vi.fn(), close: vi.fn() })),
-    ).toEqual(["refresh", "start", "|", "close"]);
+      keysOf(
+        windowMenuRows(stopped, { size, onSized: vi.fn(), share: null, setAppLifecycle: vi.fn(), close: vi.fn() }),
+      ),
+    ).toEqual(["size", "|", "start", "|", "close"]);
   });
 
   it("offers neither Share nor Stop where the caller gives none (a critical app, one the workspace cannot stop)", () => {
     expect(
       keysOf(
-        windowMenuRows(appRecord("docs"), { refresh: vi.fn(), share: null, setAppLifecycle: null, close: vi.fn() }),
+        windowMenuRows(appRecord("docs"), {
+          size,
+          onSized: vi.fn(),
+          share: null,
+          setAppLifecycle: null,
+          close: vi.fn(),
+        }),
       ),
-    ).toEqual(["refresh", "|", "close"]);
+    ).toEqual(["size", "|", "close"]);
+  });
+
+  it("drops Move and resize where the caller gives none (compact, where every window is maximized)", () => {
+    expect(
+      keysOf(
+        windowMenuRows(appRecord("docs"), {
+          size: null,
+          onSized: vi.fn(),
+          share: null,
+          setAppLifecycle: null,
+          close: vi.fn(),
+        }),
+      ),
+    ).toEqual(["close"]);
   });
 
   it("offers Close whatever the caller does with it (a pinned window's minimizes)", () => {
     const close = vi.fn();
     const rows = windowMenuRows(appRecord("docs"), {
-      refresh: vi.fn(),
+      size,
+      onSized: vi.fn(),
       share: null,
       setAppLifecycle: null,
       close,
     });
-    expect(keysOf(rows)).toEqual(["refresh", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "|", "close"]);
     rowOf(rows, "close").onSelect();
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("offers only Refresh and Close for a window of an app the shell no longer lists", () => {
+  it("offers only Move and resize and Close for a window of an app the shell no longer lists", () => {
     expect(
       keysOf(
-        windowMenuRows(undefined, { refresh: vi.fn(), share: vi.fn(), setAppLifecycle: vi.fn(), close: vi.fn() }),
+        windowMenuRows(undefined, {
+          size,
+          onSized: vi.fn(),
+          share: vi.fn(),
+          setAppLifecycle: vi.fn(),
+          close: vi.fn(),
+        }),
       ),
-    ).toEqual(["refresh", "|", "close"]);
+    ).toEqual(["size", "|", "close"]);
   });
 });
 
