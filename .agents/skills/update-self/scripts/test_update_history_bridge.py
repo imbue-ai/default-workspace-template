@@ -169,6 +169,7 @@ def test_bridge_history_makes_the_old_fork_point_the_merge_base(
     template, upstream, workspace, capsys
 ) -> None:
     old_fork = _git(template, "rev-parse", "minds-v1^{commit}")
+    old_head = _git(workspace, "rev-parse", "HEAD")
     assert (
         subprocess.run(
             ["git", "merge-base", "HEAD", "minds-v2"], cwd=workspace
@@ -183,10 +184,7 @@ def test_bridge_history_makes_the_old_fork_point_the_merge_base(
     assert _git(workspace, "merge-base", "HEAD", "minds-v2") == old_fork
     # The vendor-only release commit is gone upstream, so its twin is the commit before it.
     assert result["twin"] == _git(upstream, "rev-parse", "minds-v1^{commit}")
-    assert (
-        _git(workspace, "log", "--format=%s", "-2", "main").splitlines()[0]
-        == "Add my notes"
-    )
+    assert _git(workspace, "rev-parse", "HEAD") == old_head
 
 
 def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
