@@ -30,6 +30,7 @@ from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import SaveId
 from imbue.system_interface.shell.primitives import ShortcutTargetKind
+from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
@@ -125,6 +126,9 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "launcher_rank": row.launcher_rank,
         "pin": pin_wire_json(row.pin),
+        "message_handlers": [
+            {"type": str(handler.type), "path": str(handler.path)} for handler in row.message_handlers
+        ],
         "is_running": entry.is_running,
     }
 
@@ -382,6 +386,31 @@ class WindowLocationReport(FrozenModel):
     )
     path: WindowPath = Field(description="Where the page is now")
     title: WindowTitle = Field(description="What the page calls itself now")
+
+
+class ClientDesktopView(FrozenModel):
+    """One desktop as one client sees it: the desktop, the client's layout of it, and its windows at the paths the
+    client sees (an independent window at the client's own path)."""
+
+    desktop: Desktop = Field(description="The shared record")
+    layout: DesktopLayout = Field(description="The client's layout of the desktop, pinned windows placed")
+    seen_windows: tuple[Window, ...] = Field(description="The desktop's windows as the client sees them")
+
+
+class ShowChoice(FrozenModel):
+    """What a ``show`` op settled on: how it shows the path, on which desktop, and the window (none for an open)."""
+
+    outcome: ShowOutcome = Field(description="Raised, navigated, pinned, or opened")
+    desktop_id: DesktopId = Field(description="The desktop the path is shown on")
+    window: Window | None = Field(
+        description="The window raised or navigated, as the client sees it; None to open one"
+    )
+
+    @model_validator(mode="after")
+    def _check_a_window_exactly_unless_opening(self) -> "ShowChoice":
+        if (self.window is None) != (self.outcome is ShowOutcome.OPENED):
+            raise InvalidShellValueError(f"a show names a window unless it opens one, not {self.outcome.value}")
+        return self
 
 
 class WindowOpenOutcome(FrozenModel):

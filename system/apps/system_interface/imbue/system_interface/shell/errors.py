@@ -26,6 +26,10 @@ class UnknownAppError(ShellError, LookupError):
     """No registered app has the given name."""
 
 
+class NoMessageHandlerError(ShellError, LookupError):
+    """No registered app handles the relayed message's type (answered 404)."""
+
+
 class AppLifecycleRefusedError(ShellError, ValueError):
     """The app cannot be stopped or started through the workspace."""
 

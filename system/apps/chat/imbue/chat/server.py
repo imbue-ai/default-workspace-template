@@ -2,7 +2,8 @@
 
 Every chat renders inside an iframe at the registered ``chat`` origin (the desktop interface,
 ``docs/system/blueprint/desktop-interface/``), served by this process at its own port; the shell
-knows the chat only as an app with pages, and reaches it only through the browser-side contract.
+knows the chat only as an app with pages, and reaches it only through the browser-side contract and the messages
+this app's manifest registers for (``focus_chat.py``).
 """
 
 import json
@@ -34,6 +35,7 @@ from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 
 from imbue.chat import accounts_endpoints
+from imbue.chat import focus_chat
 from imbue.chat import latchkey_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
@@ -2048,6 +2050,7 @@ def create_application(state: ChatAppState) -> Flask:
     auth_endpoints.register_routes(application)
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
+    focus_chat.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

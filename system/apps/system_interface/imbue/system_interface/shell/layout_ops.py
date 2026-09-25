@@ -23,6 +23,8 @@ from imbue.system_interface.shell.primitives import IfPresent
 # The ops the endpoint dispatches on. Anything else is a 400.
 CONTEXT_OP: Final[str] = "context"
 LOAD_OP: Final[str] = "load"
+# Put a path of an app on the target client's screen, choosing the window itself (desktop contracts.md section 8).
+SHOW_OP: Final[str] = "show"
 RELOAD_SYSTEM_INTERFACE_OP: Final[str] = "reload_system_interface"
 # Read-only: answered with the inventory document (desktop contracts.md section 5.5).
 INVENTORY_OPS: Final[frozenset[str]] = frozenset({"desktops", "list"})
@@ -36,7 +38,7 @@ SHORTCUT_OPS: Final[frozenset[str]] = frozenset(
 # ``layout_op`` message.
 TRANSIENT_OPS: Final[frozenset[str]] = frozenset({"refresh", RELOAD_SYSTEM_INTERFACE_OP})
 KNOWN_OPS: Final[frozenset[str]] = (
-    frozenset({CONTEXT_OP, LOAD_OP, "open"}) | INVENTORY_OPS | WINDOW_OPS | SHORTCUT_OPS | TRANSIENT_OPS
+    frozenset({CONTEXT_OP, LOAD_OP, SHOW_OP, "open"}) | INVENTORY_OPS | WINDOW_OPS | SHORTCUT_OPS | TRANSIENT_OPS
 )
 
 # The one non-id a window argument accepts: the requester's own window, which the op's ``requester`` names.
@@ -80,8 +82,14 @@ class DesktopOpArguments(FrozenModel):
     """The arguments of an op, as desktop contracts.md section 8 spells them (the target keys stripped)."""
 
     window: str = Field(default="", description="A window id, ``self``, or an app name")
-    app: str = Field(default="", description="The app an ``open`` or a whole-app ``refresh`` names")
-    path: str = Field(default="", description="The path an ``open`` or a ``navigate`` names")
+    app: str = Field(default="", description="The app an ``open``, a ``show``, or a whole-app ``refresh`` names")
+    path: str = Field(default="", description="The path an ``open``, a ``navigate``, or a ``show`` names")
+    showing: tuple[str, ...] = Field(
+        default=(), description="The other paths that count as already showing a ``show``'s path"
+    )
+    repoint: tuple[str, ...] = Field(
+        default=(), description="The pages, without a query string, whose windows a ``show`` may point at its path"
+    )
     launch: LaunchPathId | None = Field(
         default=None,
         description="The launch path an ``open`` runs (None for the app's default) or a shortcut op names",

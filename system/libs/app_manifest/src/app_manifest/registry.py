@@ -18,6 +18,7 @@ from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LaunchPathMethod
+from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
@@ -106,6 +107,9 @@ class RegistryRow(FrozenModel):
     pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when its manifest declares one")
     window_closed_path: LaunchPathValue | None = Field(
         default=None, description="Where the shell posts a closed window of the app; absent means no post"
+    )
+    message_handlers: tuple[MessageHandler, ...] = Field(
+        default=(), description="The messages the app takes and where the shell posts each; absent means none"
     )
 
 

@@ -50,6 +50,14 @@ observe`, its own supervised service) writes, and serves:
   its last message as `last_messaged_at`, which the chat root's list orders on)
   and the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`).
+- `POST /api/focus-chat`: what the shell posts for the Mind app's `minds:focus-chat` (the user opened a
+  chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
+  message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
+  (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
+  screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
+  and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
+  answers the shell's `shown` and window id; `400` for a chat id of the wrong shape, `403` in a
+  secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
   the update apply polls on the `--preflight` boot and on every critical app
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
@@ -71,9 +79,12 @@ serving its last known list and reports degraded; the returning observer's
 opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
-(`shell:open`, `shell:focused`, the handshake); the shell never calls the chat.
+(`shell:open`, `shell:focused`, the handshake); the shell calls the chat only to
+post the messages its manifest registers for (`minds:focus-chat`).
 Sends are reported to the shell's client-activity route (`shell_client.py`) so
-agents can attribute a request to a client. A chat's status (`ChatStatus` in
+agents can attribute a request to a client, and the app asks the shell for
+windows through the one layout client there (`ShellLayoutClient`), which the
+auto-open reactor and the focus-chat route share. A chat's status (`ChatStatus` in
 `primitives.py`: working, idle, attention, stopped, or error) comes from its
 active agent's activity state, a pending permission request, and the lifecycle,
 and rides the `chats_updated` snapshots the chat root's list draws its status
@@ -310,10 +321,11 @@ entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
 (the Mind app's update and help chats) has its window surfaced by this app
-(`auto_open.py`): when the agent appears, the app asks the shell to point this
-app's pinned window (the avatar's chat) at the chat and show it, in every
-connected client (a desktop with no pinned window gets a chat root window opened
-instead), holds the request until a client is connected if none is, and records
+(`auto_open.py`): when the agent appears, the app asks the shell's `show` op for
+the chat root on the chat in every connected client, allowing no other window to
+be moved to it, so the shell raises a window already showing the chat, else
+points this app's pinned window (the avatar's chat) at it, else opens a chat root
+window. It holds the request until a client is connected if none is, and records
 the delivery under
 `data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a window.
 The open is held for as long as the chat exists, so a chat started while nobody

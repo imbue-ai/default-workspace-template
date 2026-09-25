@@ -25,7 +25,6 @@ import type {
 } from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
 import type { UpdateNotice } from "../model/UpdateNotice";
-import { freeTextRowsOf, isPathShowingChat } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -337,29 +336,9 @@ export function findWindow(state: DesktopState, windowId: string): { desktop: De
   return null;
 }
 
-/** The app that holds chats: the one that can start one from typed text, which is the app of the
- *  launcher's primary free-text row (the first launch path declaring a ``text_param`` or a
- *  ``draft_param``). The shell names no app. Null when this machine has no such app. */
-export function chatApp(state: DesktopState): AppRecord | null {
-  return freeTextRowsOf(state.apps)[0]?.app ?? null;
-}
-
-/** A window showing the chat ``chatId``, with the desktop it is on, or null when none is.
- *  The active desktop's windows are read as this client sees them; every other desktop's are read
- *  as the shared record, since an independent window's path is this client's own and only the
- *  active desktop's layout is loaded. */
-export function windowShowingChat(
-  state: DesktopState,
-  chatId: string,
-): { desktop: Desktop; window: WindowRecord } | null {
-  for (const desktop of state.desktops) {
-    const isActive = desktop.id === state.activeDesktopId;
-    for (const window of desktop.windows) {
-      const seen = isActive ? effectiveWindow(state, window) : window;
-      if (isPathShowingChat(seen.path, chatId)) return { desktop, window };
-    }
-  }
-  return null;
+/** Whether an app registered for the minds chrome's messages of ``type``, so the shell relays them. */
+export function isEmbedderMessageHandled(state: DesktopState, type: string): boolean {
+  return state.apps.some((app) => app.message_handlers.some((handler) => handler.type === type));
 }
 
 /** Every window of the active desktop placed, back to front. */

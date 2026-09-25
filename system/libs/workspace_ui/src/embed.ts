@@ -35,9 +35,9 @@ export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
   "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
 // Embedder -> workspace: the user opened a chat's notification in the minds
 // shell; show that chat. Payload: { chatId } (the chat's id, which is its
-// first agent's id).
-export const FOCUS_CHAT: "minds:focus-chat" =
-  "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
+// first agent's id). No page handles it here: the shell relays it to the app
+// whose manifest registers the type.
+const FOCUS_CHAT: "minds:focus-chat" = "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
 // Workspace -> embedder: this page's endpoint is listening. Payload: {}. The
 // embedder holds a focus-chat ask until it arrives, rather than guessing when
 // a freshly-mounted frame's page is live.
@@ -46,9 +46,28 @@ export const WORKSPACE_READY: "minds:workspace-ready" =
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
+// Every embedder->workspace type the contract defines: the endpoint dispatches
+// only the types it is handed a handler for, and each of these reaches its own
+// handler and then the observer.
+const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
+  CLOSE_ACTIVE_TAB,
+  OPEN_AI_KEYS_ACK,
+  PERMISSION_RESOLUTIONS,
+  FOCUS_CHAT,
+];
+
 // One replaceable handler per embedder->workspace type, registered by the
 // feature that owns it.
 const handlerByType: Partial<Record<string, EmbedderMessageHandler>> = {};
+
+// One replaceable observer of every embedder->workspace message, whatever its
+// type: the shell's relay to the apps registered for it.
+let messageObserver: EmbedderMessageHandler | null = null;
+
+function dispatchEmbedderMessage(message: ContractMessage): void {
+  handlerByType[message.type]?.(message);
+  messageObserver?.(message);
+}
 
 // Created on first use rather than at import time so importing this module
 // never touches `window` (unit tests run under node and stub it per test).
@@ -65,12 +84,7 @@ function getEndpoint(): ContractEndpoint {
   if (endpoint === null) {
     if (typeof window === "undefined") return NULL_ENDPOINT;
     endpoint = createWorkspaceEndpoint({
-      handlers: {
-        [CLOSE_ACTIVE_TAB]: (message) => handlerByType[CLOSE_ACTIVE_TAB]?.(message),
-        [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
-        [PERMISSION_RESOLUTIONS]: (message) => handlerByType[PERMISSION_RESOLUTIONS]?.(message),
-        [FOCUS_CHAT]: (message) => handlerByType[FOCUS_CHAT]?.(message),
-      },
+      handlers: Object.fromEntries(EMBEDDER_TO_WORKSPACE_TYPES.map((type) => [type, dispatchEmbedderMessage])),
     });
   }
   return endpoint;
@@ -85,6 +99,13 @@ export function sendToEmbedder(type: string, payload?: Record<string, unknown>):
 export function setEmbedderMessageHandler(type: string, handler: EmbedderMessageHandler): void {
   getEndpoint();
   handlerByType[type] = handler;
+}
+
+/** Observe every embedder->workspace message, whatever its type, after its
+ * type's own handler (replaces any prior observer). */
+export function setEmbedderMessageObserver(observer: EmbedderMessageHandler): void {
+  getEndpoint();
+  messageObserver = observer;
 }
 
 /** Tell the embedder this page is listening, so it can send what it held.
@@ -105,4 +126,5 @@ export function resetEmbedEndpointForTesting(): void {
     endpoint = null;
   }
   for (const type of Object.keys(handlerByType)) delete handlerByType[type];
+  messageObserver = null;
 }

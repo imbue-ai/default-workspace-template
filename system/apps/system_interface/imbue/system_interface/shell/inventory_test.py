@@ -66,6 +66,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "default_shortcut",
         "launcher_rank",
         "pin",
+        "message_handlers",
         "is_running",
     }
     assert serialized[1]["pin"] is None

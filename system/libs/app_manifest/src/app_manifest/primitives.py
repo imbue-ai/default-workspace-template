@@ -185,6 +185,32 @@ class LaunchPathValue(str):
         )
 
 
+# An embedder message type an app may handle (desktop-interface contracts.md section 2): ``minds:`` and a
+# lowercase kebab-case name, the spelling every type of the minds embed contract uses.
+MESSAGE_TYPE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^minds:[a-z0-9]+(?:-[a-z0-9]+)*$")
+MAX_MESSAGE_TYPE_LENGTH: Final[int] = 64
+
+
+class MessageType(str):
+    """The type of a message an app handles: ``minds:`` and a lowercase kebab-case name, at most 64 characters."""
+
+    def __new__(cls, value: str) -> Self:
+        if not MESSAGE_TYPE_PATTERN.fullmatch(value) or len(value) > MAX_MESSAGE_TYPE_LENGTH:
+            raise InvalidManifestValueError(
+                f"invalid message type {value!r}: a message type is 'minds:' and a lowercase kebab-case name, "
+                f"at most {MAX_MESSAGE_TYPE_LENGTH} characters"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
 class PriorityName(str):
     """A memory-shedding band name: a key of ``oom_priority.bands.SERVICE_BANDS`` (``user`` by default)."""
 

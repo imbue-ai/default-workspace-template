@@ -34,6 +34,7 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `launcher_rank` | integer | no | absent | At least 1; the app's place among the launcher's leading tiles. |
 | `pin` | table | no | absent | `{path, style = "plain" \| "avatar", scope = "linked" \| "independent", default_mode = "bar" \| "floating"}`; `path` obeys the launch path rule; a registered, non-internal app then has exactly one pinned window on every desktop (pinned-taskbar-entries plan section 7.1). |
 | `window_closed_path` | string | no | absent | A path shaped like a launch path; the shell posts every closed window of the app there (section 5.3), for an app whose resources live as long as their windows (`docs/system/specs/window-bound-resources.md`). |
+| `message_handlers` | array of tables | no | `[]` | Each `{type, path}`: `type` is a message type the app takes, `minds:` and a lowercase kebab-case name (at most 64 characters), unique within the manifest; `path` is a route under the app's origin shaped like a launch path. The shell posts every message of that type from the minds chrome there (section 5.6). |
 | `references`, `scope`, `wiring`, `handles` | | | | Unchanged. |
 | `preview` | table | no | the scaffold convention | How a throwaway instance boots for a preview (`PreviewSpec`; the workspace app model's contracts section 2 has the field-by-field rule): `command` (default: the program as its console script), `ports` (named free ports; `main` always), `env`, `args`, `copies` (repo-relative directories copied into the instance's scratch space, by key), `health_path` (default `/health`), `open_path` (default `/`), `open_path_takes_key`. `command`, `args`, and `env` values may carry `{port:<name>}`, `{copy:<key>}`, `{host}`, `{scratch}`, and `{registry}`; `open_path` may carry `{key}` exactly when `open_path_takes_key`. Absent, the table is `env = {<PACKAGE_UPPER>_PORT = "{port:main}", <PACKAGE_UPPER>_HOST = "{host}", <PACKAGE_UPPER>_DATA_DIR = "{copy:data}"}` over `copies = {data = "data/.apps/<name>"}`. |
 
@@ -52,13 +53,13 @@ Built-in manifests:
 | `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, params `path` optional) |
 | `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
 
-The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
+The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"` and `[[message_handlers]] type = "minds:focus-chat", path = "/api/focus-chat"`.
 The critical built-ins declare their `[preview]` tables (the workspace app model's contracts section 2 tabulates them): the shell boots `system-interface --preview --state-dir {copy:state}` over a copy of `data/.state/system_interface` with `MINDS_APPS_FILE = "{registry}"`; the chat `chat-app --secondary` over a copy of `data/.apps/chat` (`CHAT_DATA_DIR`), opening on `/?chat={key}`; the terminal `terminal-app --no-register` over a copy of `data/.apps/terminal` and a `{scratch}` state dir with `MINDS_APPS_FILE = "{registry}"`, booted `--with terminal-pty`; and the pty `terminal-pty --no-register` over a `{scratch}` state dir, probed at `/`. Getting Started, though not critical, declares one too, since its entry point registers itself: `getting-started --no-register --state-dir {scratch}/state`, which registers nothing and opens no first-visit window.
 
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), `window_closed_path`, and `message_handlers` (array of inline tables `{type, path}`) from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -209,13 +210,20 @@ A save whose placements name windows the desktop does not hold is accepted with 
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "method", "params": [name, ...], "presets": {name: value, ...}, "text_param", "draft_param"}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`, and each launch path's `text_param` and `draft_param` the declared param name or `null`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "method", "params": [name, ...], "presets": {name: value, ...}, "text_param", "draft_param"}], "default_shortcut", "launcher_rank", "pin", "message_handlers": [{"type", "path"}, ...], "is_running"}`, `pin` the manifest table or `null`, each launch path's `text_param` and `draft_param` the declared param name or `null`, and `message_handlers` the row's handlers (`[]` when it registers none). The `apps_updated` push (section 6) carries the same objects.
 
 The arrival is what a shell page posts first, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2). The page then reads `GET /api/inventory` once, taking the desktops (the seeded one among them), the apps, and its own client record from that one answer, so it knows every app before it draws a shortcut and needs nothing from the socket to show a complete desktop; the socket's `apps_updated` and `desktops_updated` (section 6) carry every change from then on. Until the inventory answers, a shortcut whose app the page cannot look up draws as connecting (`data-connecting="true"`) and running it says the page is still connecting, rather than that the app is not registered.
 `desktop_id` is where the client lands (`null` while the workspace has no desktop): for the owner and for a request with no `user_id`, the client's stored desktop when it exists, else the first desktop (section 4.3); for a visiting user (`owner` false with a `user_id`), the desktop made for them.
 On a visiting user's first arrival the shell creates that desktop and answers it as `created_desktop`: named after the user (their profile's `display_name` as section 5.1 resolves it, else the local part of their `email`, else `Guest`; suffixed ` 2`, ` 3`, ... until neither the name nor its id is taken), with the first free glyph and that glyph's colour, holding the first desktop's shortcuts, its wallpaper, and one new window at the path of each of its settled windows; it is recorded in `users.json`, broadcast as `desktops_updated`, and the client is recorded on it with its `user_id`.
 A later client of the same user lands on that desktop; a returning client keeps the desktop it was on, when it last arrived as that same user (a client whose record names another user, or none, lands on the user's desktop).
 When the recorded desktop no longer exists the shell seeds another the same way and answers the deleted one's name (as of the user's last arrival) as `replaced_desktop_name`, which the page shows once (`data-replaced-desktop-notice`).
+
+### 5.6 Embedder messages
+
+`POST /api/embedder-messages` takes `{"type", "client_id", "payload"}`: a message the minds chrome sent a client's shell page, its type, that client, and the message's other fields.
+The shell page posts every message the chrome sends it, once, when some app's `message_handlers` names its type, and posts nothing otherwise; it still rebroadcasts every such message to its child frames unchanged (the workspace app model's contracts section 11).
+The shell posts `{"type", "client_id", ...payload}` (the message itself, with the client added) to the `url` plus `path` of every registered app whose row names the type, in registry order, with a 10 second timeout, and reads no payload.
+It answers `200 {"type", "deliveries": [{"app", "status", "detail"}, ...]}` when every app answered 2xx (`detail` empty); `502` with the same body and a `detail` naming each app that answered otherwise or could not be reached (its `status` then `null`); `404` when no app handles the type; `400` for a type off the manifest rule, a bad client id, or a payload carrying `type` or `client_id`; and a preview shell `403`, its page posting nothing (the workspace app model's contracts section 6).
 
 ## 6. The WebSocket
 
@@ -278,6 +286,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `context` | | read-only; every client's recent activity (`{"ok", "clients"}`) |
 | `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
+| `show` | `app`, `path`, `showing?`, `repoint?` | put the app's page at `path` on the client's screen, choosing the window (below); answers the window id and `shown` |
 | `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the page of the launch path (`launch`, else the app's `default_shortcut.launch`, else its first): a GET launch path with `params` as the query string, a POST launch path posted `params` for the page it answers (section 5.3, with the targeted client as `client_id`, or none when the open is unplaced); a window of the app at that page is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
@@ -290,6 +299,14 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `wallpaper` | `wallpaper` | set the desktop's wallpaper |
 
 `window` is a window id, `self`, or an app name (that app's most recently focused window on the target client's active desktop).
+`show` knows nothing of what the path shows and reads no meaning into a query string. `showing` is a list of the app's other paths that count as already showing it (`path` itself always does). `repoint` is a list of the app's pages, each a path with no query string or fragment, whose windows `show` may point at `path`; absent or empty, step 2 below repoints nothing. A `showing` entry that is not a path, or a `repoint` entry that is not a page, is a `400`. For the target client, every path as that client sees it (its own stored path for an independent window), the first of these that applies:
+
+1. `raised`: a window of `app` at `path` or a `showing` path, on the client's active desktop before any other and nearest the top of the client's stack first, minimized or not, is restored and raised; one on another desktop is raised there and the client switched to that desktop.
+2. `navigated`: the shown (not minimized) window of `app` on the active desktop nearest the top of the stack whose page (its path before any `?` or `#`) is in `repoint` is set to `path` as `navigate` sets it (a linked window moves for every client, an independent one for this client) and raised; a window of the app on any other page is never repointed.
+3. `pinned`: the app's pinned window on the active desktop is set to `path` the same way and restored.
+4. `opened`: a window of `app` at `path` is opened on the active desktop for the client, shown and on top.
+
+`show` is answered like the document ops, with `desktop_id`, `desktop`, and `layout` those of the desktop the path is shown on, and `"shown"` one of the four above.
 Document ops are applied to the files and answered with `{"ok", "desktop_id", "client_id", "desktop", "layout", "window_id"?}`; the two transient ops travel as `layout_op`.
 `split`, `move`, and every instance verb (`rename`, `delete`, `stop`, `start`, `replace-url`) are refused with an error naming the replacement; `chat:`, `terminal:`, and `app:` spellings are refused with an error saying to give an app name and a path.
 Exit codes are `0`, `1`, `3`.

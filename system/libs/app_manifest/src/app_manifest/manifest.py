@@ -23,6 +23,7 @@ from app_manifest.primitives import IconPath
 from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
+from app_manifest.primitives import MessageType
 from app_manifest.primitives import PreviewName
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
@@ -179,6 +180,14 @@ class LaunchPath(FrozenModel):
         return self
 
 
+class MessageHandler(FrozenModel):
+    """A message an app takes, and the route under its own origin the shell posts each one to
+    (desktop-interface contracts.md section 2)."""
+
+    type: MessageType = Field(description="The message type the app handles")
+    path: LaunchPathValue = Field(description="The route under the app origin the shell POSTs the message to")
+
+
 class AppReference(FrozenModel):
     """An artifact outside the app's own directory that belongs to the app."""
 
@@ -330,6 +339,10 @@ class AppManifest(FrozenModel):
         description="The path under the app's origin the shell posts to when a window of the app closes; "
         "an app whose resources live as long as their windows sweeps on it",
     )
+    message_handlers: tuple[MessageHandler, ...] = Field(
+        default=(),
+        description="The messages the app takes, each posted by the shell to a route under the app's origin",
+    )
     references: tuple[AppReference, ...] = Field(
         default=(), description="The artifacts outside the app's directory that belong to it"
     )
@@ -378,6 +391,9 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError(
                 f"wiring programs must not repeat the app's own program {str(self.program)!r}"
             )
+        message_types = [handler.type for handler in self.message_handlers]
+        if len(set(message_types)) != len(message_types):
+            raise InvalidManifestValueError(f"message handler types must be unique, got {message_types}")
         launch_path_ids = [launch_path.id for launch_path in self.launch_paths]
         if len(set(launch_path_ids)) != len(launch_path_ids):
             raise InvalidManifestValueError(f"launch path ids must be unique, got {launch_path_ids}")

@@ -27,6 +27,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopLayout
@@ -34,6 +35,7 @@ from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
 from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import ShortcutTarget
+from imbue.system_interface.shell.data_types import ShowChoice
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import effective_launch_paths
@@ -41,7 +43,9 @@ from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import WindowPage
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
@@ -676,6 +680,57 @@ def most_recently_focused_window_of_app(layout: DesktopLayout, desktop: Desktop,
         if window is not None and window.app == app:
             return window
     return None
+
+
+@pure
+def stacked_windows(view: ClientDesktopView) -> list[tuple[Window, WindowPlacement]]:
+    """The desktop's windows as the client sees them, frontmost first in the client's stack, each with its placement."""
+    seen_by_id = {window.id: window for window in view.seen_windows}
+    return [
+        (seen_by_id[placement.window_id], placement)
+        for placement in reversed(effective_placements(view.layout, view.desktop))
+        if placement.window_id in seen_by_id
+    ]
+
+
+@pure
+def page_of_path(path: str) -> str:
+    """The page a path is at: the path without its query string or fragment."""
+    return urlsplit(path).path
+
+
+@pure
+def choose_show_target(
+    active: ClientDesktopView,
+    others: Sequence[ClientDesktopView],
+    app: AppName,
+    path: WindowPath,
+    showing: AbstractSet[WindowPath],
+    repoint: AbstractSet[WindowPage],
+) -> ShowChoice:
+    """Where a ``show`` op puts ``path`` for one client (desktop contracts.md section 8): a window of ``app`` already at
+    ``path`` or a path in ``showing``, on the client's active desktop before its ``others`` and frontmost first; else
+    the frontmost shown window of ``app`` on the active desktop whose page is in ``repoint``; else the app's pinned
+    window on the active desktop; else a new window there."""
+    shown_paths = {path, *showing}
+    for view in (active, *others):
+        for window, _placement in stacked_windows(view):
+            if window.app == app and window.path in shown_paths:
+                return ShowChoice(outcome=ShowOutcome.RAISED, desktop_id=view.desktop.id, window=window)
+    repointable = next(
+        (
+            window
+            for window, placement in stacked_windows(active)
+            if window.app == app and not placement.is_minimized and page_of_path(window.path) in repoint
+        ),
+        None,
+    )
+    if repointable is not None:
+        return ShowChoice(outcome=ShowOutcome.NAVIGATED, desktop_id=active.desktop.id, window=repointable)
+    pinned = next((window for window in active.seen_windows if window.app == app and window.is_pinned), None)
+    if pinned is not None:
+        return ShowChoice(outcome=ShowOutcome.PINNED, desktop_id=active.desktop.id, window=pinned)
+    return ShowChoice(outcome=ShowOutcome.OPENED, desktop_id=active.desktop.id, window=None)
 
 
 @pure

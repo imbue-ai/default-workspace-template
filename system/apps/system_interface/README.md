@@ -64,8 +64,9 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
-  registration `POST /api/avatars` is loopback-only), and the loopback-only
-  op route (`/api/layout/broadcast`).
+  registration `POST /api/avatars` is loopback-only), the embedder-message
+  relay (`/api/embedder-messages`), and the loopback-only op route
+  (`/api/layout/broadcast`).
 - Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
   right now, with their identity and profile (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
@@ -125,9 +126,9 @@ and the profile cache.
 - **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
-  `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`, the
-  shortcut and wallpaper edits) are applied to the files and announced as
-  `desktops_updated` and `placements_updated`; `context` answers every
+  `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`,
+  `show`, the shortcut and wallpaper edits) are applied to the files and
+  announced as `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
   socket registrations, and `desktops` and `list` answer the inventory
   document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
@@ -146,13 +147,27 @@ modules it shares with the app pages live in `system/libs/workspace_ui`, and
 `src/relay.ts` is the shell's side of the embedder relay (it forwards the
 framed pages' `minds:` messages to the minds chrome unchanged).
 
+A message the minds chrome sends the shell's page reaches an app another way
+too: an app whose manifest registers its type (`[[message_handlers]]`) has it
+posted, by the shell's page once and then by the shell's backend
+(`POST /api/embedder-messages`, `shell/embedder_messages.py`), to the route it
+named, with the client whose page received it. The shell reads no payload. An
+app that wants a window for what it was told asks the op route's `show`, which
+takes the app, a path, the other paths that count as already showing it, and
+the pages whose windows it may point at the path, and picks the window itself:
+one already showing it (switching desktops if it must), else the frontmost
+window on screen at one of those pages (pointed at the path), else the app's
+pinned window, else a new one. The shell reads no meaning into a path's query
+string.
+
 ### How the shell learns about apps
 
 The **inventory** (`shell/inventory.py`) watches the registry, probes each
 app's liveness (supervisord for rows with a `program`, a TCP connect
 otherwise) on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`. That is all it knows of an app: its row (display name,
-icon, launch paths, default shortcut, launcher rank) and whether it is running.
+icon, launch paths, default shortcut, launcher rank, message handlers) and
+whether it is running.
 The page learns the apps from `GET /api/inventory` right after it arrives (one
 read for the desktops, the apps, and the clients), so it never draws a
 shortcut for an app it does not know; the socket's `apps_updated` (sent on

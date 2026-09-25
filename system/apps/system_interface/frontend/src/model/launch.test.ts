@@ -5,8 +5,6 @@ import {
   fillParamOf,
   freeTextParams,
   freeTextRowsOf,
-  chatPath,
-  isPathShowingChat,
   launchPathOf,
   launchRowKindOf,
   orderAppLaunches,
@@ -112,18 +110,5 @@ describe("the free-text params", () => {
   it("never stands a POST launch path down for length, and stands one with no text param down outright", () => {
     expect(textRowDisabledReason(drafting, "x".repeat(5000))).toBeNull();
     expect(textRowDisabledReason(launchPathRecord(), "hi")).toBe("No app on this machine can start a chat");
-  });
-});
-
-describe("the path a chat is shown at", () => {
-  it("reads the chat's own page and its subagent views as showing it, and nothing else", () => {
-    expect(chatPath("chat-7")).toBe("/chat-7");
-    expect(isPathShowingChat("/chat-7", "chat-7")).toBe(true);
-    expect(isPathShowingChat("/chat-7.agent-2.sess-3", "chat-7")).toBe(true);
-    expect(isPathShowingChat("/chat-7?draft=hi", "chat-7")).toBe(true);
-    // The chat list, another chat, and a chat whose id merely starts with this one are not it.
-    expect(isPathShowingChat("/", "chat-7")).toBe(false);
-    expect(isPathShowingChat("/chat-8", "chat-7")).toBe(false);
-    expect(isPathShowingChat("/chat-70", "chat-7")).toBe(false);
   });
 });

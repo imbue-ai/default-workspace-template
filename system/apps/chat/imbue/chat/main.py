@@ -19,7 +19,6 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import LEDGER_FILENAME
-from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_settings import ChatSettingsStore
@@ -33,6 +32,8 @@ from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.server import create_application
+from imbue.chat.shell_client import DisconnectedShell
+from imbue.chat.shell_client import ShellLayoutClient
 from imbue.chat.shell_client import shell_base_url
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
@@ -117,6 +118,8 @@ def build_production_state(
     """
     broadcaster = WebSocketBroadcaster()
     data_dir = config.chat_data_dir
+    # The one client of the shell's layout, shared by the auto-open reactor and the routes; a secondary has none.
+    shell = DisconnectedShell() if is_secondary else ShellLayoutClient(shell_url=shell_base_url())
     chat_settings = ChatSettingsStore(path=data_dir / SETTINGS_FILENAME)
     chat_records_root = data_dir / CHAT_RECORDS_DIRNAME
     agent_manager = AgentManager.build(
@@ -126,9 +129,7 @@ def build_production_state(
         # have had theirs is remembered beside the stamps so a restart never re-pops one.
         auto_open=None
         if is_secondary
-        else AutoOpenReactor(
-            ledger=AutoOpenLedger(path=data_dir / LEDGER_FILENAME), shell=ShellLayoutClient(shell_url=shell_base_url())
-        ),
+        else AutoOpenReactor(ledger=AutoOpenLedger(path=data_dir / LEDGER_FILENAME), shell=shell),
         # Which agents each chat has run on, for the chats that have had a handoff.
         chat_record_store=FileChatRecordStore(root=chat_records_root),
         chat_files_root=chat_records_root,
@@ -160,6 +161,7 @@ def build_production_state(
         # separate one for the latchkey catalog proxy.
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
+        shell=shell,
     )
     # Eviction wiring: when the manager sees an agent destroyed or its lifecycle
     # transition into a dead state, the state drops that agent's watcher -- the

@@ -1,0 +1,1 @@
+The manifest gains `[[message_handlers]]`, each `{type, path}`: a message type the app takes from the minds chrome (`minds:` and a lowercase kebab-case name, unique within the manifest) and the route under the app's origin the shell posts each such message to. `RegistryRow` carries them, and `MessageHandler` and `MessageType` are the new model and primitive.

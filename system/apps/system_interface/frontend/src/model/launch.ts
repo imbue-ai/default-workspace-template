@@ -76,18 +76,6 @@ export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | nul
   return app.launch_paths.find((candidate) => candidate.id === launchId) ?? null;
 }
 
-/** The path the chat app serves a chat at: one page per chat, at ``/<chat-id>``. */
-export function chatPath(chatId: string): string {
-  return `/${chatId}`;
-}
-
-/** Whether ``path`` is showing the chat ``chatId``: the chat's own page, or one of its subagent
- *  views (``/<chat-id>.<agent-id>.<session-id>``). Any query string is ignored. */
-export function isPathShowingChat(path: string, chatId: string): boolean {
-  const withoutQuery = path.split("?")[0];
-  return withoutQuery === chatPath(chatId) || withoutQuery.startsWith(`${chatPath(chatId)}.`);
-}
-
 /** The params a free-text row launches with: the text as its fill param; none for empty text. */
 export function freeTextParams(launchPath: LaunchPath, text: string): Record<string, string> {
   const fillParam = fillParamOf(launchPath);

@@ -1,7 +1,11 @@
 import m from "mithril";
 import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
-import { FOCUS_CHAT, announceReadyToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
+import {
+  announceReadyToEmbedder,
+  setEmbedderMessageHandler,
+  setEmbedderMessageObserver,
+} from "@imbue/workspace-ui/src/embed";
 import "./style.css";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
@@ -59,10 +63,8 @@ function bootstrap(): void {
   // shell side of the app contract.
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
-  setEmbedderMessageHandler(FOCUS_CHAT, (message) => {
-    const chatId = message.chatId;
-    if (typeof chatId === "string" && chatId !== "") void desktopStore.focusChat(chatId);
-  });
+  // Every message the chrome sends also goes, its payload unread, to the apps registered for its type.
+  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message));
   const rootElement = document.getElementById("app");
   if (rootElement) {
     m.mount(rootElement, {
@@ -77,9 +79,8 @@ function bootstrap(): void {
   }
   const started = desktopStore.start(takeDeepLinkFromLocation());
   // Announced once the page can act on what the embedder held, not merely once a handler is
-  // registered: a focus-chat ask needs the desktops and the apps. ``start`` reads both from the
-  // inventory, but one whose inventory read failed returns without them, and the apps then land
-  // with the socket's first ``apps_updated``; the embedder sends the ask the moment this lands.
+  // registered: relaying a message needs the apps (which of them take it), and the embedder sends
+  // what it held the moment this lands.
   void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
 }
 

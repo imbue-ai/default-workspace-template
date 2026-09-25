@@ -33,9 +33,6 @@ from playwright.sync_api import expect
 from imbue.chat.accounts import account_dir
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
-from imbue.chat.auto_open import navigate_pinned_op_body
-from imbue.chat.auto_open import open_chat_op_body
-from imbue.chat.auto_open import restore_pinned_op_body
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
@@ -287,22 +284,19 @@ def _navigate_chat_window(server: RunningWorkspace, client_id: str, path: str) -
 
 
 def _open_fixture_chat_by_op(server: RunningWorkspace, client_id: str) -> None:
-    """Show the fixture chat the way the agent-side auto-open does: the desktop ``navigate`` op pointing the app's
-    pinned window at the chat for the client, then ``restore`` of it; with no pinned window on the desktop (this
-    server registers the chat without its pin) the ``open`` op instead, as the reactor falls back. Retried until the
-    shell has registered the client."""
-    chat_id = ChatId(FIXTURE_AGENT_ID)
-
-    def _attempt() -> bool:
-        navigated = _post_op(server, navigate_pinned_op_body(chat_id, client_id))
-        if navigated == 404:
-            return _post_op(server, open_chat_op_body(chat_id, client_id)) == 200
-        if navigated != 200:
-            return False
-        _post_op(server, restore_pinned_op_body(client_id))
-        return True
-
-    wait_for(_attempt, timeout=15.0, poll_interval=0.2, error_message="the open op never succeeded")
+    """Open the chat root on the fixture chat on the client's active desktop with the desktop ``open`` op, as an
+    agent does, whatever other desktops show. Retried until the shell has registered the client."""
+    body = {
+        "op": "open",
+        "args": {"app": CHAT_APP_NAME, "path": _FIXTURE_ROOT_PATH, "client": client_id},
+        "requester": None,
+    }
+    wait_for(
+        lambda: _post_op(server, body) == 200,
+        timeout=15.0,
+        poll_interval=0.2,
+        error_message="the open op never succeeded",
+    )
 
 
 def _taskbar_entry(page: Page, window_id: str) -> Locator:
@@ -669,8 +663,8 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
     """A chat window shown again by a desktop switch still shows its own transcript.
 
     Windows belong to a desktop: opening the chat on a second desktop (through the agent's open
-    op, the way the auto-open lands a chat on the client's active desktop) is a window of its own
-    there, and switching back shows the first desktop's window, whose page was held hidden.
+    op) is a window of its own there, and switching back shows the first desktop's window, whose
+    page was held hidden.
     """
     with _running_e2e_server(tmp_path) as server:
         _open_fixture_chat(page, server)

@@ -3,16 +3,16 @@
 A chat the Mind app starts -- the welcome chat it seeds, the update run behind "Update now", the
 help chat behind "Ask an agent" -- carries a label asking to be shown when it appears. The app
 cannot show it itself: it is outside the workspace, and the user may not be looking yet. So the
-chat app reacts to the label on a newly observed agent and asks the shell to show the chat in
-this app's pinned window (pinned-taskbar-entries plan section 4.8): the desktop op route's
-``navigate`` of ``pinned`` to the root's path for the chat, then ``restore`` of it, for every
-connected client, on whatever desktop each client is on. The pinned window is independent, so
-each client's own view moves and nobody else's does. A shell whose desktop holds no pinned window
-of this app (a manifest without the pin) is asked to ``open`` a root window instead, as before.
+chat app reacts to the label on a newly observed agent and asks the shell's ``show`` op
+(desktop-interface contracts.md section 8) to put the chat root with the chat selected on the
+screen of every connected client, on whatever desktop each client is on. It names no page to
+repoint, so the shell raises a window already showing the chat, else points this app's pinned
+window at it (pinned-taskbar-entries plan section 4.8; the pinned window is independent, so each
+client's own view moves and nobody else's does), else opens a chat root window on it.
 
 A chat is owed its window exactly once. Delivery is remembered on disk, so a restart of this app
 (the update run itself restarts it) neither re-pops a window the user has since closed nor loses
-one nobody was there to take: with no client connected the open is held and retried until a
+one nobody was there to take: with no client connected the show is held and retried until a
 client connects, for as long as the chat exists. Only a chat the ledger already names is left
 to the saved layout -- along with the chats a workspace already had the first time this app
 kept a ledger at all, which are adopted as shown rather than each popping a window.
@@ -26,20 +26,16 @@ import threading
 from collections.abc import Iterable
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 from typing import Final
-from typing import Protocol
-from typing import runtime_checkable
 
-import httpx
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
-from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
-from imbue.chat.shell_client import SHELL_POST_TIMEOUT_SECONDS
-from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.chat.shell_client import ShellLayoutInterface
+from imbue.chat.shell_client import ShellOpError
+from imbue.chat.shell_client import ShowRequest
 from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
@@ -56,7 +52,9 @@ FLUSH_INTERVAL_SECONDS: Final[float] = 3.0
 LEDGER_FILENAME: Final[str] = "auto_opened_chats.json"
 
 _DELIVERED_KEY: Final = "delivered"
-HTTP_NOT_FOUND: Final[int] = 404
+
+# The chat root: the chat list, beside whichever chat is selected.
+CHAT_ROOT_PAGE: Final[str] = "/"
 
 
 def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
@@ -65,35 +63,7 @@ def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
 
 def chat_root_path(chat_id: ChatId) -> str:
     """The chat root's path with the chat selected (plan section 9.1): where the auto-opened window lands."""
-    return f"/?chat={chat_id}"
-
-
-def open_chat_op_body(chat_id: ChatId, client_id: str) -> dict[str, Any]:
-    """The desktop ``open`` op that shows the chat to one client in a root window of its own (desktop-interface
-    contracts.md section 8): the fallback when this app has no pinned window on the client's desktop."""
-    return {
-        "op": "open",
-        "args": {"app": CHAT_APP_NAME, "path": chat_root_path(chat_id), "client": client_id},
-        "requester": None,
-    }
-
-
-# The requester the pinned-window ops carry: this app, with no marker (``pinned`` needs only the app).
-_PINNED_REQUESTER: Final[dict[str, str]] = {"app": CHAT_APP_NAME, "marker": ""}
-
-
-def navigate_pinned_op_body(chat_id: ChatId, client_id: str) -> dict[str, Any]:
-    """Point the client's view of this app's pinned window at the chat (desktop-interface contracts.md section 8)."""
-    return {
-        "op": "navigate",
-        "args": {"window": "pinned", "path": chat_root_path(chat_id), "client": client_id},
-        "requester": _PINNED_REQUESTER,
-    }
-
-
-def restore_pinned_op_body(client_id: str) -> dict[str, Any]:
-    """Show the client's pinned window of this app, raised."""
-    return {"op": "restore", "args": {"window": "pinned", "client": client_id}, "requester": _PINNED_REQUESTER}
+    return f"{CHAT_ROOT_PAGE}?chat={chat_id}"
 
 
 class AutoOpenLedger(MutableModel):
@@ -189,97 +159,6 @@ class AutoOpenLedger(MutableModel):
             self._save_unlocked()
 
 
-@runtime_checkable
-class ShellLayoutInterface(Protocol):
-    """The two things the reactor asks of the shell: who is connected, and to open a chat for one of them."""
-
-    def connected_client_ids(self) -> list[str]: ...
-
-    def open_chat(self, chat_id: ChatId, client_id: str) -> bool: ...
-
-
-class ShellLayoutClient(FrozenModel):
-    """The shell over loopback: its client list, and its agent-facing op route (desktop-interface contracts.md section 8).
-
-    Unlike ``post_to_shell`` this reports whether the shell accepted the op, because the
-    reactor holds an open the shell refused and tries again.
-    """
-
-    shell_url: str = Field(description="The shell's base URL, without a trailing slash")
-
-    def connected_client_ids(self) -> list[str]:
-        # An answer of the wrong shape reads as no clients, rather than subscripting blind: an
-        # exception here escapes the flush thread's own catch and ends it for the life of the
-        # process, and a reactor with no thread surfaces no window and says nothing about it.
-        try:
-            response = httpx.get(f"{self.shell_url}/api/clients", timeout=SHELL_POST_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as e:
-            logger.debug("Could not list the shell's clients at {}: {}", self.shell_url, e)
-            return []
-        clients = payload.get("clients") if isinstance(payload, dict) else None
-        if not isinstance(clients, list):
-            logger.warning(
-                "Ignoring a client list of the wrong shape from the shell at {} (expected a JSON object with a "
-                "'clients' list, got {})",
-                self.shell_url,
-                type(payload).__name__,
-            )
-            return []
-        return [
-            str(client["id"])
-            for client in clients
-            if isinstance(client, dict) and client.get("is_connected") and client.get("id")
-        ]
-
-    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
-        """Show the chat to the client in this app's pinned window; with no pinned window on the client's desktop
-        (a 404 for ``pinned``), open a root window on the chat instead. True once the chat is showing."""
-        navigated = self._post_op(
-            navigate_pinned_op_body(chat_id, client_id), f"point the pinned window at chat {chat_id}"
-        )
-        if navigated is None:
-            return False
-        if navigated.status_code == HTTP_NOT_FOUND:
-            opened = self._post_op(open_chat_op_body(chat_id, client_id), f"open chat {chat_id}")
-            return opened is not None and not opened.is_error
-        if navigated.is_error:
-            return False
-        # The window is pointed at the chat whether or not the restore lands (the client may be compact, say).
-        self._post_op(restore_pinned_op_body(client_id), "restore the pinned window")
-        return True
-
-    def _post_op(self, body: Mapping[str, Any], described: str) -> httpx.Response | None:
-        """Post one op; None when the shell could not be reached, the answer (refusals included) otherwise."""
-        try:
-            response = httpx.post(
-                f"{self.shell_url}/api/layout/broadcast", json=body, timeout=SHELL_POST_TIMEOUT_SECONDS
-            )
-        except httpx.HTTPError as e:
-            logger.debug("Could not ask the shell at {} to {}: {}", self.shell_url, described, e)
-            return None
-        if response.is_error:
-            logger.info(
-                "The shell refused to {} for client {} ({}): {}",
-                described,
-                body["args"].get("client"),
-                response.status_code,
-                response.text.strip()[:300],
-            )
-        return response
-
-
-class DisconnectedShell(FrozenModel):
-    """A shell with nobody connected: the default until ``main`` installs the real one, and for tests."""
-
-    def connected_client_ids(self) -> list[str]:
-        return []
-
-    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
-        return False
-
-
 class AutoOpenReactor(MutableModel):
     """Delivers the open a labeled chat is owed, once, to the clients connected when it can.
 
@@ -291,7 +170,7 @@ class AutoOpenReactor(MutableModel):
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
     ledger: AutoOpenLedger = Field(description="Which chats' opens have already reached a client")
-    shell: ShellLayoutInterface = Field(description="The shell's client list and op route")
+    shell: ShellLayoutInterface = Field(description="The shell's client list and its show op")
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _pending_chat_ids: set[ChatId] = PrivateAttr(default_factory=set)
@@ -356,7 +235,7 @@ class AutoOpenReactor(MutableModel):
             return set(self._pending_chat_ids)
 
     def flush(self) -> None:
-        """Try every held open against every connected client; the first accepted open delivers it."""
+        """Try every held chat against every connected client; the first client the shell shows it to delivers it."""
         pending = self.pending_chat_ids()
         if not pending:
             return
@@ -364,7 +243,7 @@ class AutoOpenReactor(MutableModel):
         if not client_ids:
             return
         for chat_id in pending:
-            accepted = [client_id for client_id in client_ids if self.shell.open_chat(chat_id, client_id)]
+            accepted = [client_id for client_id in client_ids if self._is_shown(chat_id, client_id)]
             if accepted:
                 logger.info("Opened chat {} in {} client(s): {}", chat_id, len(accepted), ", ".join(accepted))
                 self.ledger.mark_delivered(chat_id)
@@ -399,6 +278,16 @@ class AutoOpenReactor(MutableModel):
         except (OSError, ValueError, RuntimeError) as e:
             # The thread has to outlive one bad answer from the shell; the next wake retries.
             logger.opt(exception=e).warning("An auto-open flush failed; retrying on the next wake")
+
+    def _is_shown(self, chat_id: ChatId, client_id: str) -> bool:
+        """Ask the shell to show the chat root on the chat to one client; whichever way it shows it counts."""
+        request = ShowRequest(path=chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
+        try:
+            self.shell.show(request)
+        except ShellOpError as e:
+            logger.info("The shell did not show chat {} to client {}, so it is held: {}", chat_id, client_id, e)
+            return False
+        return True
 
     def _drop(self, chat_id: ChatId) -> None:
         with self._lock:
