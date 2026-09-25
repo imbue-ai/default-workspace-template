@@ -3,8 +3,9 @@
 The `agent_*` scripts here are reached three different ways -- `.claude/settings.json`
 for claude, `.codex/hooks.json` for codex, and `.pi/extensions/policy_guards.ts` for pi.
 All three name the scripts as plain strings, and a name that no longer resolves fails
-*silently*: the hook never runs and the guard is simply gone. So a rename that misses one of these files, or a guard added
-to one harness and forgotten on another, is invisible without this test.
+*silently*: the hook never runs and the guard is simply gone. So a rename that misses one
+of these files, or a guard added to one harness and forgotten on another, is invisible
+without this test.
 
 See tool-call-policies-state-of-things.md; "Keeping the harnesses in step" is the invariant
 asserted here.
