@@ -184,12 +184,9 @@ class LaunchPath(FrozenModel):
 class AppReference(FrozenModel):
     """An artifact outside the app's own directory that belongs to the app."""
 
-    path: ReferencePath = Field(
-        description="The literal repo-root-relative file or directory"
-    )
+    path: ReferencePath = Field(description="The literal repo-root-relative file or directory")
     note: ReferenceNote | None = Field(
-        default=None,
-        description="One line: why it belongs to the app and which surface it uses",
+        default=None, description="One line: why it belongs to the app and which surface it uses"
     )
 
 
@@ -197,8 +194,7 @@ class ScopeRules(FrozenModel):
     """What an app's footprint leaves out on top of the built-in exclusions."""
 
     exclude: tuple[ExcludeGlob, ...] = Field(
-        default=(),
-        description="Repo-root-relative gitignore-style globs no pass ever considers",
+        default=(), description="Repo-root-relative gitignore-style globs no pass ever considers"
     )
 
 
@@ -217,24 +213,17 @@ class SecretDeclaration(FrozenModel):
     published template can ask an adopter for exactly those variables."""
 
     file: SecretFileName = Field(description="The <file> of data/.secrets/<file>.env")
-    variables: tuple[EnvVarName, ...] = Field(
-        description="The variables the file must set; at least one"
-    )
+    variables: tuple[EnvVarName, ...] = Field(description="The variables the file must set; at least one")
     note: ReferenceNote | None = Field(
-        default=None,
-        description="One line for the adopter: what the value is and where to get it",
+        default=None, description="One line for the adopter: what the value is and where to get it"
     )
 
     @model_validator(mode="after")
     def _check_variables(self) -> Self:
         if not self.variables:
-            raise InvalidManifestValueError(
-                f"secret {str(self.file)!r} must list at least one variable"
-            )
+            raise InvalidManifestValueError(f"secret {str(self.file)!r} must list at least one variable")
         if len(set(self.variables)) != len(self.variables):
-            raise InvalidManifestValueError(
-                f"secret {str(self.file)!r} lists a variable twice"
-            )
+            raise InvalidManifestValueError(f"secret {str(self.file)!r} lists a variable twice")
         return self
 
 
@@ -363,24 +352,18 @@ class AppManifest(FrozenModel):
         "an app whose resources live as long as their windows sweeps on it",
     )
     references: tuple[AppReference, ...] = Field(
-        default=(),
-        description="The artifacts outside the app's directory that belong to it",
+        default=(), description="The artifacts outside the app's directory that belong to it"
     )
     scope: ScopeRules = Field(
-        default_factory=ScopeRules,
-        description="The app's own exclusions from its footprint",
+        default_factory=ScopeRules, description="The app's own exclusions from its footprint"
     )
     wiring: WiringRules = Field(
-        default_factory=WiringRules,
-        description="The extra supervisord programs the app owns",
+        default_factory=WiringRules, description="The extra supervisord programs the app owns"
     )
     secrets: tuple[SecretDeclaration, ...] = Field(
-        default=(),
-        description="The secret files the app runs under, for publish-template to aggregate",
+        default=(), description="The secret files the app runs under, for publish-template to aggregate"
     )
-    handles: dict[str, Any] = Field(
-        default_factory=dict, description="Reserved; must be absent or empty"
-    )
+    handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
     preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
 
     @model_validator(mode="before")
@@ -406,9 +389,7 @@ class AppManifest(FrozenModel):
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
         if self.handles:
-            raise InvalidManifestValueError(
-                "handles must be absent or empty in this release"
-            )
+            raise InvalidManifestValueError("handles must be absent or empty in this release")
         reference_paths = [reference.path for reference in self.references]
         if len(set(reference_paths)) != len(reference_paths):
             raise InvalidManifestValueError(
@@ -416,9 +397,7 @@ class AppManifest(FrozenModel):
             )
         wiring_programs = list(self.wiring.programs)
         if len(set(wiring_programs)) != len(wiring_programs):
-            raise InvalidManifestValueError(
-                f"wiring programs must be unique, got {wiring_programs}"
-            )
+            raise InvalidManifestValueError(f"wiring programs must be unique, got {wiring_programs}")
         if self.program in wiring_programs:
             raise InvalidManifestValueError(
                 f"wiring programs must not repeat the app's own program {str(self.program)!r}"
@@ -470,9 +449,7 @@ def app_package_directory(repo_root: Path, manifest_path: Path) -> str | None:
     return f"{app_directory.relative_to(repo_root).as_posix()}/"
 
 
-def _is_inside_another_apps_directory(
-    repo_root: Path, reference_path: ReferencePath
-) -> bool:
+def _is_inside_another_apps_directory(repo_root: Path, reference_path: ReferencePath) -> bool:
     """Whether a reference reaches into some app package under system/apps/."""
     parts = reference_path.split("/")
     # A file that sits directly in system/apps/ (its README) is not an app; only a
@@ -484,9 +461,7 @@ def _is_inside_another_apps_directory(
     )
 
 
-def _find_symlinked_component(
-    repo_root: Path, reference_path: ReferencePath
-) -> str | None:
+def _find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
     """The first component of a reference that is itself a symlink, or None when none is.
 
     Git reports a changed file under the real directory and never under a symlink to it
@@ -507,9 +482,7 @@ def _check_references_against_repo_root(
     """Raises ManifestLoadError when a reference sits where it may not, or names nothing that exists."""
     own_app_directory = app_package_directory(repo_root, path)
     for reference in manifest.references:
-        if own_app_directory is not None and is_path_covered_by(
-            own_app_directory, reference.path
-        ):
+        if own_app_directory is not None and is_path_covered_by(own_app_directory, reference.path):
             raise ManifestLoadError(
                 f"manifest {path} is invalid: reference {str(reference.path)!r} is inside the app's "
                 f"own directory {own_app_directory!r}, which is already implicit"
@@ -553,16 +526,10 @@ def load_manifest(path: Path, *, repo_root: Path | None = None) -> AppManifest:
     try:
         manifest = AppManifest.model_validate(data)
     except ValidationError as e:
-        raise ManifestLoadError(
-            f"manifest {path} is invalid: {describe_validation_error(e)}"
-        ) from e
+        raise ManifestLoadError(f"manifest {path} is invalid: {describe_validation_error(e)}") from e
     if manifest.icon is not None and not (path.parent / manifest.icon).is_file():
-        raise ManifestLoadError(
-            f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it"
-        )
-    resolved_repo_root = (
-        repo_root.resolve() if repo_root is not None else repo_root_for_manifest(path)
-    )
+        raise ManifestLoadError(f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it")
+    resolved_repo_root = repo_root.resolve() if repo_root is not None else repo_root_for_manifest(path)
     if resolved_repo_root is not None:
         _check_references_against_repo_root(path, manifest, resolved_repo_root)
     return manifest
