@@ -99,8 +99,8 @@ test, freshness, or publish pass may treat as that creation's own. Every path in
 it is repo-root-relative, and `--repo-root` (default: the current directory, the
 same convention `registry_path()` follows) is what they are relative to.
 
-    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF] [--out FILE]
-    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF] [--out FILE]
+    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
+    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
     app-manifest references --for-path <path> [--repo-root DIR]
 
 The positional manifest and `--for-path` are alternatives: the first describes
@@ -148,12 +148,16 @@ goes to stdout; with it, the parent directories are created.
   existence.
 - `exclude` is the built-in globs followed by the manifest's own, deduplicated.
 - `diff` is null unless `--diff-base` is given, and then reports the base's full
-  sha, every file the diff changed (from the three-dot form, so what the base
-  branch did after the fork is not the creation's change), and
-  `outside_footprint`: the changed files that are neither under a `primary` path,
-  nor a `wiring` file, nor under a reference, nor a `context` entry's
-  `app.toml`, nor matched by `exclude`. A non-empty `outside_footprint` means either a missing
-  reference or a change that does not belong on the branch.
+  sha, the full sha of the `ref` the diff runs to (HEAD, or what `--diff-ref`
+  names, so one tree can answer for a range that ends elsewhere -- what a merge
+  commit's first parent changed since the fork, say), every file the diff
+  changed (from the three-dot form, so what the base branch did after the fork
+  is not the creation's change), and that list split in two:
+  `inside_footprint`, the changed files under a `primary` path, a `wiring`
+  file, a reference, or a `context` entry's `app.toml`, and `outside_footprint`,
+  the changed files under none of those. A file matched by `exclude` is in
+  neither. A non-empty `outside_footprint` means either a missing reference or a
+  change that does not belong on the branch.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
 (`app`, `manifest`, `path`, `note`) for every app whose manifest claims that
