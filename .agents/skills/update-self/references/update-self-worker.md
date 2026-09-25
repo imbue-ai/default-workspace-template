@@ -31,9 +31,14 @@ no `.venv`, `uv sync --all-packages` once. Ensure the ref is present:
 if [ -f "$(git rev-parse --git-common-dir)/shallow" ]; then
     git fetch --unshallow upstream
 fi
-git fetch upstream --tags
+git fetch upstream --tags --force
 BASE=$(git merge-base HEAD "$TARGET_REF")
 ```
+
+**An empty `BASE` means the histories share no commit** (the lead's Step 3a
+bridge is missing): report `stuck` saying so. Never merge with
+`--allow-unrelated-histories` -- with no base, every file both sides have
+conflicts, and a hand-resolved result cannot be told from a good update.
 
 **A retry after a rolled-back apply of this same target must revert the
 rollback first.** The apply rolls back as a *forward revert*, so `HEAD` carries

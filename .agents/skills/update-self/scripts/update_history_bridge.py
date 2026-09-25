@@ -1,0 +1,220 @@
+"""Bridge a workspace across the template's one-time history rewrite.
+
+The template's history was rewritten to drop :data:`REWRITTEN_PATHS`, so a
+workspace created before that shares no commit with a later release. While
+that is so, a ``git replace`` graft names the workspace's own fork point as an
+extra parent of its rewritten twin in the target, which gives the ordinary
+merge its base. Nothing in the workspace is rewritten; once a merge with the
+target has landed the graft is dropped.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, Sequence
+
+# CLEANUP: remove this module, its `bridge-history` subcommand, and the SKILL.md
+# steps that run it once no supported workspace predates the history rewrite.
+
+REWRITTEN_PATHS = ("libs/mngr", "vendor/mngr", "system/vendor/mngr")
+
+DEFAULT_STATE_PATH = "data/.state/update-self/history-bridge.json"
+
+_LOG_FORMAT = "%H%x00%T%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%s"
+
+
+class HistoryBridgeError(Exception):
+    """No bridge could be built; nothing in the repo changed."""
+
+
+@dataclass(frozen=True)
+class HistoryBridge:
+    is_bridged: bool
+    fork_point: str
+    twin: str | None
+    dropped: str | None
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "bridged": self.is_bridged,
+                "fork_point": self.fork_point,
+                "twin": self.twin,
+                "dropped": self.dropped,
+            }
+        )
+
+
+def _run(
+    repo: Path, args: Sequence[str], env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=None if env is None else {**os.environ, **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _git(repo: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
+    result = _run(repo, args, env)
+    if result.returncode != 0:
+        raise HistoryBridgeError(
+            f"git {' '.join(args)} failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout.strip()
+
+
+def _merge_base(
+    repo: Path, left: str, right: str, *, is_graft_seen: bool
+) -> str | None:
+    env = None if is_graft_seen else {"GIT_NO_REPLACE_OBJECTS": "1"}
+    result = _run(repo, ["merge-base", left, right], env)
+    if result.returncode == 1:
+        return None
+    if result.returncode != 0:
+        raise HistoryBridgeError(
+            f"git merge-base {left} {right} failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout.strip()
+
+
+@dataclass(frozen=True)
+class _Commit:
+    oid: str
+    tree: str
+    identity: tuple[str, ...]
+
+
+def _commits(repo: Path, *args: str) -> list[_Commit]:
+    """``git log`` of ``args`` ignoring any graft; ``identity`` is what the rewrite keeps: authorship, dates, subject."""
+    out = _git(
+        repo,
+        "log",
+        f"--format={_LOG_FORMAT}",
+        *args,
+        env={"GIT_NO_REPLACE_OBJECTS": "1"},
+    )
+    commits = []
+    for line in out.splitlines():
+        oid, tree, *identity = line.split("\0")
+        commits.append(_Commit(oid, tree, tuple(identity)))
+    return commits
+
+
+def _shallow_boundaries(repo: Path) -> list[str]:
+    shallow = (
+        Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        / "shallow"
+    )
+    return shallow.read_text().split() if shallow.exists() else []
+
+
+def _stripped_tree(repo: Path, commit: str, index: Path) -> str:
+    env = {"GIT_INDEX_FILE": str(index)}
+    _git(repo, "read-tree", commit, env=env)
+    _git(
+        repo,
+        "rm",
+        "-r",
+        "-q",
+        "-f",
+        "--cached",
+        "--ignore-unmatch",
+        "--",
+        *REWRITTEN_PATHS,
+        env=env,
+    )
+    return _git(repo, "write-tree", env=env)
+
+
+def _is_rewritten_only(path: str) -> bool:
+    return any(path == root or path.startswith(f"{root}/") for root in REWRITTEN_PATHS)
+
+
+def _newest_equivalent(repo: Path, fork: str) -> str:
+    """The newest commit between ``fork`` and HEAD that differs from it only in :data:`REWRITTEN_PATHS`.
+
+    The rewrite drops a commit that touched only those paths, so a fork point
+    followed by vendor refreshes has the same twin as the last of them, and the
+    last one is the base that matches the workspace's own vendored copy.
+    """
+    for commit in _git(
+        repo, "rev-list", "--topo-order", "--ancestry-path", f"{fork}..HEAD"
+    ).splitlines():
+        changed = _git(repo, "diff", "--name-only", fork, commit).splitlines()
+        if changed and all(_is_rewritten_only(path) for path in changed):
+            return commit
+    return fork
+
+
+def _find_fork(repo: Path, target: str, index: Path) -> tuple[str, str]:
+    """The newest ancestor of HEAD that has a rewritten twin in ``target``'s history, and that twin.
+
+    Twins are matched by author, committer, dates and subject, which the rewrite
+    keeps; a fork point the rewrite dropped entirely (a shallow boundary that was
+    a vendor refresh) is matched by its tree instead.
+    """
+    history = _commits(repo, target)
+    by_identity: dict[tuple[str, ...], _Commit] = {}
+    by_tree: dict[str, _Commit] = {}
+    for commit in history:
+        by_identity.setdefault(commit.identity, commit)
+        by_tree.setdefault(commit.tree, commit)
+    for commit in _commits(repo, "--topo-order", "HEAD"):
+        twin = by_identity.get(commit.identity)
+        if twin is not None and _stripped_tree(repo, commit.oid, index) == twin.tree:
+            return _newest_equivalent(repo, commit.oid), twin.oid
+    for boundary in _shallow_boundaries(repo):
+        twin = by_tree.get(_stripped_tree(repo, boundary, index))
+        if (
+            twin is not None
+            and _run(repo, ["merge-base", "--is-ancestor", boundary, "HEAD"]).returncode
+            == 0
+        ):
+            return _newest_equivalent(repo, boundary), twin.oid
+    raise HistoryBridgeError(
+        f"HEAD shares no history with {target}, and none of its commits matches one of "
+        f"{target}'s with {', '.join(REWRITTEN_PATHS)} removed"
+    )
+
+
+def _drop_recorded_graft(repo: Path, state: Path) -> str | None:
+    if not state.exists():
+        return None
+    twin = json.loads(state.read_text())["twin"]
+    if (
+        _run(repo, ["rev-parse", "-q", "--verify", f"refs/replace/{twin}"]).returncode
+        == 0
+    ):
+        _git(repo, "replace", "-d", twin)
+    state.unlink()
+    return twin
+
+
+def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
+    """Keep a graft between HEAD's history and ``target``'s for exactly as long as they share no commit."""
+    shared = _merge_base(repo, "HEAD", target, is_graft_seen=False)
+    if shared is not None:
+        return HistoryBridge(False, shared, None, _drop_recorded_graft(repo, state))
+
+    state.parent.mkdir(parents=True, exist_ok=True)
+    fork, twin = _find_fork(repo, target, state.parent / "history-bridge.index")
+    parents = _git(
+        repo, "rev-parse", f"{twin}^@", env={"GIT_NO_REPLACE_OBJECTS": "1"}
+    ).split()
+    _git(repo, "replace", "-f", "--graft", twin, *parents, fork)
+    state.write_text(json.dumps({"twin": twin, "fork_point": fork}))
+    bridged = _merge_base(repo, "HEAD", target, is_graft_seen=True)
+    if bridged != fork:
+        _drop_recorded_graft(repo, state)
+        raise HistoryBridgeError(
+            f"the graft on {twin[:12]} gives a merge base of {bridged}, not the fork point {fork[:12]}"
+        )
+    return HistoryBridge(True, fork, twin, None)
