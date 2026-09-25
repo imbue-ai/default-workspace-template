@@ -43,11 +43,16 @@ merge: git then counts the target's content as already merged, and a plain
 that is the old release plus a few files, which the apply's probes cannot tell
 from a good update. Check for one, and put the content back on your branch
 before merging (a `both added` conflict on a file the target changed since is
-resolved by taking the target's version):
+resolved by taking the target's version). Only a target that is already in
+`HEAD`'s history can have been rolled back, and only a rollback after it is
+this target's: a rollback of an earlier release, already reverted by its own
+retry, is not yours to undo.
 
 ```bash
-ROLLBACK=$(git log --format=%H --grep='^Roll back update apply' "$BASE"..HEAD | head -1)
-if [ -n "$ROLLBACK" ]; then git revert --no-edit "$ROLLBACK"; fi
+if git merge-base --is-ancestor "$TARGET_REF" HEAD; then
+    ROLLBACK=$(git log --format=%H --grep='^Roll back update apply' "$TARGET_REF"..HEAD | head -1)
+    if [ -n "$ROLLBACK" ]; then git revert --no-edit "$ROLLBACK"; fi
+fi
 ```
 
 ## 2. Reason about the diff, then trial-merge

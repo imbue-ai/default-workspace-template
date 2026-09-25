@@ -1,0 +1,1 @@
+The bash strict-mode ratchet now checks only the shell scripts git would commit (tracked, plus untracked files that are not ignored), so gitignored trees such as `data/` are skipped. Before, a venv copied under `data/` (update-self keeps one to roll back to) made the ratchet fail on third-party scripts inside it.
