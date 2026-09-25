@@ -89,7 +89,13 @@ def upstream(tmp_path: Path, template: Path) -> Path:
 
 
 def _workspace(
-    tmp_path: Path, template: Path, upstream: Path, *, depth: int | None = None
+    tmp_path: Path,
+    template: Path,
+    upstream: Path,
+    *,
+    depth: int | None = None,
+    message: str = "Add my notes",
+    files: dict[str, str | None] | None = None,
 ) -> Path:
     """A workspace created from ``minds-v1`` before the rewrite, with a commit of its own."""
     workspace = tmp_path / "workspace"
@@ -105,7 +111,7 @@ def _workspace(
         str(workspace),
     )
     _git(workspace, "checkout", "-q", "-B", "main")
-    _commit(workspace, "Add my notes", {"notes.md": "mine\n"})
+    _commit(workspace, message, {"notes.md": "mine\n"} if files is None else files)
     _git(workspace, "remote", "add", "upstream", str(upstream))
     _git(workspace, "fetch", "-q", "upstream", "--tags", "--force")
     return workspace
@@ -319,21 +325,14 @@ def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
 def test_a_descendant_with_the_fork_tree_is_the_merge_base(
     tmp_path, template, upstream, capsys
 ) -> None:
-    workspace = tmp_path / "workspace"
-    _git(
-        tmp_path,
-        "clone",
-        "-q",
-        "--branch",
-        "minds-v1",
-        template.as_uri(),
-        str(workspace),
-    )
-    _git(workspace, "checkout", "-q", "-B", "main")
     # The release's vendor refresh undone: HEAD's tree is the twin's plus the older vendored copy.
-    _commit(workspace, "Put the vendored copy back", {VENDORED_FILE: "v1\n"})
-    _git(workspace, "remote", "add", "upstream", str(upstream))
-    _git(workspace, "fetch", "-q", "upstream", "--tags", "--force")
+    workspace = _workspace(
+        tmp_path,
+        template,
+        upstream,
+        message="Put the vendored copy back",
+        files={VENDORED_FILE: "v1\n"},
+    )
 
     result = _bridge(workspace, capsys)
 
