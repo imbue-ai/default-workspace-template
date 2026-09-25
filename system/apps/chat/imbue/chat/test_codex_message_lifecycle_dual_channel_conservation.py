@@ -87,7 +87,7 @@ class _CodexDualChannelWorld:
         self.accepted: list[str] = []
         self.text_by_cid: dict[str, str] = {}
         self._expected: dict[str, MessageState] = {}
-        # cids a shoulder-tap re-sent: while Sending they render as visible "Sending..." chips, so they
+        # cids a shoulder-tap re-sent: while Sending they render as visible sent messages, so they
         # ride the chip snapshot (a plain fresh-send Sending does NOT -- the frontend paints its own).
         self._resend_cids: set[str] = set()
         self._returned_handed_off: set[str] = set()
@@ -96,7 +96,7 @@ class _CodexDualChannelWorld:
         self._mint_counter = 0
         self._text_counter = 0
         self.ops: list[str] = []
-        # -- the rollout the REAL file reader tails (the Delivered channel) --------------------
+        # The rollout the REAL file reader tails (the Delivered channel)
         self._agent_state_dir = root / "state"
         sessions_dir = self._agent_state_dir / "plugin" / "codex" / "home" / "sessions"
         sessions_dir.mkdir(parents=True)
@@ -105,7 +105,7 @@ class _CodexDualChannelWorld:
         (self._agent_state_dir / "codex_transcript_path").write_text(str(self._rollout_path))
         # An epoch-ms base for committed user-bubble timestamps (only ordering matters).
         self._commit_clock = 1_760_000_000_000
-        # -- the real client + ledger + file reader over this world ---------------------------
+        # The real client + ledger + file reader over this world
         self.client = CodexAppServerClient(transport=self)
         self.client.initialize("mngr", "0.1")
         self.client.thread_start(cwd="/work")
@@ -130,7 +130,7 @@ class _CodexDualChannelWorld:
             harness=HarnessType.CODEX,
         )
 
-    # -- AppServerTransport (the scripted daemon) ------------------------------------------
+    # AppServerTransport (the scripted daemon)
 
     def send(self, message: str) -> None:
         request = json.loads(message)
@@ -185,7 +185,7 @@ class _CodexDualChannelWorld:
         turn_id = self._current_turn_id if self._current_turn_id is not None else "turn-final"
         return {"thread": {"id": self._thread_id, "turns": [{"id": turn_id, "items": items}]}}
 
-    # -- committing a userMessage on BOTH channels -----------------------------------------
+    # Committing a userMessage on BOTH channels
 
     def _commit(self, client_id: str, content: str) -> None:
         """The daemon commits ``client_id``'s userMessage: append it to the rollout (Delivered channel)
@@ -229,7 +229,7 @@ class _CodexDualChannelWorld:
         )
         self.client.poll_notifications()
 
-    # -- id / text minting -----------------------------------------------------------------
+    # Id / text minting
 
     def _mint(self) -> str:
         self._mint_counter += 1
@@ -249,7 +249,7 @@ class _CodexDualChannelWorld:
     def is_idle(self) -> bool:
         return self._current_turn_id is None
 
-    # -- the operations, driving the REAL ledger + file reader -----------------------------
+    # The operations, driving the REAL ledger + file reader
 
     def user_send(self) -> str:
         was_idle = self.is_idle
@@ -347,7 +347,7 @@ class _CodexDualChannelWorld:
         self._push_turn_completed(turn_id, status="completed")
         self._current_turn_id = None
 
-    # -- reading the independent expectation -----------------------------------------------
+    # Reading the independent expectation
 
     def _expects(self, state: MessageState) -> bool:
         return any(value == state for value in self._expected.values())
@@ -377,14 +377,14 @@ class _CodexDualChannelWorld:
         self._returned_handed_off.update(cids)
         return "\n".join(self.text_by_cid[cid] for cid in cids)
 
-    # -- reading the FILE (Delivered) channel ----------------------------------------------
+    # Reading the FILE (Delivered) channel
 
     def _committed_transcript(self) -> str:
         """The concatenation of every committed user turn's text on disk (the Delivered channel)."""
         events = self.watcher.get_all_events()
         return "\n".join(event["content"] for event in events if event.get("type") == "user_message")
 
-    # -- the per-step dual-channel law -----------------------------------------------------
+    # The per-step dual-channel law
 
     def verify(self, context: str) -> None:
         note = self.note()
@@ -433,9 +433,7 @@ def _iso_from_epoch_ms(epoch_ms: int) -> str:
     return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-# =============================================================================
 # Required deterministic corners.
-# =============================================================================
 
 
 def _assert_a3b_chip_removed_before_transcript_turn(world: _CodexDualChannelWorld) -> None:
@@ -573,9 +571,7 @@ def _assert_combined_resend_a3b_chip_removed_before_transcript_turn(world: _Code
     )
 
 
-# =============================================================================
 # The seeded storm.
-# =============================================================================
 
 _A3B_ROUNDS = frozenset({3, 15})
 _REQUIRED_STOP_ROUNDS = frozenset({7, 19})

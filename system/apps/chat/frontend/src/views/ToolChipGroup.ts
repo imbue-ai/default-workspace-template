@@ -95,6 +95,19 @@ function chipKey(call: ToolCall): string {
   return `chip:${call.tool_call_id}`;
 }
 
+/** The group's own margins separate it from its SIBLINGS inside a message, and
+ *  they are deliberately NOT equal. Above it is the line that introduces the
+ *  run ("Checking how much disk..."), which the run belongs to: tight, so it
+ *  reads as that sentence's work. Below it the agent has moved on to what it
+ *  found, which is a new message however the harness packaged it: the full
+ *  message gap, so it reads as one.
+ *
+ *  At the edges of a message they would instead add to the message's own
+ *  margin, making that seam wider than every other seam in the transcript -- so
+ *  there they collapse and the message rhythm alone does the spacing, the same
+ *  shape as the `p:last-child` rules the markdown blocks carry. */
+const GROUP_CLASS = "tool-chip-group mt-1.5 mb-5 first:mt-0 last:mb-0";
+
 /** `-ml-1` cancels the first chip's own left padding, so the row's ink starts
  *  where the prose above it does: a ghost button needs that padding for its
  *  hover fill to have a shape, but the padding is chrome. It tracks the chip's
@@ -132,6 +145,28 @@ const CHIP_LABEL_CLASS = "tool-chip-label min-w-0 truncate";
  *  and the matching narrower basis put it back in line with the prose, undoing
  *  the row's own `-ml-1` for this one child. */
 const DETAIL_CLASS = "tool-chip-detail mt-1 mb-0.5 ml-1 basis-[calc(100%-0.25rem)] rounded-md border px-3 py-1.5";
+
+/** The panel's header: which call this is, and the way out of it.
+ *
+ *  What it is for is room. A chip caps its phrase at 20rem and truncates, so the
+ *  full text of what a call did had nowhere to be said; here it has the panel's
+ *  whole width, and wraps rather than truncating when even that is not enough.
+ *  `items-start` keeps the glyph and the close control on the first line when it
+ *  does.
+ *
+ *  The negative margins undo the panel's own padding, so the header spans its full
+ *  width and meets its rounded top corners. */
+const DETAIL_HEADER_CLASS =
+  "tool-chip-detail-header -mx-3 -mt-1.5 mb-1.5 flex items-start gap-1.5 " +
+  "rounded-t-md border-b px-3 py-1.5 text-(length:--font-size-helper) leading-normal";
+
+/** The close control: the same ghost treatment as a chip, squared off for an icon.
+ *  `-mr-2` sets it nearer the panel's edge than its own padding would -- the gap that
+ *  reads as right is the one to the glyph, not to the invisible box around it. */
+const DETAIL_CLOSE_CLASS =
+  "tool-chip-detail-close -mr-2 ml-auto flex shrink-0 cursor-pointer appearance-none items-center rounded " +
+  "border-0 bg-transparent p-1 text-faint transition-colors duration-(--dur-base) hover:bg-fill-hover " +
+  "hover:text-primary";
 
 /** The code itself adds only how it wraps; the pane around it sets the face. */
 const PANE_CODE_CLASS = "break-all whitespace-pre-wrap";
@@ -220,6 +255,115 @@ function renderPaneNote(marker: string, state: "loading" | "unavailable", extra 
   );
 }
 
+/** How much of a long output the panel shows before asking. Enough that most calls
+ *  are unaffected and a long one still opens with its shape visible, short enough
+ *  that a thousand-line log does not bury the rest of the transcript when a chip is
+ *  opened by mistake.
+ *
+ *  Both limits are needed. Lines alone miss the payload with no newlines in it at
+ *  all -- minified JSON, base64, a captured request body -- which the pane wraps
+ *  (`break-all whitespace-pre-wrap`) into hundreds of visual lines from one logical
+ *  one. Characters alone would clamp mid-line on ordinary console output. */
+const OUTPUT_CLAMP_LINES = 20;
+const OUTPUT_CLAMP_CHARS = 2000;
+
+/** Where the "showing all of it" state lives. Its own key rather than the chip's,
+ *  so unfolding a log does not also count as opening the chip -- and cleared with
+ *  the chip (see {@link closeChip}), so reopening one starts clamped again. */
+function outputKey(call: ToolCall): string {
+  return `chip-output:${call.tool_call_id}`;
+}
+
+/** Close a chip. The unfolded-output state is a second key, and the expansion store
+ *  is never swept, so without clearing it here "showing all" would outlive the panel
+ *  it belongs to and a reopened chip would dump its whole log again. */
+function closeChip(call: ToolCall): void {
+  setBlockExpanded(chipKey(call), false);
+  setBlockExpanded(outputKey(call), false);
+}
+
+/** A text button under the clamped pane; sized and toned like a chip, since it is
+ *  the same kind of thing (a small control the reader may ignore). `-ml-1` cancels
+ *  its own padding so its ink starts on the pane's, as the chip row's does. */
+const OUTPUT_TOGGLE_CLASS =
+  "tool-call-output-toggle -ml-1 mt-1 cursor-pointer appearance-none rounded border-0 bg-transparent px-1 " +
+  "py-[2px] text-(length:--font-size-helper) leading-normal text-secondary transition-colors " +
+  "duration-(--dur-base) hover:bg-fill-hover hover:text-primary";
+
+/** The lines of an output, without the empty one a trailing newline leaves behind --
+ *  otherwise a 20-line log that ends in a newline reports itself as 21. */
+function outputLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/** What to show of an output and what to call the rest, or null when the whole of
+ *  it is short enough to show. */
+function clampedOutput(text: string): { shown: string; label: string } | null {
+  const lines = outputLines(text);
+  const byLines = lines.length > OUTPUT_CLAMP_LINES;
+  let shown = byLines ? lines.slice(0, OUTPUT_CLAMP_LINES).join("\n") : text;
+  const byChars = shown.length > OUTPUT_CLAMP_CHARS;
+  if (byChars) shown = shown.slice(0, OUTPUT_CLAMP_CHARS);
+  if (!byLines && !byChars) return null;
+  // Counting lines is the useful measure when there are lines to count; for one
+  // long line it would read "View all 1 lines" and promise nothing.
+  return { shown, label: byLines ? `View all ${lines.length} lines` : "Show the whole output" };
+}
+
+/** The output pane, clamped when it is long enough to be worth asking about. */
+function renderOutput(call: ToolCall, text: string): m.Vnode {
+  const clamped = clampedOutput(text);
+  if (clamped === null) return renderPane("tool-call-output", text);
+  const showingAll = isBlockExpanded(outputKey(call));
+  return m("div", [
+    renderPane("tool-call-output", showingAll ? text : clamped.shown),
+    m(
+      "button",
+      {
+        type: "button",
+        class: OUTPUT_TOGGLE_CLASS,
+        onclick: () => setBlockExpanded(outputKey(call), !showingAll),
+      },
+      showingAll ? "Show less" : clamped.label,
+    ),
+  ]);
+}
+
+/** The panel's own title bar: which call this is, and the way out of it. */
+function renderDetailHeader(chip: ChipCall): m.Vnode {
+  return m("div", { class: DETAIL_HEADER_CLASS }, [
+    m.trust(
+      // `mt-[3px]` centres a 13px glyph on the first line of a ~19px line box, which
+      // matters only once the title wraps and `items-start` stops doing it.
+      icon(toolIcon(chip.call.tool_name), {
+        size: 13,
+        strokeWidth: 1.75,
+        className: "tool-chip-icon mt-[3px] shrink-0",
+      }),
+    ),
+    // The whole phrase, wrapping if it must -- the chip above truncated it, and this
+    // is the one place with the width to say it in full.
+    m(
+      "span",
+      { class: "tool-chip-detail-title min-w-0 text-secondary", title: chip.call.tool_name },
+      chipTitle(chipText(chip.call)),
+    ),
+    m(
+      "button",
+      {
+        type: "button",
+        class: DETAIL_CLOSE_CLASS,
+        "aria-label": "Close",
+        title: "Close",
+        onclick: () => closeChip(chip.call),
+      },
+      m.trust(icon("close", { size: 14, strokeWidth: 1.75 })),
+    ),
+  ]);
+}
+
 function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId: string): m.Vnode {
   const { inputText, inputState, outputText, outputState, requestPayloads } = resolveToolPayloads(
     chip.call,
@@ -238,7 +382,7 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
   // it is readable the instant the panel opens, while the full output -- which
   // is what actually has to be fetched -- is still on its way.
   if (isError && toolResult?.error_snippet) {
-    sections.push(renderPane("tool-call-error-snippet", toolResult.error_snippet, "text-danger"));
+    sections.push(renderPane("tool-call-error-snippet", toolResult.error_snippet));
   }
   if (inputState === "loaded") {
     const input = formatToolInput(inputText, chip.call.action_note);
@@ -251,11 +395,10 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
   } else {
     sections.push(renderPaneNote("tool-call-input", inputState));
   }
-  const outputMarker = isError ? "tool-call-output tool-call-output--error" : "tool-call-output";
   if (outputState === "loaded") {
-    if (outputText) sections.push(renderPane(outputMarker, outputText, isError ? "text-danger" : ""));
+    if (outputText) sections.push(renderOutput(chip.call, outputText));
   } else {
-    sections.push(renderPaneNote(outputMarker, outputState));
+    sections.push(renderPaneNote("tool-call-output", outputState));
   }
 
   // A call with nothing recorded either way still says so: an empty box would
@@ -277,7 +420,15 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     // Keyed because its siblings in the row are: mithril rejects a fragment
     // that mixes keyed and unkeyed children.
     { class: DETAIL_CLASS, key: `detail-${chip.call.tool_call_id}` },
-    sections.map((section, i) => (i === 0 ? section : m("div", { class: "mt-1.5 border-t pt-1.5" }, section))),
+    [
+      renderDetailHeader(chip),
+      // Dashed: the rule between the panes separates two parts of one call, which is
+      // a lighter claim than the solid one under the header (that divides the panel's
+      // chrome from its contents).
+      ...sections.map((section, i) =>
+        i === 0 ? section : m("div", { class: "mt-1.5 border-t border-dashed pt-1.5" }, section),
+      ),
+    ],
   );
 }
 
@@ -298,18 +449,18 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
     // line, which breaks the wrap exactly where it sits: the chip that opened it
     // ends its line, the panel spans the width underneath, and the rest of the
     // run resumes below.
-    return m("div", { class: "tool-chip-group my-1.5" }, [
+    return m("div", { class: GROUP_CLASS }, [
       m(
         "div",
         { class: ROW_CLASS },
         chips.flatMap((chip) => {
           const isOpen = open !== null && open.call.tool_call_id === chip.call.tool_call_id;
-          const failed = toolResults.get(chip.call.tool_call_id)?.is_error === true;
           const text = chipText(chip.call);
-          // Colour says two different things at once, so they are ordered: a
-          // failed call stays red whether or not it is the open one, since the
-          // failure matters more than the selection.
-          const tone = failed ? "text-danger" : isOpen ? "text-primary" : "text-faint";
+          // A failed call is NOT marked here: the agent says what it means, in
+          // prose, a line or two below, which is the form a reader can act on.
+          // Colour is left to say the one thing nothing else does -- which chip
+          // is open.
+          const tone = isOpen ? "text-primary" : "text-faint";
           const fill = isOpen ? "tool-chip--selected bg-fill-active" : "bg-transparent";
           const button = m(
             "button",
@@ -323,7 +474,7 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
               key: chip.call.tool_call_id,
               onclick: () => {
                 // One open at a time: opening a chip closes whichever was open.
-                if (open !== null) setBlockExpanded(chipKey(open.call), false);
+                if (open !== null) closeChip(open.call);
                 if (!isOpen) setBlockExpanded(chipKey(chip.call), true);
               },
             },
