@@ -22,6 +22,7 @@ import pytest
 import scaffold_flask_lib
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import MAX_DISPLAY_NAME_LENGTH
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
@@ -329,9 +330,7 @@ def test_the_runner_page_connects_to_the_shell_and_installs_the_element_menu() -
 
 def test_the_shell_module_paths_match_the_library() -> None:
     # The scaffold runs in its own PEP 723 environment and cannot import the
-    # library, so it carries its own copy of the paths.
-    from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
-
+    # library, so it carries its own copy of the paths; this keeps the copy honest.
     assert (
         Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
         == SHELL_APP_CONTRACT_PATH.parent
