@@ -245,6 +245,12 @@ def build_selection_workspace(repo_root: Path) -> None:
         '# Exercises system/scripts/banner.txt.\ndef test_banner() -> None:\n    pass\n',
     )
     write_repo_file(repo_root, "system/scripts/banner.txt", "hello\n")
+    write_repo_file(repo_root, "system/scripts/shape_testing.py", "SHAPE = 1\n")
+    write_repo_file(
+        repo_root,
+        "system/scripts/shape_test.py",
+        "from shape_testing import SHAPE\n\n\ndef test_shape() -> None:\n    assert SHAPE\n",
+    )
     write_repo_file(repo_root, "system/test_layout.py", "def test_layout() -> None:\n    pass\n")
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "from corelib.core import VALUE\n")

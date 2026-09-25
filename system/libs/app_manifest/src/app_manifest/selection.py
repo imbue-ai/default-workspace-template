@@ -448,15 +448,19 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
 
 @pure
 def build_name_index(test_texts: Mapping[str, str]) -> dict[str, frozenset[str]]:
-    """Every file-like token the test files write, and the test files that write it.
+    """Every file-like token the test files write or import, and the test files that do.
 
     A token is indexed whole and by each of its trailing path components, so a test that
-    writes ``system/scripts/layout.py`` is found by ``layout.py`` too.
+    writes ``system/scripts/layout.py`` is found by ``layout.py`` too; an imported module
+    ``a.b`` counts as writing ``a/b.py``.
     """
     index: dict[str, set[str]] = defaultdict(set)
     for test_file, text in test_texts.items():
-        for token in set(_PATH_TOKEN_PATTERN.findall(text)):
-            token = token.removeprefix("./").rstrip("./")
+        written = {
+            token.removeprefix("./").rstrip("./") for token in _PATH_TOKEN_PATTERN.findall(text)
+        }
+        imported = {f"{module.replace('.', '/')}.py" for module in _imported_modules_in_text(text)}
+        for token in written | imported:
             if "." not in token and "/" not in token:
                 continue
             parts = token.split("/")
@@ -493,8 +497,18 @@ def naming_tokens(path: str, unique_suffixes: Set[str]) -> tuple[str, ...]:
 
 def _imported_modules(path: Path) -> set[str]:
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, SyntaxError, ValueError):
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    return _imported_modules_in_text(text)
+
+
+@pure
+def _imported_modules_in_text(text: str) -> set[str]:
+    """The absolute imports a Python source names; none when it does not parse."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
         return set()
     modules: set[str] = set()
     for node in ast.walk(tree):

@@ -122,6 +122,12 @@ def test_a_file_a_test_names_runs_that_test(workspace: Path) -> None:
     assert selection.paths[0].classes == (ChangedPathClass.NAMED_BY_TEST,)
 
 
+def test_a_helper_module_a_test_imports_runs_that_test(workspace: Path) -> None:
+    selection = _select(workspace, ["system/scripts/shape_testing.py"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/scripts/shape_test.py"]
+
+
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
     selection = _select(workspace, ["README.md", "docs/guide.md", "system/libs/corelib/README.md"])
 
