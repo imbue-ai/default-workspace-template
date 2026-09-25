@@ -146,7 +146,9 @@ version" prompt says so). If they decline, record `run-status verdict REFUSED
 it>"` and end the pass. Details in `references/version-ceiling.md`.
 
 To preview what the release changes, diff from the merge base (`git diff
---name-status "$(git merge-base HEAD "$REF")" "$REF"`), never from `HEAD`.
+--name-status "$(git merge-base HEAD "$REF")" "$REF"`), never from `HEAD`. A
+workspace that predates the template's history rewrite has no merge base until
+Step 3a bridges it, so its preview waits until then.
 
 ### 2a. Hand off to the target's own update-self flow
 
