@@ -125,8 +125,8 @@ def _run_event(
 ) -> subprocess.CompletedProcess[str]:
     """Fire one ``event`` through ``extension``, with ``work_dir`` as the agent's work dir.
 
-    Returns the completed process: parse ``.stdout`` for ``{"result": ...}`` (see
-    ``_event_result``) and read ``.stderr`` for anything a handler wrote there.
+    Returns the completed process: parse ``.stdout`` for ``{"result": ..., "payload": ...}``
+    (see ``_event_output``) and read ``.stderr`` for anything a handler wrote there.
     """
     node = _node_that_imports_typescript()
     if node is None:
@@ -152,9 +152,14 @@ def _run_event(
     )
 
 
-def _event_result(proc: subprocess.CompletedProcess[str]) -> Any:
+def _event_output(proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """The driver's ``{"result": ..., "payload": ...}`` report."""
     assert proc.returncode == 0, f"event driver failed:\n{proc.stdout}\n{proc.stderr}"
-    return json.loads(proc.stdout)["result"]
+    return json.loads(proc.stdout)
+
+
+def _event_result(proc: subprocess.CompletedProcess[str]) -> Any:
+    return _event_output(proc)["result"]
 
 
 def _guard_call(
@@ -168,8 +173,7 @@ def _guard_call(
     proc = _run_event(
         tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT, env=env
     )
-    assert proc.returncode == 0, f"event driver failed:\n{proc.stdout}\n{proc.stderr}"
-    out = json.loads(proc.stdout)
+    out = _event_output(proc)
     return out["result"], out["payload"]["input"]["command"]
 
 
