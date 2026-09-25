@@ -11,6 +11,7 @@ from app_manifest.selection import render_selection
 from app_manifest.selection import select_tests
 from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
+from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_dropin
 
@@ -216,6 +217,27 @@ def test_a_path_an_app_manifest_references_runs_that_app(workspace: Path) -> Non
 
     assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
     assert selection.paths[0].classes == (ChangedPathClass.MANIFEST_REFERENCE,)
+
+
+def test_an_app_change_runs_the_tests_of_the_directories_its_manifest_references(
+    workspace: Path,
+) -> None:
+    write_app_manifest(
+        workspace,
+        "notes",
+        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n\n'
+        '[[references]]\npath = ".agents/skills/refresh"\n',
+        is_icon_written=True,
+    )
+    commit_everything(workspace, "notes references the refresh skill")
+
+    selection = _select(workspace, ["system/apps/notes/src/notes/core.py"])
+
+    assert _command_lines(selection) == [
+        _ALWAYS_RUN,
+        "uv run pytest .agents/skills/refresh",
+        "uv run pytest system/apps/notes",
+    ]
 
 
 def test_a_supervisord_block_runs_the_app_it_starts(workspace: Path) -> None:

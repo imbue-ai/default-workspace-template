@@ -214,6 +214,8 @@ A path selects:
   after `npm ci && npm run build`, plus the browser tests of every app whose
   frontend is among them;
 - the app whose manifest references it, or whose supervisord block it holds;
+- for a path in an app, the tests beneath each directory the app's manifest
+  references (a referenced skill drives the app's surface);
 - every test file that names it;
 - what the override file says.
 

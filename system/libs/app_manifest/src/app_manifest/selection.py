@@ -822,12 +822,14 @@ def _select_for_owning_unit(context: _SelectionContext, path: str) -> _PathOutco
 def _select_for_package(
     context: _SelectionContext, path: str, unit: OwningUnit
 ) -> list[_PytestRequest]:
-    """The package's own suite, the suites of the members that depend on it, and the tests of
-    the unpackaged scripts that import it or one of those members."""
+    """The package's own suite, the suites of the members that depend on it, the tests of the
+    unpackaged scripts that import it or one of those members, and, for an app, the tests of
+    the directories its manifest references."""
     layout = context.layout
     requests = _own_unit_requests(
         layout, path, _reason(path, ChangedPathClass.PACKAGE, f"changed in {unit.directory}")
     )
+    requests.extend(_referenced_directory_requests(layout, path, unit.directory))
     requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, unit.directory))
     for consumer in context.python_consumers.get(unit.directory, ()):
         reason = _reason(path, ChangedPathClass.PACKAGE, f"{consumer} depends on {unit.directory}")
@@ -835,6 +837,30 @@ def _select_for_package(
             _present([_whole_request(layout, consumer, is_browser_included=False, reason=reason)])
         )
         requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, consumer))
+    return requests
+
+
+def _referenced_directory_requests(
+    layout: RepoLayout, path: str, app_directory: str
+) -> list[_PytestRequest]:
+    """The tests beneath each directory the app's manifest references (a referenced skill
+    drives the app's surface); a referenced file, and a directory with no tests, select
+    nothing."""
+    requests: list[_PytestRequest] = []
+    for loaded in layout.manifests:
+        owner = app_package_directory(layout.repo_root, loaded.manifest_path)
+        if owner is None or owner.rstrip("/") != app_directory:
+            continue
+        for reference in loaded.manifest.references:
+            directory = reference.path.rstrip("/")
+            reason = _reason(
+                path, ChangedPathClass.PACKAGE, f"{app_directory} references {directory}"
+            )
+            requests.extend(
+                _present(
+                    [_whole_request(layout, directory, is_browser_included=False, reason=reason)]
+                )
+            )
     return requests
 
 
