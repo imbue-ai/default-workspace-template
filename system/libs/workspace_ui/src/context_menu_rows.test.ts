@@ -68,6 +68,18 @@ describe("standardContextMenuRows", () => {
     expect(keysOf(standardContextMenuRows(targetOf(field)))).toEqual(["cut", "copy", "paste", "select-all"]);
   });
 
+  it("offers Copy but not Cut on a field when the selection lies elsewhere on the page", () => {
+    const field = byId("field") as HTMLInputElement;
+    field.setSelectionRange(0, 0);
+    expect(keysOf(standardContextMenuRows(targetOf(field, "plain words")))).toEqual(["copy", "paste", "select-all"]);
+    expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "editable")))).toEqual([
+      "cut",
+      "copy",
+      "paste",
+      "select-all",
+    ]);
+  });
+
   it("withholds Paste where the browser withholds readText", () => {
     delete clipboard.readText;
     expect(keysOf(standardContextMenuRows(targetOf(byId("note"))))).toEqual(["select-all"]);

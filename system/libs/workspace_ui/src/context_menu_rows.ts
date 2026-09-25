@@ -149,8 +149,10 @@ export function standardContextMenuRows(target: ContextMenuTarget): ContextMenuR
   const isEditable = isEditableElement(element);
   const fieldSelection = fieldSelectionOf(element);
   const hasSelection = selectionText !== "" || fieldSelection !== "";
+  // Cut acts on the target's own selection: a field's, or the document's inside a contenteditable region.
+  const ownSelection = isFieldElement(element) ? fieldSelection : selectionText;
   const editRows: ContextMenuRow[] = [];
-  if (isEditable && hasSelection) {
+  if (isEditable && ownSelection !== "") {
     editRows.push({ kind: "action", key: "cut", label: "Cut", onSelect: () => void cutFrom(element, selectionText) });
   }
   if (hasSelection) {
