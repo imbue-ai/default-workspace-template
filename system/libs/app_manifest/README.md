@@ -76,6 +76,14 @@ The models behind a workspace app's two descriptions:
   `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and `SKILL_CONVENTIONS` are the fixed
   lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
   raises `ScopeComputationError` rather than reporting an empty diff.
+- `app_manifest.selection` and `app_manifest.workspace_graph`: the test
+  selection behind `app-manifest select-tests` (below). `workspace_graph` reads
+  what the workspace declares about its packages: the uv workspace members and
+  npm packages with their consumers (`python_consumers`, `npm_consumers`), the
+  suites that run as their own pytest root, and what a `uv.lock` change
+  upgraded and who depends on it (`classify_lockfile_change`).
+  `scope.list_changed_files` is the diff both `footprint` and `select-tests`
+  read.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape),
@@ -174,3 +182,65 @@ plain `python3` from every supervisord program line, so it stays stdlib-only
 and copies the manifest's fields without applying the rules above. The rules
 are applied by `validate-manifest` (which the build-app scaffold runs on the
 manifest it writes) and by every reader of the registry.
+
+## Selecting tests
+
+    app-manifest select-tests --diff-base REF [--diff-ref REF] [--repo-root DIR] [--format text|json]
+    app-manifest select-tests --path P [--path P ...] [--diff-base REF] [--repo-root DIR] [--format text|json]
+
+`select-tests` prints the commands that can observe a change, one per line, in
+the order to run them, each under a comment saying which changed paths called
+for it. Every line runs from the repo root. With `--diff-base` the change is
+what the ref changed since it forked from the base (the same three-dot diff as
+`footprint`); with `--path` it is the paths given, as the working tree holds
+them, and `--diff-base` only names the revision a changed `uv.lock` is compared
+against.
+
+A path selects:
+
+- its own tests: the package (`system/{libs,services,apps}/<name>`) or skill
+  (`.agents/skills/<name>`) it sits in, or, in the flat script directories
+  (`system/scripts`, `.agents/shared/scripts`), the tests paired with it by
+  filename (`<stem>.py`, `<stem>.sh` and `<stem>/` pair with `<stem>_test.py`
+  and `test_<stem>*.py`);
+- its consumers: every workspace member that depends on its package, directly
+  or transitively (`pyproject.toml` dependencies and dependency groups), and
+  the unpackaged scripts that import one of its modules;
+- for a `uv.lock` change, every member that depends on a package the lock
+  upgraded (a package only added selects nothing beyond the member whose
+  `pyproject.toml` added it);
+- for an npm package, its and its consumers' `npm test`, `npm run lint` and
+  `npm run format:check` (and `npm run typecheck` for a package with no build),
+  after `npm ci && npm run build`, plus the browser tests of every app whose
+  frontend is among them;
+- the app whose manifest references it, or whose supervisord block it holds;
+- every test file that names it;
+- what the override file says.
+
+Every change that is not entirely documentation (README and changelog files
+anywhere, and other markdown outside `.agents/` and `system/`) also runs the
+always-run set: `system/*.py` and the cross-cutting guards the override file
+lists. A change made only of documentation selects nothing.
+
+`system/apps/chat` and `system/apps/system_interface` run as their own pytest
+roots, which deselect their browser tests (the `release` marker) by default.
+Such an app runs with them (`-m ''`) when the app itself changed, and without
+them when it was reached as a consumer. The chat suite's `test_no_type_errors`
+is deselected and its `ty check` printed as a command of its own, so the two
+memory peaks do not stack.
+
+A path none of this classifies brings in the full root suite, and is named in
+an `# unclassified` block at the end. That is the signal to decide which suites
+can observe the path and record it in the override file.
+
+### The override file
+
+`src/app_manifest/test_selection_overrides.toml` holds what the declarations
+cannot show: `always_run` (the cross-cutting guards), `[[consumer]]` entries
+(`paths` globs, the `suites` they select, and a `note`; an empty `suites` says
+the always-run set covers the paths), and `[[integration]]` entries for tests
+that drive a real installed tool (`test`, the `paths` that select it, and a
+`note`). Paths are gitignore-style globs over repo-root-relative paths; a suite
+is a test file or a suite directory. A suite that does not exist fails the
+selection rather than selecting nothing.
+
