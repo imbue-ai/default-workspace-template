@@ -101,11 +101,13 @@ class _FakeMngr:
         returncode: int = 0,
         stderr: str = "",
         error: Exception | None = None,
+        extra_lines: Sequence[str] = (),
     ) -> None:
         self.records = records
         self.returncode = returncode
         self.stderr = stderr
         self.error = error
+        self.extra_lines = extra_lines
 
     def __call__(self, argv: Sequence[str], timeout_seconds: float) -> "subprocess.CompletedProcess[str]":
         if self.error is not None:
@@ -113,7 +115,8 @@ class _FakeMngr:
         options = dict(zip(argv[2::2], argv[3::2]))
         provider = options.get("--provider")
         listed = [r for r in self.records if provider is None or r["host"]["provider_name"] == provider]
-        stdout = "".join(_render_like_mngr(options["--format"], record) + "\n" for record in listed)
+        rendered = [_render_like_mngr(options["--format"], record) for record in listed]
+        stdout = "".join(f"{line}\n" for line in [*rendered, *self.extra_lines])
         return subprocess.CompletedProcess(list(argv), self.returncode, stdout=stdout, stderr=self.stderr)
 
 
@@ -312,6 +315,17 @@ def test_a_listing_that_fails_with_no_agents_is_unknown_not_empty(tmp_path: Path
 
     assert report.agents.candidates is None
     assert report.agents.notes == ("mngr list exited 1: Error: cannot load the local provider",)
+
+
+def test_a_listing_none_of_whose_lines_parse_is_unknown_not_empty(tmp_path: Path, runtime_dir: Path) -> None:
+    proc = tmp_path / "proc"
+    mngr = _FakeMngr([], extra_lines=["NAME  STATE  (an output shape this command does not read)"])
+
+    report = memory_candidates.collect_report(_sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})))
+
+    assert report.agents.candidates is None
+    assert len(report.agents.notes) == 1
+    assert report.agents.notes[0].startswith("1 line(s) of `mngr list` output did not parse as an agent")
 
 
 def test_the_listing_argv_and_every_template_field_exist_in_the_pinned_mngr() -> None:

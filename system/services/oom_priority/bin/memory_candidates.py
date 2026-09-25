@@ -294,18 +294,30 @@ def run_mngr_list(run_command: RunCommand) -> tuple[list[ListedAgent] | None, li
 
     With ``--on-error continue`` mngr still renders every agent it could list when something fails,
     reports the failure on stderr, and exits non-zero; those agents are kept with the failure as a
-    note. A non-zero exit with no agents at all is "unknown", not "no agents".
+    note. A non-zero exit with no agents at all is "unknown", not "no agents", and so is output
+    none of whose lines parse as an agent.
     """
     try:
         result = run_command(MNGR_LIST_ARGV, MNGR_LIST_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as error:
         return None, [f"could not run `mngr list`: {error}"]
-    agents = [agent for agent in (parse_listed_agent(line) for line in result.stdout.splitlines()) if agent is not None]
-    if result.returncode == 0:
-        return agents, []
-    stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
-    note = f"mngr list exited {result.returncode}: {'; '.join(stderr_lines) or 'no output'}"
-    return (agents if agents else None), [note]
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    agents: list[ListedAgent] = []
+    unparsed: list[str] = []
+    for line in lines:
+        agent = parse_listed_agent(line)
+        if agent is None:
+            unparsed.append(line)
+        else:
+            agents.append(agent)
+    notes: list[str] = []
+    if result.returncode != 0:
+        stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+        notes.append(f"mngr list exited {result.returncode}: {'; '.join(stderr_lines) or 'no output'}")
+    if unparsed:
+        notes.append(f"{len(unparsed)} line(s) of `mngr list` output did not parse as an agent, first: {unparsed[0]!r}")
+    is_unknown = not agents and (result.returncode != 0 or bool(unparsed))
+    return (None if is_unknown else agents), notes
 
 
 def agent_kind(labels: Mapping[str, str]) -> str | None:
