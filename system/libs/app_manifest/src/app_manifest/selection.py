@@ -338,8 +338,10 @@ def is_test_file_name(path: str) -> bool:
 
 @pure
 def is_docs_path(path: str) -> bool:
-    """Whether a path is documentation no test reads: a README or a changelog entry anywhere,
-    and any other markdown outside the directories where markdown is agent-run prose."""
+    """Whether a path is documentation, which selects no tests: a README or a changelog entry
+    anywhere, and any other markdown outside the directories where markdown is agent-run prose.
+    The always-run prose ratchets read some of it (AGENTS.md, docs/), so a documentation-only
+    change they would fail is caught by the next run of them, not by its own selection."""
     pure_path = PurePosixPath(path)
     if pure_path.name == "README.md" or (
         pure_path.parent.name == "changelog" and pure_path.suffix == _MARKDOWN_SUFFIX
