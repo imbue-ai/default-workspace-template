@@ -235,6 +235,12 @@ order they were sent**, and **on top of** (prepended to) whatever text is alread
 composer at that moment. The backend computes the exact ordered text to return; the frontend
 prepends it.
 
+**A background-task report is not returned.** The `<background-task-report>` that
+`system/scripts/run_in_background.py` sends an agent when a command it ran exits is the agent's,
+not the user's, and in the composer it would never reach the agent. Interrupt re-sends each
+queued or in-flight report straight to the agent, which starts its next turn with it. Only a
+report whose re-send fails is returned, placed ahead of the rest of the returned text.
+
 **Interrupt during a shoulder-tap** is just this contract applied: the tap is an attempt to
 deliver all queued messages; if interrupt fires during it, each queued/in-flight message that
 did not commit returns to the composer (in send order, on top), and each that did commit stays
