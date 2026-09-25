@@ -783,6 +783,11 @@ export function createMenu(options: MenuOptions): Menu {
         onupdate: place,
         onmouseenter: cancelStackLeave,
         onmouseleave: handleStackLeave,
+        // A right-click on the card is handled here, like one on the sheet: the page's element menu
+        // yields to it rather than describing one of this menu's own rows, and the browser's own stays away.
+        oncontextmenu: (event: MouseEvent) => {
+          event.preventDefault();
+        },
       },
       rows.map((row) => renderRow(row, false)),
     );
@@ -844,6 +849,9 @@ export function createMenu(options: MenuOptions): Menu {
           clearSafeApex();
         },
         onmouseleave: handleStackLeave,
+        oncontextmenu: (event: MouseEvent) => {
+          event.preventDefault();
+        },
       },
       content,
     );
