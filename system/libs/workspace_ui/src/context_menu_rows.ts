@@ -15,6 +15,7 @@ import {
   elementOfTarget,
   isEditableElement,
   imageSrcOf,
+  isPasswordField,
   linkHrefOf,
   referenceBlock,
   selectionOf,
@@ -109,7 +110,7 @@ function isFieldElement(element: Element): element is HTMLInputElement | HTMLTex
  *  field's selection is never read, so Cut and Copy are not offered there, as the browser's own menu withholds
  *  them: the secret must not land on the clipboard in plain text. */
 function fieldSelectionOf(element: Element): string {
-  if (!isFieldElement(element) || element.type === "password") return "";
+  if (!isFieldElement(element) || isPasswordField(element)) return "";
   const start = element.selectionStart ?? 0;
   const end = element.selectionEnd ?? 0;
   return element.value.slice(start, end);

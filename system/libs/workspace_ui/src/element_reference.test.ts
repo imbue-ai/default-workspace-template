@@ -79,7 +79,10 @@ describe("describeElement", () => {
     );
     expect(describeElement(byId("name"), CLICK, SCOPE).input_value).toBe("Ada");
     expect(describeElement(byId("notes"), CLICK, SCOPE).input_value).toBe("hi");
-    expect(describeElement(byId("secret"), CLICK, SCOPE).input_value).toBeNull();
+    const secret = describeElement(byId("secret"), CLICK, SCOPE);
+    expect(secret.input_value).toBeNull();
+    // Nor its default: the value attribute is the secret in plain text too.
+    expect(secret.attributes).toEqual({ type: "password" });
     expect(describeElement(byId("pic"), CLICK, SCOPE).image_src).toBe(`${window.location.origin}/a.png`);
     expect(isEditableElement(byId("name"))).toBe(true);
     expect(isEditableElement(byId("notes"))).toBe(true);

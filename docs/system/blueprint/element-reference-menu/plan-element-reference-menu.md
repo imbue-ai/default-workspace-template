@@ -59,7 +59,7 @@ Every field is present; a fact the page does not know is `null` (a scalar) or em
 | `tag` | The element's tag name, lower case |
 | `id` | The element's `id`, or `null` |
 | `classes` | The element's class list, in order, every class kept |
-| `attributes` | Every attribute but `class` and `id` (carried above), by name, `style` included |
+| `attributes` | Every attribute but `class` and `id` (carried above), by name, `style` included; a password field's `value` attribute is withheld as its value is |
 | `role` | The `role` attribute, or `null` |
 | `aria_label` | The `aria-label` attribute, or `null` |
 | `selection_text` | The document's selected text at the click, or `""` |

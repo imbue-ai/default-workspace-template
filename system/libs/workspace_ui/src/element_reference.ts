@@ -115,12 +115,17 @@ export function contentEditableRegionOf(element: Element): Element | null {
   return value === "" || value === "true" || value === "plaintext-only" ? region : null;
 }
 
-/** The value of a field, or null for an element that has none. A password field's value is never read: the
- *  reference reaches the clipboard, a chat message, and a file, and the secret must not travel in plain text
- *  (the same reason the menu withholds Cut and Copy there). */
+/** Whether the element is a password input, whose value never travels: the reference reaches the clipboard, a
+ *  chat message, and a file, and the secret must not travel in plain text (the same reason the menu withholds
+ *  Cut and Copy there). */
+export function isPasswordField(element: Element): boolean {
+  return element instanceof HTMLInputElement && element.type === "password";
+}
+
+/** The value of a field, or null for an element that has none, and for a password field. */
 export function inputValueOf(element: Element): string | null {
   if (!INPUT_VALUE_TAGS.has(element.tagName.toLowerCase())) return null;
-  if (element instanceof HTMLInputElement && element.type === "password") return null;
+  if (isPasswordField(element)) return null;
   return (element as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
 }
 
@@ -137,10 +142,14 @@ export function imageSrcOf(element: Element): string | null {
   return element.src === "" ? null : element.src;
 }
 
+/** Every attribute but ``class`` and ``id`` (carried on their own), and but a password field's ``value``: the
+ *  default its markup gives it is the secret in plain text, withheld as its live value is. */
 function attributesOf(element: Element): Record<string, string> {
   const attributes: Record<string, string> = {};
+  const isValueWithheld = isPasswordField(element);
   for (const attribute of Array.from(element.attributes)) {
     if (attribute.name === "class" || attribute.name === "id") continue;
+    if (isValueWithheld && attribute.name === "value") continue;
     attributes[attribute.name] = attribute.value;
   }
   return attributes;
