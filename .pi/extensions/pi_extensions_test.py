@@ -2,18 +2,18 @@
 
 pi has no shell-hook surface, so the rules claude and codex get from
 ``system/scripts/`` reach a pi agent as the two TypeScript extensions here:
-``policy_guards.ts`` (the checker bridge) and ``tk_workflow.ts`` (the step
-discipline). They run inside pi's Node process, so they are exercised the way
+``policy_guards.ts`` (the command guards and rewrite) and ``tk_workflow.ts``
+(the step discipline). They run inside pi's Node process, so they are exercised the way
 mngr exercises its own pi extension -- drive the real file with a synthetic
 event through Node and assert on what the handler returns -- rather than
 reimplemented in Python. Skipped automatically when Node (with TypeScript
 support) is unavailable; the ``.ts`` files are resources, not Python, so they do
 not count toward coverage.
 
-``policy_guards.ts`` resolves its checkers from ``MNGR_AGENT_WORK_DIR``, and the
-checkers live in this repo, so those tests point it at the repo root and run the
-real ``agent_latchkey_request_check.py`` / ``agent_tk_standalone_check.py`` --
-covering the bridge and its wiring together. ``tk_workflow.ts`` reads step state
+``policy_guards.ts`` resolves its scripts from ``MNGR_AGENT_WORK_DIR``, and the
+scripts live in this repo, so those tests point it at the repo root and run the
+real PreToolUse hook scripts and ``agent_rewrite_bash_command.py`` -- covering
+the extension and its wiring together. ``tk_workflow.ts`` reads step state
 from the vendored ``ticket`` script, so those tests point it at a temp tree with
 a stub ``ticket`` whose output a test can drive.
 
@@ -35,7 +35,7 @@ from typing import Any
 import pytest
 
 # Every test here starts a Node process that type-strips a `.ts` module, and most of
-# them have it spawn a python3 checker or a bash `ticket` in turn. That runs in well
+# them have it spawn a guard script or a bash `ticket` in turn. That runs in well
 # under a second warm, but the suite's global 10s per-test timeout budgets for pure
 # Python; a cold cache or a loaded machine pushes these past it. Give them room.
 _NODE_EVENT_TIMEOUT_SECONDS = 60
