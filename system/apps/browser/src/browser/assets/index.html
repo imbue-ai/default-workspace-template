@@ -321,7 +321,7 @@
     if (!agentDriving) {
       if (humanPinned && handoffReason) {
         returnQueue.textContent = (handoffAgent || "An agent") + " needs your help: " + handoffReason +
-          ". Do it in this pane, then click “Return to agent” to hand control back.";
+          ". Do it in this pane, then click “Return control to agents” to hand control back.";
         returnBtn.style.display = "";
       } else {
         returnQueue.textContent = waiting.length
