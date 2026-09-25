@@ -792,8 +792,10 @@ def _pair_beside(shell: ShellState, target: _DesktopOpTarget, anchor: Window | N
     returns each to where it stood. An ``open`` that answered the anchor itself has nothing to pair it with."""
     if anchor is None or anchor.id == window_id:
         return
+    # The desktop as the open left it: an edit reads the layout against the windows the desktop it is given holds,
+    # and the snapshot the op started from is one window short of this one.
     shell.edit_desktop_layout(
-        target.desktop,
+        shell.get_desktop(target.desktop.id),
         target.client_id,
         lambda current: with_window_state(
             with_window_state(current, anchor.id, WindowState.SNAPPED_LEFT), window_id, WindowState.SNAPPED_RIGHT
