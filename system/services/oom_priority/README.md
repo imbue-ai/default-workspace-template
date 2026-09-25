@@ -241,8 +241,9 @@ a protected one.
   One `process_shed` line per kill, carrying the agent name only when an agent's
   *own* process was shed, plus why earlyoom picked the victim (`oom_score_adj`,
   `badness_kib`, `vm_rss_kib`, and the `ordering`: `kernel_badness`, or
-  `rss_fallback` if earlyoom's startup self-check could not read those inputs;
-  null when earlyoom did not report them). Read by the revival-notice hook
+  `upstream_fallback` if earlyoom's startup self-check could not read those
+  inputs, which also leaves `badness_kib` null; null when earlyoom did not
+  report them). Read by the revival-notice hook
   (`system/services/oom_priority/bin/claude_shed_notice_hook.py`) and the launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
   by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.

@@ -15,7 +15,7 @@
 # downloads nothing here.
 set -euo pipefail
 
-EARLYOOM_VERSION="v1.9.0-imbue.1"
+EARLYOOM_VERSION="v1.9.0-imbue.2"
 EARLYOOM_REPO="imbue-ai/earlyoom"
 INSTALL_PATH="/usr/local/bin/earlyoom"
 VERSION_STAMP="/usr/local/bin/.earlyoom-version"
@@ -29,11 +29,11 @@ arch="$(uname -m)"
 case "$arch" in
     x86_64)
         triple="x86_64-unknown-linux"
-        sha256="d37fffbafd0612020a491235a3da50562e18e0656163145622e1d1859fdd66bf"
+        sha256="7365a0d9275a43cd70101517ea3adb5c21d9b1401ef550c1614696c5836f3d05"
         ;;
     aarch64 | arm64)
         triple="aarch64-unknown-linux"
-        sha256="b9fee4da601e22e1636ba1f12bba1336cabd893565122e29ebadac4b5f3cade2"
+        sha256="3770697288ea4c7cd1e612f610bf2d7415401765973154519664d80491c6f960"
         ;;
     *) echo "install_earlyoom: unsupported arch $arch" >&2; exit 1 ;;
 esac

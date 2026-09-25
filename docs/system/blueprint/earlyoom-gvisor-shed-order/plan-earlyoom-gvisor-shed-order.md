@@ -43,7 +43,7 @@
 - The `-N` hook still runs with no arguments and gets `EARLYOOM_PID/UID/NAME/CMDLINE` as before.
 - It also gets these new variables:
   - `EARLYOOM_OOM_SCORE_ADJ`, `EARLYOOM_BADNESS_KIB` and `EARLYOOM_VMRSS_KIB`.
-  - `EARLYOOM_ORDERING`: `kernel_badness`, or `rss_fallback` if the self-check failed.
+  - `EARLYOOM_ORDERING`: `kernel_badness`, or `upstream_fallback` if the self-check failed. `EARLYOOM_BADNESS_KIB` is set only under `kernel_badness`.
 - On the released tree, each `process_shed` ledger line records `oom_score_adj`, `badness_kib`, `vm_rss_kib` and `ordering`. Fields the hook didn't receive are `null`.
 - A hotpatched workspace, which still has the old hook, records kills exactly as today. Its earlyoom log still shows each victim's adj.
 - The kill log line gains `oom_score_adj N` (from upstream v1.9.0). Nothing parses that line.
@@ -51,7 +51,7 @@
 ### Startup self-check
 
 - At startup, earlyoom reads `/proc/self/oom_score_adj`, `/proc/self/status` VmRSS and `/proc/meminfo` MemTotal.
-- If any can't be read or parsed, it keeps running with RSS-only ordering. It logs an ERROR at startup and on every kill, and marks each kill `rss_fallback`.
+- If any can't be read or parsed, it keeps running and chooses victims exactly as upstream v1.9.0 does. It logs an ERROR at startup and on every kill, and marks each kill `upstream_fallback`.
 - It never exits over this. A restart loop under supervisord would leave the workspace with no early shedding at all.
 
 ### Install and upgrade
@@ -120,7 +120,7 @@
     - -1000 is skipped;
     - pid 2 and its children are eligible, and a no-mm process is skipped;
     - earlyoom doesn't pick itself;
-    - an unreadable adj produces `rss_fallback` ordering.
+    - an unreadable adj produces `upstream_fallback` ordering.
 - `.github/workflows/ci.yml`: keep upstream's build and `make test`.
   - Add an x86_64 job that installs runsc at the production pin (`PINNED_GVISOR_RELEASE` in the monorepo's `libs/mngr_vps/imbue/mngr_vps/host_setup.py`, currently `20260601`).
   - That job runs the built binary under `docker --runtime=runsc` with a memory limit and processes tagged to different bands, then asserts that the kill order follows badness.
