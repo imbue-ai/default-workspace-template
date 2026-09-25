@@ -592,6 +592,8 @@ class _AutoResumingAgent:
     async def __aexit__(self, *_exc: Any) -> None:
         assert self._reader is not None
         self._reader.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._reader
         await self._ws.close()
 
     async def _send(self, method: str, params: "dict[str, Any]", session_id: str | None = None) -> "asyncio.Future[dict[str, Any]]":
