@@ -237,9 +237,9 @@ def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
     ).split()
     _git(repo, "replace", "-f", "--graft", twin, *parents, fork)
     state.parent.mkdir(parents=True, exist_ok=True)
-    scratch = state.with_suffix(".json.tmp")
-    scratch.write_text(json.dumps({"twin": twin, "fork_point": fork}))
-    scratch.replace(state)
+    pending = state.with_suffix(".json.tmp")
+    pending.write_text(json.dumps({"twin": twin, "fork_point": fork}))
+    pending.replace(state)
     bridged = _merge_base(repo, "HEAD", target, is_graft_seen=True)
     if bridged != fork:
         _drop_recorded_graft(repo, state)
