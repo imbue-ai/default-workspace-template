@@ -180,7 +180,7 @@ def _newest_equivalent(repo: Path, fork: str) -> str:
 
 
 def _find_fork(repo: Path, target: str, index: Path) -> tuple[str, str]:
-    """The newest ancestor of HEAD that has a rewritten twin in ``target``'s history, and that twin.
+    """The newest ancestor of HEAD with a rewritten twin in ``target``'s history, advanced by :func:`_newest_equivalent`, and that twin.
 
     Twins are matched by author, committer, dates and subject, which the rewrite
     keeps; a fork point the rewrite dropped entirely (a shallow boundary that was
