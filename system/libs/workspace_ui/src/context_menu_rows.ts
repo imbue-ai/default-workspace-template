@@ -123,6 +123,13 @@ function regionSelectionOf(element: Element, selectionText: string): string {
   return region.contains(selection.getRangeAt(0).commonAncestorContainer) ? selectionText : "";
 }
 
+/** The element that takes focus for the ``execCommand`` path: the contenteditable region the target sits in
+ *  (a child of the region is not itself focusable, and the command acts on the focused editor), else the
+ *  target. */
+function editableHostOf(element: Element): HTMLElement {
+  return (contentEditableRegionOf(element) ?? element) as HTMLElement;
+}
+
 /** Cut fails whole, as the native row does: nothing is deleted unless the copy landed. */
 async function cutFrom(element: Element, selectionText: string): Promise<void> {
   if (isFieldElement(element)) {
@@ -134,7 +141,7 @@ async function cutFrom(element: Element, selectionText: string): Promise<void> {
     return;
   }
   if (!(await copyText(selectionText))) return;
-  (element as HTMLElement).focus();
+  editableHostOf(element).focus();
   element.ownerDocument.execCommand("delete");
 }
 
@@ -152,7 +159,7 @@ async function pasteInto(element: Element): Promise<void> {
     element.dispatchEvent(new Event("input", { bubbles: true }));
     return;
   }
-  (element as HTMLElement).focus();
+  editableHostOf(element).focus();
   element.ownerDocument.execCommand("insertText", false, text);
 }
 
@@ -162,7 +169,7 @@ function selectAllIn(element: Element): void {
     element.select();
     return;
   }
-  (element as HTMLElement).focus();
+  editableHostOf(element).focus();
   element.ownerDocument.execCommand("selectAll");
 }
 

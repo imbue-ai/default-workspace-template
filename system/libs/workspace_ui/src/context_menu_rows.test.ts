@@ -154,6 +154,22 @@ describe("standardContextMenuRows", () => {
     expect(execCommand).toHaveBeenCalledWith("selectAll");
   });
 
+  it("focuses the contenteditable region, not the child clicked inside it, before an execCommand", async () => {
+    const note = byId("note") as HTMLElement;
+    note.innerHTML = '<span id="word">editable</span>';
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    const rows = standardContextMenuRows(targetOf(byId("word")));
+    expect(keysOf(rows)).toEqual(["paste", "select-all"]);
+    (rows[0] as { onSelect: () => void }).onSelect();
+    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("insertText", false, "pasted"));
+    expect(document.activeElement).toBe(note);
+    (document.activeElement as HTMLElement).blur();
+    (rows[1] as { onSelect: () => void }).onSelect();
+    expect(execCommand).toHaveBeenCalledWith("selectAll");
+    expect(document.activeElement).toBe(note);
+  });
+
   it("copies an absolute link address", async () => {
     const rows = standardContextMenuRows(targetOf(byId("link")));
     (rows[0] as { onSelect: () => void }).onSelect();
