@@ -208,10 +208,16 @@ export function App(): m.Component<AppAttrs> {
    *  every page), and once more when the gesture ends or is cancelled: a redraw diffs against the last
    *  render rather than the DOM and writes nothing it finds equal, so the DOM must already be at what
    *  the render answers, which the store's ``windowRect`` and ``snapPreviewRect`` are at every point. */
+  /** The chrome of one window as the backdrop holds it now, else null (its window is closed, or its desktop
+   *  is no longer the one on screen). */
+  function windowElement(windowId: string): HTMLElement | null {
+    return backdropArea?.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`) ?? null;
+  }
+
   function paintWindow(current: DesktopStore, windowId: string): void {
     const area = backdropArea;
     if (area === null) return;
-    const element = area.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
+    const element = windowElement(windowId);
     if (element !== null) applyRectStyle(element, current.windowRect(windowId));
     pages?.placePage(windowId);
     const preview = area.querySelector<HTMLElement>(`[${SNAP_PREVIEW_ATTRIBUTE}]`);
@@ -235,7 +241,13 @@ export function App(): m.Component<AppAttrs> {
    *  Re-measuring per frame is the placement a drag already does, driven by the transition
    *  instead of by the pointer. */
   function followTravellingWindows(): void {
-    for (const windowId of travellingWindows.keys()) pages?.placePage(windowId);
+    for (const windowId of [...travellingWindows.keys()]) {
+      // A window that leaves the desktop mid-travel (closed, or its desktop swapped for another) has its
+      // transitions cancelled on a chrome already out of the document, where the event never reaches the
+      // backdrop that listens for it: the frame that cannot find the chrome is what ends its travel.
+      if (windowElement(windowId) === null) travellingWindows.delete(windowId);
+      else pages?.placePage(windowId);
+    }
     travelFrame = travellingWindows.size > 0 ? requestAnimationFrame(followTravellingWindows) : null;
   }
 

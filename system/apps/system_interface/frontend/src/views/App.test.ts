@@ -6,7 +6,7 @@
 import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
@@ -194,37 +194,6 @@ describe("a window drag", () => {
     expect(page.style.pointerEvents).toBe("auto");
   });
 
-  // jsdom raises no transition events of its own, so the travel is driven by hand here.
-  it("re-places a travelling window's page every frame, and once more where the window landed", async () => {
-    store.setBackdropSize({ width: 1000, height: 800 });
-    const root = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
-    const content = root.querySelector("[data-window-content]") as HTMLElement;
-    let travelled = { left: 100, top: 60, width: 500, height: 400 };
-    content.getBoundingClientRect = () => travelled as DOMRect;
-    m.redraw.sync();
-    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
-    expect(page.style.left).toBe("100px");
-
-    // One transition per property the move changes; the travel is over when the last of them ends.
-    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
-    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
-    travelled = { ...travelled, left: 300 };
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    expect(page.style.left).toBe("300px");
-
-    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
-    travelled = { ...travelled, left: 500 };
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    expect(page.style.left).toBe("500px");
-
-    travelled = { ...travelled, left: 640 };
-    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
-    expect(page.style.left).toBe("640px");
-    travelled = { ...travelled, left: 900 };
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    expect(page.style.left).toBe("640px");
-  });
-
   it("turns window motion off for the press and back on when it ends", () => {
     store.setBackdropSize({ width: 1000, height: 800 });
     m.redraw.sync();
@@ -234,6 +203,76 @@ describe("a window drag", () => {
     expect(document.querySelector('[data-window-motion="off"]')).not.toBeNull();
     listener.onPressEnd(binding);
     expect(document.querySelector("[data-window-motion]")).toBeNull();
+  });
+});
+
+// The move the pointer did not make: the chrome transitions to its new rectangle and its page, which has no
+// rectangle of its own to transition, is laid over the chrome again every frame of the way. jsdom raises no
+// transition events of its own, so each travel is driven by hand here.
+describe("a window's travel", () => {
+  let root: HTMLElement;
+  let page: HTMLElement;
+  let travelled = { left: 100, top: 60, width: 500, height: 400 };
+
+  /** Where the travelling chrome's content box measures from here on. */
+  function travelTo(left: number): void {
+    travelled = { ...travelled, left };
+  }
+
+  /** Two frames: one for the follow to run in, one for what it wrote to be readable. */
+  function twoFrames(frame: typeof requestAnimationFrame = requestAnimationFrame): Promise<unknown> {
+    return new Promise((resolve) => frame(() => frame(resolve)));
+  }
+
+  beforeEach(() => {
+    travelled = { left: 100, top: 60, width: 500, height: 400 };
+    store.setBackdropSize({ width: 1000, height: 800 });
+    root = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
+    const content = root.querySelector("[data-window-content]") as HTMLElement;
+    content.getBoundingClientRect = () => travelled as DOMRect;
+    m.redraw.sync();
+    page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+  });
+
+  it("re-places a travelling window's page every frame, and once more where the window landed", async () => {
+    expect(page.style.left).toBe("100px");
+
+    // One transition per property the move changes; the travel is over when the last of them ends.
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    travelTo(300);
+    await twoFrames();
+    expect(page.style.left).toBe("300px");
+
+    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    travelTo(500);
+    await twoFrames();
+    expect(page.style.left).toBe("500px");
+
+    travelTo(640);
+    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    expect(page.style.left).toBe("640px");
+    travelTo(900);
+    await twoFrames();
+    expect(page.style.left).toBe("640px");
+  });
+
+  it("gives up on a window whose chrome leaves the desktop before it lands", async () => {
+    const frame = requestAnimationFrame.bind(globalThis);
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    travelTo(300);
+    await twoFrames(frame);
+    expect(page.style.left).toBe("300px");
+
+    const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
+    // A closed window (or a desktop swapped for another) takes its chrome out of the document, and the
+    // transition the browser cancels there raises its event where the backdrop cannot hear it: nothing is
+    // left to end the travel but the frame that goes looking for the chrome.
+    root.remove();
+    await twoFrames(frame);
+
+    expect(scheduled).not.toHaveBeenCalled();
+    scheduled.mockRestore();
   });
 });
 
