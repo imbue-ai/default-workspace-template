@@ -193,6 +193,48 @@ describe("a window drag", () => {
     listener.onPressEnd(binding);
     expect(page.style.pointerEvents).toBe("auto");
   });
+
+  // jsdom raises no transition events of its own, so the travel is driven by hand here.
+  it("re-places a travelling window's page every frame, and once more where the window landed", async () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    const root = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
+    const content = root.querySelector("[data-window-content]") as HTMLElement;
+    let travelled = { left: 100, top: 60, width: 500, height: 400 };
+    content.getBoundingClientRect = () => travelled as DOMRect;
+    m.redraw.sync();
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect(page.style.left).toBe("100px");
+
+    // One transition per property the move changes; the travel is over when the last of them ends.
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    travelled = { ...travelled, left: 300 };
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    expect(page.style.left).toBe("300px");
+
+    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    travelled = { ...travelled, left: 500 };
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    expect(page.style.left).toBe("500px");
+
+    travelled = { ...travelled, left: 640 };
+    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    expect(page.style.left).toBe("640px");
+    travelled = { ...travelled, left: 900 };
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    expect(page.style.left).toBe("640px");
+  });
+
+  it("turns window motion off for the press and back on when it ends", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const listener = gestureListener as GestureListener;
+    expect(document.querySelector("[data-window-motion]")).toBeNull();
+    listener.onPressStart(binding);
+    expect(document.querySelector('[data-window-motion="off"]')).not.toBeNull();
+    listener.onPressEnd(binding);
+    expect(document.querySelector("[data-window-motion]")).toBeNull();
+  });
 });
 
 describe("Escape", () => {

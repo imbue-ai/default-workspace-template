@@ -11,3 +11,12 @@ courtesy, not its point.
 This is the desktop's answer to what the tabbed shell did when an agent opened
 something it had just built: dock it beside the chat that asked for it, rather
 than over the conversation the user is reading.
+
+**A window travels to its new rectangle instead of appearing at it.** Any move
+the pointer did not make -- a snap from the size menu, a restore, a `place`, the
+pairing above -- now runs as a 180ms transition (`--desk-window-move`). Only the
+chrome transitions: its live page is positioned by measuring the chrome, so it
+has nothing to transition towards and is re-measured every frame of the travel
+instead. A press sets `data-window-motion="off"` on the desktop's root for its
+whole length, so a dragged window stays under the pointer and the settle at the
+release does not animate; `prefers-reduced-motion` turns the travel off entirely.

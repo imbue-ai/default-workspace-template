@@ -52,3 +52,29 @@
 [data-window-dragging] [data-drag-handle] {
   cursor: grabbing;
 }
+
+/* A window travels to its new rectangle rather than appearing at it, so a move the user did not
+   make with the pointer -- a snap from the size menu, a restore, an agent laying one window beside
+   another -- reads as the window going somewhere rather than as the desktop cutting to a new
+   arrangement. The chrome's root alone: App.ts carries its live page along, for the reason
+   ``followTravellingWindows`` gives. */
+[data-window-id] {
+  transition:
+    left var(--desk-window-move) var(--desk-window-move-ease),
+    top var(--desk-window-move) var(--desk-window-move-ease),
+    width var(--desk-window-move) var(--desk-window-move-ease),
+    height var(--desk-window-move) var(--desk-window-move-ease);
+}
+
+/* A window the pointer carries is written to its rectangle once per move, with no redraw: a
+   transition there would leave it trailing the pointer instead of held by it. */
+[data-window-motion="off"] [data-window-id] {
+  transition: none;
+}
+
+/* Someone who asked for less motion gets the arrangement, not the travel. */
+@media (prefers-reduced-motion: reduce) {
+  [data-window-id] {
+    transition: none;
+  }
+}
