@@ -337,9 +337,8 @@ class InputRouter:
     def close(self) -> None:
         self.release_all()
         try:
-            # A round trip first: closing straight after a flush dropped or delayed the events
-            # still in flight (measured: 1 paste in 5 lost its Ctrl+V, or its Ctrl release, which
-            # left Ctrl held in X).
+            # A round trip first: closing right after a flush can drop or delay events still in
+            # flight, such as a paste's Ctrl+V or its Ctrl release (which would leave Ctrl held).
             self._display.sync()
             self._display.close()
         except Xlib.error.ConnectionClosedError:

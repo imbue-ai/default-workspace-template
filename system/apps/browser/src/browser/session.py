@@ -105,8 +105,7 @@ _FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 # env.d unit. Each subdirectory holding a manifest.json is passed via --load-extension.
 _EXTENSIONS_DIR = "/opt/fortress/extensions"
 
-# The fleet's own unpacked extensions, shipped in this package (open_popups_as_tabs: the
-# window guardian keeps one browser window, so a window.open pop-up has to be a tab).
+# The fleet's own unpacked extensions, shipped in this package.
 _BUNDLED_EXTENSIONS_DIR = Path(__file__).parent / "extensions"
 
 # The fleet's CDP proxy: ONE websocket server for every browser, addressed by

@@ -313,7 +313,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
     assert saved is not None and all(e.id != "riley-jones" for e in saved.browsers)
 
 
-# --- persistence: the core promise, against real Chromium --------------------
+# Persistence, the core promise, against real Chromium.
 
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
@@ -461,7 +461,7 @@ def _profile_dir_for(browser_id: str):
     return bsession._profile_dir(browser_id)
 
 
-# --- popups, handoff and paste, against real Chromium -------------------------
+# Popups, handoff and paste, against real Chromium.
 
 
 class _PageServer:
@@ -506,8 +506,8 @@ async def _page_session(browser: "bsession.LiveBrowser", target_id: str) -> str:
 
 
 async def _evaluate(browser: "bsession.LiveBrowser", session_id: str, expression: str) -> Any:
-    """Evaluate in a page through the fleet's own CDP client, which raises CdpError after 5s
-    when the page does not answer (a paused or hung renderer)."""
+    """Evaluate in a page through the fleet's own CDP client, which raises CdpError when the
+    page does not answer (a paused or hung renderer)."""
     assert browser._cdp is not None
     result = await browser._cdp.send(
         "Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": True}, session_id=session_id
@@ -642,10 +642,9 @@ def _held_keycodes(display: str) -> list[int]:
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> None:
-    # A window.open with a features string is a popup: Chromium makes a second top-level
-    # window, which the window guardian closes ("multiple windows are not supported"), so
-    # every popup-based sign-in (Continue with Google, ...) failed. The bundled extension
-    # makes it a tab in the main window instead, keeping window.opener, which the OAuth
+    # A window.open with a features string asks for a popup, which would be a second
+    # top-level window that the window guardian closes -- breaking popup-based sign-ins. It
+    # must open as a tab in the one window instead, keeping window.opener, which an OAuth
     # callback page needs to hand its result back and close itself.
     other_origin = _PageServer({"/frame": (
         "<script>addEventListener('message', () =>"
@@ -692,9 +691,9 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
 @pytest.mark.timeout(120)
 def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
     # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
-    # until that client resumes it, and a handoff leaves the agent's socket connected. Its
-    # resume then went through a proxy that refused every frame from a client without the
-    # lease: the tab stayed paused, and the page that opened it -- same renderer -- froze.
+    # until that client resumes it, and a handoff leaves the agent's socket connected. The
+    # proxy must forward that resume although the agent no longer holds the lease, or the
+    # tab stays paused and the page that opened it -- same renderer -- freezes.
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake_method)
     pages = _PageServer({"/": "<title>opener</title>", "/child": "<title>child</title>"})
     with pages:
@@ -739,10 +738,9 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
-    # Paste-in injects Ctrl+V on a short-lived X connection. Closing it straight after the
-    # flush dropped or delayed the keystrokes (about 1 in 5 pastes never arrived, while the
-    # viewer still said "Pasted"), and a late Ctrl release left Ctrl held in X, so the
-    # human's scroll zoomed and their clicks became Ctrl+clicks.
+    # Paste-in injects Ctrl+V on a short-lived X connection. If it closes before X has handled
+    # the keystrokes, the paste silently never arrives (the viewer still says "Pasted"), or
+    # Ctrl stays held, so the human's scroll zooms and their clicks become Ctrl+clicks.
     rounds = 20
     pages = _PageServer({"/": (
         "<input id=i style='position:absolute;left:100px;top:100px;width:600px;height:60px'>"
@@ -764,6 +762,7 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                     " const top = window.screenY + window.outerHeight - window.innerHeight;"
                     " return [Math.round(window.screenX + r.left + 20), Math.round(top + r.top + r.height / 2)]; })()"
                 ))
+
                 def paste(text: str) -> int:
                     with runner.application.test_request_context():
                         response = mediastream.clipboard_paste(browser.browser_id, browser, text.encode(), "text/plain")
@@ -803,7 +802,7 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
         asyncio.run(go())
 
 
-# --- boot-a-server: cast WS dual-direction + disconnect-as-lease over a real socket ---
+# Boot-a-server: cast WS dual-direction + disconnect-as-lease over a real socket.
 # These exercise the real Werkzeug threaded server + socket path that the Flask test
 # client (in-process GeneratorExit) does NOT cover -- so the disconnect-detection-via-
 # heartbeat-write contract is verified empirically, not assumed.

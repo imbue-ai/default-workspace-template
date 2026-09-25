@@ -109,7 +109,7 @@ class BrowserProxy:
         self._follow_handle: asyncio.TimerHandle | None = None
         self._attached_once = False
 
-    # --- HTTP discovery ---------------------------------------------------
+    # HTTP discovery
 
     async def rewrite_discovery(self, path: str, token: str) -> Response | None:
         """Serve `/json/version[/]` and `/json/list[/]` with our URLs substituted.
@@ -157,7 +157,7 @@ class BrowserProxy:
         })
         return Response(status, "OK" if status == 200 else "Error", headers, body)
 
-    # --- the websocket path ----------------------------------------------
+    # The websocket path
 
     async def pump(self, client: Any, token: str) -> None:
         """Bridge one agent socket to Chromium, gating every frame the agent sends."""
