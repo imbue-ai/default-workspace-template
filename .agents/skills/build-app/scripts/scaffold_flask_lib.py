@@ -261,8 +261,6 @@ packages = ["src/{package}"]
 def _lib_runner(name: str, package: str, description: str, port: int) -> str:
     env_var = f"{package.upper()}_DATA_DIR"
     port_env_var = f"{package.upper()}_PORT"
-    shell_static_modules_dir = SHELL_STATIC_MODULES_DIR
-    shell_static_module_names = SHELL_STATIC_MODULE_NAMES
     return f'''"""{description}.
 
 Services run from /home/user/workspace (the repo root). Conventions:
@@ -321,8 +319,8 @@ PORT = int(os.environ.get("{port_env_var}", "{port}"))
 # clicked element to a chat). A module import is a fetch without cookies, which
 # the forwarder refuses across origins, so they are served here rather than from
 # the shell. Relative to the repo root the service runs from, like DATA_DIR.
-SHELL_STATIC_MODULES_DIR = Path("{shell_static_modules_dir}")
-SHELL_STATIC_MODULE_NAMES = {shell_static_module_names!r}
+SHELL_STATIC_MODULES_DIR = Path("{SHELL_STATIC_MODULES_DIR}")
+SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
 
 # The script every page serves (keep it on every page): it connects the page to
 # the shell, reports where the page is on the handshake so the shell can reopen
