@@ -1,4 +1,5 @@
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ def test_a_reference_is_written_whole_to_a_fresh_private_file(tmp_path: Path) ->
 
 
 def test_the_directory_is_under_the_temporary_directory() -> None:
-    assert get_element_references_directory().name == ELEMENT_REFERENCES_SUBDIRECTORY
+    assert get_element_references_directory() == Path(tempfile.gettempdir()) / ELEMENT_REFERENCES_SUBDIRECTORY
 
 
 @pytest.mark.parametrize(
