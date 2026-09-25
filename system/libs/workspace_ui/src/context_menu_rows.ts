@@ -76,12 +76,14 @@ function reportFailure(what: string, error: unknown): void {
   console.warn(`[context-menu] ${what} failed: ${(error as Error)?.message ?? String(error)}`);
 }
 
-/** Put ``text`` on the clipboard, reporting a refusal to the console. */
-export async function copyText(text: string): Promise<void> {
+/** Put ``text`` on the clipboard; answers whether it landed, reporting a refusal to the console. */
+export async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
+    return true;
   } catch (error) {
     reportFailure("copy", error);
+    return false;
   }
 }
 
@@ -104,16 +106,17 @@ function fieldSelectionOf(element: Element): string {
   return element.value.slice(start, end);
 }
 
+/** Cut fails whole, as the native row does: nothing is deleted unless the copy landed. */
 async function cutFrom(element: Element, selectionText: string): Promise<void> {
   if (isFieldElement(element)) {
     const selected = fieldSelectionOf(element);
     if (selected === "") return;
-    await copyText(selected);
+    if (!(await copyText(selected))) return;
     element.setRangeText("", element.selectionStart ?? 0, element.selectionEnd ?? 0, "end");
     element.dispatchEvent(new Event("input", { bubbles: true }));
     return;
   }
-  await copyText(selectionText);
+  if (!(await copyText(selectionText))) return;
   (element as HTMLElement).focus();
   element.ownerDocument.execCommand("delete");
 }

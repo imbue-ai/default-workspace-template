@@ -109,6 +109,21 @@ describe("standardContextMenuRows", () => {
     await vi.waitFor(() => expect(field.value).toBe(" world"));
   });
 
+  it("leaves a field's selection in place, with a warning, when the clipboard refuses the cut", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    clipboard.writeText = vi.fn(async () => {
+      throw new Error("not focused");
+    });
+    const field = byId("field") as HTMLInputElement;
+    field.setSelectionRange(0, 5);
+    const rows = standardContextMenuRows(targetOf(field));
+    (rows[0] as { key: string; onSelect: () => void }).onSelect();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("not focused")));
+    expect((rows[0] as { key: string }).key).toBe("cut");
+    expect(field.value).toBe("hello world");
+    warn.mockRestore();
+  });
+
   it("pastes into and selects all of an input without a selection API through execCommand", async () => {
     const mail = byId("mail") as HTMLInputElement;
     const execCommand = vi.fn(() => true);
