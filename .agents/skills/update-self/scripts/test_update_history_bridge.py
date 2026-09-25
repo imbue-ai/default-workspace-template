@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 import update_self
-from update_history_bridge import REWRITTEN_PATHS
+from update_history_bridge import DEFAULT_STATE_PATH, REWRITTEN_PATHS
 
 # The rewrite runs git-filter-repo through uvx, which downloads it on a cold cache.
 pytestmark = pytest.mark.acceptance
@@ -242,7 +242,7 @@ def test_bridge_history_drops_the_graft_once_the_merge_has_landed(
     assert result["bridged"] is False
     assert result["dropped"] == twin
     assert _replace_refs(workspace) == []
-    assert not (workspace / "data/.state/update-self/history-bridge.json").exists()
+    assert not (workspace / DEFAULT_STATE_PATH).exists()
     assert _git(workspace, "merge-base", "HEAD", "minds-v2") == _git(
         workspace, "rev-parse", "minds-v2^{commit}"
     )
@@ -270,7 +270,7 @@ def test_bridge_history_replaces_a_graft_an_earlier_pass_left(
         *_git(workspace, "rev-parse", f"{stale}^@").split(),
         unrelated,
     )
-    state = workspace / "data/.state/update-self/history-bridge.json"
+    state = workspace / DEFAULT_STATE_PATH
     state.parent.mkdir(parents=True)
     state.write_text(json.dumps({"twin": stale, "fork_point": unrelated}))
 
@@ -349,7 +349,7 @@ def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
 
     assert json.loads(capsys.readouterr().out)["dropped"] == twin
     assert _replace_refs(workspace) == []
-    assert list((workspace / "data/.state/update-self").iterdir()) == []
+    assert list((workspace / DEFAULT_STATE_PATH).parent.iterdir()) == []
     assert (
         subprocess.run(
             ["git", "merge-base", "HEAD", "minds-v2"], cwd=workspace
@@ -370,7 +370,7 @@ def test_bridge_history_drop_forgets_a_record_whose_graft_is_gone(
     )
 
     assert json.loads(capsys.readouterr().out)["dropped"] == twin
-    assert list((workspace / "data/.state/update-self").iterdir()) == []
+    assert list((workspace / DEFAULT_STATE_PATH).parent.iterdir()) == []
 
 
 def test_a_descendant_with_the_fork_tree_is_the_merge_base(
