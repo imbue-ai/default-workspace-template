@@ -1,0 +1,243 @@
+{
+  "models": [
+    {
+      "id": "claude-3-5-haiku",
+      "family": "haiku",
+      "display_name": "Haiku 3.5",
+      "capabilities": []
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "family": "haiku",
+      "display_name": "Haiku 4.5",
+      "capabilities": [
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-3-5-sonnet",
+      "family": "sonnet",
+      "display_name": "Sonnet 3.5",
+      "capabilities": []
+    },
+    {
+      "id": "claude-3-7-sonnet",
+      "family": "sonnet",
+      "display_name": "Sonnet 3.7",
+      "capabilities": []
+    },
+    {
+      "id": "claude-sonnet-4-0",
+      "family": "sonnet",
+      "display_name": "Sonnet 4",
+      "capabilities": [
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "family": "sonnet",
+      "display_name": "Sonnet 4.5",
+      "capabilities": [
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "family": "sonnet",
+      "display_name": "Sonnet 4.6",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "adaptive_thinking",
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-sonnet-5",
+      "family": "sonnet",
+      "display_name": "Sonnet 5",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "mid_conv_system",
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-opus-4-0",
+      "family": "opus",
+      "display_name": "Opus 4",
+      "capabilities": [
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-opus-4-1",
+      "family": "opus",
+      "display_name": "Opus 4.1",
+      "capabilities": [
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-opus-4-5",
+      "family": "opus",
+      "display_name": "Opus 4.5",
+      "capabilities": [
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-opus-4-6",
+      "family": "opus",
+      "display_name": "Opus 4.6",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "adaptive_thinking",
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-opus-4-7",
+      "family": "opus",
+      "display_name": "Opus 4.7",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "context_management"
+      ]
+    },
+    {
+      "id": "claude-opus-4-8",
+      "family": "opus",
+      "display_name": "Opus 4.8",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "mid_conv_system",
+        "mid_conv_tool_change",
+        "context_management",
+        "fast_mode",
+        "lean_prompt"
+      ]
+    },
+    {
+      "id": "claude-opus-5",
+      "family": "opus",
+      "display_name": "Opus 5",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "mid_conv_system",
+        "mid_conv_tool_change",
+        "context_management",
+        "thinking_disabled_effort_cap",
+        "fast_mode",
+        "lean_prompt",
+        "refusal_fallback",
+        "opus_5_prompt_bundle"
+      ]
+    },
+    {
+      "id": "claude-opus-5-5",
+      "family": "opus",
+      "display_name": "Opus 5.5",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "rejects_disabled_thinking",
+        "mid_conv_system",
+        "mid_conv_tool_change",
+        "per_turn_effort",
+        "per_turn_timing",
+        "context_management",
+        "fast_mode",
+        "lean_prompt",
+        "refusal_fallback",
+        "opus_5_5_prompt_bundle"
+      ]
+    },
+    {
+      "id": "claude-fable-5",
+      "family": "fable",
+      "display_name": "Fable 5",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "rejects_disabled_thinking",
+        "mid_conv_system",
+        "mid_conv_tool_change",
+        "context_management",
+        "lean_prompt",
+        "fable_5_mitigations",
+        "refusal_fallback"
+      ]
+    },
+    {
+      "id": "claude-fable-5-1",
+      "family": "fable",
+      "display_name": "Fable 5.1",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "rejects_disabled_thinking",
+        "mid_conv_system",
+        "mid_conv_tool_change",
+        "per_turn_effort",
+        "per_turn_timing",
+        "context_management",
+        "lean_prompt",
+        "fable_5_mitigations",
+        "refusal_fallback",
+        "fable_5_1_prompt_bundle"
+      ]
+    },
+    {
+      "id": "claude-mythos-5",
+      "family": "mythos",
+      "display_name": "Mythos 5",
+      "capabilities": []
+    },
+    {
+      "id": "claude-mythos-5-1",
+      "family": "mythos",
+      "display_name": "Mythos 5.1",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "rejects_disabled_thinking",
+        "mid_conv_system",
+        "mid_conv_tool_change",
+        "per_turn_timing",
+        "context_management",
+        "lean_prompt",
+        "fable_5_mitigations",
+        "fable_5_1_prompt_bundle"
+      ]
+    }
+  ],
+  "aliases": {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5",
+    "fable": "claude-fable-5-1"
+  }
+}
