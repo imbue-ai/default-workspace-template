@@ -10,7 +10,6 @@ import {
   describeElement,
   elementOfTarget,
   isEditableElement,
-  isReferenceFileName,
   mintReferenceId,
   referenceBlock,
   referenceEnvelopeOf,
@@ -175,13 +174,9 @@ describe("the reference id and its file", () => {
     for (const id of ids) expect(id).toMatch(REFERENCE_ID_PATTERN);
   });
 
-  it("names the file after the id, and recognises only such a name", () => {
+  it("names the file after the id", () => {
     const id = mintReferenceId();
     expect(referenceFileNameOf(id)).toBe(`${id}.json`);
-    expect(isReferenceFileName(`${id}.json`)).toBe(true);
-    expect(isReferenceFileName(id)).toBe(false);
-    expect(isReferenceFileName("REF-1.json")).toBe(false);
-    expect(isReferenceFileName("plan.json")).toBe(false);
   });
 
   it("writes the file pretty-printed with a final newline", () => {

@@ -229,11 +229,6 @@ export function referenceFileNameOf(referenceId: string): string {
   return `${referenceId}.json`;
 }
 
-/** Whether a file name is a reference file's, as ``referenceFileNameOf`` names one. */
-export function isReferenceFileName(fileName: string): boolean {
-  return fileName.endsWith(".json") && REFERENCE_ID_PATTERN.test(fileName.slice(0, -".json".length));
-}
-
 /** Build the reference of ``element`` for a right-click at ``click`` on a page with ``scope``. */
 export function describeElement(element: Element, click: ReferenceClick, scope: ReferenceScope): ElementReference {
   const ownerDocument = element.ownerDocument;

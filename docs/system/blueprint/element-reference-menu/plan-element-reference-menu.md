@@ -260,7 +260,7 @@ Installs the generic listener with the Mithril menu and drafts through `connecti
 
 In `system/libs/workspace_ui/src/`:
 
-- `element_reference.ts`: `ElementReference`, `describeElement(target, click, scope)`, `uniqueSelectorFor(element)`, `mintReferenceId()`, `referenceFileNameOf(id)`, `isReferenceFileName(name)`, `referenceBlock(reference)`, `referenceFileText(envelope)`, `referenceSummaryOf(reference)`, and `referenceEnvelopeOf(json)`.
+- `element_reference.ts`: `ElementReference`, `describeElement(target, click, scope)`, `uniqueSelectorFor(element)`, `mintReferenceId()`, `referenceFileNameOf(id)`, `referenceBlock(reference)`, `referenceFileText(envelope)`, `referenceSummaryOf(reference)`, and `referenceEnvelopeOf(json)`.
   Pure over the DOM: no framework, no message primitive.
 - `context_menu_rows.ts`: `ContextMenuTarget` (the element, the selection text, the click), `standardContextMenuRows(target)`, `elementReferenceRows(reference, draft, isDraftAvailable)` (Explain and Modify grey with the section 4.7 tooltip when the last is false), the prompts (`explainPromptOf(id)`, `modifyPromptOf(id)`), and the clipboard helpers.
   Its row type is structurally an `ActionRow` or a `DividerRow` of the shared Menu, so the built-ins pass the rows straight to `createMenu` and the framework-free renderer draws the same objects.
