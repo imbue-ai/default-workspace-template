@@ -1,0 +1,1 @@
+The `submit-upstream-changes` mngr-changes reference now names the real recipe (`just dwt-mngr-pin`, not the nonexistent `just pin-template-mngr`) and mentions that a developer with both checkouts may pin a template branch to an unmerged mngr commit on the private mngr-internal repo (`just dwt-mngr-pin-internal`), which is not something an agent in a workspace does.
