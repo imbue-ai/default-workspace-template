@@ -269,10 +269,10 @@ selector leaves out, that is a mapping to add (below).
 
 **An unclassified path.** When the output ends with an `# unclassified` block,
 each listed path is one the selector could not map, and the full root suite is
-among the lines in its place: run the lines as printed. That run fails
-`test_every_tracked_path_is_classified`, which lists every tracked path the
-mapping misses (these, and any the tree already carried), and a mapping for
-each is the fix. Decide which suites can actually observe a change to that
+among the lines in its place: run the lines as printed. For a listed path the
+tree still holds, that run fails `test_every_tracked_path_is_classified`, which
+lists every tracked path the mapping misses (these, and any the tree already
+carried), and a mapping for each is the fix. Decide which suites can actually observe a change to that
 path, record it in `system/config/test_selection_overrides.toml` (a
 `[[consumer]]` entry; an empty `suites` when no suite beyond the always-run set
 can observe it) as part of your change, and re-run `select-tests` to confirm
