@@ -129,7 +129,7 @@ The reference rows, always present:
 | Modify this element... | Drafts `Modify this element:`, a blank line, the reference block, a blank line |
 
 "Editable" means an `input` (but not one of the button-like types), a `textarea`, or an element inside a `contenteditable` region.
-A row that fails at run time (the clipboard refused) is reported with the page's own notice mechanism where it has one, and otherwise to the console; nothing else changes.
+A row that fails at run time (the clipboard refused) reports the failure to the console; nothing else changes.
 
 ### 3.4 Where a draft goes
 
