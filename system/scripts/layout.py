@@ -27,9 +27,10 @@ Subcommands:
 
 A *desktop* is a named, shared collection of *windows*: each window is one page of an app,
 named by its app and the path under the app's origin it is at (``chat`` at ``/?chat=<id>``,
-``terminal`` at ``/?session=<name>``, ``files`` at ``/notes/``). Windows and desktops are shared
-by everyone; where each window sits on a screen (its frame, whether it is minimized or
-maximized) is one client's own *placement*. Every browser *client* has one active desktop.
+``terminal`` at ``/?session=<name>``, ``files`` at ``/home/user/workspace/data/notes/``). Windows
+and desktops are shared by everyone; where each window sits on a screen (its frame, whether it
+is minimized or maximized) is one client's own *placement*. Every browser *client* has one
+active desktop.
 
 A window is named by its id (``win-<hex>``, from ``desktops`` or the ``open`` that made it), by
 ``self`` (the caller's own chat window), or by an app name (that app's most recently focused
