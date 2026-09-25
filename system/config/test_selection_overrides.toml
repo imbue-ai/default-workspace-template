@@ -78,31 +78,6 @@ paths = [
 suites = []
 note = "covered by the always-run guards, or read by no test"
 
-[[integration]]
-test = "system/scripts/test_require_create_account.py"
-paths = [".mngr/settings.toml", "system/scripts/require_create_account.py"]
-note = "runs the committed create gate through the real mngr create"
-
-[[integration]]
-test = "system/scripts/test_collect_bug_report_diagnostics_installed_mngr.py"
-paths = [".mngr/settings.toml", "system/scripts/collect_bug_report_diagnostics.py"]
-note = "fetches transcripts through the real installed mngr"
-
-[[integration]]
-test = "system/scripts/test_lead_address_by_id.py"
-paths = [".agents/skills/launch-task/scripts/*.py", ".agents/shared/references/worker-reporting.md"]
-note = "renames a real mngr agent and addresses it by id"
-
-[[integration]]
-test = "system/scripts/test_claude_plugin_first_session.py"
-paths = [".mngr/settings.toml", "system/scripts/claude_update_plugin.sh"]
-note = "provisions the plugin for a real claude session"
-
-[[integration]]
-test = "system/scripts/test_codex_plugin_first_session.py"
-paths = [".mngr/settings.toml", "system/scripts/codex_update_plugin.sh"]
-note = "provisions the plugin for a real codex session"
-
 [[consumer]]
 paths = ["system/config/test_selection_overrides.toml"]
 suites = ["system/libs/app_manifest/test_repo_test_selection.py"]
@@ -154,3 +129,28 @@ paths = [
 ]
 suites = []
 note = "provisioning, launcher and manual-verification scripts no test runs; the always-run guards check their wiring"
+
+[[integration]]
+test = "system/scripts/test_require_create_account.py"
+paths = [".mngr/settings.toml", "system/scripts/require_create_account.py"]
+note = "runs the committed create gate through the real mngr create"
+
+[[integration]]
+test = "system/scripts/test_collect_bug_report_diagnostics_installed_mngr.py"
+paths = [".mngr/settings.toml", "system/scripts/collect_bug_report_diagnostics.py"]
+note = "fetches transcripts through the real installed mngr"
+
+[[integration]]
+test = "system/scripts/test_lead_address_by_id.py"
+paths = [".agents/skills/launch-task/scripts/*.py", ".agents/shared/references/worker-reporting.md"]
+note = "renames a real mngr agent and addresses it by id"
+
+[[integration]]
+test = "system/scripts/test_claude_plugin_first_session.py"
+paths = [".mngr/settings.toml", "system/scripts/claude_update_plugin.sh"]
+note = "provisions the plugin for a real claude session"
+
+[[integration]]
+test = "system/scripts/test_codex_plugin_first_session.py"
+paths = [".mngr/settings.toml", "system/scripts/codex_update_plugin.sh"]
+note = "provisions the plugin for a real codex session"
