@@ -388,11 +388,10 @@ def test_create_chat_refuses_a_message_beside_a_minted_id(agent_manager: AgentMa
     agent_manager.stop()
 
 
-def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
+def test_a_chat_created_with_a_message_starts_on_it(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """A chat created with its own first message carries it; ``/welcome`` is only for a chat
-    that starts with nothing to say (``launch_role_templates``)."""
+    """A chat created with its own first message carries it on its provisional record."""
     q = broadcaster.register()
 
     seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
@@ -405,20 +404,31 @@ def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
     assert proto_msg["message"] == "Teach me about Mind"
 
 
-@pytest.mark.parametrize(
-    ("message", "is_fast", "expected"),
-    [
-        ("", True, ("welcome", "fast")),
-        ("", False, ("welcome",)),
-        ("Teach me about Mind", True, ("fast",)),
-        ("Teach me about Mind", False, ()),
-    ],
-)
-def test_launch_role_templates_follow_the_message_and_the_chats_fast_mode(
-    message: str, is_fast: bool, expected: tuple[str, ...]
+@pytest.mark.parametrize(("is_fast", "expected"), [(True, ("fast",)), (False, ())])
+def test_launch_role_templates_follow_the_chats_fast_mode(is_fast: bool, expected: tuple[str, ...]) -> None:
+    """A chat starts fast when its fast mode calls for it; nothing else rides the templates."""
+    assert launch_role_templates(is_fast) == expected
+
+
+def test_a_chat_created_with_nothing_to_say_is_created_without_a_first_message(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every chat that starts silent is greeted; a chat starts fast when its fast mode calls for it."""
-    assert launch_role_templates(message, is_fast) == expected
+    """No greeting rides a silent create: the chat waits for the user's first message."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created.chat_id) is None, 10, "the provisional chat's completion"
+        )
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert "--message" not in argv_line
+    assert "--template welcome" not in argv_line
 
 
 def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_folder(
@@ -548,7 +558,7 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
 ) -> None:
     """The user's first message launches the chat's first real agent: a fresh id under the
     chat's, joining the record as its second member, with the membership labels a handoff's
-    successor carries, the message it was sent, and no ``/welcome``."""
+    successor carries, and the message it was sent."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
@@ -577,7 +587,7 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
     assert templates == ["chat", "fast"]
     assert f"chat_id={seeded.chat_id}" in argv and "chat_seq=2" in argv
-    assert "Let's" in argv_line and "/welcome" not in argv_line
+    assert "Let's" in argv_line
 
 
 def test_a_seeded_chats_launch_carries_the_conversation_the_chat_opened_on(
@@ -1623,8 +1633,8 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
 
 
 def test_chat_create_argv_carries_a_seeded_first_message_only_when_given() -> None:
-    """The seeded message rides the create as ``--message`` (delivered once the harness is ready,
-    like ``/welcome``); a plain chat's argv carries no ``--message`` at all."""
+    """The seeded message rides the create as ``--message`` (delivered once the harness is ready);
+    a plain chat's argv carries no ``--message`` at all."""
     seeded = _chat_create_argv(initial_message="/use-template https://github.com/example/a-template")
     assert_mngr_argv_valid(seeded)
     assert seeded[seeded.index("--message") + 1] == "/use-template https://github.com/example/a-template"
@@ -1688,15 +1698,15 @@ def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver(
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
-    """The launch templates (`welcome`, `fast`) stack via extra_role_templates; the
-    resulting argv must resolve against the live CLI."""
+    """The launch template (`fast`) stacks via extra_role_templates; the resulting argv must
+    resolve against the live CLI."""
     argv = _chat_create_argv(
         harness=HarnessType.CODEX,
-        extra_role_templates=("welcome", "fast"),
+        extra_role_templates=("fast",),
     )
     assert_mngr_argv_valid(argv)
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == ["chat", "welcome", "fast"]
+    assert templates == ["chat", "fast"]
 
 
 # the chat's originating project (the mngr ``project`` label)
