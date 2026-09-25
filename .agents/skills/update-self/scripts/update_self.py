@@ -77,6 +77,11 @@ belong in tested code rather than agent prose:
     possibly-stale local copy. ``differs`` gates only which SKILL.md prose the
     lead follows, not the path.
 
+``rewrite-history``
+    Give ``HEAD`` a merge base with the target when the workspace predates the
+    template's history rewrite, by rewriting its branches and tags the same way
+    upstream's were. A no-op for every other workspace.
+
 ``apply``
     Land a prepared merge and make the live workspace consistent with it, as
     one atomic, idempotent, rollback-on-failure motion inside a single
@@ -116,9 +121,10 @@ The logic lives in the sibling modules, imported by name from this directory
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
 verdict and record the Mind app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
-``update_environment``, ``update_probes``, ``update_ledger``, and
-``update_apply`` (the apply and recover orchestration). All of it is covered
-by ``update_self_test.py``.
+``update_environment``, ``update_probes``, ``update_ledger``,
+``update_history_rewrite``, and ``update_apply`` (the apply and recover
+orchestration). All of it is covered by ``update_self_test.py`` and
+``update_history_rewrite_test.py``.
 """
 
 from __future__ import annotations
@@ -148,6 +154,7 @@ from update_apply_contract import (
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
 from update_environment import default_sweep_homes
+from update_history_rewrite import DEFAULT_SCRATCH_DIR, HistoryRewriteError, rewrite_history
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -477,6 +484,17 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rewrite_history(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    scratch = Path(args.scratch)
+    print(
+        rewrite_history(
+            repo_root, args.ref, scratch if scratch.is_absolute() else repo_root / scratch
+        ).to_json()
+    )
+    return 0
+
+
 def _parse_worker_bundles(values: list[str] | None) -> dict[str, str] | None:
     """``--worker-bundle APP=PATH`` occurrences as a mapping; None when none were given."""
     if not values:
@@ -770,6 +788,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
 
+    rewrite_parser = sub.add_parser(
+        "rewrite-history",
+        help="Rewrite a workspace that predates the template's history rewrite so "
+        "it shares history with the target again (a no-op otherwise).",
+        parents=[common],
+    )
+    rewrite_parser.add_argument("--ref", required=True, help="The resolved target ref.")
+    rewrite_parser.add_argument(
+        "--scratch",
+        default=DEFAULT_SCRATCH_DIR,
+        help=f"Working dir for the rewrite (default: {DEFAULT_SCRATCH_DIR}).",
+    )
+    rewrite_parser.set_defaults(func=_cmd_rewrite_history)
+
     apply_parser = sub.add_parser(
         "apply",
         help="Land a prepared merge and make the live workspace consistent with "
@@ -967,6 +999,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         AppVersionUnavailableError,
         NoUpdateTargetError,
         ApplyPreconditionError,
+        HistoryRewriteError,
     ) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it

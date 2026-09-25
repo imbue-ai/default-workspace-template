@@ -201,6 +201,21 @@ matches the target.
 capped ref; if they take it, set `$REF` to it and re-run §2a the same way. If
 they decline every option, record `run-status verdict REFUSED --detail "..."`.
 
+**Then give an old workspace a shared history with the target.** The
+template's history was rewritten once, so a workspace created before that
+shares no commit with `$REF` and the worker's merge would have no base. This
+rewrites the workspace's own history the same way; for every other workspace it
+changes nothing:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    rewrite-history --ref "$REF" || exit 1
+```
+
+Either `"rewritten"` value needs nothing from the user. If it exits non-zero,
+nothing live changed: record `run-status verdict STUCK --detail "<the error
+line, in plain terms>"`, surface it, and stop.
+
 ### 3b. Launch
 
 Surface your own chat window first (the Mind app sends the user into this
