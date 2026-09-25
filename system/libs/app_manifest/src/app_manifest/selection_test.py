@@ -11,6 +11,7 @@ from app_manifest.selection import render_selection
 from app_manifest.selection import select_tests
 from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
+from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_dropin
@@ -272,8 +273,8 @@ def test_an_override_naming_a_suite_that_does_not_exist_fails_loudly(workspace: 
 
 
 def test_an_upgraded_lock_entry_runs_the_members_that_depend_on_it(workspace: Path) -> None:
-    base_lock = _lock(corelib_version="0.1.0", requests_version="2.0")
-    head_lock = _lock(corelib_version="0.1.0", requests_version="2.1")
+    base_lock = selection_lock("2.0")
+    head_lock = selection_lock("2.1")
 
     selection = _select(workspace, ["uv.lock"], (base_lock, head_lock))
 
@@ -290,7 +291,7 @@ def test_an_upgraded_lock_entry_runs_the_members_that_depend_on_it(workspace: Pa
 
 
 def test_a_lock_that_only_adds_packages_runs_nothing_beyond_the_adder(workspace: Path) -> None:
-    base_lock = _lock(corelib_version="0.1.0", requests_version="2.0")
+    base_lock = selection_lock("2.0")
     head_lock = base_lock + '\n[[package]]\nname = "newdep"\nversion = "1.0"\nsource = { registry = "https://pypi.org/simple" }\n'
 
     selection = _select(workspace, ["uv.lock", "system/libs/midlib/pyproject.toml"], (base_lock, head_lock))
@@ -303,7 +304,7 @@ def test_a_lock_that_only_adds_packages_runs_nothing_beyond_the_adder(workspace:
 
 
 def test_a_lock_that_does_not_parse_brings_in_the_full_root_suite(workspace: Path) -> None:
-    selection = _select(workspace, ["uv.lock"], ("not [ toml", _lock(corelib_version="0.1.0", requests_version="2.0")))
+    selection = _select(workspace, ["uv.lock"], ("not [ toml", selection_lock("2.0")))
 
     assert _command_lines(selection) == ["uv run pytest"]
     assert any("cannot parse the base uv.lock" in note for note in selection.notes)
@@ -314,44 +315,3 @@ def test_a_lock_with_no_base_to_compare_brings_in_the_full_root_suite(workspace:
 
     assert _command_lines(selection) == ["uv run pytest"]
     assert selection.paths[0].classes == (ChangedPathClass.LOCKFILE,)
-
-
-def _lock(corelib_version: str, requests_version: str) -> str:
-    """A uv.lock for the selection workspace in which corelib depends on requests."""
-    return f"""
-version = 1
-
-[[package]]
-name = "workspace"
-version = "0.1.0"
-source = {{ virtual = "." }}
-
-[[package]]
-name = "corelib"
-version = "{corelib_version}"
-source = {{ editable = "system/libs/corelib" }}
-dependencies = [{{ name = "requests" }}]
-
-[[package]]
-name = "midlib"
-version = "0.1.0"
-source = {{ editable = "system/libs/midlib" }}
-dependencies = [{{ name = "corelib" }}]
-
-[[package]]
-name = "notes"
-version = "0.1.0"
-source = {{ editable = "system/apps/notes" }}
-dependencies = [{{ name = "midlib" }}]
-
-[[package]]
-name = "chat"
-version = "0.1.0"
-source = {{ editable = "system/apps/chat" }}
-dependencies = [{{ name = "corelib" }}]
-
-[[package]]
-name = "requests"
-version = "{requests_version}"
-source = {{ registry = "https://pypi.org/simple" }}
-"""

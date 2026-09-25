@@ -261,6 +261,47 @@ def build_selection_workspace(repo_root: Path) -> None:
     commit_everything(repo_root, "workspace")
 
 
+def selection_lock(requests_version: str) -> str:
+    """A uv.lock for the selection workspace in which corelib depends on requests."""
+    return f"""
+version = 1
+
+[[package]]
+name = "workspace"
+version = "0.1.0"
+source = {{ virtual = "." }}
+
+[[package]]
+name = "corelib"
+version = "0.1.0"
+source = {{ editable = "system/libs/corelib" }}
+dependencies = [{{ name = "requests" }}]
+
+[[package]]
+name = "midlib"
+version = "0.1.0"
+source = {{ editable = "system/libs/midlib" }}
+dependencies = [{{ name = "corelib" }}]
+
+[[package]]
+name = "notes"
+version = "0.1.0"
+source = {{ editable = "system/apps/notes" }}
+dependencies = [{{ name = "midlib" }}]
+
+[[package]]
+name = "chat"
+version = "0.1.0"
+source = {{ editable = "system/apps/chat" }}
+dependencies = [{{ name = "corelib" }}]
+
+[[package]]
+name = "requests"
+version = "{requests_version}"
+source = {{ registry = "https://pypi.org/simple" }}
+"""
+
+
 class ShellStub(MutableModel):
     """A loopback stand-in for the shell that answers every GET with one configured status and body."""
 

@@ -11,6 +11,7 @@ from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
 from app_manifest.testing import init_git_repository
 from app_manifest.testing import run_git
+from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 
@@ -357,13 +358,13 @@ def test_select_tests_over_explicit_paths_matches_the_same_set_read_from_a_diff(
     tmp_path: Path,
 ) -> None:
     build_selection_workspace(tmp_path)
-    base_lock = _selection_lock("2.0")
+    base_lock = selection_lock("2.0")
     write_repo_file(tmp_path, "uv.lock", base_lock)
     commit_everything(tmp_path, "lock")
     changes = {
         "system/libs/midlib/src/midlib/core.py": "VALUE = 2\n",
         "system/scripts/forward_port.py": "PORT = 2\n",
-        "uv.lock": _selection_lock("2.1"),
+        "uv.lock": selection_lock("2.1"),
         "README.md": "# changed\n",
     }
     _branch_with_changes(tmp_path, changes)
@@ -418,20 +419,3 @@ def test_select_tests_needs_a_diff_or_paths(tmp_path: Path) -> None:
     assert neither.exit_code != 0
     assert "--diff-base" in neither.output
     assert ref_without_base.exit_code != 0
-
-
-def _selection_lock(requests_version: str) -> str:
-    return f"""
-version = 1
-
-[[package]]
-name = "corelib"
-version = "0.1.0"
-source = {{ editable = "system/libs/corelib" }}
-dependencies = [{{ name = "requests" }}]
-
-[[package]]
-name = "requests"
-version = "{requests_version}"
-source = {{ registry = "https://pypi.org/simple" }}
-"""
