@@ -1,6 +1,8 @@
 """Unit tests for the shared PathWatcher."""
 
 import threading
+import time
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +59,7 @@ def test_path_watcher_derives_on_start_and_keeps_running(tmp_path: Path) -> None
         fired.set()
 
     # Watch a not-yet-created file, exercising the parent-dir watch path.
-    watcher = PathWatcher.build((tmp_path / "settings.json",), on_change)
+    watcher = PathWatcher.build((tmp_path / "settings.json",), on_change, min_cycle_interval_seconds=0.0)
     watcher.start()
     try:
         assert fired.wait(timeout=5.0)
@@ -83,7 +85,7 @@ def test_path_watcher_stop_releases_an_observer_the_loop_thread_creates_late(tmp
     """
     before = _live_watchdog_threads()
     watched_dir = _StopGatedDirPath(tmp_path)
-    watcher = PathWatcher.build((watched_dir,), lambda: None)
+    watcher = PathWatcher.build((watched_dir,), lambda: None, min_cycle_interval_seconds=0.0)
     # Hold the loop thread short of observer creation until a stop is requested.
     watched_dir.open_gate_when(watcher._stop_event)
 
@@ -101,7 +103,57 @@ def test_path_watcher_stop_releases_an_observer_the_loop_thread_creates_late(tmp
 @pytest.mark.flaky
 @pytest.mark.timeout(30)
 def test_path_watcher_stop_is_idempotent(tmp_path: Path) -> None:
-    watcher = PathWatcher.build((tmp_path,), lambda: None)
+    watcher = PathWatcher.build((tmp_path,), lambda: None, min_cycle_interval_seconds=0.0)
     watcher.start()
     watcher.stop()
     watcher.stop()
+
+
+def _keep_waking(watcher: PathWatcher, seconds: float) -> None:
+    """Set the watcher's wake flag continuously for ``seconds``: what a stream of writes to
+    a watched tree does, one watchdog event after another."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        watcher._wake_event.set()
+
+
+def test_a_stream_of_wakes_is_batched_into_one_refresh_per_minimum_interval(tmp_path: Path) -> None:
+    """Every chat's transcript watcher watches its account's whole projects tree, so any
+    chat's writes wake every watcher; a burst of wakes costs at most one refresh per
+    minimum interval."""
+    started_at: list[float] = []
+    lock = threading.Lock()
+
+    def on_change() -> None:
+        with lock:
+            started_at.append(time.monotonic())
+
+    interval = 0.2
+    watcher = PathWatcher.build((tmp_path,), on_change, min_cycle_interval_seconds=interval)
+    watcher.start()
+    try:
+        waker = threading.Thread(target=_keep_waking, args=(watcher, 0.6))
+        waker.start()
+        waker.join()
+    finally:
+        watcher.stop()
+
+    with lock:
+        cycles = list(started_at)
+    # 0.6s of wakes at one refresh per 0.2s, plus the initial derive and slack for the
+    # last refresh landing just after the burst.
+    assert 2 <= len(cycles) <= 6
+    gaps = [later - earlier for earlier, later in pairwise(cycles)]
+    assert min(gaps) >= interval * 0.9
+
+
+def test_stopping_a_batched_watcher_does_not_wait_out_its_interval(tmp_path: Path) -> None:
+    derived = threading.Event()
+    watcher = PathWatcher.build((tmp_path,), derived.set, min_cycle_interval_seconds=30.0)
+    watcher.start()
+    assert derived.wait(timeout=5.0)
+    watcher._wake_event.set()
+
+    stop_started_at = time.monotonic()
+    watcher.stop()
+    assert time.monotonic() - stop_started_at < 2.0

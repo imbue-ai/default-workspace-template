@@ -30,6 +30,7 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
 from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
 from imbue.system_interface.testing import build_test_state
@@ -288,7 +289,9 @@ if sys.argv[1:] == ["confirm-last"]:
 if sys.argv[1:] == ["rollback-last"]:
     current = json.loads(record.read_text())
     current["progress"] = "Reverting the update"
-    record.write_text(json.dumps(current))
+    scratch = record.with_name(record.name + ".tmp")
+    scratch.write_text(json.dumps(current))
+    os.replace(scratch, record)
     threading.Event().wait({rollback_hold_seconds})
 sys.exit(0)
 """
@@ -306,24 +309,22 @@ def write_rollback_point(
     """The record an apply run with ``--keep-rollback-point`` leaves, in the apply's own shape (its extra
     fields included), under ``repo_root``."""
     path = repo_root / LAST_GOOD_RECORD_REL
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
-                "rollback_to": "def5678def5678def5678def5678def5678def56",
-                "applied_at": 1_780_000_000.0,
-                "driven_by": "mngr/update-widgets",
-                "snapshots": [
-                    {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
-                ],
-                "programs": list(programs) if programs is not None else list(apps),
-                "apps": list(apps),
-                "needs_system_services_restart": needs_system_services_restart,
-                "progress": progress,
-                "outcome": outcome,
-            }
-        )
+    write_json_atomic(
+        path,
+        {
+            "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
+            "rollback_to": "def5678def5678def5678def5678def5678def56",
+            "applied_at": 1_780_000_000.0,
+            "driven_by": "mngr/update-widgets",
+            "snapshots": [
+                {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
+            ],
+            "programs": list(programs) if programs is not None else list(apps),
+            "apps": list(apps),
+            "needs_system_services_restart": needs_system_services_restart,
+            "progress": progress,
+            "outcome": outcome,
+        },
     )
     return path
 
