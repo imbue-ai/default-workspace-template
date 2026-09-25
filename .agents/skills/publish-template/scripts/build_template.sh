@@ -10,7 +10,7 @@
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
-# /welcome rewrite + version-history removal + boot smoke-check + single commit.
+# README rewrite + version-history removal + boot smoke-check + single commit.
 # It does NOT create the
 # GitHub repo or push, and it deliberately leaves two things unfinished for the
 # worker to complete before reporting done: the manifest's FILL-IN blocks (real
@@ -402,7 +402,7 @@ stage_snapshot() {
 
 # If the assembled tree is identical to BASE_REF's tree, there is nothing to
 # publish. Compare via git: stage everything, then diff the index tree against
-# BASE_REF's tree. (This runs before manifest/thumbnail/welcome writes, which
+# BASE_REF's tree. (This runs before the manifest/thumbnail/README writes, which
 # would themselves create a diff.)
 stage_snapshot
 ASSEMBLED_TREE="$(git write-tree)"
@@ -695,62 +695,7 @@ cat > "$THUMBNAIL" <<THUMB_EOF
 </svg>
 THUMB_EOF
 
-# 8. write the template-specific /welcome into the SNAPSHOT
-
-# The published repo ships its OWN welcome skill, generated here by overwriting
-# .agents/skills/welcome/SKILL.md in the assembled tree. The TEMPLATE's welcome
-# skill is deliberately untouched by the templates feature -- no marker
-# region, no takeover branch; the template handles changing the welcome
-# entirely within the snapshot it publishes. Deterministic full-file write,
-# never an LLM freeform edit; idempotent across accumulated publishes (each
-# publish regenerates it targeting the newly-published slug, the latest).
-welcome_description_yaml="$(yaml_scalar "Greet the user when a new project starts. This mind was created from the ${TITLE} template, so the welcome introduces that template and immediately starts the adaptation conversation.")"
-WELCOME_FILE=".agents/skills/welcome/SKILL.md"
-mkdir -p "$(dirname "$WELCOME_FILE")"
-cat > "$WELCOME_FILE" <<WELCOME_EOF
----
-name: welcome
-description: ${welcome_description_yaml}
----
-
-# Welcome the user (template: ${TITLE})
-
-This mind was created from a template -- a published snapshot of apps
-another mind built:
-
-- Title: ${TITLE}
-- Slug: \`${SLUG}\`
-- Description: ${manifest_description}
-- Manifest: \`${MANIFEST}\` (at the repo root, with \`${MANIFEST_TOML}\` beside it)
-
-Do ALL of the following in your FIRST response, in the same turn, without
-waiting to be asked:
-
-1. Open with a short CUSTOM welcome that names **${TITLE}** and gives the
-   one-line description above. Do NOT use a generic "Welcome to Mind"
-   greeting and do NOT offer a generic suggestions list.
-2. Immediately read \`${MANIFEST}\` at the repo root (reading the
-   manifest in the first turn is required).
-3. In plain, non-technical language, present what the template is and
-   what it needs from the user -- name the manifest's activation requirements
-   (the connectors/permissions it runs on). Then ask whether they want to hook it
-   up to their own accounts now (e.g. "Want me to connect this to your own
-   Slack?"). End your first response on THAT question. This is the
-   \`use-template\` skill's template path; the manifest's "How to adapt
-   it" section is the full script: if they say yes, ACTIVATE FIRST -- initiate
-   each \`requires_permission\` via a latchkey permission request, get the
-   app showing THEIR OWN DATA (that is the definition of working; a running
-   service is not), invite them to take a look -- and only then ask how they
-   want to adapt it.
-
-This repo holds exactly one template. If \`${MANIFEST_TOML}\` lists
-\`[[lineage]]\` entries, those are the templates this one was built on --
-each with the repo URL and commit it was taken at, so you can go read any of
-them at the exact state that was used. They are provenance, not something to
-adapt here.
-WELCOME_EOF
-
-# 8.5 overwrite README.md to describe the template
+# 8. overwrite README.md to describe the template
 
 # The clean base's README describes the generic default-workspace-template.
 # That is wrong for a published template: the repo's landing page -- the
@@ -818,7 +763,7 @@ machine-readable half (recipe, requirements, and the environment it needs
 installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
 README_EOF
 
-# 8.6 remove the version history so it never ships in a template
+# 8.5 remove the version history so it never ships in a template
 
 # docs/VERSION_HISTORY.md is WORKSPACE-only, never part of a template: it records
 # where a mind came from and every template it has published (slugs, repo

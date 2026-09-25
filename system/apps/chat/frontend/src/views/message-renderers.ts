@@ -109,9 +109,9 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
  * Hide auth-error turns from the pre-login prefix once login has recovered.
  *
  * A fresh chat with no Claude credentials produces a run of "Not logged in"
- * assistant messages before the user authenticates. Once login succeeds and
- * /welcome is resent, the first visible turn should be the friendly greeting,
- * not the prior failed attempts.
+ * assistant messages before the user authenticates. Once login succeeds, the
+ * first visible turn should be the first successful reply, not the prior
+ * failed attempts.
  *
  * Restricted to the PREFIX of the transcript (turns that occurred before any
  * successful assistant message). A mid-session token expiration -- where the

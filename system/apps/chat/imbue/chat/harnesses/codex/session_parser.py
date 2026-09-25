@@ -143,14 +143,14 @@ def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     return "" if raw is None else str(raw)
 
 
-def _tk_output_text(output: str) -> str:
-    """Unwrap code-mode command results for decoration, keeping raw detail unchanged.
+def _unwrap_command_result_envelopes(output: str) -> str:
+    """Unwrap code-mode command results for the structured facts, keeping raw detail unchanged.
 
     ``text(result)`` prints a JSON envelope; ``text(result.output)`` prints plain stdout.
     Adjacent calls can concatenate envelopes on one line. Decode only complete command
     result envelopes, never arbitrary JSON embedded in prose or a command's stdout.
     """
-    if "-step-" not in output:
+    if '"chunk_id"' not in output:
         return output
     decoder = json.JSONDecoder()
     lines: list[str] = []
@@ -161,7 +161,7 @@ def _tk_output_text(output: str) -> str:
             try:
                 value, end = decoder.raw_decode(remaining)
             except (json.JSONDecodeError, RecursionError) as exc:
-                logger.warning("Could not decode code-mode task output: {}", exc)
+                logger.warning("Could not decode a code-mode command result envelope: {}", exc)
                 break
             if not isinstance(value, dict) or not isinstance(value.get("chunk_id"), str):
                 break
@@ -646,6 +646,7 @@ def parse_lines(
         # The structured facts lifted from the full output, which itself stays off the
         # event (the payload-free wire contract): the request objects the permission and
         # secret cards render from, the tk stamp the step view reads, and the error snippet.
+        unwrapped_output = _unwrap_command_result_envelopes(raw_output)
         # A failed code-mode script writes output starting with "Script failed".
         is_error = raw_output.startswith("Script failed")
         event: dict[str, Any] = {
@@ -659,11 +660,11 @@ def parse_lines(
             "is_error": is_error,
             "message_uuid": event_id,
         }
-        stamp_echoed_requests(event, raw_output)
+        stamp_echoed_requests(event, unwrapped_output)
         snippet = error_snippet(raw_output) if is_error else ""
         if snippet:
             event["error_snippet"] = snippet
-        stamped_tk = tk_stamp(_tk_output_text(raw_output))
+        stamped_tk = tk_stamp(unwrapped_output)
         if stamped_tk:
             event["tk_stamp"] = stamped_tk
         return [event]

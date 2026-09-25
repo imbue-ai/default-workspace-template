@@ -142,7 +142,7 @@ def test_map_legacy_path_flags_the_overloaded_prefixes_as_ambiguous() -> None:
 
 def test_map_legacy_path_leaves_current_layout_paths_alone() -> None:
     for path in (
-        ".agents/skills/welcome/SKILL.md",
+        ".agents/skills/caretaker/SKILL.md",
         "system/apps/browser/README.md",
         "data/memories/note.md",
     ):

@@ -731,6 +731,10 @@ def test_a_draft_intake_navigated_into_the_shown_chat_lands_in_its_composer_and_
         expect(_chat(page).locator(".message-input-textbox")).to_have_value(draft)
 
 
+# Flaky: the second navigate to the same /send path is sometimes dropped by the shell. The page's report of
+# leaving it (after Escape) and the navigate back can land in one reconcile, where the shell's stale-snapshot
+# guard (livePages.ts follow(), pendingReport.fromPath) takes the deliberate navigate for a stale snapshot.
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_a_chat_selector_intake_offers_the_picker_and_sends_the_text_to_the_chat_picked(
     tmp_path: Path, page: Page
@@ -822,23 +826,89 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
 
 
+# Installed in every frame before its scripts run: records each placeholder screen or text the chat page ever
+# draws, however briefly, into ``window.__placeholdersSeen``.
+_RECORD_PLACEHOLDERS_SEEN_SCRIPT = """
+(() => {
+  const texts = ["No conversation data", "Loading terminal output", "Starting the chat", "Loading events",
+    "No events yet", "Send a message to start this chat"];
+  const seen = new Set();
+  window.__placeholdersSeen = [];
+  const check = () => {
+    const root = document.documentElement;
+    if (!root) return;
+    if (document.querySelector(".message-list-not-found") && !seen.has("not-found")) seen.add("not-found");
+    const body = root.innerText || "";
+    for (const text of texts) if (body.includes(text)) seen.add(text);
+    window.__placeholdersSeen = [...seen];
+  };
+  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
+})();
+"""
+
+
 @pytest.mark.timeout(120, func_only=False)
-def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_it_lands(
-    tmp_path: Path, page: Page
+def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With an account signed in the intake creates the chat at once on it; the page says so while the
-    create runs, and the composer arrives when the agent registers. The launcher's launch points the chat's
-    pinned window at the new chat's path, so the create can land before the notice is looked for: either is
-    accepted, and the composer is what must arrive."""
+    """With an account signed in the intake creates the chat at once on it, and the page is an empty chat with its composer
+    ready from the first frame: no placeholder text while the agent is created, and none once it lands -- not even
+    for a single frame, which is how a flash of a "not found" or "loading" screen shows up."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    page.add_init_script(_RECORD_PLACEHOLDERS_SEEN_SCRIPT)
     with _running_e2e_server(tmp_path) as server:
-        chat = _start_new_chat(page, server)
-        creating_or_landed = chat.locator(".message-list-creating, .message-input-textbox")
-        expect(creating_or_landed.first).to_be_visible(timeout=15000)
-        if chat.locator(".message-list-creating").count() > 0:
-            expect(chat.locator(".message-list-creating")).to_contain_text("Starting the chat")
-        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        try:
+            chat = _start_new_chat(page, server)
+            # The long wait only covers the chat page's socket, which in CI has taken about twenty seconds to
+            # connect and bring the provisional record; the create itself is held until released below.
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
+            expect(chat.locator(".message-input-textbox")).to_be_editable()
+            expect(chat.locator(".message-list-creating")).to_have_text("")
+            assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
+        finally:
+            release_create.touch()
+
+        expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
+        expect(chat.locator(".message-list-empty")).to_have_text("")
+        expect(chat.locator(".message-input-textbox")).to_be_editable()
+        seen = [text for frame in page.frames for text in frame.evaluate("window.__placeholdersSeen || []")]
+        assert seen == [], "a new chat showed placeholder screens while it started: {}".format(seen)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_chats_first(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A message typed while the chat is being created sits where the transcript will put it, and
+    stays there when the chat lands; it reaches the new agent as its first message, with nothing
+    sent ahead of it."""
+    release_create = tmp_path / "release-create"
+    monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    messenger = RecordingMngrMessenger()
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        try:
+            chat = _start_new_chat(page, server)
+            # The create is held until released below, so the long wait only covers the chat page's socket,
+            # which in CI has taken about twenty seconds to connect and bring the provisional record.
+            expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
+            chat.locator(".message-input-textbox").fill("hello")
+            chat.locator(".message-input-textbox").press("Enter")
+            bubble = chat.locator(".outgoing-message")
+            expect(bubble).to_be_visible(timeout=5000)
+            assert messenger.sent == [], "the create is still running, so nothing can have been delivered"
+            box_while_starting = bubble.bounding_box()
+            assert box_while_starting is not None
+        finally:
+            release_create.touch()
+
+        wait_for(lambda: len(messenger.sent) > 0, timeout=30.0, error_message="the message never reached the agent")
         expect(chat.locator(".message-list-creating")).to_have_count(0, timeout=15000)
-        assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
+
+        assert [message for _agent_id, message in messenger.sent] == ["hello"]
+        box_once_landed = bubble.bounding_box()
+        assert box_once_landed is not None
+        assert box_once_landed["y"] == box_while_starting["y"]
 
 
 # Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at

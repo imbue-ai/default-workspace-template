@@ -79,7 +79,7 @@ export enum UserMessageKind {
   /** A skill expansion whose body is relocated into its `Tool: Skill` block. */
   SkillExpansion = "skill-expansion",
   /**
-   * A message with no visual at all: the seeded `/welcome`, and -- via the
+   * A message with no visual at all: an older chat's `/welcome`, and -- via the
    * general `isMeta` rule in classifyUserMessage -- every framework-injected,
    * model-only message that no explicit detector surfaces (the resume-
    * continuation marker, the image coordinate note, MCP-resource dumps, hook
@@ -156,7 +156,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   [UserMessageKind.Hidden]: {
     rail: Rail.None,
     boundary: false,
-    netVisual: "No DOM at all -- fully invisible (e.g. the seeded '/welcome').",
+    netVisual: "No DOM at all -- fully invisible (e.g. an older chat's '/welcome').",
   },
   [UserMessageKind.PermissionResolution]: {
     rail: Rail.None,

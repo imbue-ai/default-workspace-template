@@ -213,7 +213,7 @@ class MessageDisplay(FrozenModel):
 
 
 def _match_welcome(content: str) -> MessageDisplay | None:
-    """The seeded ``/welcome`` invocation the desktop client sends every new agent."""
+    """The ``/welcome`` greeting chats used to open with, still in older chats' transcripts."""
     if content.strip() != "/welcome":
         return None
     return MessageDisplay(display=DisplayKind.HIDDEN)
