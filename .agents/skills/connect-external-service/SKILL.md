@@ -17,13 +17,12 @@ explain; do not ask them to choose a mechanism.
 
 | # | Method | Workable when | What you say | Read |
 |---|---|---|---|---|
-| 1 | **Builtin latchkey service** | `latchkey services list` names the service, possibly under a name other than the product's (Notion is `notion-mcp`). `--viable` narrows it to the ones already connected or connectable through a browser sign-in, so a service connected with a pasted key is missing there until it is connected; `latchkey services info <name>` gives auth options and status. | "I'll use your connected Slack account." | `references/latchkey.md` |
+| 1 | **Builtin latchkey service** | `latchkey services list` names the service, possibly under a name other than the product's (Notion is `notion-mcp`); `latchkey services info <name>` gives auth options and status. | "I'll use your connected Slack account." | `references/latchkey.md` |
 | 2 | **Custom latchkey service, with a key** | The API is HTTPS and takes a key the user can copy from their account settings as one header (`Authorization: Bearer <token>`, or a named header via `payload.header`). A key that goes in the query string, a signature scheme, or two values that must be combined are NOT workable here. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Mind's credential store." | `references/latchkey.md`, "Custom services" |
-| 3 | **Official MCP server** | The service itself publishes an MCP server: its docs link to it, or it lives in the service's own GitHub organization. Local or hosted, key or OAuth sign-in, all equally fine. | "Example has its own connector, so I'll set that up; it needs you to sign in to Example once." | `references/mcp.md` |
+| 3 | **Official MCP server** | The service itself publishes an MCP server: its docs link to it, or it lives in the service's own GitHub organization. Local or hosted, key or OAuth sign-in, all equally fine. Anyone else's server is never run. | "Example has its own connector, so I'll set that up; it needs you to sign in to Example once." | `references/mcp.md` |
 | 4 | **Custom latchkey service, with a sign-in** | No key works (the documented API needs a registered OAuth app, or there is none), but the service's own website loads its data from endpoints its sign-in authorises: `cookie-capture` when the session cookie is the credential, `token-capture` when the page fetches a bearer token from an endpoint of its own. | "I'll ask you to sign in to Example once, in a window Mind opens on your computer; your session stays in Mind's credential store." | `references/latchkey.md`, "Signing in instead of a key" |
-| 5 | **Community MCP server** | Someone other than the service maintains an MCP server for it, it is actively maintained, and it needs no more than a key the user can copy (not an OAuth app they would have to register). Run it here at a pinned version; one someone else hosts only as a last resort. | "There's a well-maintained connector for Example, so I'll set that up; it needs an API key, which I'll ask you for." | `references/mcp.md` |
-| 6 | **Direct API** | An official SDK, CLI, or documented HTTP API takes a key the user can copy from their account settings. An API that needs an OAuth app registration is workable too, but offered as the more technical option, with row 7 the default. | "Example has an API; I'll ask you for its key and call it from here." | `references/direct-api.md` |
-| 7 | **Browser** | Always. Sign-ins, CAPTCHAs, and two-factor prompts go to the user through `handoff`. | "I'll drive a browser you can watch and take over." | the `agentic-browser-fleet` skill |
+| 5 | **Direct API** | An official SDK, CLI, or documented HTTP API takes a key the user can copy from their account settings. An API that needs an OAuth app registration is workable too, but offered as the more technical option, with row 6 the default. | "Example has an API; I'll ask you for its key and call it from here." | `references/direct-api.md` |
+| 6 | **Browser** | Always. Sign-ins, CAPTCHAs, and two-factor prompts go to the user through `handoff`. | "I'll drive a browser you can watch and take over." | the `agentic-browser-fleet` skill |
 
 A row's test is cheap on purpose: run `latchkey services list` and `mcpc`
 (which lists the MCP connections this workspace already has) first, then look
@@ -42,11 +41,11 @@ explanation, try the row, and move to the next one when it actually fails.
 
 - **Decide, then explain.** Pick the first workable row and tell the user which
   and why in plain terms. At the one fork that is genuinely their preference
-  (registering an OAuth app for row 6 versus driving the browser for row 7),
+  (registering an OAuth app for row 5 versus driving the browser for row 6),
   default to the browser and mention the OAuth alternative in one line.
 - **A credential value never enters a command, a file you write, or your prose.**
   Rows 1, 2 and 4 keep the value in Mind's credential store and inject it at the
-  gateway. Rows 3, 5 and 6 take a key through the **secret card**: you run
+  gateway. Rows 3 and 5 take a key through the **secret card**: you run
   `request_secret.py` (below), the user types the value into the card, and the
   chat app writes `data/.secrets/<name>.env`. You never see the value; you name
   the file and the variables. A program reads the file only through

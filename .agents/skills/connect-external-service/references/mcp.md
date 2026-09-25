@@ -1,21 +1,20 @@
-# The service's MCP server (rows 3 and 5)
+# The service's MCP server (row 3)
 
-## When these rows apply
+## When this row applies
 
 Row 3 is a server the service itself publishes: its docs link to it, or it
 lives in the service's own GitHub organization. A listing in an MCP directory or
 registry does not make a server official; anyone can list one. Local or hosted,
 it is equally fine: the service already holds the data it passes on.
 
-Row 5 is anyone else's server, taken only after a key (row 2) and a sign-in
-(row 4) are ruled out, and only when it is actively maintained and needs no more
-than a key the user can copy. Run it here, at a pinned version. A community
-server someone else hosts is the last resort within the row: whoever runs it
-sees the key and every request.
+A server anyone else publishes is not a row. Run here, it is a stranger's code
+with this workspace's access and the user's key; hosted, whoever runs it sees
+the key and every request. Its source can still show you which endpoints and
+auth scheme the service's API takes, for row 2 or row 5.
 
-A server that runs here is code with this workspace's access, including every
-variable the wrapper hands it; the secrets guard stops your own tool calls, not
-a process. So install the version you looked at, not whatever is newest at each
+Even the service's own server, run here, is code with this workspace's access,
+including every variable the wrapper hands it; the secrets guard stops your own
+tool calls, not a process. So install the version you looked at, not whatever is newest at each
 launch. `npm view <package> version` gives an npm package's current version, and
 its pypi.org page gives a Python package's; the command names that version
 (`npx -y @example/mcp-server@1.2.3`, `uvx example-mcp@1.2.3`). To move to a

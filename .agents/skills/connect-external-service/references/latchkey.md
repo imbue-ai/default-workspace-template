@@ -9,8 +9,7 @@ workspace; the gateway attaches it to the request.
 
 - **Use `latchkey curl`** instead of regular `curl` for supported services. Pass
   through all regular curl arguments; latchkey is a transparent wrapper.
-- **`latchkey services list`** names the builtin services. `--viable` shows the
-  ones already connected or easily connectable through a browser.
+- **`latchkey services list`** names the builtin services.
 - **`latchkey services info <service_name>`** gives a service's auth options,
   credential status, API docs links and special requirements.
 - **Submit a permission request** (below) when `latchkey curl` fails with a
@@ -155,7 +154,7 @@ Before you decide to go down this route: you do not need a connection to make
 requests to URLs that require no credentials; latchkey is not necessary at all.
 And a custom service covers only what the gateway can inject: a request header,
 or a cookie or token captured from a browser sign-in. A key that goes in the
-query string or a signature scheme is not one of them (row 6). A documented API
+query string or a signature scheme is not one of them (row 5). A documented API
 that needs a registered OAuth app is not one either, but that does not rule the
 service out: its website's own sign-in may be (row 4, "Signing in instead of a
 key" below).
