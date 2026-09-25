@@ -41,29 +41,18 @@ App specifics:
 - A fresh worktree has no `.venv`, so run `uv sync --all-packages` once before
   any `uv run`. If a fix needs a new dependency, `uv add ...` and commit the
   manifest changes (`pyproject.toml` / `uv.lock`).
-- Add a `test_<package>.py` for the routes, and test the whole footprint rather
-  than the app directory alone -- a referenced skill's tests have to run when
-  the app's surface moves. The app is its own project with its own pytest and
-  coverage configuration, so it runs from its own root; the referenced paths
-  outside it are covered by the root configuration and run from the repo root:
+- Add a `test_<package>.py` for the routes. While you iterate, run the app's
+  own suite from its own root (it is its own project, with its own pytest and
+  coverage configuration):
 
   ```bash
   cd system/apps/<package> && uv run pytest    # primary, plus test_<package>_ratchets.py
   ```
 
-  ```bash
-  # from the repo root, over every referenced directory that holds tests
-  # anywhere beneath it (a skill keeps its tests under scripts/):
-  REFERENCE_TEST_DIRS=$(jq -r '.references[].path' "$SCOPE_FILE" | while read -r p; do
-      [ -d "$p" ] && [ -n "$(find "$p" \( -name '*_test.py' -o -name 'test_*.py' \) -print -quit)" ] && echo "$p"
-  done)
-  [ -n "$REFERENCE_TEST_DIRS" ] && uv run pytest $REFERENCE_TEST_DIRS
-  ```
-
-  Without the guard, a bare `uv run pytest` from the repo root runs the whole
-  monorepo suite. A referenced file, and a referenced
-  directory with no tests beneath it, stay out of the run. A pre-manifest app
-  carries no scope file, so the app-directory run is its whole test set.
+  The gate is `harden-creation.md`'s "The test gate": `select-tests` turns the
+  app's `[[references]]` into the suites that exercise them (a referenced
+  skill's tests run when the app's surface moves), along with everything else
+  the change reaches, so there is no reference list to walk by hand.
 
 ## Working in isolation
 
@@ -85,6 +74,8 @@ What differs for you:
   `system/libs/workspace_ui/` library, and the apply installs the bundles you
   built only when it is given all three. Report each `static/` path in your
   `done` body, so the lead can pass them to the apply.
+  The test gate selects its own checks from what changed; building every
+  bundle is for the apply, whatever the gate ran.
 - **Never drive `networkidle`** against a shell or chat instance in Playwright:
   both hold sockets open for as long as they run, so the wait never returns.
   Wait for the element you are about to read instead.

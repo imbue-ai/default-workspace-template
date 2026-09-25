@@ -98,6 +98,8 @@ Do not confuse "no errors" with "correct behavior" -- a command that exits 0 but
 Then crystallize the verified behavior into formal tests. 
 Assert on things that are true if and only if the feature worked correctly -- this ensures tests are both reliable and meaningful.
 
+To find which tests a change calls for, run `uv run app-manifest select-tests --diff-base <the commit before the change>` from the repo root: it prints the commands to run, in order. The chat app's and the shell's suites (`system/apps/chat`, `system/apps/system_interface`, each run from its own directory) skip their browser tests by default; pass `-m ''` to run everything, or `-m release` for only the browser tests. Naming a browser test file without either reports it as deselected and runs nothing.
+
 # Communication
 
 If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
@@ -228,7 +230,7 @@ If you get a failure when trying to commit the first time, just try committing a
 
 If something unexpected happens -- errors, confusing state, things not working as documented -- use the `dealing-with-the-unexpected` skill for guidance.
 
-A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy processes under sustained memory pressure -- most-expendable first (an agent's build/test/browser subprocesses before the agent itself). If a command of yours dies with exit 137 (or SIGKILL/SIGTERM) and you did not kill it, confirm by checking the shed ledger at `/home/user/workspace/data/.state/oom_priority/events/shed.jsonl` for a record naming it (matched by pid or process name). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can.
+A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy processes under sustained memory pressure -- most-expendable first (an agent's build/test/browser subprocesses before the agent itself). If a command of yours dies with exit 137 (or SIGKILL/SIGTERM) and you did not kill it, confirm by checking the shed ledger at `/home/user/workspace/data/.state/oom_priority/events/shed.jsonl` for a record naming it (matched by pid or process name). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can. That advice is for your own ad-hoc commands. A shed command of a harden worker's test gate follows the gate's own shed handling (`.agents/shared/worker/references/harden-creation.md`, "The test gate"), and memory pressure is never a reason to skip one. When an agent reports a shed to you, free memory with the user per `.agents/shared/references/freeing-memory.md`.
 
 # Sandboxed runtime
 

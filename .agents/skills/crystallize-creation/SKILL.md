@@ -90,7 +90,11 @@ the transcript; for `type: app`, the parent of the commit that added the app's
 manifest, `$(git rev-parse "$(git log --diff-filter=A --format=%H -1 --
 system/apps/<package>/app.toml)^")`, so the scope file's diff covers the
 scaffold and everything built on it), and an optional `source_artifacts_dir`.
-Both keys are omitted for a `type: service` task, which has no footprint. The body *describes* the
+For a `type: service` task, which has no footprint, omit `scope_file` and set
+`diff_base` to the parent of the commit that added the service's
+`system/supervisord.conf.d/<name>.conf`, the same way; `diff_base` goes on
+every task, since the worker's test gate selects its suites from what changed
+since it. The body *describes* the
 work and -- for a skill reconstructed from the transcript -- anchors the
 worker's search with verbatim quotes (the user's original ask, key decisions,
 tool outputs that defined the recipe). Without anchors the worker scans the

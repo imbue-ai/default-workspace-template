@@ -25,7 +25,8 @@ then -- once the fix is implemented and verified per `type-app.md` -- report
 Fixed <app> on branch `<branch>`. Ready to preview.
 - Change: <one-sentence (root cause + fix)>
 - Frontend / backend: <which, and the files touched>
-- Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>
+- Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
+- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
@@ -83,6 +84,7 @@ Fixed `<name>`:
 - Scenarios run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
+- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
 ```
 
 **App or service:**
@@ -94,6 +96,7 @@ Fixed app or service `<name>`:
 - Scenarios / tests run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
+- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
 ```
 
 The last two lines come from the scope file (`harden-creation.md`); a

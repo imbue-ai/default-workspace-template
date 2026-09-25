@@ -300,14 +300,34 @@ in your report.
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else.
-- **Suites, lint, ratchets** for each project in `projects_to_validate` plus
-  that of any file you edited yourself in the branch, and for no other (with
-  neither, no suite runs at all): root
-  `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
-  and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
-  or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
-  test` at `system/`, the npm workspace root). mngr's own suite runs in its
-  repo, not here.
+- **Suites, lint, ratchets** for what the merged set and your own edits can
+  reach, and for nothing else (with neither, no suite runs at all). The test
+  selector names them from those paths -- each changed package's, skill's, or
+  script's own tests, the suites of whatever consumes it, the frontend checks,
+  and the repo guards; a set made only of documentation selects nothing:
+
+  ```bash
+  MERGE="$(git log --merges -1 --format=%H --fixed-strings \
+      --grep "update-self: merge upstream template ($TARGET_REF)")"
+  python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+      classify-merge --local "$MERGE^1" --target "$TARGET_REF" \
+      > data/.tasks/update-self/classify.json
+  { jq -r '.merged[].path' data/.tasks/update-self/classify.json
+    git diff --name-only "$MERGE" HEAD; } | sort -u \
+      > data/.tasks/update-self/validate-paths.txt
+  [ -s data/.tasks/update-self/validate-paths.txt ] \
+      && uv run --frozen --package app-manifest app-manifest select-tests \
+          --diff-base "$MERGE^1" \
+          $(sed 's/^/--path /' data/.tasks/update-self/validate-paths.txt)
+  ```
+
+  Commit your own edits first: the second half of the list reads commits.
+  `--diff-base` here only names what a merged `uv.lock` is compared against,
+  so a lock that upgraded a package selects the suites that depend on it. Run
+  every printed line, in order, plus `uv run ruff check` when a Python file is
+  in the list, and handle a shed command or an `# unclassified` path the way
+  `.agents/shared/worker/references/harden-creation.md` ("The test gate")
+  says. mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a

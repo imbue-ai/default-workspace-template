@@ -105,9 +105,10 @@ worker writes the creation's computed footprint at the start of its run -- you
 name the path, the worker creates the file), and `diff_base` (the commit before
 the work being hardened: for the committed origin, the start of
 `$COMMIT_RANGE`, so the scope file's diff covers the committed change; for the
-emergent origin, your `HEAD` at dispatch). The last two are for a skill or an
-app with an `app.toml`; omit both for a service, a pre-manifest app, or the
-system interface, which have no footprint. The body carries the
+emergent origin, your `HEAD` at dispatch). `scope_file` is for a skill or an
+app with an `app.toml`; omit it for a service, a pre-manifest app, or the
+system interface, which have no footprint. `diff_base` goes on every task: the
+worker's test gate selects its suites from what changed since it. The body carries the
 `## Change origin` marker the worker dispatches on, plus origin-specific content:
 
 ```bash

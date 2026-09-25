@@ -75,7 +75,10 @@ message or `mngr start` does not relaunch a shed agent), then nudge it to
 continue with `create_worker.py reply --task-file <TASK_FILE> -m continue`. You
 do not need to resend the task: it survives in the worker's conversation
 history, and a SessionStart hook already tells the revived worker it was paused,
-so it re-checks state before continuing.
+so it re-checks state before continuing. Before reviving it, and whenever a
+worker's `question` gate reports that a test command was shed, free memory
+with the user per `.agents/shared/references/freeing-memory.md`: a revival or
+rerun into the same pressure is shed again.
 
 ## Diagnose worker liveness before invoking failure flow
 
@@ -234,7 +237,10 @@ or supersede the pass per `.agents/shared/references/harden-contention.md`.
 
 On `type: status`:
 
-- `name: done` -- merge the worker's branch:
+- `name: done` -- if the body lists `Selector gaps:`, they are built-in
+  defects (the test selector could not map a built-in path): add them to the
+  pass's single report per `.agents/shared/references/report-built-in-issues.md`.
+  Then merge the worker's branch:
   ```bash
   git merge --no-ff <WORKER_BRANCH>
   ```

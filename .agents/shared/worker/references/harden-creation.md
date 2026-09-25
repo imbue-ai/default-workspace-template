@@ -80,8 +80,7 @@ supervisord program blocks that run it, in the files that declare them),
 drives it, a script, a doc), `context` (paths to read but never change),
 `conventions`, `exclude` (a hard denylist of globs), and `diff` (the branch's
 changed files, split into those inside the footprint and `outside_footprint`).
-Two consumers read it: the test selection in `type-app.md`, and the freshness
-check the lead runs before merging
+The freshness check the lead runs before merging reads it
 (`.agents/shared/references/harden-contention.md`). Regenerate it whenever the
 footprint moves under you -- when you register a `[[references]]` entry, or
 when you add a supervisord section -- and once more immediately before your
@@ -244,45 +243,69 @@ evicts is not hardened, no matter how well-tested its happy path is.
 ## Review gates
 
 1. Ensure all in-flight changes have settled and are committed
-2. Run the scoped test set below and fix what it flags with narrowly targeted
+2. Run the test gate below and fix what it flags with narrowly targeted
    changes
 
-### The scoped test set
+### The test gate
 
-Three parts, in order, **each its own `pytest` invocation** -- passing two of
-these path sets to one command makes `conftest` resolve to whichever it reaches
-first and dies during collection. A bare `uv run pytest` from the repo root is
-not one of them: it collects the whole monorepo -- on this workspace about 2,500
-tests and several minutes -- to check a change that usually touches a handful of
-files.
+The gate is whatever the change can reach, and a command prints it. From the
+repo root, after committing everything (the selector reads commits, like the
+scope file):
 
-1. **The creation's own suite**, as your `type-<TYPE>.md` defines it.
+```bash
+uv run app-manifest select-tests --diff-base "$DIFF_BASE"
+```
 
-2. **The repo guards** -- the cross-cutting checks no creation owns: manifest
-   and registry consistency, template stacking, hook wiring, the meta-ratchets.
-   Run them whatever you touched:
+It prints shell lines, each under a comment naming the changed paths behind
+it. Run every line, in order, each as its own command: they include the
+frontend build the browser tests need, and passing two pytest roots to one
+invocation breaks collection. What it selects, and why, is in
+`system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
+changed packages' and skills' own suites with their ratchets, the suites of
+whatever consumes them, the tests paired with a changed script, the browser
+tests of an app that itself changed, and the frontend checks. Do not add runs
+beside it, and do not drop any line of it; if something should run that the
+selector leaves out, that is a mapping to add (below).
 
-   ```bash
-   uv run pytest system/*.py system/scripts
-   ```
+**An unclassified path.** When the output ends with an `# unclassified` block,
+each listed path is one the selector could not map, and the full root suite is
+among the lines in its place: run the lines as printed. Then decide which
+suites can actually observe a change to that path, record it in
+`system/libs/app_manifest/src/app_manifest/test_selection_overrides.toml`
+(a `[[consumer]]` entry; an empty `suites` when the always-run set already
+covers it) as part of your change, and re-run `select-tests` to confirm the
+path is classified, so the next change to it runs only what it needs. When the
+path is built-in
+(AGENTS.md, "Updates", has the test), name it in your `done` report under
+`Selector gaps:`, one line each with the mapping you added: your lead includes
+it in its report of built-in issues for the pass.
 
-   A few hundred tests, well under a minute. This is what catches a change that
-   breaks a contract the rest of the tree depends on, which part 1 by
-   construction cannot see.
+**A command that dies from a signal.** Exit status 137 or 143, or `Killed`
+with no failure output, is not a test failure until the shed ledger says it is
+not a shed. Note the time before each command (`date -u
++%Y-%m-%dT%H:%M:%S`), and on a signal death look for sheds since then:
 
-3. **The full suite, only when the change left the footprint.** Regenerate the
-   scope file, then read `diff.outside_footprint`. Empty means parts 1 and 2
-   cover the change. Non-empty means it reached code outside the creation, and
-   whatever depends on that code is in neither set:
+```bash
+jq -c --arg since "$STARTED_AT" \
+    'select(.type == "process_shed" and .timestamp >= $since)' \
+    /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
+```
 
-   ```bash
-   jq -e '.diff.outside_footprint | length == 0' "$SCOPE_FILE" >/dev/null \
-       || echo "changed files outside the footprint -- run the full suite"
-   ```
+A record whose `pid` or `comm` is the command or one of its children (pytest,
+an xdist worker, node, a browser) means the command was shed for memory
+pressure: that is a shed, never a failure to fix in the code. A shed child can
+also surface as ordinary test errors (a browser that vanished mid-test), so
+run the same check when failures look unrelated to your change. Then judge
+whether a rerun would be shed again, from the ledger (are shed records still
+arriving, for processes other than yours?) and from `/proc/meminfo` (is
+`MemAvailable` recovering since the shed, or still falling?). If things are
+settling, rerun the shed command. If they are not, or the rerun is shed too,
+ask your lead with a `question` gate (`worker-reporting.md`) naming the
+command, the ledger records, and the free memory you saw; your lead frees
+memory with the user, and answers when you can rerun.
 
-A run that carries no scope file -- a pre-manifest app, a standalone service,
-the system interface, per "The scope file" above -- cannot make that check, so
-it runs parts 1 and 2 and then the full suite once.
+Memory pressure is never a reason to skip a command of the gate, or to report
+`done` without it.
 
 If your own task file says your lead runs this verification on the merged
 result -- the scoped-sibling case above -- run your own scope's tests and skip

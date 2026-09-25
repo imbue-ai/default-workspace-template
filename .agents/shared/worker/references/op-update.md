@@ -58,7 +58,8 @@ Hardened <app> on branch `<branch>`.
 - Change: <one-sentence>
 - Frontend / backend: <which, and the files touched>
 - Bundles built: <the static/ path of every bundle you built, all three when the shared library changed>
-- Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>
+- Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
+- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
@@ -156,6 +157,7 @@ Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
   consumer or surface would need to adapt to>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
+- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
 ```
 
 **App or service:**
@@ -167,6 +169,7 @@ Updated app or service `<name>`:
 - Scenarios / tests run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
+- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
 ```
 
 The last two lines come from the scope file (`harden-creation.md`); a
