@@ -341,7 +341,7 @@ _FAILED_LAUNCH_MEMORY = int(os.environ.get("BROWSER_FAILED_LAUNCH_MEMORY", "32")
 _LEASE_IDLE_TTL = float(os.environ.get("BROWSER_LEASE_IDLE_TTL", "60"))
 
 # A human take-control is STICKY: it blocks agents until the human explicitly hands
-# back ("Return to agent"). There is no idle/grace yield -- a human who grabs a
+# back ("Return control to agents"). There is no idle/grace yield -- a human who grabs a
 # browser keeps it even if they walk away mid-CAPTCHA/login, so they never come back
 # to find an agent moved the page out from under them. (Agents still auto-release via
 # _LEASE_IDLE_TTL; the asymmetry is deliberate -- a dead agent must not hoard, a human
