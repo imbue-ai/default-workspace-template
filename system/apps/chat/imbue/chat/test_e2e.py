@@ -804,14 +804,37 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
 
 
+# Installed in every frame before its scripts run: records each placeholder screen or text the chat page ever
+# draws, however briefly, into ``window.__placeholdersSeen``.
+_RECORD_PLACEHOLDERS_SEEN_SCRIPT = """
+(() => {
+  const texts = ["No conversation data", "Loading terminal output", "Starting the chat", "Loading events",
+    "No events yet"];
+  const seen = new Set();
+  window.__placeholdersSeen = [];
+  const check = () => {
+    const root = document.documentElement;
+    if (!root) return;
+    if (document.querySelector(".message-list-not-found") && !seen.has("not-found")) seen.add("not-found");
+    const body = root.innerText || "";
+    for (const text of texts) if (body.includes(text)) seen.add(text);
+    window.__placeholdersSeen = [...seen];
+  };
+  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
+})();
+"""
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With an account signed in the create runs immediately on it, and the page is an empty chat with its composer
-    ready from the first frame: no placeholder text while the agent is created, and none once it lands."""
+    ready from the first frame: no placeholder text while the agent is created, and none once it lands -- not even
+    for a single frame, which is how a flash of a "not found" or "loading" screen shows up."""
     release_create = tmp_path / "release-create"
     monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
+    page.add_init_script(_RECORD_PLACEHOLDERS_SEEN_SCRIPT)
     with _running_e2e_server(tmp_path) as server:
         try:
             chat = _start_new_chat(page, server)
@@ -827,6 +850,8 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
         expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
         expect(chat.locator(".message-list-empty")).to_have_text("")
         expect(chat.locator(".message-input-textbox")).to_be_editable()
+        seen = [text for frame in page.frames for text in frame.evaluate("window.__placeholdersSeen || []")]
+        assert seen == [], "a new chat showed placeholder screens while it started: {}".format(seen)
 
 
 @pytest.mark.timeout(120, func_only=False)
