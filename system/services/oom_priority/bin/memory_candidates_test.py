@@ -4,15 +4,19 @@ browser-service and shell answers (all injected through ``Sources``)."""
 import importlib.util
 import json
 import os
+import string
 import subprocess
 import sys
 import urllib.error
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
+from imbue.mngr.cli.field_catalog import FieldContext, build_list_field_catalog
+from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 _SCRIPT = Path(__file__).parent / "memory_candidates.py"
 _spec = importlib.util.spec_from_file_location("memory_candidates", _SCRIPT)
@@ -49,22 +53,36 @@ def _agent_record(
     last_activity: datetime,
     pid: int | None = None,
     provider: str = "local",
-) -> dict[str, object]:
-    """One ``mngr list --format jsonl`` agent record, in ``AgentDetails``' shape (the fields read here)."""
+) -> dict[str, Any]:
+    """One agent as mngr holds it (``AgentDetails``' shape, for the fields the template names)."""
     return {
-        "resource_type": "agent",
         "id": f"agent-{uuid4().hex}",
         "name": name,
         "type": "claude",
         "state": state,
         "pid": pid,
-        "start_time": (last_activity - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        "start_time": last_activity - timedelta(hours=1),
         "user_activity_time": None,
-        "agent_activity_time": last_activity.isoformat().replace("+00:00", "Z"),
+        "agent_activity_time": last_activity,
         "idle_seconds": 1.0,
         "labels": dict(labels),
         "host": {"id": "host-1", "name": "localhost", "provider_name": provider},
     }
+
+
+def _render_like_mngr(template: str, record: Mapping[str, Any]) -> str:
+    """Render one agent through a ``mngr list --format`` template the way the pinned mngr does: a dotted
+    field walks nested fields and label keys, and a null field or an absent label renders empty."""
+    parts: list[str] = []
+    for literal, field, _, _ in string.Formatter().parse(template):
+        parts.append(literal)
+        if field is None:
+            continue
+        value: Any = record
+        for key in field.split("."):
+            value = value.get(key) if isinstance(value, dict) else None
+        parts.append("" if value is None else str(value))
+    return "".join(parts)
 
 
 def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
@@ -74,17 +92,29 @@ def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
 
 
 class _FakeMngr:
-    """Stands in for running ``mngr list``: prints the given lines, or raises the given error."""
+    """Stands in for running ``mngr list``: renders each record through the ``--format`` template it is
+    given, keeping only the ``--provider`` asked for; or raises the given error."""
 
-    def __init__(self, lines: Sequence[object], returncode: int = 0, error: Exception | None = None) -> None:
-        self.stdout = "".join(json.dumps(line) + "\n" for line in lines)
+    def __init__(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        returncode: int = 0,
+        stderr: str = "",
+        error: Exception | None = None,
+    ) -> None:
+        self.records = records
         self.returncode = returncode
+        self.stderr = stderr
         self.error = error
 
     def __call__(self, argv: Sequence[str], timeout_seconds: float) -> "subprocess.CompletedProcess[str]":
         if self.error is not None:
             raise self.error
-        return subprocess.CompletedProcess(list(argv), self.returncode, stdout=self.stdout, stderr="")
+        options = dict(zip(argv[2::2], argv[3::2]))
+        provider = options.get("--provider")
+        listed = [r for r in self.records if provider is None or r["host"]["provider_name"] == provider]
+        stdout = "".join(_render_like_mngr(options["--format"], record) + "\n" for record in listed)
+        return subprocess.CompletedProcess(list(argv), self.returncode, stdout=stdout, stderr=self.stderr)
 
 
 class _FakeHttp:
@@ -256,24 +286,42 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(t
 
     assert report.agents.candidates is None
     assert len(report.agents.notes) == 1
-    assert report.agents.notes[0].startswith("could not run `mngr list --format jsonl --on-error continue`")
+    assert report.agents.notes[0].startswith("could not run `mngr list`: ")
     assert [b.name for b in report.browsers.candidates] == ["browser-1"]
     assert "Idle chats and workers (waiting, no activity for 15m or more):\n  unknown\n  note: could not run" in (
         memory_candidates.render_table(report)
     )
 
 
-def test_a_provider_error_in_mngr_list_keeps_the_agents_it_did_list(tmp_path: Path, runtime_dir: Path) -> None:
+def test_a_listing_error_keeps_the_agents_mngr_did_list_and_notes_the_error(tmp_path: Path, runtime_dir: Path) -> None:
     proc = tmp_path / "proc"
     chat = _agent_record("chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100)
-    error_line = {"event": "error", "exception_type": "ProviderUnavailableError", "message": "modal is unreachable"}
+    mngr = _FakeMngr([chat], returncode=1, stderr="Errors while listing:\n  host-2: ssh timed out\n")
 
-    report = memory_candidates.collect_report(
-        _sources(proc, _FakeMngr([chat, error_line], returncode=3), _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
-    )
+    report = memory_candidates.collect_report(_sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})))
 
     assert [a.name for a in report.agents.candidates] == ["chat-a"]
-    assert report.agents.notes == ("mngr list reported: modal is unreachable",)
+    assert report.agents.notes == ("mngr list exited 1: Errors while listing:; host-2: ssh timed out",)
+
+
+def test_a_listing_that_fails_with_no_agents_is_unknown_not_empty(tmp_path: Path, runtime_dir: Path) -> None:
+    proc = tmp_path / "proc"
+    mngr = _FakeMngr([], returncode=1, stderr="Error: cannot load the local provider\n")
+
+    report = memory_candidates.collect_report(_sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})))
+
+    assert report.agents.candidates is None
+    assert report.agents.notes == ("mngr list exited 1: Error: cannot load the local provider",)
+
+
+def test_the_listing_argv_and_every_template_field_exist_in_the_pinned_mngr() -> None:
+    assert_mngr_argv_valid(memory_candidates.MNGR_LIST_ARGV)
+    template_fields = {
+        row.key.replace("$KEY", "") for row in build_list_field_catalog() if FieldContext.TEMPLATE in row.contexts
+    }
+    for field in memory_candidates.MNGR_LIST_FIELDS:
+        label_prefix = "labels."
+        assert (field if not field.startswith(label_prefix) else label_prefix) in template_fields, field
 
 
 def test_an_unreachable_browser_service_reports_browsers_as_unknown_and_still_lists_agents(
@@ -370,12 +418,14 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
 
 
 def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -> None:
-    """End to end through the real wiring: a fake ``mngr`` on PATH, a browser service nothing listens on."""
+    """End to end through the real wiring: a fake ``mngr`` on PATH printing one rendered agent, and a browser
+    service nothing listens on."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     record = _agent_record("chat-a", "WAITING", {"user_created": "true"}, datetime.now(timezone.utc) - timedelta(hours=3))
+    line = _render_like_mngr(memory_candidates.MNGR_LIST_ARGV[-1], record)
     fake_mngr = bindir / "mngr"
-    fake_mngr.write_text(f"#!/bin/sh\ncat <<'EOF'\n{json.dumps(record)}\nEOF\n")
+    fake_mngr.write_text(f"#!/bin/sh\ncat <<'EOF'\n{line}\nEOF\n")
     fake_mngr.chmod(0o755)
     env = {
         **os.environ,
