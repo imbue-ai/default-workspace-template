@@ -62,7 +62,7 @@ def _run_guarded_step(repo: Path, marker_dir: Path, **extra_env: str) -> str:
 _PINNED_STEP = (
     f'. "{_GUARD}"\n'
     "provision_drop_inherited_pins\n"
-    ': "${CLAUDE_CODE_VERSION:=2.1.269}"\n'
+    ': "${CLAUDE_CODE_VERSION:=2.1.280}"\n'
     'echo "claude=$CLAUDE_CODE_VERSION"\n'
 )
 
@@ -84,7 +84,7 @@ def test_an_inherited_pin_yields_to_the_trees_unless_the_override_is_deliberate(
         PROVISION_PIN_OVERRIDE="1",
     )
 
-    assert "claude=2.1.269" in inherited
+    assert "claude=2.1.280" in inherited
     assert "ignoring inherited CLAUDE_CODE_VERSION=2.1.227" in inherited
     assert "claude=2.1.227" in overridden
 
