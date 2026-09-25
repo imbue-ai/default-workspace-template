@@ -21,8 +21,8 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isCompact: false,
     isTouch: false,
     isMenuOpen: false,
+    sizeMenuTrigger: {},
     isShielded: false,
-    isPlacedHere: true,
     onStartApp: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
@@ -57,7 +57,7 @@ describe("Window", () => {
     expect(element.querySelector('[data-window-control="minimize"]')).not.toBeNull();
   });
 
-  it("keeps the resize handles outside the clipped frame, so they can overhang the border", () => {
+  it("keeps the resize handles outside the clipped frame, so they can overhang its edge", () => {
     const element = render();
     const frame = element.querySelector("[data-window-frame]") as HTMLElement;
     expect(frame.classList.contains("overflow-hidden")).toBe(true);
@@ -94,7 +94,7 @@ describe("Window", () => {
     const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
       control.getAttribute("data-window-control"),
     );
-    expect(controls).toEqual(["menu", "minimize", "maximize", "close"]);
+    expect(controls).toEqual(["refresh", "menu", "minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="close"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
   });
@@ -123,21 +123,6 @@ describe("Window", () => {
       render({ app: appRecord("docs", { is_running: false }), onStartApp: null }).querySelector(
         "[data-stopped-app] button",
       ),
-    ).toBeNull();
-  });
-
-  it("says a window settling on another client's open is starting elsewhere", () => {
-    const element = render({
-      window: windowRecord("win-1", "docs", "/new", { is_settling: true }),
-      isPlacedHere: false,
-    });
-    expect(element.querySelector("[data-settling]")).not.toBeNull();
-    unmountViews();
-    expect(
-      render({
-        window: windowRecord("win-1", "docs", "/new", { is_settling: true }),
-        isPlacedHere: true,
-      }).querySelector("[data-settling]"),
     ).toBeNull();
   });
 

@@ -16,7 +16,7 @@ import type { DesktopState } from "./desktopState";
 
 export type ShortcutRun =
   | { readonly kind: "raise"; readonly windowId: string }
-  | { readonly kind: "open"; readonly app: string; readonly path: string; readonly launch: string }
+  | { readonly kind: "open"; readonly app: string; readonly launch: string }
   /** The app is not known yet because no app list has landed; nothing is wrong with the shortcut. */
   | { readonly kind: "connecting" }
   | { readonly kind: "unavailable"; readonly reason: string };
@@ -45,7 +45,7 @@ export function resolveLaunchRun(
     const recent = mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     if (recent !== null) return { kind: "raise", windowId: recent.id };
   }
-  return { kind: "open", app: app.name, path: launchPath.path, launch: launchPath.id };
+  return { kind: "open", app: app.name, launch: launchPath.id };
 }
 
 /** The name a fresh desktop gets: the first "Desktop N" nobody is using, by name or by id. */
