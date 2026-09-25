@@ -58,7 +58,7 @@ describe("Window", () => {
     expect(element.querySelector('[data-window-control="minimize"]')).not.toBeNull();
   });
 
-  it("keeps the resize handles outside the clipped frame, so they can overhang the border", () => {
+  it("keeps the resize handles outside the clipped frame, so they can overhang its edge", () => {
     const element = render();
     const frame = element.querySelector("[data-window-frame]") as HTMLElement;
     expect(frame.classList.contains("overflow-hidden")).toBe(true);

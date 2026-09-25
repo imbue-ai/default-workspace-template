@@ -111,10 +111,11 @@ export function Window(): m.Component<WindowAttrs> {
             "div",
             {
               "data-window-frame": "",
+              // No border: the shadow is what separates a window from the backdrop, and a line
+              // around it only competes. Focus is the title bar's, which changes colour with it.
               class:
-                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) border " +
-                "shadow-(--desk-window-shadow) " +
-                (isFocused ? "border-default" : "border-subtle"),
+                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) " +
+                "shadow-(--desk-window-shadow)",
             },
             [
               m(TitleBar, {
