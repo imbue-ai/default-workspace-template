@@ -87,7 +87,10 @@ background agent, which is its own chat -- or the human).
   `window.open` pop-up -- the shape of most "Sign in with ..." buttons -- opens as a tab in
   that window instead, keeping `window.opener`, so an OAuth callback can still hand its result
   back and close itself. The fleet's own extension (`extensions/open_popups_as_tabs/`, loaded
-  alongside the vendored ones) does this by adding `popup=0` to the call's features.
+  alongside the vendored ones) does this by adding `popup=0` to the call's features. That
+  wrapper is visible to page script, which cuts against Fortress's stealth: `window.open`'s
+  `toString()` loses its function name. Letting the guardian keep a real pop-up window over the
+  main one would avoid that, at the cost of window stacking, focus and resize handling.
 - **Persistence**: the fleet survives a workspace stop/restart. Each browser gets
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium
