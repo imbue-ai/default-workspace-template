@@ -400,9 +400,11 @@ def _read_text(path: Path) -> str:
         raise SuiteSelectionError(f"cannot read {path}: {e}") from e
 
 
-def _drives_a_browser(test_file: Path) -> bool:
+@pure
+def _drives_a_browser(test_text: str) -> bool:
     return any(
-        module.split(".")[0] == _BROWSER_TEST_LIBRARY for module in _imported_modules(test_file)
+        module.split(".")[0] == _BROWSER_TEST_LIBRARY
+        for module in _imported_modules_in_text(test_text)
     )
 
 
@@ -441,9 +443,9 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         test_texts=test_texts,
         browser_test_files=frozenset(
             path
-            for path in test_texts
+            for path, text in test_texts.items()
             if any(is_path_covered_by(unit, path) for unit in own_root_units)
-            and _drives_a_browser(repo_root / path)
+            and _drives_a_browser(text)
         ),
         own_root_units=own_root_units,
         coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
@@ -507,7 +509,8 @@ def naming_tokens(path: str, unique_suffixes: Set[str]) -> tuple[str, ...]:
 def _imported_modules(path: Path) -> set[str]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as e:
+        logger.debug("Not reading the imports of {}, which cannot be read: {}", path, e)
         return set()
     return _imported_modules_in_text(text)
 
