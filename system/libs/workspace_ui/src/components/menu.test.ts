@@ -411,3 +411,83 @@ describe("a submenu", () => {
     });
   });
 });
+
+describe("a menu opened from a hover trigger", () => {
+  let trigger: HTMLButtonElement;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    menu = createMenu({ placement: "below", redraw: render });
+    rows = [{ kind: "action", key: "go", label: "Go", onSelect: vi.fn() }];
+    trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+  });
+
+  /** What a caller spreading `hoverTriggerAttrs` onto an element does, for one event. */
+  function fire(name: "mouseenter" | "mouseleave"): void {
+    const attrs = menu.hoverTriggerAttrs(onBeforeOpen);
+    const handler = attrs[`on${name}`] as (event: MouseEvent) => void;
+    handler(Object.assign(new MouseEvent(name), { currentTarget: trigger }) as MouseEvent);
+  }
+
+  const onBeforeOpen = vi.fn();
+
+  it("opens once the pointer has rested, and lays no sheet", () => {
+    fire("mouseenter");
+    expect(menu.isOpen()).toBe(false);
+    vi.advanceTimersByTime(40);
+    expect(menu.isOpen()).toBe(true);
+    expect(onBeforeOpen).toHaveBeenCalledTimes(1);
+    expect(part("menu")).not.toBeNull();
+    // No sheet: the chrome the trigger sits in has to stay hoverable behind the card.
+    expect(part("sheet")).toBeNull();
+  });
+
+  it("does not open when the pointer leaves before the delay is out", () => {
+    fire("mouseenter");
+    fire("mouseleave");
+    vi.advanceTimersByTime(500);
+    expect(menu.isOpen()).toBe(false);
+  });
+
+  it("closes once the pointer has left the trigger and the card alike, and not before", () => {
+    fire("mouseenter");
+    vi.advanceTimersByTime(40);
+    fire("mouseleave");
+    // The seam between the two boxes: the card's enter cancels the count the leave started.
+    part("menu")!.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(500);
+    expect(menu.isOpen()).toBe(true);
+
+    part("menu")!.dispatchEvent(new MouseEvent("mouseleave"));
+    vi.advanceTimersByTime(219);
+    expect(menu.isOpen()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(menu.isOpen()).toBe(false);
+  });
+
+  it("closes on a press outside it, and leaves a press on its own trigger alone", () => {
+    fire("mouseenter");
+    vi.advanceTimersByTime(40);
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(menu.isOpen()).toBe(true);
+
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(menu.isOpen()).toBe(false);
+  });
+
+  it("closes on Escape", () => {
+    fire("mouseenter");
+    vi.advanceTimersByTime(40);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(menu.isOpen()).toBe(false);
+  });
+
+  it("lays its sheet again once a click opens it", () => {
+    fire("mouseenter");
+    vi.advanceTimersByTime(40);
+    expect(part("sheet")).toBeNull();
+    menu.open(ANCHOR);
+    expect(part("sheet")).not.toBeNull();
+  });
+});

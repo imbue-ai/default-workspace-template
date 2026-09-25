@@ -146,6 +146,13 @@ export function App(): m.Component<AppAttrs> {
     },
   });
 
+  /** Whether what is open shields the windows' pages. A menu that lays a sheet does: the press
+   *  that dismisses it must not also land on the page under it. The size menu lays none, by
+   *  design, so a shield over the pages would swallow the press that its own dismissal needs. */
+  function isShieldingOverlayOpen(): boolean {
+    return (openMenu !== null && openMenu.kind !== "size") || store?.isLauncherOpen() === true;
+  }
+
   /** Show ``next``'s menu against ``anchor``. A shortcut's menu selects the shortcut on the way:
    *  the selection box is the only thing that says which icon the verbs are about, and a right
    *  click (or a long press) reaches the menu without ever passing through a click that selects. */
@@ -351,10 +358,13 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  /** The zone grid's actions for a window, or null in compact mode, where every window renders
-   *  maximized and there is nothing to choose. */
+  /** The zone grid's actions for a window, or null where there is nothing to choose: compact mode,
+   *  where every window renders maximized, and a window that has since been closed -- a hover menu
+   *  outlives its trigger, and placing a window that is gone writes a placement nothing owns. */
   function sizeActionsOf(current: DesktopStore, windowId: string): WindowSizeActions | null {
-    if (current.getState().modes.isCompact) return null;
+    const state = current.getState();
+    if (state.modes.isCompact) return null;
+    if (!activeDesktop(state)?.windows.some((candidate) => candidate.id === windowId)) return null;
     return {
       setState: (state) => current.setWindowState(windowId, state),
       setFrame: (frame) => current.setWindowFrame(windowId, frame),
@@ -792,7 +802,7 @@ export function App(): m.Component<AppAttrs> {
                     sizeMenuTrigger,
                     onEntryClick,
                     onEntryContextMenu,
-                    isOverlayOpen: openMenu !== null || isLauncherOpen,
+                    isOverlayOpen: isShieldingOverlayOpen(),
                     onSelectShortcut: (key) => {
                       selectedShortcutKey = key;
                     },

@@ -17,7 +17,7 @@ import type { EntryLook } from "../reducers/desktopState";
 export interface WindowMenuActions {
   /** The zone grid's actions, or null in compact mode, where every window renders maximized. */
   readonly size: WindowSizeActions | null;
-  /** Leave the menu up after a size is picked, for the caller that wants to keep choosing. */
+  /** Run after a size is picked, to take the menu down. */
   readonly onSized: () => void;
   /** Null when there is no share surface for the app (a critical app). */
   readonly share: (() => void) | null;

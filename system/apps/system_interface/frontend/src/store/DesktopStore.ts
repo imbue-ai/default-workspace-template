@@ -771,8 +771,28 @@ export class DesktopStore {
   }
 
   /** Move a shortcut to a cell, showing it there at once and putting it back if the shell refuses:
-   *  a drop that waited on the round trip would draw the icon in the cell it came from meanwhile. */
+   *  a drop that waited on the round trip would draw the icon in the cell it came from meanwhile.
+   *
+   *  Both writes move the ONE shortcut in whatever the desktop is by then, rather than restoring a
+   *  snapshot taken before the request: a later drop, or a broadcast that landed in between, is
+   *  someone else's edit and is not this refusal's to undo. */
   async moveShortcut(app: string, launch: string, cell: GridCell): Promise<void> {
+    const desktop = activeDesktop(this.state);
+    if (desktop === null) return;
+    const from = desktop.shortcuts.find(
+      (shortcut) => shortcut.target.app === app && shortcut.target.launch === launch,
+    )?.cell;
+    this.withShortcutAt(app, launch, cell);
+    try {
+      this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
+    } catch (error) {
+      if (from !== undefined) this.withShortcutAt(app, launch, from);
+      this.deps.notify(`Could not move the shortcut: ${(error as Error).message}`);
+    }
+  }
+
+  /** The active desktop with one shortcut's cell rewritten, taken as the desktop of record. */
+  private withShortcutAt(app: string, launch: string, cell: GridCell): void {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
     this.takeDesktop({
@@ -781,12 +801,6 @@ export class DesktopStore {
         shortcut.target.app === app && shortcut.target.launch === launch ? { ...shortcut, cell } : shortcut,
       ),
     });
-    try {
-      this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
-    } catch (error) {
-      this.takeDesktop(desktop);
-      this.deps.notify(`Could not move the shortcut: ${(error as Error).message}`);
-    }
   }
 
   async removeShortcut(app: string, launch: string): Promise<void> {
