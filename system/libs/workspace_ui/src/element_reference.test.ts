@@ -155,12 +155,17 @@ describe("uniqueSelectorFor", () => {
     expect(uniqueSelectorFor(span)).toBe("body > div.a > div.b > span");
   });
 
-  it("answers null when the best try matches more than one element", () => {
-    // Two roots with the same classes and a lookalike child each: a lookalike sibling gets an index, but two
-    // identical subtrees under an unindexed root still collide.
+  it("answers null when the best try matches more than one element, or none", () => {
+    // Two identical subtrees under lookalike roots: the root gets an index, so the selector stays unique.
     render('<div class="a"><span>x</span></div><div class="a"><span>y</span></div>');
     const spans = document.querySelectorAll("span");
     expect(uniqueSelectorFor(spans[0])).toBe("body > div.a:nth-of-type(1) > span");
+    // A duplicated id: the walk stops at it, and "#dup > span" matches both spans.
+    render('<div id="dup"><span>x</span></div><div id="dup"><span>y</span></div>');
+    const underDuplicateIds = document.querySelectorAll("span");
+    expect(document.querySelectorAll("#dup > span")).toHaveLength(2);
+    expect(uniqueSelectorFor(underDuplicateIds[0])).toBeNull();
+    expect(uniqueSelectorFor(underDuplicateIds[1])).toBeNull();
     render("<p>x</p>");
     const detached = document.createElement("span");
     expect(uniqueSelectorFor(detached)).toBeNull();
