@@ -228,7 +228,10 @@ always-run set: `system/*.py` and the cross-cutting guards the override file
 lists. A change made only of documentation selects nothing.
 
 `system/apps/chat` and `system/apps/system_interface` run as their own pytest
-roots, which deselect their browser tests (the `release` marker) by default.
+roots: workspace members with their own pytest configuration, which the root
+configuration ignores. Any other directory it ignores (a vendored subtree such
+as `system/vendor/tk`) is no suite, and its tests are never selected. The two
+apps' suites deselect their browser tests (the `release` marker) by default.
 Such an app runs with them (`-m ''`) when the app itself changed, and without
 them when it was reached as a consumer. A run of only some of such a suite's
 files (its browser tests, or a test file that names a changed path) passes
