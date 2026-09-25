@@ -96,8 +96,12 @@ describe("stageElementReferences", () => {
     expect(ready[0].uploaded?.path).toBe(`/w/data/uploads/x/${ID_A}.json`);
   });
 
-  it("answers an empty text for a block on its own", () => {
+  it("answers an empty text for a block on its own, and the prompt alone for a block ahead of it", () => {
     expect(stageElementReferences(chatId, BLOCK_A)).toBe("");
     expect(getComposerAttachments(chatId)).toHaveLength(1);
+    expect(stageElementReferences(chatId, `${BLOCK_B}\n\nExplain what I attached in ${ID_B}`)).toBe(
+      `Explain what I attached in ${ID_B}`,
+    );
+    expect(getComposerAttachments(chatId)).toHaveLength(2);
   });
 });

@@ -40,8 +40,8 @@ function referenceBlocksIn(text: string): ReferenceBlock[] {
   return found;
 }
 
-/** ``text`` without the blocks, the blank lines that set them off collapsed, and no trailing newlines (a prompt
- *  that ends in a space to type after keeps it). */
+/** ``text`` without the blocks, the blank lines that set them off collapsed, and no newlines at either end (a
+ *  block that came first leaves none above the prompt; a prompt that ends in a space to type after keeps it). */
 function withoutBlocks(text: string, blocks: readonly ReferenceBlock[]): string {
   const pieces: string[] = [];
   let cursor = 0;
@@ -53,6 +53,7 @@ function withoutBlocks(text: string, blocks: readonly ReferenceBlock[]): string 
   return pieces
     .join("")
     .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+/, "")
     .replace(/\n+$/, "");
 }
 
