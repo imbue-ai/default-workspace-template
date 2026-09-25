@@ -145,6 +145,11 @@ def _drop(workspace: Path, capsys) -> dict:
     return json.loads(capsys.readouterr().out)
 
 
+def _merge_release(workspace: Path) -> None:
+    """Merge ``minds-v2`` as the worker does: always a merge commit, never a fast-forward."""
+    _git(workspace, "merge", "-q", "--no-ff", "--no-edit", "minds-v2")
+
+
 def _replace_refs(repo: Path) -> list[str]:
     return _git(repo, "replace", "-l").splitlines()
 
@@ -193,7 +198,7 @@ def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
     old_head = _git(workspace, "rev-parse", "HEAD")
     _bridge(workspace, capsys)
 
-    _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
+    _merge_release(workspace)
 
     assert (
         subprocess.run(
@@ -234,7 +239,7 @@ def test_bridge_history_forks_at_the_newest_release_the_workspace_merged(
 
     assert result["fork_point"] == _git(template, "rev-parse", "minds-v1.1^{commit}")
     assert result["twin"] == _git(upstream, "rev-parse", "minds-v1.1^{commit}")
-    _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
+    _merge_release(workspace)
     assert _git(workspace, "diff", "--name-only", "minds-v2", "HEAD").splitlines() == [
         "notes.md"
     ]
@@ -244,7 +249,7 @@ def test_bridge_history_drops_the_graft_once_the_merge_has_landed(
     workspace, capsys
 ) -> None:
     twin = _bridge(workspace, capsys)["twin"]
-    _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
+    _merge_release(workspace)
 
     result = _bridge(workspace, capsys)
 
@@ -300,7 +305,7 @@ def test_bridge_history_bridges_a_shallow_workspace(
     result = _bridge(workspace, capsys)
 
     assert result["fork_point"] == boundary
-    _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
+    _merge_release(workspace)
     assert not (workspace / VENDORED_FILE).exists()
 
 
@@ -385,8 +390,11 @@ def test_a_descendant_with_the_fork_tree_is_the_merge_base(
         files={VENDORED_FILE: "v1\n"},
     )
 
+    old_head = _git(workspace, "rev-parse", "HEAD")
+
     result = _bridge(workspace, capsys)
 
-    assert result["fork_point"] == _git(workspace, "rev-parse", "HEAD")
-    _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
-    assert not (workspace / VENDORED_FILE).exists()
+    assert result["fork_point"] == old_head
+    _merge_release(workspace)
+    assert _git(workspace, "rev-parse", "HEAD^1") == old_head
+    assert _git(workspace, "diff", "--name-only", "minds-v2", "HEAD") == ""
