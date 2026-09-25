@@ -357,7 +357,8 @@ def test_an_unreadable_shell_leaves_browsers_unknown_rather_than_calling_them_un
 ) -> None:
     proc = tmp_path / "proc"
     fleet = _fleet(_browser("browser-1", "running"))
-    for desktops_answer in (urllib.error.URLError("timed out"), {"unexpected": "shape"}):
+    malformed_browser_window = _desktops({"app": "browser", "path": None, "client_paths": {"c": "/?session=browser-1"}})
+    for desktops_answer in (urllib.error.URLError("timed out"), {"unexpected": "shape"}, malformed_browser_window):
         http = _FakeHttp({f"{_BROWSER_URL}/browsers": fleet, f"{_SHELL_URL}/api/desktops": desktops_answer})
 
         report = memory_candidates.collect_report(_sources(proc, _FakeMngr([]), http))

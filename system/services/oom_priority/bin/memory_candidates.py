@@ -414,13 +414,18 @@ def browser_names_shown_by_windows(desktops: Any) -> set[str] | None:
         for window in desktop["windows"]:
             if not isinstance(window, dict):
                 return None
-            if window.get("app") != BROWSER_APP_NAME:
-                continue
+            window_path = window.get("path")
             client_paths = window.get("client_paths", {})
-            paths = [window.get("path"), *(client_paths.values() if isinstance(client_paths, dict) else ())]
-            for path in paths:
-                if not isinstance(path, str):
-                    continue
+            if (
+                not isinstance(window.get("app"), str)
+                or not isinstance(window_path, str)
+                or not isinstance(client_paths, dict)
+                or not all(isinstance(client_path, str) for client_path in client_paths.values())
+            ):
+                return None
+            if window["app"] != BROWSER_APP_NAME:
+                continue
+            for path in (window_path, *client_paths.values()):
                 values = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query).get(BROWSER_SESSION_QUERY_KEY)
                 if values:
                     shown.add(values[0])
