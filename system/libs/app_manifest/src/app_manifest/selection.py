@@ -233,7 +233,7 @@ class ConsumerOverride(FrozenModel):
         description="gitignore-style globs of the paths it covers"
     )
     suites: tuple[RepoRelativePath, ...] = Field(
-        description="Suite directories or test files to run; empty when the always-run set covers the paths"
+        description="Suite directories or test files to run; empty when no suite beyond the always-run set can observe the paths"
     )
     note: NonEmptyStr = Field(description="Why these paths reach these suites")
 
