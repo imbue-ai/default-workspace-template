@@ -414,23 +414,24 @@ describe("a submenu", () => {
 
 describe("a menu opened from a hover trigger", () => {
   let trigger: HTMLButtonElement;
+  const onBeforeOpen = vi.fn();
 
   beforeEach(() => {
     vi.useFakeTimers();
+    onBeforeOpen.mockClear();
     menu = createMenu({ placement: "below", redraw: render });
     rows = [{ kind: "action", key: "go", label: "Go", onSelect: vi.fn() }];
     trigger = document.createElement("button");
     document.body.appendChild(trigger);
+    // What a caller spreading `hoverTriggerAttrs` onto its element gets.
+    const attrs = menu.hoverTriggerAttrs(onBeforeOpen);
+    trigger.addEventListener("mouseenter", attrs.onmouseenter as EventListener);
+    trigger.addEventListener("mouseleave", attrs.onmouseleave as EventListener);
   });
 
-  /** What a caller spreading `hoverTriggerAttrs` onto an element does, for one event. */
   function fire(name: "mouseenter" | "mouseleave"): void {
-    const attrs = menu.hoverTriggerAttrs(onBeforeOpen);
-    const handler = attrs[`on${name}`] as (event: MouseEvent) => void;
-    handler(Object.assign(new MouseEvent(name), { currentTarget: trigger }) as MouseEvent);
+    trigger.dispatchEvent(new MouseEvent(name));
   }
-
-  const onBeforeOpen = vi.fn();
 
   it("opens once the pointer has rested, and lays no sheet", () => {
     fire("mouseenter");
