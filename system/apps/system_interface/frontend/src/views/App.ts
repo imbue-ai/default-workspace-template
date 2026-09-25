@@ -152,7 +152,7 @@ export function App(): m.Component<AppAttrs> {
     role: "menu",
     minWidth: MENU_MIN_WIDTH,
     // The marker class each menu is known by. Read off the open menu on every render, so one
-    // component can wear all five names.
+    // component can wear every kind's name.
     get extraClass(): string | undefined {
       return openMenu === null ? undefined : `${openMenu.kind}-menu`;
     },
