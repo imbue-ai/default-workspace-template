@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import update_self
 from update_history_bridge import REWRITTEN_PATHS
 
@@ -56,7 +57,8 @@ def _commit(repo: Path, message: str, files: dict[str, str | None]) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
-def _template(tmp_path: Path) -> Path:
+@pytest.fixture
+def template(tmp_path: Path) -> Path:
     """A template that vendors mngr, released as ``minds-v1``."""
     template = tmp_path / "template"
     template.mkdir()
@@ -83,7 +85,8 @@ def _template(tmp_path: Path) -> Path:
     return template
 
 
-def _rewritten_upstream(tmp_path: Path, template: Path) -> Path:
+@pytest.fixture
+def upstream(tmp_path: Path, template: Path) -> Path:
     """``template`` rewritten as upstream's is, then released again as ``minds-v2`` without the vendored copy."""
     upstream = tmp_path / "upstream.git"
     _git(tmp_path, "clone", "-q", "--mirror", template.as_uri(), str(upstream))
@@ -119,6 +122,11 @@ def _workspace(
     return workspace
 
 
+@pytest.fixture
+def workspace(tmp_path: Path, template: Path, upstream: Path) -> Path:
+    return _workspace(tmp_path, template, upstream)
+
+
 def _bridge(workspace: Path, capsys) -> dict:
     assert (
         update_self.main(
@@ -134,10 +142,8 @@ def _replace_refs(repo: Path) -> list[str]:
 
 
 def test_bridge_history_is_a_no_op_for_a_workspace_on_the_rewritten_history(
-    tmp_path, capsys
+    tmp_path, upstream, capsys
 ) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
     workspace = tmp_path / "fresh"
     _git(tmp_path, "clone", "-q", "--branch", "minds-v1", str(upstream), str(workspace))
 
@@ -149,11 +155,8 @@ def test_bridge_history_is_a_no_op_for_a_workspace_on_the_rewritten_history(
 
 
 def test_bridge_history_makes_the_old_fork_point_the_merge_base(
-    tmp_path, capsys
+    template, upstream, workspace, capsys
 ) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
-    workspace = _workspace(tmp_path, template, upstream)
     old_fork = _git(template, "rev-parse", "minds-v1^{commit}")
     assert (
         subprocess.run(
@@ -176,11 +179,8 @@ def test_bridge_history_makes_the_old_fork_point_the_merge_base(
 
 
 def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
-    tmp_path, capsys
+    workspace, capsys
 ) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
-    workspace = _workspace(tmp_path, template, upstream)
     old_head = _git(workspace, "rev-parse", "HEAD")
     _bridge(workspace, capsys)
 
@@ -199,11 +199,8 @@ def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
 
 
 def test_bridge_history_drops_the_graft_once_the_merge_has_landed(
-    tmp_path, capsys
+    workspace, capsys
 ) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
-    workspace = _workspace(tmp_path, template, upstream)
     twin = _bridge(workspace, capsys)["twin"]
     _git(workspace, "merge", "-q", "--no-edit", "minds-v2")
 
@@ -218,10 +215,7 @@ def test_bridge_history_drops_the_graft_once_the_merge_has_landed(
     )
 
 
-def test_bridge_history_is_repeatable_before_the_merge(tmp_path, capsys) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
-    workspace = _workspace(tmp_path, template, upstream)
+def test_bridge_history_is_repeatable_before_the_merge(workspace, capsys) -> None:
     first = _bridge(workspace, capsys)
 
     second = _bridge(workspace, capsys)
@@ -230,9 +224,9 @@ def test_bridge_history_is_repeatable_before_the_merge(tmp_path, capsys) -> None
     assert len(_replace_refs(workspace)) == 1
 
 
-def test_bridge_history_bridges_a_shallow_workspace(tmp_path, capsys) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
+def test_bridge_history_bridges_a_shallow_workspace(
+    tmp_path, template, upstream, capsys
+) -> None:
     workspace = _workspace(tmp_path, template, upstream, depth=1)
     boundary = (workspace / ".git/shallow").read_text().split()[0]
 
@@ -243,10 +237,7 @@ def test_bridge_history_bridges_a_shallow_workspace(tmp_path, capsys) -> None:
     assert not (workspace / VENDORED_FILE).exists()
 
 
-def test_a_worker_worktree_sees_the_bridge(tmp_path, capsys) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
-    workspace = _workspace(tmp_path, template, upstream)
+def test_a_worker_worktree_sees_the_bridge(tmp_path, workspace, capsys) -> None:
     worker = tmp_path / "worker"
     _git(
         workspace,
@@ -265,10 +256,8 @@ def test_a_worker_worktree_sees_the_bridge(tmp_path, capsys) -> None:
 
 
 def test_bridge_history_refuses_a_workspace_it_cannot_match_and_changes_nothing(
-    tmp_path, capsys
+    tmp_path, upstream, capsys
 ) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
     stranger = tmp_path / "stranger"
     stranger.mkdir()
     _git(stranger, "init", "-q", "-b", "main")
@@ -289,10 +278,7 @@ def test_bridge_history_refuses_a_workspace_it_cannot_match_and_changes_nothing(
     assert not (stranger / "data/.state/update-self/history-bridge.json").exists()
 
 
-def test_bridge_history_drop_removes_a_live_graft(tmp_path, capsys) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
-    workspace = _workspace(tmp_path, template, upstream)
+def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
     twin = _bridge(workspace, capsys)["twin"]
 
     assert (
@@ -310,9 +296,9 @@ def test_bridge_history_drop_removes_a_live_graft(tmp_path, capsys) -> None:
     )
 
 
-def test_a_descendant_with_the_fork_tree_is_the_merge_base(tmp_path, capsys) -> None:
-    template = _template(tmp_path)
-    upstream = _rewritten_upstream(tmp_path, template)
+def test_a_descendant_with_the_fork_tree_is_the_merge_base(
+    tmp_path, template, upstream, capsys
+) -> None:
     workspace = tmp_path / "workspace"
     _git(
         tmp_path,
