@@ -314,7 +314,7 @@ and windows (desktop-interface contracts.md section 8):
 ```bash
 python3 system/scripts/layout.py desktops
 python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open files --path /notes/ --desktop Research
+python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/ --desktop Research
 python3 system/scripts/layout.py open terminal
 python3 system/scripts/layout.py place self --zone left
 python3 system/scripts/layout.py navigate win-0123456789abcdef /other/

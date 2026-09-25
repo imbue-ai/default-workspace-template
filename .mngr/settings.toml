@@ -335,10 +335,13 @@ Run every shell command as its own `exec_command`. Do NOT start a long-lived int
 # into the image (system/scripts/setup_system.sh, PI_VERSION), so check_installation
 # is off.
 #
-# No model is pinned: pi is many-provider,
+# No model is pinned here: pi is many-provider,
 # many-auth. Its model (`provider/model`) and effort (thinking level: off..max)
 # come from the user's pi settings / launch args, not an mngr-forced slug; the chat
-# model bar reads the live values via the pi lifecycle extension.
+# model bar reads the live values via the pi lifecycle extension. The one default the
+# workspace supplies is pi's own `defaultProvider` / `defaultModel` pair, seeded into
+# ~/.pi/agent/settings.json by system/scripts/seed_home_skeleton.sh (OpenRouter's
+# GLM 5.3), which pi only honors when that provider has a key.
 #
 # auto_allow_permissions MUST be true -- pi has no approval gate and its config
 # validator rejects false. auto_dismiss_dialogs_at_startup adds pi's `--approve` (trust

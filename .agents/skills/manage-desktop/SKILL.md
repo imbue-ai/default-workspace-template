@@ -86,7 +86,7 @@ A window argument is one of:
 | List every app with its launch paths and windows | `python3 system/scripts/layout.py list` |
 | Switch a client onto a desktop | `python3 system/scripts/layout.py load <desktop> [--client <id>]` |
 | Open an app (at its default launch path) | `python3 system/scripts/layout.py open terminal` |
-| Open a specific page of an app | `python3 system/scripts/layout.py open files --path /notes/` |
+| Open a specific page of an app | `python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/` |
 | Open a page with launch parameters | `python3 system/scripts/layout.py open terminal --launch new --param workdir=/data` |
 | Open a web page in a new browser | `python3 system/scripts/layout.py open https://example.com` |
 | Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
@@ -109,10 +109,12 @@ target client's active desktop (or `--desktop`), on top of that client's stack.
 
 Some paths worth knowing: your own chat is `open chat --path
 "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`; a folder is `open files --path
-/notes/` (dufs serves `data/` at `/`, so `/notes/` is `data/notes`; the `path`
-launch parameter, `open files --param path=/notes/`, lands in the same folder
-but as a window at `/?path=/notes/`, and a window is focused only when its
-path matches exactly, so use one form per folder); a browser is `open browser
+/home/user/workspace/data/notes/` (the file viewer serves the filesystem root
+and opens at the workspace folder, so the path is absolute; the `path` launch
+parameter, `open files --param path=/home/user/workspace/data/notes/`, lands in
+the same folder but as a window at `/home/user/workspace/?path=...`, and a
+window is focused only when its path matches exactly, so use one form per
+folder); a browser is `open browser
 --path "/?session=<name>"`; a terminal is `open terminal --path
 "/?session=<name>"`.
 

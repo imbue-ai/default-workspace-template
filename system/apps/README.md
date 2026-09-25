@@ -33,8 +33,8 @@ Built-in apps:
 - `terminal_pty/` - Only the manifest of that ttyd origin (`terminal-pty`,
   internal); the program that registers it is the `terminal-pty` entry point of
   `terminal/`.
-- `files/` - The file viewer: dufs over `data/`, run from its program line with
-  a vendored, patched frontend.
+- `files/` - The file viewer: dufs over the container's filesystem, opened at the
+  workspace folder, run from its program line with a vendored, patched frontend.
 - `browser/` - The live browser: a fleet of Chromium browsers streamed to the
   UI by its daemon (`browser-service`).
 

@@ -12,5 +12,5 @@ mode = "new"
 [[launch_paths]]
 id = "new"
 label = "File Viewer"
-path = "/"
+path = "/home/user/workspace/"
 params = [{name = "path", label = "Path", required = false}]

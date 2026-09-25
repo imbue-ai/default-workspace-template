@@ -382,7 +382,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     ]
     assert by_name["chat"].default_shortcut is not None
     assert by_name["chat"].default_shortcut.launch == "root"
-    for name, launch_path, method in (("terminal", "/new", "POST"), ("files", "/", "GET"), ("browser", "/new", "POST")):
+    for name, launch_path, method in (("terminal", "/new", "POST"), ("files", "/home/user/workspace/", "GET"), ("browser", "/new", "POST")):
         assert [(entry.id, entry.path, entry.method.value) for entry in by_name[name].launch_paths] == [
             ("new", launch_path, method)
         ], name

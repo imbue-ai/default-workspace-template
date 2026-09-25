@@ -89,4 +89,20 @@ if command -v pi >/dev/null 2>&1; then
             fi
         fi
     done
+    # pi's own startup default is the first model of the first provider with a
+    # key, which on OpenRouter is a weak model. Seed a stronger one; pi ignores
+    # it whenever that provider has no key and falls back to its usual pick.
+    # Set only when neither key exists, so a default the user saved from pi's
+    # model picker (Ctrl+S) survives every boot.
+    if command -v jq >/dev/null 2>&1; then
+        mkdir -p /home/user/.pi/agent
+        [ -s /home/user/.pi/agent/settings.json ] || printf '{}\n' > /home/user/.pi/agent/settings.json
+        if jq 'if has("defaultProvider") or has("defaultModel") then . else . + {defaultProvider: "openrouter", defaultModel: "z-ai/glm-5.3"} end' \
+            /home/user/.pi/agent/settings.json > /home/user/.pi/agent/settings.json.tmp; then
+            mv /home/user/.pi/agent/settings.json.tmp /home/user/.pi/agent/settings.json
+        else
+            rm -f /home/user/.pi/agent/settings.json.tmp
+            echo "seed_home_skeleton: warning: failed to seed the pi default model" >&2
+        fi
+    fi
 fi
