@@ -14,11 +14,12 @@ auth scheme the service's API takes, for row 2 or row 5.
 
 Even the service's own server, run here, is code with this workspace's access,
 including every variable the wrapper hands it; the secrets guard stops your own
-tool calls, not a process. So install the version you looked at, not whatever is newest at each
-launch. `npm view <package> version` gives an npm package's current version, and
-its pypi.org page gives a Python package's; the command names that version
-(`npx -y @example/mcp-server@1.2.3`, `uvx example-mcp@1.2.3`). To move to a
-newer version, look at what changed and edit the pin.
+tool calls, not a process. So install the version you looked at, not whatever
+is newest at each launch. `npm view <package> version` gives an npm package's
+current version, and its pypi.org page gives a Python package's; the command
+names that version (`npx -y @example/mcp-server@1.2.3`,
+`uvx example-mcp@1.2.3`). To move to a newer version, look at what changed and
+edit the pin.
 
 MCP is allowed for a service latchkey has no builtin for. The workspace disables
 claude.ai's own connector sync (`ENABLE_CLAUDEAI_MCP_SERVERS=false` in
