@@ -537,7 +537,7 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         # snapshot pushed to the agent manager, compared so an unchanged queue pushes
         # nothing. The callback is set once before ``start`` and read without the lock.
         self._queue_tracker = ClaudeQueueTracker.build()
-        self._last_broadcast_queue_snapshot: list[dict[str, str]] = []
+        self._last_broadcast_queue_snapshot: list[dict[str, Any]] = []
         self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
 
     # -- base hooks -----------------------------------------------------------------------
@@ -552,6 +552,10 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         # committed transcript turn in the SAME cycle (its LEAVE record and its ``user``
         # record ride the same file). Push the queue snapshot (the chip REMOVAL) before the
         # transcript turn is broadcast, so the message is never a chip and a turn at once.
+        # The emit cycle runs at least once per poll interval, which is also what drops a
+        # message left queued past the idle grace when nothing else wakes the watcher.
+        with self._lock:
+            self._queue_tracker.expire(time.monotonic())
         self._broadcast_queue_snapshot_if_changed()
 
     # -- the queue feed -------------------------------------------------------------------
@@ -620,15 +624,15 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         self._broadcast_queue_snapshot_if_changed()
 
     def notify_idle(self) -> list[dict[str, Any]]:
-        """Apply the working->IDLE backstop and return the resulting (empty) snapshot.
+        """Apply the working->IDLE backstop and return the resulting snapshot.
 
         The caller (the agent manager, on a working->IDLE transition) folds the returned
         snapshot into the same broadcast that carries the IDLE activity state, so this does
-        not push a broadcast of its own -- it only records the cleared snapshot as
-        broadcast so the poll loop does not re-push it.
+        not push a broadcast of its own -- it only records the snapshot as broadcast so
+        the poll loop does not re-push it.
         """
         with self._lock:
-            self._queue_tracker.on_idle()
+            self._queue_tracker.on_idle(time.monotonic())
             snapshot = self._queue_tracker.snapshot()
             self._last_broadcast_queue_snapshot = snapshot
         return snapshot

@@ -1325,6 +1325,38 @@ def test_queued_to_delivered_emits_chip_removal_before_the_transcript_turn(tmp_p
     assert order_log == ["queue:[]", "turn:1"]
 
 
+def test_a_message_queued_through_the_reply_stays_shown_until_its_turn(tmp_path: Path) -> None:
+    """The agent reads as IDLE the moment its reply lands, before claude dequeues what was
+    queued behind it. The idle backstop keeps that message (as being sent) instead of blanking
+    it, and its own leave record removes it in the cycle its turn arrives."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    order_log: list[str] = []
+    watcher = ClaudeSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        work_dir=None,
+        on_events=lambda _aid, evts: order_log.append(f"turn:{len(evts)}"),
+    )
+    watcher.set_queue_snapshot_callback(
+        lambda snapshot: order_log.append(f"queue:{[entry['content'] for entry in snapshot]}")
+    )
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_enqueue_record("follow-up", "test-session")) + "\n").encode("utf-8"))
+    watcher._emit_cycle()
+
+    assert [(entry["content"], entry["is_sending"]) for entry in watcher.notify_idle()] == [("follow-up", True)]
+
+    order_log.clear()
+    watcher._emit_cycle()
+    assert order_log == []
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_dequeue_record("test-session")) + "\n").encode("utf-8"))
+        f.write((json.dumps(_user_event(1, "follow-up")) + "\n").encode("utf-8"))
+    watcher._emit_cycle()
+    assert order_log == ["queue:[]", "turn:1"]
+
+
 def test_reprime_after_backend_restart_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
     """claude --resume RE-APPENDS to the same session file, so a backend restart's
     priming replay walks a ledger that can still hold enqueues a killed claude

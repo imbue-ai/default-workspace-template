@@ -3770,9 +3770,9 @@ class AgentManager:
         """Register the agent watcher's working->IDLE queue backstop.
 
         Called once when the watcher is created. On a working->IDLE transition
-        ``_recompute_activity_state`` invokes it: the handler clears the harness
-        queue populator and returns the resulting (empty) snapshot, which the same
-        broadcast that carries the IDLE state also carries.
+        ``_recompute_activity_state`` invokes it: the handler applies the harness
+        queue populator's idle backstop and returns the resulting snapshot, which the
+        same broadcast that carries the IDLE state also carries.
         """
         with self._lock:
             self._queue_idle_handler_by_agent[agent_id] = handler
@@ -4022,8 +4022,8 @@ class AgentManager:
             )
             idle_handler = self._queue_idle_handler_by_agent.get(agent_id) if has_stale_queue else None
 
-        # The idle handler clears the watcher's queue populator and returns the
-        # resulting (empty) snapshot; it calls into the watcher, so it runs outside
+        # The idle handler applies the watcher's queue backstop and returns the
+        # resulting snapshot; it calls into the watcher, so it runs outside
         # the lock, and its snapshot is folded into the same broadcast as the IDLE
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
