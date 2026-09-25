@@ -111,6 +111,15 @@ describe("installElementContextMenu", () => {
     expect(card()!.style.left).toBe("70px");
   });
 
+  it("keeps a press on a row from taking focus off the target", () => {
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    rightClick(document.getElementById("para") as Element);
+    const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    row("explain-element").dispatchEvent(press);
+    expect(press.defaultPrevented).toBe(true);
+    expect(card()).not.toBeNull();
+  });
+
   it("keeps the open card on a right-click on the card itself, describing none of its own buttons", () => {
     uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
     rightClick(document.getElementById("para") as Element);

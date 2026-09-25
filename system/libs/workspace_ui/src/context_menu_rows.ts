@@ -107,6 +107,7 @@ async function cutFrom(element: Element, selectionText: string): Promise<void> {
     return;
   }
   await copyText(selectionText);
+  (element as HTMLElement).focus();
   element.ownerDocument.execCommand("delete");
 }
 

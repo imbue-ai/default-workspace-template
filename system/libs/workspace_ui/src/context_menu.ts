@@ -182,6 +182,9 @@ export function createDefaultRenderer(
       button.addEventListener("mouseleave", () => {
         button.style.background = "transparent";
       });
+      // The press must not move focus off the target the edit rows act on, nor collapse the
+      // selection there, as the shared Menu keeps its sheet's press from doing; the click still fires.
+      button.addEventListener("mousedown", (event) => event.preventDefault());
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         if (isDisabled) return;
