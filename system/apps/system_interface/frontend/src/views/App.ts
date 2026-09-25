@@ -332,12 +332,8 @@ export function App(): m.Component<AppAttrs> {
       },
       onLongPress: (binding, client) => {
         const anchor = anchorForPoint(client.x, client.y);
-        const referenceRows = referenceRowsFor(
-          current,
-          document.elementFromPoint(client.x, client.y),
-          client.x,
-          client.y,
-        );
+        const referenceRows = (): MenuRow[] =>
+          referenceRowsFor(current, document.elementFromPoint(client.x, client.y), client.x, client.y);
         switch (binding.kind) {
           case "window-move":
           case "window-resize":
@@ -347,15 +343,17 @@ export function App(): m.Component<AppAttrs> {
             const shortcut = activeDesktop(current.getState())?.shortcuts.find(
               (candidate) => candidate.target.app === binding.app && candidate.target.launch === binding.launch,
             );
-            if (shortcut !== undefined) openMenuAt({ kind: "shortcut", shortcut, referenceRows }, anchor);
+            if (shortcut !== undefined) {
+              openMenuAt({ kind: "shortcut", shortcut, referenceRows: referenceRows() }, anchor);
+            }
             break;
           }
           case "taskbar-entry":
-            openMenuAt({ kind: "entry", windowId: binding.windowId, referenceRows }, anchor);
+            openMenuAt({ kind: "entry", windowId: binding.windowId, referenceRows: referenceRows() }, anchor);
             break;
           case "floating-entry": {
             const windowId = pinnedWindowIdOf(binding.app);
-            if (windowId !== null) openMenuAt({ kind: "entry", windowId, referenceRows }, anchor);
+            if (windowId !== null) openMenuAt({ kind: "entry", windowId, referenceRows: referenceRows() }, anchor);
             break;
           }
         }
