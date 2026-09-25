@@ -29,14 +29,16 @@ from typing import Any
 import pytest
 import simple_websocket
 import websockets
+import Xlib.error
 from browser import manifest, mediastream, runner
 from browser import session as bsession
 from browser.cdp_client import CdpError
 from browser.cdp_proxy import ProxyServer
+from browser.window_guardian import WindowGuardian
 from browser.wsgi import make_threaded_server
 from browser.xinput import InputRouter
 from playwright.async_api import Error as PlaywrightError
-from Xlib import X, Xatom
+from Xlib import X
 from Xlib.display import Display
 
 # Real Chromium launches but its CDP connection never completes on the GitHub Actions
@@ -618,16 +620,20 @@ def _browser_window_count(display: str) -> int:
     """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
     disp = Display(display)
     try:
-        window_type = disp.intern_atom("_NET_WM_WINDOW_TYPE")
-        normal = disp.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL")
+        atoms = {
+            "window_type": disp.intern_atom("_NET_WM_WINDOW_TYPE"),
+            "type_normal": disp.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL"),
+        }
         count = 0
         for window in disp.screen().root.query_tree().children:
-            attrs = window.get_attributes()
-            if attrs.map_state != X.IsViewable or attrs.override_redirect:
-                continue
-            prop = window.get_full_property(window_type, Xatom.ATOM)
-            if prop is None or not prop.value or normal in prop.value:
-                count += 1
+            try:
+                attrs = window.get_attributes()
+                if attrs.map_state != X.IsViewable or attrs.override_redirect:
+                    continue
+                if WindowGuardian._is_browser_window(window, atoms):
+                    count += 1
+            except Xlib.error.BadWindow:
+                continue  # gone between query_tree and the read
         return count
     finally:
         disp.close()
