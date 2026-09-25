@@ -9,16 +9,23 @@ from pathlib import Path
 import pytest
 
 from host_backup.cli import (
+    _TAIL_READ_MAX_BYTES,
     EXIT_BACKUP_FAILED,
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
-    _TAIL_READ_MAX_BYTES,
+    _EventsLogFollower,
     _exit_code_for_completion,
     _read_tail_lines,
     _scan_for_inflight_tick_ids,
     _wait_for_next_completion,
 )
-from host_backup.events import BackupEventType, make_event, write_event
+from host_backup.events import (
+    EVENTS_LOG_ROTATION_BYTES,
+    BackupEventType,
+    make_event,
+    rotate_events_log_if_over,
+    write_event,
+)
 
 # Long enough that a waiter which fails to recognise a terminal event is
 # unambiguously stuck rather than merely slow, short enough that the test still
@@ -76,6 +83,7 @@ def test_wait_ends_on_every_tick_ending_and_maps_it_to_an_exit_code(
     expected_exit_code: int,
 ) -> None:
     """Every way a tick can end has to end the wait and pick out its own exit code."""
+    follower = _EventsLogFollower(tmp_path / "events.jsonl")
     _write_tick(
         tmp_path,
         BackupEventType.BACKUP_STARTED,
@@ -84,7 +92,7 @@ def test_wait_ends_on_every_tick_ending_and_maps_it_to_an_exit_code(
         tick_id="tick-under-test",
     )
     completion = _wait_for_next_completion(
-        tmp_path / "events.jsonl", 0, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
+        follower, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
     )
     assert completion is not None
     assert completion["type"] == terminal_event.value
@@ -93,9 +101,9 @@ def test_wait_ends_on_every_tick_ending_and_maps_it_to_an_exit_code(
 
 def test_wait_times_out_when_the_tick_never_resolves(tmp_path: Path) -> None:
     """A tick that emits nothing terminal still has to hit the deadline and report it."""
+    follower = _EventsLogFollower(tmp_path / "events.jsonl")
     _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-hung")
-    events_path = tmp_path / "events.jsonl"
-    completion = _wait_for_next_completion(events_path, 0, time.monotonic() + 0.1)
+    completion = _wait_for_next_completion(follower, time.monotonic() + 0.1)
     assert completion is None
 
 
@@ -104,11 +112,56 @@ def test_wait_ignores_events_already_present_before_the_trigger(tmp_path: Path) 
     _write_tick(
         tmp_path, BackupEventType.RESTIC_BACKUP_SUCCEEDED, tick_id="tick-previous"
     )
-    events_path = tmp_path / "events.jsonl"
-    completion = _wait_for_next_completion(
-        events_path, events_path.stat().st_size, time.monotonic() + 0.1
-    )
+    follower = _EventsLogFollower(tmp_path / "events.jsonl")
+    completion = _wait_for_next_completion(follower, time.monotonic() + 0.1)
     assert completion is None
+
+
+@pytest.mark.parametrize(
+    "new_log_filler_bytes",
+    [
+        pytest.param(0, id="new-log-shorter-than-the-old-offset"),
+        pytest.param(
+            EVENTS_LOG_ROTATION_BYTES, id="new-log-longer-than-the-old-offset"
+        ),
+    ],
+)
+def test_wait_follows_the_log_across_a_rotation(
+    tmp_path: Path, new_log_filler_bytes: int
+) -> None:
+    """The runner rotates the log at the top of the very tick the command triggered,
+    so that tick's events all land in a fresh file. A waiter that kept a byte offset
+    into the path read the new file from the old one's end -- nothing at all when the
+    new file is shorter, only what follows the tick when it is longer -- and timed
+    out on a tick that had finished."""
+    events_path = tmp_path / "events.jsonl"
+    _write_tick(
+        tmp_path, BackupEventType.RESTIC_BACKUP_SUCCEEDED, tick_id="tick-previous"
+    )
+    with events_path.open("r+b") as fh:
+        fh.seek(EVENTS_LOG_ROTATION_BYTES)
+        fh.write(b"\n")
+    follower = _EventsLogFollower(events_path)
+
+    rotate_events_log_if_over(tmp_path)
+    _write_tick(
+        tmp_path,
+        BackupEventType.BACKUP_STARTED,
+        BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS,
+        tick_id="tick-triggered",
+    )
+    with events_path.open("ab") as fh:
+        fh.write(b"\0" * new_log_filler_bytes + b"\n")
+
+    completion = _wait_for_next_completion(
+        follower, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
+    )
+
+    assert completion is not None
+    assert completion["tick_id"] == "tick-triggered"
+    assert (
+        completion["type"] == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value
+    )
 
 
 def test_inflight_scan_treats_every_tick_ending_as_finished(tmp_path: Path) -> None:
@@ -201,7 +254,10 @@ def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> 
     events_path = tmp_path / "events.jsonl"
     events_path.write_text("first-line-is-long\nsecond\nthird\n")
 
-    assert _read_tail_lines(events_path, max_lines=10, max_bytes=14) == ["second", "third"]
+    assert _read_tail_lines(events_path, max_lines=10, max_bytes=14) == [
+        "second",
+        "third",
+    ]
     assert _read_tail_lines(events_path, max_lines=10, max_bytes=10_000) == [
         "first-line-is-long",
         "second",

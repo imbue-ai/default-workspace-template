@@ -9,7 +9,7 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
-import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
+import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
   desktopRecord,
@@ -174,6 +174,25 @@ describe("a window drag", () => {
     expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("SNAPPED_LEFT");
     expect(preview.style.display).toBe("none");
   });
+
+  // The press, not the begin: the pixels a press spends reaching the drag threshold are spent beside the
+  // handle, and a page still live there takes the moves that would have crossed it.
+  it("makes the pages inert from the press, and gives them back when the press ends", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    // Every box measures as empty under jsdom, and a page over a content box with no area is hidden rather
+    // than laid out, which is the only step that writes the page's pointer events.
+    const content = document.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+    m.redraw.sync();
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect(page.style.pointerEvents).toBe("auto");
+    const listener = gestureListener as GestureListener;
+    listener.onPressStart(binding);
+    expect(page.style.pointerEvents).toBe("none");
+    listener.onPressEnd(binding);
+    expect(page.style.pointerEvents).toBe("auto");
+  });
 });
 
 describe("Escape", () => {
@@ -219,20 +238,32 @@ function pressOn(element: HTMLElement): void {
 }
 
 describe("the avatar chooser", () => {
-  // The pinned app takes a draft at its home path, so the chooser's prompt goes to this client's view of its window.
+  // The pinned app declares a launch path taking a draft, so the chooser's prompt is launched into this client's
+  // view of its window.
   const buddy = appRecord("buddy", {
     pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
-    launch_paths: [launchPathRecord({ id: "root", path: "/", params: ["draft"] })],
+    launch_paths: [
+      launchPathRecord({
+        id: "draft",
+        path: "/api/intake",
+        method: "POST",
+        params: ["message"],
+        presets: { is_draft: "true" },
+        draft_param: "message",
+      }),
+    ],
   });
 
   /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
   function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
-    socket.deliver().onAppsUpdated([appRecord("docs"), buddy, ...apps]);
-    socket.deliver().onDesktopsUpdated([
+    offerApps(api, socket, [appRecord("docs"), buddy, ...apps]);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    api.desktops = [
       desktopRecord("home", {
         windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
       }),
-    ]);
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
     m.redraw.sync();
     return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
   }
@@ -253,8 +284,10 @@ describe("the avatar chooser", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
     await settle();
-    const prompt = new URLSearchParams({ draft: AVATAR_DESIGN_PROMPT }).toString();
-    expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?${prompt}:Buddy`);
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: AVATAR_DESIGN_PROMPT })}:window:win-9`,
+    );
+    expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?chat=agent-1:`);
     expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
 
     openEntryMenuRow(entry, "style-plain");

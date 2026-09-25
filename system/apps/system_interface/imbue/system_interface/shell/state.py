@@ -2,16 +2,19 @@
 
 import threading
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import assert_never
 
 from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from app_manifest.registry import RegistryLaunchPath
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -23,6 +26,8 @@ from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTO
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
+from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -32,6 +37,7 @@ from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
@@ -40,9 +46,12 @@ from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import EntryPresentation
+from imbue.system_interface.shell.data_types import LaunchOutcome
+from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import StoredWindowPath
+from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
@@ -50,6 +59,7 @@ from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import window_wire_json
+from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import pinned_apps
@@ -59,23 +69,37 @@ from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
+from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
+from imbue.system_interface.shell.desktops import desktop_kept_by_returning_client
+from imbue.system_interface.shell.desktops import desktop_name_for_user
+from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
+from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import PinnedWindowError
+from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPoster
+from imbue.system_interface.shell.launches import post_launch
+from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
+from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
+from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
 from imbue.system_interface.shell.window_paths import WindowPathStore
 from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
@@ -105,6 +129,10 @@ class ShellState(MutableModel):
         frozen=True, description="Where the workspace's own wallpaper files are read from"
     )
     clients: ClientStore = Field(frozen=True, description="clients.json")
+    users: UserStore = Field(frozen=True, description="users.json: the desktop made for each signed-in visitor")
+    profiles: ProfileResolver = Field(
+        frozen=True, description="Each account's display name and avatar, from imbue_cloud through the on-disk cache"
+    )
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     avatar_catalog: AvatarCatalogStore = Field(
@@ -124,6 +152,11 @@ class ShellState(MutableModel):
         default=post_window_closed_hint,
         frozen=True,
         description="How an app is told a window of its closed; a test records the hints instead",
+    )
+    launch_poster: LaunchPoster = Field(
+        default=post_launch,
+        frozen=True,
+        description="How a POST launch path is asked for its page; a test answers the posts itself",
     )
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -208,10 +241,64 @@ class ShellState(MutableModel):
             raise DesktopValueError(f"No registered app named {app!r}")
         return entry
 
-    def require_launch_path(self, entry: AppInventoryEntry, launch: LaunchPathId) -> None:
-        """Raises DesktopValueError (a 400) unless the app offers the launch path (the synthesized ``open`` included)."""
-        if launch not in {launch_path.id for launch_path in effective_launch_paths(entry.row)}:
+    def require_launch_path(self, entry: AppInventoryEntry, launch: LaunchPathId) -> RegistryLaunchPath:
+        """The launch path the app offers under ``launch`` (the synthesized ``open`` included); raises
+        DesktopValueError (a 400) for any other id."""
+        launch_path = next(
+            (candidate for candidate in effective_launch_paths(entry.row) if candidate.id == launch), None
+        )
+        if launch_path is None:
             raise DesktopValueError(f"App {str(entry.row.name)!r} declares no launch path {str(launch)!r}")
+        return launch_path
+
+    def launch_destination(
+        self,
+        entry: AppInventoryEntry,
+        launch_path: RegistryLaunchPath,
+        params: Mapping[str, str],
+        client_id: ClientId | None,
+        desktop_id: DesktopId | None,
+        window_path: WindowPath | None,
+    ) -> WindowPath:
+        """The page a launch of the path opens (post-launch-paths plan section 3.2): built for a GET launch path,
+        asked of the app for a POST one, with the requesting client, its desktop, and the aimed-at window's path as
+        the envelope. Raises LaunchRefusedError (a 400) and LaunchUnavailableError (a 502)."""
+        return resolve_launch_destination(
+            entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
+        )
+
+    def launch(self, desktop_id: str, request: LaunchRequest) -> LaunchOutcome:
+        """Run a launch path for a client (post-launch-paths plan section 5.3): resolve the page it opens, then open a
+        window there (the ``new`` and ``focus`` targets, as ``open_window`` does) or point the named window at it
+        (the ``window`` target, as the op route's ``navigate`` does)."""
+        desktop = self.get_desktop(desktop_id)
+        entry = self.require_app_entry(str(request.app))
+        launch_path = self.require_launch_path(entry, request.launch)
+        match request.target.kind:
+            case LaunchTargetKind.NEW | LaunchTargetKind.FOCUS:
+                path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
+                if_present = IfPresent.NEW if request.target.kind is LaunchTargetKind.NEW else IfPresent.FOCUS
+                opened = self.open_window(
+                    desktop.id,
+                    WindowOpenRequest(app=request.app, path=path, client_id=request.client_id, if_present=if_present),
+                    request.minimized,
+                )
+                return LaunchOutcome(window=opened.window, path=path, is_new=opened.is_new)
+            case LaunchTargetKind.WINDOW:
+                assert request.target.window_id is not None, "a window target names its window"
+                window = require_window(desktop, request.target.window_id)
+                if window.app != request.app:
+                    raise DesktopValueError(
+                        f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}"
+                    )
+                seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+                path = self.launch_destination(
+                    entry, launch_path, request.params, request.client_id, desktop.id, seen.path
+                )
+                navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
+                return LaunchOutcome(window=navigated, path=path, is_new=False)
+            case _ as unreachable:
+                assert_never(unreachable)
 
     def get_desktop(self, desktop_id: str) -> Desktop:
         for desktop in self.list_desktops():
@@ -318,7 +405,7 @@ class ShellState(MutableModel):
         already at that exact path is answered instead, restored and raised there unless the open asked for
         minimized, in which case it is left as placed (desktop plan section 4.1)."""
         desktop = self.get_desktop(desktop_id)
-        self._require_open_target(request.app, request.launch)
+        self.require_app_entry(str(request.app))
         if request.if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, request.app, request.path)
             if existing is not None:
@@ -327,7 +414,7 @@ class ShellState(MutableModel):
                         desktop, request.client_id, lambda layout: with_window_raised(layout, existing.id)
                     )
                 return WindowOpenOutcome(window=existing, is_new=False)
-        opened_on, window = self._append_window(desktop, request.app, request.path, request.launch)
+        opened_on, window = self._append_window(desktop, request.app, request.path)
         placed = self._edit_placements(
             opened_on,
             request.client_id,
@@ -341,38 +428,30 @@ class ShellState(MutableModel):
         return WindowOpenOutcome(window=window, is_new=True)
 
     def open_window_unplaced(
-        self, desktop_id: str, app: AppName, path: WindowPath, launch: LaunchPathId | None, if_present: IfPresent
+        self, desktop_id: str, app: AppName, path: WindowPath, if_present: IfPresent
     ) -> WindowOpenOutcome:
         """An open with no client to place it for (an agent's, with nobody connected): the window exists on the
         desktop for everyone and reads as minimized in every layout; with ``if_present`` focus, a window of the app
         already at the path is answered as it stands."""
         desktop = self.get_desktop(desktop_id)
-        self._require_open_target(app, launch)
+        self.require_app_entry(str(app))
         if if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, app, path)
             if existing is not None:
                 return WindowOpenOutcome(window=existing, is_new=False)
-        _, window = self._append_window(desktop, app, path, launch)
+        _, window = self._append_window(desktop, app, path)
         self.broadcast_desktops_updated()
         logger.info("Opened window {} of {} at {} on desktop {} for no client", window.id, app, path, desktop.id)
         return WindowOpenOutcome(window=window, is_new=True)
 
-    def _require_open_target(self, app: AppName, launch: LaunchPathId | None) -> None:
-        entry = self.require_app_entry(str(app))
-        if launch is not None:
-            self.require_launch_path(entry, launch)
-
-    def _append_window(
-        self, desktop: Desktop, app: AppName, path: WindowPath, launch: LaunchPathId | None
-    ) -> tuple[Desktop, Window]:
-        """Mint a window and write it onto the desktop; a window opened at a launch path settles until its page reports."""
+    def _append_window(self, desktop: Desktop, app: AppName, path: WindowPath) -> tuple[Desktop, Window]:
+        """Mint a window and write it onto the desktop."""
         window = Window(
             id=mint_window_id(),
             app=app,
             path=path,
             title=WindowTitle(""),
             opened_at=datetime.now(timezone.utc),
-            is_settling=launch is not None,
         )
         return self.desktops.open_window(desktop.id, window), window
 
@@ -454,6 +533,109 @@ class ShellState(MutableModel):
             self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(desktop_id))
         return outcome.is_active_desktop_changed
 
+    def arrive_client(self, client_id: ClientId, identity: RequestIdentity) -> ClientArrivalOutcome | None:
+        """Where a client whose shell page just loaded lands (desktop plan section 3.10): the owner and anonymous
+        clients follow the rule of contracts.md section 4.3; a signed-in visitor lands on the desktop made for them,
+        seeded from the first desktop on their first arrival (and again, with a notice, if it has since been deleted),
+        while a returning client of theirs keeps the desktop it was on. None while the workspace has no desktop."""
+        now = datetime.now(timezone.utc)
+        user_id = visiting_user_id(identity)
+        # The profile (what the desktop made for a visitor is named after) is resolved before the lock: it may be a
+        # fetch, bounded but slow, and nobody else's arrival should wait on it.
+        profile = self.profiles.resolve(user_id, now) if user_id is not None else None
+        # The whole read-decide-write runs under the state lock (re-entrant, so the stores' own takes nest): two
+        # arrivals of one new user at once (a browser restoring its tabs) must not both seed a desktop for them.
+        with STATE_FILES_LOCK:
+            desktops = self.list_desktops()
+            record = self.clients.get_client(client_id)
+            shared_landing = resolve_active_desktop(record, desktops)
+            if shared_landing is None:
+                return None
+            outcome = (
+                self._land_visiting_user(user_id, identity, profile, record, desktops, now)
+                if user_id is not None
+                else ClientArrivalOutcome(desktop_id=shared_landing, created_desktop=None, replaced_desktop_name=None)
+            )
+            # Every arrival stamps the user it came as (None for the owner), so the returning-client rule never
+            # reads a user the browser has since stopped being.
+            recorded = self.clients.record_arrival(client_id, user_id, outcome.desktop_id, now)
+        if outcome.created_desktop is not None:
+            self.broadcast_desktops_updated()
+        # A client that already had a record may have other windows open on the desktop it was moved off.
+        if record is not None and recorded.is_active_desktop_changed:
+            self.broadcaster.broadcast_active_desktop_changed(str(client_id), str(outcome.desktop_id))
+        return outcome
+
+    def _land_visiting_user(
+        self,
+        user_id: UserId,
+        identity: RequestIdentity,
+        profile: UserProfile | None,
+        record: ClientRecord | None,
+        desktops: Sequence[Desktop],
+        now: datetime,
+    ) -> ClientArrivalOutcome:
+        """Where a visiting user's client lands, with the user's record brought up to date: the desktop made for
+        them, seeded now when they have none or when the one they had has been deleted (which the outcome names),
+        unless the client is a returning one of theirs, which keeps the desktop it was on. Runs under the state lock."""
+        known = self.users.get_user(user_id)
+        desktop_by_id = {desktop.id: desktop for desktop in desktops}
+        own_desktop = desktop_by_id.get(known.desktop_id) if known is not None else None
+        created: Desktop | None = None
+        replaced_desktop_name: str | None = None
+        if own_desktop is not None:
+            kept = desktop_kept_by_returning_client(record, user_id, desktop_by_id.keys())
+            landing = kept if kept is not None else own_desktop.id
+        else:
+            created = self._create_desktop_for_user(identity, profile, desktops, now)
+            own_desktop = created
+            landing = created.id
+            replaced_desktop_name = known.desktop_name if known is not None else None
+        # The record carries the desktop's name as it stands at this arrival, so a notice after a deletion names
+        # the desktop as the user last saw it, renames included.
+        self.users.record_user(
+            UserRecord(
+                user_id=user_id,
+                desktop_id=own_desktop.id,
+                desktop_name=own_desktop.name,
+                email=identity.email,
+                display_name=profile.display_name if profile is not None else None,
+                last_seen=now,
+            )
+        )
+        return ClientArrivalOutcome(
+            desktop_id=landing, created_desktop=created, replaced_desktop_name=replaced_desktop_name
+        )
+
+    def _create_desktop_for_user(
+        self, identity: RequestIdentity, profile: UserProfile | None, desktops: Sequence[Desktop], now: datetime
+    ) -> Desktop:
+        """A desktop named after the user (their profile's display name, else their email's local part), seeded from
+        the first desktop (its shortcuts, wallpaper, and windows as new windows), with the next free glyph and that
+        glyph's colour."""
+        name = desktop_name_for_user(profile.display_name if profile is not None else None, identity.email, desktops)
+        glyph = next_glyph_index([desktop.glyph for desktop in desktops])
+        source = desktops[0]
+        seeded = desktop_seeded_from(
+            source,
+            slugify_desktop_name(name),
+            name,
+            DESKTOP_GLYPH_COLORS[glyph],
+            glyph,
+            [mint_window_id() for _ in source.windows],
+            now,
+        )
+        created = self.desktops.add_desktop(seeded)
+        logger.info(
+            "Seeded desktop {!r} for user {} from {!r} ({} shortcut(s), {} window(s))",
+            created.name,
+            identity.user_id,
+            source.name,
+            len(created.shortcuts),
+            len(created.windows),
+        )
+        return created
+
     def set_client_entry_presentation(
         self, client_id: ClientId, app: AppName, presentation: EntryPresentation
     ) -> ClientRecord:
@@ -495,11 +677,15 @@ def build_shell_state(
     avatar_catalog_directory: Path = DEFAULT_AVATAR_CATALOG_DIRECTORY,
     agent_events_path: Path | None = None,
     repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
+    profiles: ProfileResolver | None = None,
+    launch_poster: LaunchPoster | None = None,
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests, and
     ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
     environment names; ``repo_root`` (the workspace the update notice's record and script live under) is the
-    served tree by default."""
+    served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
+    that can reach no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a
+    POST launch path is asked for its page) defaults to the loopback POST."""
     return ShellState(
         state_directory=state_directory,
         inventory=inventory
@@ -510,6 +696,12 @@ def build_shell_state(
         window_paths=WindowPathStore(state_directory=state_directory),
         wallpaper_files_directory=wallpaper_files_directory,
         clients=ClientStore(state_directory=state_directory),
+        users=UserStore(state_directory=state_directory),
+        profiles=profiles
+        if profiles is not None
+        else ProfileResolver(
+            cache_directory=state_directory / "profiles", share_env_path=state_directory / "share.env"
+        ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=avatar_catalog_directory),
@@ -519,4 +711,5 @@ def build_shell_state(
             broadcaster=broadcaster,
         ),
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),
+        launch_poster=launch_poster if launch_poster is not None else post_launch,
     )

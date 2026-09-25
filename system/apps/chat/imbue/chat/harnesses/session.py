@@ -110,6 +110,9 @@ class SessionDeps(FrozenModel):
     send_to_harness: Callable[[str], bool]
     # Push a fresh agents snapshot to clients (tap-button greying rides this).
     notify_agents_changed: Callable[[], None]
+    # Whether the harness's process has launched but not yet written its ready marker (False for a
+    # harness that writes none).
+    is_harness_starting_up: Callable[[], bool]
     # Whether the manager still tracks this agent (a connection built after teardown is dropped).
     is_tracked: Callable[[], bool]
     # Codex connection callbacks: the ledger's queue snapshot / committed user-turn fan-out.
@@ -144,11 +147,16 @@ class AgentHarnessSession(ABC):
         """The harness this session was built for (the manager heals a mismatched cache)."""
         return self._deps.harness
 
-    # -- liveness ---------------------------------------------------------------------------
+    # Liveness
 
     def ensure_live(self) -> None:
         """Bring up whatever live backend the harness needs (blocking OK). No-op default:
         a file harness has no daemon to connect."""
+
+    def is_starting_up(self) -> bool:
+        """Whether a send now would first wait for the harness to come up (the chat shows it as
+        connecting). Default: the harness's own ready marker says it has not finished starting."""
+        return self._deps.is_harness_starting_up()
 
     def on_lifecycle_dead(self) -> None:
         """The agent's mngr lifecycle is positively dead; drop live state that died with it.
@@ -158,7 +166,7 @@ class AgentHarnessSession(ABC):
     def close(self) -> None:
         """Terminal teardown (the manager stopped tracking the agent). No-op default."""
 
-    # -- messages ---------------------------------------------------------------------------
+    # Messages
 
     @abstractmethod
     def send(self, text: str, message_id: str) -> SendOutcome:
@@ -172,7 +180,7 @@ class AgentHarnessSession(ABC):
         """The still-in-flight (Sending) messages as one concatenated block ('' = none)."""
         return ""
 
-    # -- turn control -----------------------------------------------------------------------
+    # Turn control
 
     def is_tap_available(self, *, has_queued: bool) -> bool:
         """Whether the shoulder-tap button is offered (contract Shoulder-tap): something is
@@ -200,7 +208,7 @@ class AgentHarnessSession(ABC):
     ) -> str:
         """Interrupt the running turn and return the queued block to the composer."""
 
-    # -- model options ----------------------------------------------------------------------
+    # Model options
 
     def switch_options(self) -> tuple[ModelOption, ...]:
         """The option set the switch endpoint validates against; static catalog by default."""

@@ -3,11 +3,15 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { appRecord, avatarStateRecord, desktopRecord, windowRecord } from "../testing/records";
+import { applyPresence, resetPresenceForTesting } from "../model/Presence";
+import { appRecord, avatarStateRecord, desktopRecord, presentUserRecord, windowRecord } from "../testing/records";
 import { Taskbar } from "./Taskbar";
 import type { TaskbarAttrs } from "./Taskbar";
 
-afterEach(unmountViews);
+afterEach(() => {
+  unmountViews();
+  resetPresenceForTesting();
+});
 
 function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
   const docs = appRecord("docs");
@@ -24,7 +28,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         look: null,
       },
       {
-        window: windowRecord("win-2", "docs", "/new", { is_settling: true }),
+        window: windowRecord("win-2", "docs", "/new"),
         app: docs,
         title: "Docs",
         isMinimized: true,
@@ -80,7 +84,6 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.getAttribute("data-taskbar-entry"))).toEqual(["win-1", "win-2", "win-3"]);
     expect(entries.map((entry) => entry.getAttribute("data-minimized"))).toEqual(["false", "true", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-focused"))).toEqual(["true", "false", "false"]);
-    expect(entries.map((entry) => entry.getAttribute("data-settling"))).toEqual(["false", "true", "false"]);
     expect(entries.map((entry) => entry.getAttribute("data-pinned"))).toEqual(["false", "false", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-pinned-entry"))).toEqual([null, null, "docs"]);
     expect(entries[2].getAttribute("data-entry-mode")).toBe("bar");
@@ -128,7 +131,7 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40);
   });
 
-  it("carries the launcher field and the two tray widgets, with a glyph per desktop and an icon per running app", () => {
+  it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {
     const onSwitchDesktop = vi.fn();
     const taskbar = render({
       tray: {
@@ -148,6 +151,19 @@ describe("Taskbar", () => {
     expect(onSwitchDesktop).toHaveBeenCalledWith("work");
     expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
+  });
+
+  it("draws the Presence widget in front of Desktops once two users are connected", () => {
+    applyPresence([presentUserRecord("user-bob-4471"), presentUserRecord("user-owner-9c21", { owner: true })]);
+    const taskbar = render();
+    const tray = taskbar.querySelector("[data-system-tray]") as HTMLElement;
+    expect([...tray.children].map((widget) => widget.getAttribute("data-tray-widget"))).toEqual([
+      "presence",
+      "desktops",
+    ]);
+    expect(
+      [...tray.querySelectorAll("[data-presence-user]")].map((el) => el.getAttribute("data-presence-user")),
+    ).toEqual(["user-bob-4471", "user-owner-9c21"]);
   });
 
   it("the launcher field's Escape clears a typed query first, and keeps the key from the document", () => {

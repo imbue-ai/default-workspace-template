@@ -43,12 +43,14 @@ background agent, which is its own chat -- or the human).
   sweep; a shell that cannot be read is a skipped sweep. Several windows can show
   the one browser at once (each is a viewer of the same display). A workspace saved
   under a larger cap restores its first browser and registers the rest stopped.
-- **Launch path** (`GET /new[?url=]`, the manifest's `new` launch path): the browser,
-  as a redirect to its page `/?session=<name>` -- created when there is none, started
+- **Launch path** (`POST /new`, the manifest's `new` launch path, posted by the shell with
+  an optional `url`): the browser, answered as `{"path": "/?session=<name>"}`, the page the
+  shell then opens a window at (`docs/system/blueprint/post-launch-paths/`) -- created when there is none, started
   again when it was stopped, and answered as it is when it runs, with `url` opened
   as a new tab in front (an empty `url` opens nothing new, like no `url` at all; a
   `url` that is not an absolute `http(s)` URL is 400; 503 while Chromium is not
-  installed). `POST /browsers` with no name answers the same browser; with a name
+  installed; a refusal carries its reason as `{"detail"}`, which the shell passes on
+  to whoever ran the launch). `POST /browsers` with no name answers the same browser; with a name
   it is a create (409 for a duplicate or a full fleet). The shell opens a browser
   window at the launch path (`layout.py open browser`); everything else about a
   browser it learns from the page itself through the app contract. The `/browsers`

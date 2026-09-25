@@ -1,16 +1,20 @@
 """Tests for the Flask server."""
 
 import fcntl
+import importlib.util
 import io
 import json
 import os
+from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import parse_qs
 from urllib.parse import quote
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
@@ -24,7 +28,9 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.chat_records import ChatRecord
@@ -47,6 +53,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
@@ -63,6 +70,8 @@ from imbue.chat.state import state_of
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -105,9 +114,15 @@ def signed_in_account() -> str:
 
 
 @pytest.fixture
-def app(config: Config, signed_in_account: str, tmp_path: Path) -> Flask:
+def messenger() -> RecordingMngrMessenger:
+    """The messenger the shared app sends through: every send is recorded, none reaches mngr."""
+    return RecordingMngrMessenger()
+
+
+@pytest.fixture
+def app(config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger) -> Flask:
     # A create writes the chat's fast mode under this root; the default is this package's own data/.
-    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
     state = build_test_state(config=config, agent_manager=manager)
     state.agent_manager.note_agent_list_known()
     return create_application(state)
@@ -562,6 +577,59 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert tracked is not None and tracked.state == "WAITING"
 
 
+def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: bool) -> tuple[int, list[bool]]:
+    """Send one message to a claude agent in ``state`` and return the response status and every
+    ``is_connecting`` the page was pushed for its chat, in order."""
+    agent_id = f"agent-{uuid4().hex}"
+    state_dir = agent_state_dir(Path(os.environ["MNGR_HOST_DIR"]), agent_id)
+    state_dir.mkdir(parents=True)
+    if is_ready_marker_written:
+        (state_dir / "session_started").touch()
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="claude-agent",
+        state=state,
+        agent_state_dir=state_dir,
+        claude_config_dir=state_dir / ".claude",
+    )
+    broadcaster = WebSocketBroadcaster()
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="claude-agent", state=state)
+    pushes = broadcaster.register()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+    return response.status_code, drain_is_connecting_pushes(pushes, agent_id)
+
+
+def test_a_send_to_a_claude_agent_still_starting_reads_as_connecting_until_it_resolves() -> None:
+    """Claude's launch deletes its ``session_started`` marker and the SessionStart hook writes it
+    back, so a running agent without one has not finished starting: the send waits inside mngr
+    for the prompt, and the page is told so for exactly that long."""
+    status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=False)
+
+    assert status == 200
+    assert True in connecting_pushes
+    assert connecting_pushes[-1] is False
+
+
+def test_a_send_to_a_ready_claude_agent_never_reads_as_connecting() -> None:
+    status, connecting_pushes = _send_and_record_connecting_pushes("RUNNING", is_ready_marker_written=True)
+
+    assert status == 200
+    assert True not in connecting_pushes
+
+
+def test_a_send_to_a_stopped_agent_reads_as_connecting_while_the_send_starts_it() -> None:
+    """A stopped agent is started by the send itself, whatever its markers say from its last run."""
+    status, connecting_pushes = _send_and_record_connecting_pushes("STOPPED", is_ready_marker_written=True)
+
+    assert status == 200
+    assert True in connecting_pushes
+    assert connecting_pushes[-1] is False
+
+
 class _FakeCodexLedger:
     """A stand-in for the live codex ledger the endpoints reach through the agent manager."""
 
@@ -614,6 +682,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         model_state_path=agent_info.agent_state_dir / "model_state.json",
         send_to_harness=lambda text: True,
         notify_agents_changed=lambda: None,
+        is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
         on_queue_snapshot=lambda snapshot: None,
         on_user_turn=lambda event: None,
@@ -635,6 +704,15 @@ def _codex_session_over(ledger: "_FakeCodexLedger | None") -> CodexHarnessSessio
     session.ensure_live = lambda: None
     session._live_ledger = lambda: ledger
     return session
+
+
+def _codex_session_down_until_started(ledger: "_FakeCodexLedger") -> tuple[CodexHarnessSession, Callable[[], None]]:
+    """A codex session whose daemon is down until the returned ``bring_up`` runs (a revive's start)."""
+    session = CodexHarnessSession.__new__(CodexHarnessSession)
+    session.ensure_live = lambda: None
+    live: list[_FakeCodexLedger] = []
+    session._live_ledger = lambda: live[0] if live else None
+    return session, lambda: live.append(ledger)
 
 
 def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
@@ -688,13 +766,10 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
     ledger = _FakeCodexLedger()
 
     # The daemon is down until the revive starts the agent; the retry then finds the ledger.
-    session = CodexHarnessSession.__new__(CodexHarnessSession)
-    session.ensure_live = lambda: None
-    live: list[_FakeCodexLedger] = []
-    session._live_ledger = lambda: live[0] if live else None
+    session, bring_up = _codex_session_down_until_started(ledger)
 
     def fake_start(agent_name: str) -> None:
-        live.append(ledger)
+        bring_up()
 
     with (
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
@@ -704,6 +779,44 @@ def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -
         response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
     assert response.status_code == 200
     assert ledger.sent == [("hi", "m9")]
+
+
+def test_a_codex_send_with_no_live_connection_reads_as_connecting_while_it_revives(tmp_path: Path) -> None:
+    """With no live connection the send first waits on the daemon (here, through a revive), and the
+    chat reads as connecting from the start of the send until it resolves."""
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="codex-agent", harness=HarnessType.CODEX)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    ledger = _FakeCodexLedger()
+    session, bring_up = _codex_session_down_until_started(ledger)
+    is_connecting_at_connect: list[bool] = []
+    is_connecting_at_revive: list[bool] = []
+
+    # The first connect attempt runs before the send reports NOT_READY, so this reading is the
+    # pre-send check's alone.
+    def record_connecting_at_connect() -> None:
+        is_connecting_at_connect.append(is_chat_connecting(manager, agent_id))
+
+    def fake_start(agent_name: str) -> None:
+        is_connecting_at_revive.append(is_chat_connecting(manager, agent_id))
+        bring_up()
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server.start_agent", fake_start),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+        patch.object(session, "ensure_live", record_connecting_at_connect),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert ledger.sent == [("hi", "m-1")]
+    assert is_connecting_at_connect[0] is True
+    assert is_connecting_at_revive == [True]
+    assert is_chat_connecting(manager, agent_id) is False
 
 
 def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_manager: AgentManager) -> None:
@@ -2289,6 +2402,90 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     )
 
 
+def test_create_chat_with_should_wait_answers_the_creates_own_failure(
+    config: Config,
+    signed_in_account: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    false_binary: str,
+) -> None:
+    """``should_wait`` holds the answer until ``mngr create`` has finished, so a caller outside
+    the workspace (``message_chat.py --create``) gets the create's own verdict rather than a
+    201 for a chat that then fails behind its back."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    state = build_test_state(
+        config=config,
+        agent_manager=AgentManager.build(
+            WebSocketBroadcaster(), mngr_binary=false_binary, chat_files_root=tmp_path / "chats"
+        ),
+    )
+    state.agent_manager.note_agent_list_known()
+    app = create_application(state)
+    # The primary's work dir has to exist for ``false`` to run there and fail as ``mngr create`` would.
+    state.agent_manager._agents["agent-123"] = AgentStateItem(
+        id="agent-123", name="primary", state="RUNNING", labels={}, work_dir=str(tmp_path)
+    )
+
+    response = app.test_client().post(
+        "/api/chats/create",
+        json={
+            "name": "assist-1a2b3c",
+            "message": "/assist it broke",
+            "labels": {"auto_open": "true"},
+            "should_wait": True,
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.get_json()["detail"].startswith("mngr create exited with code 1")
+    [record] = state.agent_manager.get_provisional_chats()
+    assert record.phase is ProvisionalChatPhase.FAILED and record.name == "assist-1a2b3c"
+
+
+def test_create_chat_refuses_a_label_the_app_sets_itself_with_a_400(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+
+    response = client.post("/api/chats/create", json={"labels": {"account": "someone-else"}})
+
+    assert response.status_code == 400
+    assert "account" in response.get_json()["detail"]
+
+
+def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) -> None:
+    """``system/scripts/message_chat.py --create`` is standard-library only and cannot import this
+    package, so its copy of the route's path, its waiver setting, and the fields it posts are
+    pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
+    a chat app from before them: a rename on this side would send every Minds-app chat back to the
+    bare ``mngr create`` without a single failing test."""
+    script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
+    spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.SKIP_CLAUDE_INSTALLATION_CHECK_SETTING == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+    assert module.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
+    body = module.create_request_body(
+        module.CreateRequest(
+            name="assist-1a2b3c",
+            message="/assist it broke",
+            labels={"auto_open": "true"},
+        )
+    )
+
+    parsed = CreateChatRequest.model_validate(body)
+    assert parsed.name == "assist-1a2b3c"
+    assert parsed.message == "/assist it broke"
+    assert parsed.labels == {"auto_open": "true"}
+    assert parsed.is_installation_check_skipped is True
+    assert body[module.WAIT_FIELD] is True and parsed.should_wait is True
+
+
 def test_create_chat_refuses_an_id_it_never_minted(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3221,3 +3418,298 @@ def test_the_event_fan_out_is_keyed_by_chat(app: Flask, tmp_path: Path) -> None:
     assert (
         state.is_main_session_event({"type": "user_message", "agent_id": "agent-untracked", "session_id": "s"}) is True
     )
+
+
+# The intake (post-launch-paths plan sections 3.5 and 3.6)
+
+
+def _intake(client: FlaskClient, **fields: object) -> Any:
+    return client.post("/api/chats/intake", json=fields)
+
+
+def _token_of(path: str) -> str:
+    return parse_qs(urlparse(path).query)["intake"][0]
+
+
+def test_intake_is_not_ready_until_the_agent_list_is_known() -> None:
+    manager = AgentManager.build(WebSocketBroadcaster())
+    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+    response = test_client.post("/api/chats/intake", json={"message": "hi", "target": "new_chat"})
+    assert response.status_code == 503
+
+
+def test_intake_to_an_explicit_chat_the_app_does_not_list_is_not_found(client: FlaskClient) -> None:
+    response = _intake(client, message="hi", target="chat", chat_id="agent-nobody")
+    assert response.status_code == 404
+
+
+def test_intake_sends_to_the_named_chat_and_answers_its_path(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A send an intake finishes on the server: the text reaches the agent through the ordinary send path (awaited
+    here, so the answer says it landed) and the path is the chat's selection alone."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000123", "test-agent", tmp_path / "claude_config")
+
+    response = _intake(
+        client,
+        message="Carry on",
+        target="chat",
+        chat_id="agent-00000000000000000000000000000123",
+        is_delivery_awaited=True,
+        client_id="c1",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"path": "/?chat=agent-00000000000000000000000000000123"}
+    assert messenger.sent == [("agent-00000000000000000000000000000123", "Carry on")]
+
+
+def test_intake_holds_a_draft_for_the_chat_the_window_shows_until_the_root_applies_it(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``current_chat`` reads the window's path; a draft is never sent by the server but held under a token the
+    root applies once, taking the text for the composer; a second apply finds nothing."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000123", "test-agent", tmp_path / "claude_config")
+
+    response = _intake(
+        client,
+        message="Draw me a seal",
+        target="current_chat",
+        is_draft="true",
+        window_path="/?chat=agent-00000000000000000000000000000123",
+    )
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    token = _token_of(path)
+    assert path == f"/?chat=agent-00000000000000000000000000000123&intake={token}"
+    held = client.get(f"/api/chats/intakes/{token}")
+    assert held.status_code == 200
+    assert held.get_json() == {
+        "message": "Draw me a seal",
+        "is_draft": True,
+        "needs_pick": False,
+        "chat_id": "agent-00000000000000000000000000000123",
+    }
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": "/?chat=agent-00000000000000000000000000000123",
+        "chat_id": "agent-00000000000000000000000000000123",
+        "composer_text": "Draw me a seal",
+        "first_message": None,
+    }
+    assert client.get(f"/api/chats/intakes/{token}").status_code == 404
+    assert client.post(f"/api/chats/intakes/{token}/apply", json={}).status_code == 404
+
+
+def test_intake_current_chat_falls_back_to_the_most_recently_messaged_chat(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
+    _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
+    agent_manager: AgentManager = state_of(app).agent_manager
+    agent_manager.record_message_sent(ChatId("agent-00000000000000000000000000000002"))
+
+    response = _intake(client, message="Draft", target="current_chat", is_draft=True, window_path="/")
+
+    assert response.status_code == 200
+    assert response.get_json()["path"].startswith("/?chat=agent-00000000000000000000000000000002&intake=")
+
+
+def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picker(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``chat_selector`` over two chats: the answer is the picker's path, the held intake says a pick is needed, a
+    pick of nothing (or of a chat that cannot take a message) is refused, and a pick of a chat finishes the send."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
+    _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
+
+    response = _intake(client, message="Carry on", target="chat_selector")
+
+    assert response.status_code == 200
+    token = _token_of(response.get_json()["path"])
+    assert response.get_json()["path"] == f"/?intake={token}"
+    assert client.get(f"/api/chats/intakes/{token}").get_json()["needs_pick"] is True
+    assert client.post(f"/api/chats/intakes/{token}/apply", json={}).status_code == 400
+    applied = client.post(
+        f"/api/chats/intakes/{token}/apply", json={"chat_id": "agent-00000000000000000000000000000002"}
+    )
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": "/?chat=agent-00000000000000000000000000000002",
+        "chat_id": "agent-00000000000000000000000000000002",
+        "composer_text": None,
+        "first_message": None,
+    }
+    wait_for(lambda: messenger.sent == [("agent-00000000000000000000000000000002", "Carry on")], timeout=10.0)
+
+
+def test_intake_with_one_chat_sends_to_it_without_a_pick(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000001", "only", tmp_path / "claude_config")
+
+    response = _intake(client, message="Carry on", target="chat_selector", is_delivery_awaited=True)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"path": "/?chat=agent-00000000000000000000000000000001"}
+    assert messenger.sent == [("agent-00000000000000000000000000000001", "Carry on")]
+
+
+def test_intake_dismissed_picker_drops_the_intake(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
+    _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
+    token = _token_of(_intake(client, message="x", target="chat_selector").get_json()["path"])
+
+    assert client.delete(f"/api/chats/intakes/{token}").status_code == 204
+    assert client.get(f"/api/chats/intakes/{token}").status_code == 404
+    assert client.delete("/api/chats/intakes/never-minted").status_code == 204
+
+
+def test_intake_new_chat_with_an_account_creates_the_chat_with_the_text_as_its_first_message(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
+    _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, message="Teach me", target="new_chat")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    assert path.startswith("/?chat=agent-") and "intake" not in path
+    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert provisional.phase is ProvisionalChatPhase.CREATING
+    assert provisional.message == "Teach me"
+
+
+def test_intake_new_chat_draft_mints_a_chat_awaiting_its_first_send_and_holds_the_draft(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signed_in_account: str
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, message="Draw me a seal", target="new_chat", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    token = _token_of(path)
+    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    assert provisional.is_seeded is False
+    assert provisional.account_id == signed_in_account
+    assert provisional.name == "Chat 1"
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.get_json()["composer_text"] == "Draw me a seal"
+    assert applied.get_json()["first_message"] is None
+
+
+def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_chooser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no account the server cannot launch: the chat waits for its first send, and applying the intake hands
+    the root the message to launch it with once an account is chosen."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = test_client.post("/api/chats/intake", json={"message": "Teach me", "target": "new_chat"})
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    token = _token_of(path)
+    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    provisional = manager.get_provisional_chat(chat_id)
+    assert provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    assert provisional.account_id == ""
+    applied = test_client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.get_json() == {
+        "path": f"/?chat={chat_id}",
+        "chat_id": chat_id,
+        "composer_text": None,
+        "first_message": "Teach me",
+    }
+
+
+def test_intake_new_chat_naming_an_unknown_account_is_refused(client: FlaskClient) -> None:
+    response = _intake(client, message="hi", target="new_chat", account_id="acct-nobody")
+    assert response.status_code == 400
+
+
+def test_intake_with_an_empty_message_answers_the_chat_and_sends_nothing(
+    app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No text is nothing to send, draft, or pick a chat for: the resolved chat's path comes back alone, and with
+    several chats to choose from the root's."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
+
+    sent = _intake(
+        client,
+        message="",
+        target="chat",
+        chat_id="agent-00000000000000000000000000000001",
+        is_delivery_awaited=True,
+    )
+    drafted = _intake(client, message="", target="current_chat", is_draft=True, window_path="/")
+    _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
+    picked = _intake(client, message="", target="chat_selector")
+
+    assert sent.status_code == 200
+    assert sent.get_json() == {"path": "/?chat=agent-00000000000000000000000000000001"}
+    assert drafted.get_json() == {"path": "/?chat=agent-00000000000000000000000000000001"}
+    assert picked.get_json() == {"path": "/"}
+    assert messenger.sent == []
+
+
+def test_intake_to_a_chat_awaiting_its_first_send_is_held_and_applies_as_its_first_message(
+    app: Flask, client: FlaskClient
+) -> None:
+    agent_manager: AgentManager = state_of(app).agent_manager
+    awaiting = agent_manager.mint_awaiting_chat("")
+
+    response = _intake(client, message="Begin here", target="chat", chat_id=str(awaiting.chat_id))
+
+    assert response.status_code == 200
+    token = _token_of(response.get_json()["path"])
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": f"/?chat={awaiting.chat_id}",
+        "chat_id": str(awaiting.chat_id),
+        "composer_text": None,
+        "first_message": "Begin here",
+    }
+
+
+def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_manager: AgentManager = state_of(app).agent_manager
+    _track_claude_agent(app, "agent-00000000000000000000000000000001", "first", tmp_path / "claude_config")
+    held = _intake(
+        client, message="Draft", target="chat", chat_id="agent-00000000000000000000000000000001", is_draft=True
+    )
+    token = _token_of(held.get_json()["path"])
+
+    agent_manager.remove_agent("agent-00000000000000000000000000000001")
+
+    assert client.post(f"/api/chats/intakes/{token}/apply", json={}).status_code == 404
+    assert client.get(f"/api/chats/intakes/{token}").status_code == 404

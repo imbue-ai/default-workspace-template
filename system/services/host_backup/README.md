@@ -160,10 +160,16 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 
 Each restic command's stdout / stderr is captured into the matching
 `*_succeeded` / `*_failed` event for forensic debugging, capped at 16 KB per
-field. Nothing rotates this log, and `restic backup --json` emits a progress
-document per tick, so an uncapped capture grew it by megabytes a day. The head
-and tail of a capped field are both kept, with a marker naming how much was
-dropped, so the command's opening lines and its final summary both survive.
+field: `restic backup --json` emits a progress document per tick, so an
+uncapped capture grew the log by megabytes a day. The head and tail of a capped
+field are both kept, with a marker naming how much was dropped, so the
+command's opening lines and its final summary both survive.
+
+At the start of a tick, once the log has reached 8 MiB, the runner renames it
+to `events.jsonl.<timestamp>` and keeps only the two newest such files, so the
+log stays bounded. Rotating only there keeps each tick's events in one file.
+`mngr events` reads the rotated files alongside the current one;
+`host-backup-now` follows the file it opened across a rotation.
 
 ## First-run setup
 
