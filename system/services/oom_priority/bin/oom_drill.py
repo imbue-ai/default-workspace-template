@@ -399,7 +399,7 @@ def main() -> int:
     parser.add_argument(
         "--bands",
         required=True,
-        help="Comma-separated oom_score_adj per sleeper, e.g. 1000,900,600,25",
+        help="Comma-separated oom_score_adj per sleeper, e.g. 1000,900,800,600,300",
     )
     parser.add_argument(
         "--sleeper-percent",
