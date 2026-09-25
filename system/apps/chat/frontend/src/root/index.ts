@@ -345,8 +345,8 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
   addChatsUpdatedListener(onceListed);
 }
 
-function connectRootToShell(accountsLoaded: Promise<void>): void {
-  connection = connectToShell({
+function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
+  const shell = connectToShell({
     capabilities: { navigation: true },
     onHandshake: (received) => {
       handshake = received;
@@ -382,9 +382,11 @@ function connectRootToShell(accountsLoaded: Promise<void>): void {
       select(requested);
     },
   });
+  connection = shell;
   // Hidden until the shell says shown: the root can load into a background tab.
-  if (connection.isFramed) isRootShown = false;
-  window.addEventListener("focus", () => connection?.focused());
+  if (shell.isFramed) isRootShown = false;
+  window.addEventListener("focus", () => shell.focused());
+  return shell;
 }
 
 function bootstrap(): void {
@@ -393,7 +395,7 @@ function bootstrap(): void {
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
   compactQuery.addEventListener("change", () => m.redraw());
-  connectRootToShell(accountsLoaded);
+  const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     (chatId) => select(chatId),
@@ -406,10 +408,7 @@ function bootstrap(): void {
   // The element menu over the root's own chrome (element-reference-menu plan section 7.3); the rail's rows append
   // the reference rows to their own menu instead.
   installElementContextMenu({
-    connection: {
-      isFramed: connection?.isFramed ?? false,
-      draftText: (text) => connection?.draftText(text),
-    },
+    connection: shell,
     handshake: () => handshake,
     draft: draftReference,
     isDraftAvailable: isReferenceDraftAvailable,
