@@ -18,6 +18,10 @@ from app_manifest.scope import compute_skill_scope
 from app_manifest.scope import find_referencing_manifests
 from app_manifest.scope import render_scope_file
 from app_manifest.scope import with_diff_against_base
+from app_manifest.selection import render_selection
+from app_manifest.selection import render_selection_json
+from app_manifest.selection import select_tests_for_diff
+from app_manifest.selection import select_tests_for_paths
 
 
 class ReferenceLookupRow(FrozenModel):
@@ -127,7 +131,9 @@ def footprint(
 
 
 def _app_scope(repo_root: Path, manifest_path: Path) -> CreationScope:
-    resolved_manifest_path = manifest_path if manifest_path.is_absolute() else repo_root / manifest_path
+    resolved_manifest_path = (
+        manifest_path if manifest_path.is_absolute() else repo_root / manifest_path
+    )
     manifest = load_manifest(resolved_manifest_path, repo_root=repo_root)
     return compute_app_scope(repo_root, resolved_manifest_path, manifest)
 
@@ -169,6 +175,63 @@ def _lookup_row(repo_root: Path, match: ManifestReferenceMatch) -> ReferenceLook
         path=match.reference.path,
         note=match.reference.note,
     )
+
+
+@app_manifest_cli.command("select-tests")
+@_repo_root_option
+@click.option(
+    "--diff-base",
+    "diff_base",
+    default=None,
+    help="A git ref; the changed paths are what the ref changed since it forked from this one. "
+    "With --path, only the revision a changed uv.lock is compared against.",
+)
+@click.option(
+    "--diff-ref",
+    "diff_ref",
+    default=None,
+    help="The ref the diff runs to (default HEAD); only meaningful with --diff-base.",
+)
+@click.option(
+    "--path",
+    "paths",
+    multiple=True,
+    help="A changed repo-root-relative path (repeatable), instead of a diff.",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Shell lines with a comment on each (default), or the selection as JSON.",
+)
+def select_tests(
+    repo_root: Path | None,
+    diff_base: str | None,
+    diff_ref: str | None,
+    paths: tuple[str, ...],
+    output_format: str,
+) -> None:
+    """Print the test commands a change calls for, in the order to run them."""
+    if diff_ref is not None and (diff_base is None or paths):
+        raise click.UsageError("--diff-ref only says where a --diff-base diff runs to")
+    if not paths and diff_base is None:
+        raise click.UsageError("pass --diff-base, or the changed paths with --path")
+    resolved_repo_root = _resolved_repo_root(repo_root)
+    try:
+        if paths:
+            selection = select_tests_for_paths(resolved_repo_root, paths, diff_base)
+        else:
+            assert diff_base is not None
+            selection = select_tests_for_diff(
+                resolved_repo_root, diff_base, diff_ref if diff_ref is not None else "HEAD"
+            )
+    except AppManifestError as e:
+        raise click.ClickException(str(e)) from e
+    rendered = (
+        render_selection_json(selection) if output_format == "json" else render_selection(selection)
+    )
+    click.echo(rendered, nl=False)
 
 
 def main() -> None:
