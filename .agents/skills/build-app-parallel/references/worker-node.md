@@ -147,8 +147,12 @@ Nothing you produced is in the folder, so the report is the deliverable.
 - **Decisions the contract does not make obvious**, with the reason in the same
   line, only where a node would otherwise pick differently.
 - **What you deliberately left open** for a later node to settle.
+- **The paths the contract turns on** -- where the module, asset or route it
+  describes should live, and the path of anything you did write, such as a
+  contract file or a fixture. One per line, so no later node has to guess a
+  location you had in mind.
 
-Around 150 words beyond the contract. No files list and no way to run it.
+Around 150 words beyond the contract. Nothing to run, so no command.
 
 ### If you built something
 
