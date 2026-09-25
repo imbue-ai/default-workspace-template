@@ -211,9 +211,6 @@ def _tk_result(
     )
 
 
-# --- policy_guards.ts --------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -313,9 +310,6 @@ def test_a_refused_command_is_left_as_written(tmp_path: Path) -> None:
     result, command = _guard_call(tmp_path, "git rebase -i HEAD~2")
     assert result is not None and result["block"] is True
     assert command == "git rebase -i HEAD~2"
-
-
-# --- tk_workflow.ts ----------------------------------------------------------
 
 
 def test_require_steps_reminder_rides_the_tool_result_when_no_step_is_in_progress(
