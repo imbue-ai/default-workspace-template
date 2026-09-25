@@ -42,8 +42,8 @@ def test_an_agent_stays_addressable_by_id_across_a_rename(tmp_path: Path) -> Non
     # found". The docker provider is on by built-in default and has no daemon to reach
     # inside a workspace container. This test creates a local agent and looks it up, so
     # the two providers that answer over a network are turned off, matching the block the
-    # other real-mngr tests write (test_nested_dispatch_live.py,
-    # test_message_conservation_release.py).
+    # other real-mngr tests write (test_nested_dispatch_live.py, and the chat app's
+    # prepare_isolated_mngr_host_dir).
     (project / ".mngr" / "settings.toml").write_text(
         "is_allowed_in_pytest = true\n\n"
         "[providers.modal]\nis_enabled = false\n\n"
