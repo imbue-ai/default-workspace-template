@@ -211,7 +211,7 @@
    - Plus the lima runc drill.
 5. **Sweep.**
    - Survey, then apply staging, then production. Production waits for the owner's go-ahead.
-   - geebspace gets the hotpatch plus a drill with the browser closed.
+   - geebspace gets the hotpatch, then a probe whose `--dryrun` pick of the installed fork is the predicted first victim. Nothing in the sweep stops a user's chats or browser; the drill is for disposable workspaces only.
    - Any tagging bugs the survey finds get fixed in the dwt PR, or a follow-up if found after merge.
 6. **Guards and release (mngr PR 2).**
    - The AWS release test: a control run against dwt `main` fails, then the branch passes.
@@ -240,7 +240,7 @@
 - **Lima drill (acceptance, runc, aarch64, the owner's `minds-host-9dcc81e54493424591859d55199aed74`).**
   - The branch's `setup_system.sh` masks and stops `earlyoom.service` and purges the package, leaving one earlyoom process.
   - The drill passes, and its order matches the kernel's `oom_score` order.
-- **geebspace.** Hotpatch, then a drill with the browser closed. It passes if no victim was out of predicted order.
+- **geebspace.** Hotpatch, then a probe. It passes if the installed fork's `--dryrun` pick (read-only: it logs the victim and sends nothing) is the predicted first victim.
 - **AWS release test.** A control run against dwt `main` must fail on ordering; the branch must pass.
 - **Pass criterion for realistic drills.** Each victim had the highest predicted badness among eligible processes when it was shed, and no built-in service was shed while any process at adj ≥ 900 remained.
 
