@@ -19,6 +19,7 @@ import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers } from "../model/api";
 import { launchPathOf } from "../model/launch";
+import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
@@ -70,9 +71,6 @@ type OpenMenu =
   | { readonly kind: "desktops" }
   | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
-
-/** The shell's own name, the app a reference to its chrome names. */
-const SHELL_APP_NAME = "system_interface";
 
 /** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
  *  holds the target, when one does. */
