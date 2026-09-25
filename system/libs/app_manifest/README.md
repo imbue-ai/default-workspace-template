@@ -250,8 +250,9 @@ the always-run set covers the paths), and `[[integration]]` entries for tests
 that drive a real installed tool (`test`, the `paths` that select it, and a
 `note`). Paths are gitignore-style globs over repo-root-relative paths; a suite
 is a test file or a suite directory. A suite that does not exist fails the
-selection rather than selecting nothing. `test_repo_test_selection.py` holds the real tree to the
-mapping: every tracked path that is not documentation must classify, and every
-suite the file names must exist. CI runs it on every change, and a workspace
-runs it whenever the selector or the override file changes.
+selection rather than selecting nothing. `test_repo_test_selection.py` holds
+the real tree to the mapping: every tracked path that is not documentation must
+classify, and every suite the file names must exist. CI runs it on every
+change, and a workspace runs it whenever the selector or the override file
+changes.
 
