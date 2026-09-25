@@ -66,7 +66,9 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
@@ -74,6 +76,7 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -742,6 +745,33 @@ class RunningWorkspace(FrozenModel):
     )
 
 
+def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name: str = "Chat-1") -> ChatSnapshot:
+    """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
+    return ChatSnapshot(
+        chat_id=ChatId(chat_id),
+        title=name.replace("-", " "),
+        name=name,
+        project=None,
+        status=ChatStatus.IDLE,
+        labels={},
+        agent_ids=(chat_id,),
+        handoff=None,
+        active_agent=ActiveAgentSnapshot(
+            agent_id=chat_id,
+            name=name,
+            harness=HarnessType.CLAUDE,
+            account_id=None,
+            state="RUNNING",
+            activity_state=ActivityState.IDLE,
+            model_choice=None,
+            queued_messages=(),
+            shoulder_tap_available=False,
+            is_connecting=False,
+        ),
+        last_messaged_at=last_messaged_at,
+    )
+
+
 def seed_failed_chat(
     agent_manager: AgentManager,
     chat_id: ChatId,
@@ -842,19 +872,33 @@ def running_workspace(
     fake_bin_dir = _write_fake_binaries(tmp_path)
 
     registry_path = tmp_path / "registry" / "apps.toml"
-    rows = [
+    # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
+    # the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    write_registry(
+        registry_path,
         registry_row_toml(
             "chat",
             chat_url,
             is_critical=True,
-            default_shortcut=("new", "new"),
+            default_shortcut=("root", "new"),
             display_name="Chat",
-            launch_paths=(("new", "New Chat", "/new"), ("send", "Send to chat...", "/send")),
-            launch_params={"new": ("account_id", "message"), "send": ("message",)},
+            launch_paths=(
+                ("root", "Chat", "/"),
+                ("new", "New Chat", "/api/chats/intake"),
+                ("send", "Send to chat...", "/api/chats/intake"),
+                ("draft", "Draft into chat", "/api/chats/intake"),
+            ),
+            launch_params={"new": ("account_id", "message"), "send": ("message",), "draft": ("message",)},
             launch_text_params={"new": "message", "send": "message"},
-        )
-    ]
-    write_registry(registry_path, *rows)
+            launch_draft_params={"draft": "message"},
+            launch_methods={"new": "POST", "send": "POST", "draft": "POST"},
+            launch_presets={
+                "new": {"target": "new_chat"},
+                "send": {"target": "chat_selector"},
+                "draft": {"target": "current_chat", "is_draft": "true"},
+            },
+        ),
+    )
 
     with (
         patch.dict(

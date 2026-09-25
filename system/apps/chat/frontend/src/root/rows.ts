@@ -68,11 +68,6 @@ function recencyKey(row: ChatRow, startedHere: ReadonlySet<string>): number {
   return startedHere.has(row.chatId) ? Number.POSITIVE_INFINITY : 0;
 }
 
-/** The chat most recently messaged (a chat started here and never messaged counts as newest), or null with none. */
-export function mostRecentChatId(rows: readonly ChatRow[], startedHere: ReadonlySet<string>): string | null {
-  return byRecency([...rows], startedHere)[0]?.chatId ?? null;
-}
-
 function byRecency(rows: ChatRow[], startedHere: ReadonlySet<string>): ChatRow[] {
   return [...rows].sort((first, second) => recencyKey(second, startedHere) - recencyKey(first, startedHere));
 }

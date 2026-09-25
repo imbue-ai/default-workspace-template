@@ -24,6 +24,7 @@ from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
@@ -54,11 +55,16 @@ def registry_row_toml(
     display_name: str | None = None,
     label: str = "",
     launcher_rank: int | None = None,
-    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id, and
-    # ``launch_text_params`` the param of each that takes typed text.
+    # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id,
+    # ``launch_text_params`` the param of each that takes typed text, ``launch_draft_params`` the param of each
+    # that takes drafted text, ``launch_methods`` the method of each that is not a GET, and ``launch_presets``
+    # the presets of each that declares any.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
     launch_text_params: Mapping[str, str] | None = None,
+    launch_draft_params: Mapping[str, str] | None = None,
+    launch_methods: Mapping[str, str] | None = None,
+    launch_presets: Mapping[str, Mapping[str, str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
@@ -98,6 +104,15 @@ def registry_row_toml(
         text_param = (launch_text_params or {}).get(launch_id)
         if text_param is not None:
             lines.append(f'text_param = "{text_param}"')
+        draft_param = (launch_draft_params or {}).get(launch_id)
+        if draft_param is not None:
+            lines.append(f'draft_param = "{draft_param}"')
+        method = (launch_methods or {}).get(launch_id)
+        if method is not None:
+            lines.append(f'method = "{method}"')
+        presets = (launch_presets or {}).get(launch_id)
+        if presets:
+            lines.append("presets = {" + ", ".join(f'{name} = "{value}"' for name, value in presets.items()) + "}")
     return "\n".join(lines) + "\n"
 
 
@@ -118,6 +133,7 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
             program="terminal",
             default_shortcut=("new", "new"),
             launch_paths=[("new", "New terminal", "/new")],
+            launch_params={"new": ["workdir"]},
             window_closed_path=TEST_TERMINAL_WINDOW_CLOSED_PATH,
         ),
         registry_row_toml("files", TEST_FILES_URL, program="files", default_shortcut=("open", "focus")),
@@ -131,6 +147,7 @@ def shell_application(
     broadcaster: WebSocketBroadcaster,
     is_preview: bool = False,
     wallpaper_files_directory: Path | None = None,
+    launch_poster: LaunchPoster | None = None,
 ) -> Flask:
     """The shell app over ``inventory``, its state under ``tmp_path/state`` and the update notice's workspace at
     ``tmp_path/repo``, sharing the inventory's broadcaster as in production.
@@ -148,6 +165,7 @@ def shell_application(
         repo_root=tmp_path / "repo",
         static_directory=tmp_path / "static",
         wallpaper_files_directory=wallpaper_files_directory,
+        launch_poster=launch_poster,
     )
     return create_application(state)
 
@@ -211,7 +229,6 @@ def window_record(
     window_id: WindowId,
     app: str,
     path: str,
-    is_settling: bool = False,
     is_pinned: bool = False,
     scope: LocationScope = LocationScope.LINKED,
     title: str = "",
@@ -223,7 +240,6 @@ def window_record(
         path=WindowPath(path),
         title=WindowTitle(title),
         opened_at=TEST_NOW,
-        is_settling=is_settling,
         is_pinned=is_pinned,
         scope=scope,
     )
