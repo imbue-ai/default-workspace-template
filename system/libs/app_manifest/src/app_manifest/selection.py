@@ -60,6 +60,7 @@ from app_manifest.workspace_graph import python_consumers
 from app_manifest.workspace_graph import read_coverage_measured_units
 from app_manifest.workspace_graph import read_npm_packages
 from app_manifest.workspace_graph import read_own_root_units
+from app_manifest.workspace_graph import read_root_ignored_directories
 from app_manifest.workspace_graph import read_python_members
 
 OVERRIDES_PATH: Final[RepoRelativePath] = RepoRelativePath(
@@ -434,12 +435,26 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
     """Read everything the selection needs off the tree at ``repo_root``."""
     repo_root = repo_root.resolve()
     tracked_files = frozenset(str(path) for path in list_tracked_files(repo_root))
-    test_files = tuple(sorted(path for path in tracked_files if is_test_file_name(path)))
+    python_members = read_python_members(repo_root)
+    own_root_units = read_own_root_units(repo_root, python_members)
+    # No suite collects the tests of a directory the root run ignores and that is not an own
+    # root, and naming one to the root run would override its --ignore.
+    uncollected_directories = [
+        directory
+        for directory in read_root_ignored_directories(repo_root)
+        if directory not in own_root_units
+    ]
+    test_files = tuple(
+        sorted(
+            path
+            for path in tracked_files
+            if is_test_file_name(path)
+            and not any(is_path_covered_by(directory, path) for directory in uncollected_directories)
+        )
+    )
     test_texts = {
         path: _read_text(repo_root / path) for path in test_files if (repo_root / path).is_file()
     }
-    python_members = read_python_members(repo_root)
-    own_root_units = read_own_root_units(repo_root, python_members)
     manifests = load_app_manifests(repo_root)
     return RepoLayout(
         repo_root=repo_root,

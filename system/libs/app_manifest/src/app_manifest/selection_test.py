@@ -348,7 +348,7 @@ def test_a_lock_with_no_base_to_compare_brings_in_the_full_root_suite(workspace:
     assert selection.paths[0].classes == (ChangedPathClass.LOCKFILE,)
 
 
-def test_an_ignored_vendored_subtree_is_not_its_own_suite(workspace: Path) -> None:
+def test_an_ignored_vendored_subtree_selects_none_of_its_tests(workspace: Path) -> None:
     write_repo_file(
         workspace,
         "pyproject.toml",
@@ -364,5 +364,6 @@ def test_an_ignored_vendored_subtree_is_not_its_own_suite(workspace: Path) -> No
 
     selection = _select(workspace, ["system/scripts/forward_port.py"])
 
-    assert not any(command.working_directory == "system/vendor/tool" for command in selection.commands)
+    assert not any("system/vendor/tool" in line for line in _command_lines(selection))
+    assert "uv run pytest system/scripts/forward_port_test.py" in _command_lines(selection)
 
