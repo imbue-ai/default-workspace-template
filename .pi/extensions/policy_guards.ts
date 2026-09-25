@@ -28,7 +28,7 @@ interface Guard {
 }
 
 // claude's PreToolUse order. `match` is a loose superset of what each script can
-// refuse, so a command no guard has anything to say about spawns no process.
+// refuse, so a command no guard has anything to say about spawns no guard process.
 const GUARDS: Guard[] = [
   { script: join(SCRIPTS, "agent_prevent_commit_rewrite.sh"), match: /\bgit\b/ },
   { script: join(SCRIPTS, "agent_block_pipe_tail_head.sh"), match: /\b(tail|head)\b/ },
