@@ -61,6 +61,20 @@ def test_a_shared_library_change_runs_its_suite_and_every_transitive_consumer(
     assert not selection.is_full_root
 
 
+def test_a_shared_library_change_runs_the_tests_of_scripts_importing_a_consumer(
+    workspace: Path,
+) -> None:
+    write_repo_file(workspace, "system/scripts/mid_report.py", "from midlib.core import VALUE\n")
+    write_repo_file(
+        workspace, "system/scripts/mid_report_test.py", "def test_report() -> None:\n    pass\n"
+    )
+    commit_everything(workspace, "a script that imports midlib")
+
+    selection = _select(workspace, ["system/libs/corelib/src/corelib/core.py"])
+
+    assert "uv run pytest system/scripts/mid_report_test.py" in _command_lines(selection)
+
+
 def test_a_consumer_change_does_not_run_what_it_consumes(workspace: Path) -> None:
     selection = _select(workspace, ["system/apps/notes/src/notes/core.py"])
 
@@ -243,6 +257,8 @@ def test_an_upgraded_lock_entry_runs_the_members_that_depend_on_it(workspace: Pa
 
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
+        # The skill's script imports corelib, which depends on the upgrade.
+        "uv run pytest .agents/skills/refresh",
         "uv run pytest system/apps/notes",
         "uv run pytest system/libs/corelib",
         "uv run pytest system/libs/midlib",

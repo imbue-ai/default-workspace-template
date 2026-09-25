@@ -726,20 +726,18 @@ def _select_for_lockfile(context: _SelectionContext, path: str) -> _PathOutcome:
     if lockfile is None:
         return _PathOutcome(classes=(ChangedPathClass.LOCKFILE,), is_full_root=True)
     upgraded = ", ".join(change.name for change in lockfile.upgraded)
-    requests = _present(
-        _whole_request(
-            context.layout,
-            member,
-            is_browser_included=False,
-            reason=_reason(
-                path, ChangedPathClass.LOCKFILE, f"{member} depends on upgraded {upgraded}"
-            ),
+    requests: list[_PytestRequest] = []
+    for member in lockfile.dependent_members:
+        reason = _reason(
+            path, ChangedPathClass.LOCKFILE, f"{member} depends on upgraded {upgraded}"
         )
-        for member in lockfile.dependent_members
-    )
+        requests.extend(
+            _present([_whole_request(context.layout, member, is_browser_included=False, reason=reason)])
+        )
+        requests.extend(_importer_requests(context, path, ChangedPathClass.LOCKFILE, member))
     return _PathOutcome(
         classes=(ChangedPathClass.LOCKFILE,),
-        pytest_requests=requests,
+        pytest_requests=tuple(requests),
         is_full_root=lockfile.is_root_dependent,
     )
 
@@ -804,19 +802,29 @@ def _select_for_package(
     context: _SelectionContext, path: str, unit: OwningUnit
 ) -> list[_PytestRequest]:
     """The package's own suite, the suites of the members that depend on it, and the tests of
-    the unpackaged scripts that import it."""
+    the unpackaged scripts that import it or one of those members."""
     layout = context.layout
     requests = _own_unit_requests(
         layout, path, _reason(path, ChangedPathClass.PACKAGE, f"changed in {unit.directory}")
     )
+    requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, unit.directory))
     for consumer in context.python_consumers.get(unit.directory, ()):
         reason = _reason(path, ChangedPathClass.PACKAGE, f"{consumer} depends on {unit.directory}")
         requests.extend(
             _present([_whole_request(layout, consumer, is_browser_included=False, reason=reason)])
         )
-    for importer in context.import_index.get(unit.directory, ()):
-        reason = _reason(path, ChangedPathClass.PACKAGE, f"{importer} imports {unit.directory}")
-        requests.extend(_own_unit_requests(layout, importer, reason))
+        requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, consumer))
+    return requests
+
+
+def _importer_requests(
+    context: _SelectionContext, path: str, path_class: ChangedPathClass, member: str
+) -> list[_PytestRequest]:
+    """The tests of the unpackaged scripts that import one of ``member``'s modules."""
+    requests: list[_PytestRequest] = []
+    for importer in context.import_index.get(member, ()):
+        reason = _reason(path, path_class, f"{importer} imports {member}")
+        requests.extend(_own_unit_requests(context.layout, importer, reason))
     return requests
 
 
@@ -1183,7 +1191,7 @@ def select_tests(
                 lockfile = classify_lockfile_change(*lockfile_texts)
             except SuiteSelectionError as e:
                 notes.append(f"{e}; the full root suite runs")
-    touches_member = any(
+    reaches_member = lockfile is not None or any(
         is_path_covered_by(member.directory, path)
         for member in layout.python_members
         for path in paths
@@ -1192,7 +1200,7 @@ def select_tests(
         layout=layout,
         name_index=build_name_index(layout.test_texts),
         unique_suffixes=unique_path_suffixes(layout.tracked_files),
-        import_index=build_import_index(layout) if touches_member else {},
+        import_index=build_import_index(layout) if reaches_member else {},
         python_consumers=python_consumers(layout.python_members),
         npm_consumers=npm_consumers(layout.npm_packages),
         lockfile=lockfile,
