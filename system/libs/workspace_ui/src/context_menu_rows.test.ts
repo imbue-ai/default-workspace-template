@@ -43,6 +43,7 @@ beforeEach(() => {
   document.body.innerHTML =
     '<p id="para">plain words</p>' +
     '<input id="field" value="hello world">' +
+    '<input id="mail" type="email" value="a@b.example">' +
     '<a id="link" href="/docs/intro">intro</a>' +
     '<img id="pic" src="/a.png">' +
     '<div id="note" contenteditable="true">editable</div>';
@@ -50,6 +51,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  delete (document as { execCommand?: unknown }).execCommand;
 });
 
 describe("standardContextMenuRows", () => {
@@ -105,6 +107,19 @@ describe("standardContextMenuRows", () => {
     expect(clipboard.writeText).toHaveBeenCalledWith("hello");
     (rowByKey.cut as { onSelect: () => void }).onSelect();
     await vi.waitFor(() => expect(field.value).toBe(" world"));
+  });
+
+  it("pastes into and selects all of an input without a selection API through execCommand", async () => {
+    const mail = byId("mail") as HTMLInputElement;
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    const rows = standardContextMenuRows(targetOf(mail));
+    expect(keysOf(rows)).toEqual(["paste", "select-all"]);
+    (rows[0] as { onSelect: () => void }).onSelect();
+    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("insertText", false, "pasted"));
+    expect(document.activeElement).toBe(mail);
+    (rows[1] as { onSelect: () => void }).onSelect();
+    expect(execCommand).toHaveBeenCalledWith("selectAll");
   });
 
   it("copies an absolute link address", async () => {

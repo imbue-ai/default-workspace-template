@@ -85,8 +85,15 @@ export async function copyText(text: string): Promise<void> {
   }
 }
 
+/** The input types the selection API (``selectionStart``, ``setRangeText``) applies to; on any other type a
+ *  browser throws, so an editable input of another type (``email``, ``number``, ``date``) takes the
+ *  ``execCommand`` path a contenteditable region takes. */
+const SELECTION_API_INPUT_TYPES: ReadonlySet<string> = new Set(["text", "search", "url", "tel", "password"]);
+
+/** Whether the target is a text control the field API acts on: a textarea, or an input of a type it applies to. */
 function isFieldElement(element: Element): element is HTMLInputElement | HTMLTextAreaElement {
-  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+  if (element instanceof HTMLTextAreaElement) return true;
+  return element instanceof HTMLInputElement && SELECTION_API_INPUT_TYPES.has(element.type);
 }
 
 /** The text a field has selected, or "" (a contenteditable region's selection is the document's). */
