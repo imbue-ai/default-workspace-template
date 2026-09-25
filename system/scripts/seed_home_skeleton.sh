@@ -102,7 +102,7 @@ if command -v pi >/dev/null 2>&1; then
     # key, which on OpenRouter is a weak model. Seed a stronger one; pi ignores
     # it whenever that provider has no key and falls back to its usual pick.
     # Set only when neither key exists, so a default the user saved from pi's
-    # model picker (Ctrl+S) survives every boot.
+    # model picker (Ctrl+S) survives a re-run of this seed.
     if command -v jq >/dev/null 2>&1; then
         merge_pi_settings "seed the pi default model" \
             'if has("defaultProvider") or has("defaultModel") then . else . + {defaultProvider: "openrouter", defaultModel: "z-ai/glm-5.3"} end'
