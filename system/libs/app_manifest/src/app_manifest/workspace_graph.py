@@ -276,9 +276,11 @@ def npm_consumers(packages: Sequence[NpmPackage]) -> dict[str, tuple[str, ...]]:
     return _reverse_transitive_closure(edges)
 
 
-def read_own_root_units(repo_root: Path) -> tuple[str, ...]:
-    """The directories the root pytest configuration ignores because they run as their own
-    pytest root: each has a ``pyproject.toml`` with its own ``[tool.pytest.ini_options]``."""
+def read_own_root_units(repo_root: Path, members: Sequence[PythonMember]) -> tuple[str, ...]:
+    """The workspace members the root pytest configuration ignores because they run as their
+    own pytest root: each has its own ``[tool.pytest.ini_options]``. An ignored directory
+    that is not a member (a vendored subtree with its own tests) is nobody's suite here."""
+    member_directories = {str(member.directory) for member in members}
     root_pyproject = _read_toml(repo_root / "pyproject.toml")
     pytest_options = _table(
         _table(_table(root_pyproject.get("tool")).get("pytest")).get("ini_options")
@@ -288,6 +290,8 @@ def read_own_root_units(repo_root: Path) -> tuple[str, ...]:
         if not option.startswith("--ignore="):
             continue
         directory = option.removeprefix("--ignore=").rstrip("/")
+        if directory not in member_directories:
+            continue
         pyproject_path = repo_root / directory / "pyproject.toml"
         if not pyproject_path.is_file():
             continue

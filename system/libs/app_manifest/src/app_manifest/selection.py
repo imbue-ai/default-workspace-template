@@ -438,7 +438,8 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
     test_texts = {
         path: _read_text(repo_root / path) for path in test_files if (repo_root / path).is_file()
     }
-    own_root_units = read_own_root_units(repo_root)
+    python_members = read_python_members(repo_root)
+    own_root_units = read_own_root_units(repo_root, python_members)
     manifests = load_app_manifests(repo_root)
     return RepoLayout(
         repo_root=repo_root,
@@ -453,7 +454,7 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         ),
         own_root_units=own_root_units,
         coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
-        python_members=read_python_members(repo_root),
+        python_members=python_members,
         npm_packages=read_npm_packages(repo_root),
         manifests=manifests,
         wiring_owners=_wiring_owners(repo_root, manifests),
