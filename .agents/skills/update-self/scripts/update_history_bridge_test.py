@@ -226,6 +226,34 @@ def test_bridge_history_is_repeatable_before_the_merge(workspace, capsys) -> Non
     assert len(_replace_refs(workspace)) == 1
 
 
+def test_bridge_history_replaces_a_graft_an_earlier_pass_left(
+    workspace, capsys
+) -> None:
+    stale = _git(workspace, "rev-parse", "minds-v2^{commit}")
+    unrelated = _git(workspace, "commit-tree", "-m", "Unrelated", "HEAD^{tree}")
+    _git(
+        workspace,
+        "replace",
+        "--graft",
+        stale,
+        *_git(workspace, "rev-parse", f"{stale}^@").split(),
+        unrelated,
+    )
+    state = workspace / "data/.state/update-self/history-bridge.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"twin": stale, "fork_point": unrelated}))
+
+    result = _bridge(workspace, capsys)
+
+    assert result["dropped"] == stale
+    assert _replace_refs(workspace) == [result["twin"]]
+    assert (
+        update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
+        == 0
+    )
+    assert _replace_refs(workspace) == []
+
+
 def test_bridge_history_bridges_a_shallow_workspace(
     tmp_path, template, upstream, capsys
 ) -> None:
