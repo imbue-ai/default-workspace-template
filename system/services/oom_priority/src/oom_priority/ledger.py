@@ -6,7 +6,10 @@ Two record types share the file:
 - ``process_shed`` -- one per earlyoom kill, written by the kill hook. Carries
   ``agent_name`` only when an agent's *own* main process was shed (looked up in
   the pid registry); that is what marks an agent as needing a revival notice. A
-  shed subprocess has ``agent_name`` null.
+  shed subprocess has ``agent_name`` null. Also carries why the victim was
+  picked -- its ``oom_score_adj``, ``badness_kib``, ``vm_rss_kib`` and the
+  ``ordering`` earlyoom used -- each null when earlyoom did not report it (the
+  stock earlyoom a not-yet-updated workspace may still run reports none).
 - ``notice_delivered`` -- written by the revival-notice hook when it has told a
   revived agent it was paused, recording the latest shed timestamp covered so
   the same notice is not injected twice.
@@ -48,11 +51,17 @@ def append_shed_record(
     comm: str,
     agent_name: str | None,
     is_worker: bool | None,
+    oom_score_adj: int | None = None,
+    badness_kib: int | None = None,
+    vm_rss_kib: int | None = None,
+    ordering: str | None = None,
 ) -> None:
     """Append one ``process_shed`` line for an earlyoom kill.
 
     ``agent_name``/``is_worker`` are set only when the killed pid was an agent's
     own main process (per the registry); for a shed subprocess they are None.
+    ``oom_score_adj``/``badness_kib``/``vm_rss_kib``/``ordering`` are what
+    earlyoom reported about the victim, None where it reported nothing.
     """
     _append(
         {
@@ -62,6 +71,10 @@ def append_shed_record(
             "comm": comm,
             "agent_name": agent_name,
             "is_worker": is_worker,
+            "oom_score_adj": oom_score_adj,
+            "badness_kib": badness_kib,
+            "vm_rss_kib": vm_rss_kib,
+            "ordering": ordering,
         }
     )
 
