@@ -64,6 +64,7 @@ describe("renderMarkdown links", () => {
     "[report](q4.md:12)",
     "[section](#usage)",
     "[local](file:///home/user/workspace/notes.md)",
+    "[text me](sms:+15551234)",
   ])("renders %s as its label text with no link", (source) => {
     const container = render(source);
     expect(container.querySelector("a")).toBeNull();
