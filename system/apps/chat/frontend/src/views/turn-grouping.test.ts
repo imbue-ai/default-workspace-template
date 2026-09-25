@@ -723,6 +723,53 @@ describe("carryover", () => {
     expect(stepItems(sections[1].items)[0].is_carryover).toBe(true);
     expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
   });
+
+  // Two messages sent back to back reach the agent together; the open step shows once, under the
+  // second, not also as an empty node under the first.
+  it("carries a step past back-to-back user messages without an empty node between them", () => {
+    const events = [
+      userMsg("t0", "first", "u1"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t5", "also check X", "u2"),
+      userMsg("t6", "and Y", "u3"),
+      workMsg("t7", "Edit", "w2"),
+      result("t7", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u1", "u2", "u3"]);
+    expect(sections[1].items).toEqual([]);
+    const carried = stepItems(sections[2].items);
+    expect(carried.map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(carried[0].is_carryover).toBe(true);
+    expect(carried[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // A fresh start leaves no handoff node behind, so a message the retiring agent never answered
+  // leaves a section holding only the carried-over step: it shows once, in the successor's turn.
+  it("carries a step past a message and a fresh-start switch without an empty node between them", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t0", "first", "u1"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "never mind, switch", "u2"),
+      agentSwitch("t4", "sw1", "claude", "pi", null, true),
+      userMsg("t5", "carry on in pi", "u3"),
+      workMsg("t6", "Edit", "w2"),
+      result("t6", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual(["u1", "u2", null, "u3"]);
+    expect(sections[1].items).toEqual([]);
+    expect(sections[2].items).toEqual([]);
+    const carried = stepItems(sections[3].items);
+    expect(carried.map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(carried[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
 });
 
 describe("pending roster", () => {
@@ -870,61 +917,6 @@ describe("audit regressions", () => {
     expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
   });
 
-  // A stop-hook chip renders at its chronological position in the timeline.
-  // Chips are no longer reply boundaries: the wrap-up reply is the final run of
-  // ungrouped prose regardless of where a chip fell.
-  it("renders a stop-hook chip at its position with the reply below the timeline", () => {
-    const events = [
-      userMsg("t0", "go"),
-      tkMsg("t1", "tk start s1", "k1"),
-      result("t1", "k1", startOut("s1", "Do it")),
-      userMsg("t2", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
-      workMsg("t3", "Edit", "w1"),
-      result("t3", "w1", "ok"),
-      tkMsg("t4", "tk close s1", "k2"),
-      result("t4", "k2", closeOut("s1", "Do it", "did it")),
-      assistantText("t5", "All wrapped up.", "reply"),
-    ];
-    const sections = run(events);
-    expect(sections[0].items.some((i) => i.kind === "chip")).toBe(true);
-    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
-  });
-
-  // A browser-fleet nudge and a background task-notification are system messages
-  // that arrive on the user rail; they fold into the current turn as a chip (like
-  // a stop hook), NOT as a new turn boundary.
-  it("folds a browser-fleet nudge into the current section as a chip, not a new turn", () => {
-    const events = [
-      userMsg("t0", "go"),
-      assistantText("t1", "working on it", "a1"),
-      userMsg("t2", "<agentic-browser-fleet>Browser foo-1 was handed back to you.</agentic-browser-fleet>", "bf1", {
-        display: "chip",
-        display_label: "Browser fleet",
-        display_body: "Browser foo-1 was handed back to you.",
-      }),
-      assistantText("t3", "resuming", "a2"),
-    ];
-    const sections = run(events);
-    // One section (the fleet nudge did NOT open a second), with a chip inside it.
-    expect(sections.length).toBe(1);
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "bf1")).toBe(true);
-  });
-
-  it("folds a <task-notification> line into the current section as a chip, not a new turn", () => {
-    const events = [
-      userMsg("t0", "go"),
-      assistantText("t1", "spawned a background task", "a1"),
-      userMsg("t2", "<task-notification>\n<status>completed</status>\n</task-notification>", "tn1", {
-        display: "chip",
-        display_label: "Background task",
-      }),
-      assistantText("t3", "handling the result", "a2"),
-    ];
-    const sections = run(events);
-    expect(sections.length).toBe(1);
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "tn1")).toBe(true);
-  });
-
   // The post-auto-compaction status carries display: "status" and is the FIRST
   // event of a resumed session -- there is no section open yet. It must still
   // render (as a status item in a fresh section), not be dropped.
@@ -1000,87 +992,71 @@ describe("audit regressions", () => {
   });
 });
 
-// Prose sitting immediately before a chip is a delivered reply: an injected
-// user-side line only arrives at a request boundary, so prose can precede one
-// only when that response ended with text and no tool call -- the agent stopped
-// there. The work it does after being woken must not retroactively bury that
-// reply inside the step that happened to still be open. See the stint split in
-// finalizeSection.
-describe("chips as stint boundaries", () => {
-  it("keeps a delivered reply surfaced when a stop hook wakes the agent into the same step", () => {
-    const events = [
-      userMsg("t0", "go"),
-      tkMsg("t1", "tk start s1", "k1"),
-      result("t1", "k1", startOut("s1", "Do it")),
-      workMsg("t2", "Edit", "w1"),
-      result("t2", "w1", "ok"),
-      assistantText("t3", "Here is what I found.", "wrapup"),
-      userMsg("t4", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
-      workMsg("t5", "Edit", "w2"),
-      result("t5", "w2", "ok"),
-      assistantText("t6", "Done now.", "reply"),
-    ];
-    const sections = run(events);
-    const steps = stepItems(sections[0].items);
-    // The wrap-up is ejected from the step, not collapsed inside it alongside
-    // the work that followed the hook.
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
-    // It renders inline at its own position, immediately before the chip.
-    expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "ungrouped", "chip"]);
-    const ung = sections[0].items[1] as { kind: "ungrouped"; events: AssistantMessageEvent[] };
-    expect(ung.events.map((e) => e.event_id)).toEqual(["wrapup"]);
-    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+/** A background task's completion, as the backend classifies it: a one-line notice. */
+function notice(ts: string, id: string): UserMessageEvent {
+  return userMsg(ts, "<task-notification>\n<status>completed</status>\n</task-notification>", id, {
+    display: "notice",
+    display_label: "Background task completed",
+    display_body: 'Background command "Wait for the worker" completed',
   });
+}
 
-  it("keeps a delivered reply surfaced when a background-task notice wakes the agent", () => {
+function stopHook(ts: string, id: string): UserMessageEvent {
+  return userMsg(ts, "Stop hook feedback:\nhook", id, { display: "chip", display_label: "Stop hook feedback" });
+}
+
+function fleetNudge(ts: string, id: string): UserMessageEvent {
+  return userMsg(ts, "<agentic-browser-fleet>Browser foo-1 was handed back to you.</agentic-browser-fleet>", id, {
+    display: "chip",
+    display_label: "Browser fleet",
+    display_body: "Browser foo-1 was handed back to you.",
+  });
+}
+
+// A system chip or notice arrives between two of the agent's requests and the agent resumes after
+// it, so the timeline breaks there: what the agent said before it stays above it, and what it does
+// after renders below it, in the step carried over to the chip's section.
+describe("system chips and notices break the timeline", () => {
+  it("renders the work the agent resumes after a notice below it, in the step carried over", () => {
     const events = [
       userMsg("t0", "go"),
       tkMsg("t1", "tk start s1", "k1"),
-      result("t1", "k1", startOut("s1", "Do it")),
+      result("t1", "k1", startOut("s1", "Run the update")),
       workMsg("t2", "Bash", "w1"),
       result("t2", "w1", "ok"),
-      assistantText("t3", "Kicked it off; I'll relay the findings.", "wrapup"),
-      userMsg("t4", "<task-notification>\n<status>completed</status>\n</task-notification>", "tn1", {
-        display: "chip",
-        display_label: "Background task",
-      }),
+      assistantText("t3", "It's running in the background; I'll report back.", "wrapup"),
+      notice("t4", "n1"),
       workMsg("t5", "Bash", "w2"),
       result("t5", "w2", "ok"),
+      assistantText("t6", "The worker stalled, so I restarted it.", "narr"),
+      workMsg("t7", "Bash", "w3"),
+      result("t7", "w3", "ok"),
+      tkMsg("t8", "tk close s1", "k2"),
+      result("t8", "k2", closeOut("s1", "Run the update", "Ran it")),
+      assistantText("t9", "Done.", "reply"),
     ];
     const sections = run(events);
-    const steps = stepItems(sections[0].items);
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
-    expect(steps[0].narration).toBeNull();
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "n1"]);
+
+    const before = stepItems(sections[0].items);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["step"]);
+    expect(before[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+    expect(before[0].status).toBe("active");
+    // The reply the agent gave before it stopped is that turn's reply, above the notice.
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["wrapup"]);
+
+    const after = stepItems(sections[1].items);
+    expect(after).toHaveLength(1);
+    expect(after[0].ticket_id).toBe("s1");
+    expect(after[0].is_carryover).toBe(true);
+    expect(after[0].status).toBe("done");
+    expect(after[0].events.map((e) => e.event_id)).toEqual(["a-w2", "narr", "a-w3"]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
   });
 
-  // The live frontier step's LAST stint has not ended, so its trailing prose is
-  // still in-flight narration. Only its earlier stints -- each of which a chip
-  // proved ended -- get their closing prose ejected.
-  it("ejects a frontier step's pre-chip prose but keeps its live narration", () => {
-    const events = [
-      userMsg("t0", "go"),
-      tkMsg("t1", "tk start s1", "k1"),
-      result("t1", "k1", startOut("s1", "Do it")),
-      workMsg("t2", "Edit", "w1"),
-      result("t2", "w1", "ok"),
-      assistantText("t3", "Here is what I found.", "wrapup"),
-      userMsg("t4", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
-      workMsg("t5", "Edit", "w2"),
-      result("t5", "w2", "ok"),
-      assistantText("t6", "Still going.", "narr"),
-    ];
-    const sections = run(events, /* idle */ false);
-    const steps = stepItems(sections[0].items);
-    expect(steps[0].is_frontier).toBe(true);
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2", "narr"]);
-    expect(steps[0].narration).toBe("Still going.");
-    expect(sections[0].trailing_reply).toHaveLength(0);
-  });
-
-  // The flicker variant: the notice lands and the agent has not yet produced
-  // anything. It flips the derived activity state, making the still-open step
-  // the frontier -- which must not retract the reply already shown.
-  it("keeps the reply surfaced when a notice lands before the agent has resumed", () => {
+  // The moment a notice lands, before the agent has done anything: the agent is busy again, but the
+  // reply it gave stays above the notice, and the spinner moves to the step below it.
+  it("keeps the reply above a notice that lands before the agent has resumed", () => {
     const events = [
       userMsg("t0", "go"),
       tkMsg("t1", "tk start s1", "k1"),
@@ -1088,35 +1064,129 @@ describe("chips as stint boundaries", () => {
       workMsg("t2", "Bash", "w1"),
       result("t2", "w1", "ok"),
       assistantText("t3", "All three parts are done.", "wrapup"),
-      userMsg("t4", "<task-notification>\n<status>completed</status>\n</task-notification>", "tn1", {
-        display: "chip",
-        display_label: "Background task",
-      }),
+      notice("t4", "n1"),
     ];
     const sections = run(events, /* idle */ false);
-    const steps = stepItems(sections[0].items);
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "n1"]);
     expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["wrapup"]);
+    expect(stepItems(sections[0].items)[0].is_frontier).toBe(false);
+    const live = stepItems(sections[1].items)[0];
+    expect(live.is_frontier).toBe(true);
+    expect(live.events).toEqual([]);
+    expect(sections[1].trailing_reply).toEqual([]);
+
+    // What the agent says next, before its first tool call, is the live step's narration, below
+    // the notice -- the earlier reply does not move.
+    const speaking = run([...events, assistantText("t5", "Checking what it reported.", "narr")], false);
+    expect(stepItems(speaking[1].items)[0].narration).toBe("Checking what it reported.");
+    expect(speaking[0].trailing_reply.map((e) => e.event_id)).toEqual(["wrapup"]);
   });
 
-  // Prose mid-stint is ordinary narration: it is followed by more work before
-  // any chip, so it is not a closing remark and must stay in the step.
-  it("leaves mid-stint narration inside the step", () => {
+  // A chip can also land mid-step, right after a tool result (a browser handed back while the agent
+  // works). The step's work up to it stays above; the rest renders below it.
+  it("splits a step at a chip that lands between two tool calls", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Sign in")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      fleetNudge("t3", "bf1"),
+      workMsg("t4", "Bash", "w2"),
+      result("t4", "w2", "ok"),
+      assistantText("t5", "Signed in; checking the session.", "narr"),
+      workMsg("t6", "Bash", "w3"),
+      result("t6", "w3", "ok"),
+    ];
+    const sections = run(events);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "bf1"]);
+    expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+    const after = stepItems(sections[1].items)[0];
+    expect(after.events.map((e) => e.event_id)).toEqual(["a-w2", "narr", "a-w3"]);
+    expect(after.narration).toBe("Signed in; checking the session.");
+  });
+
+  // A Stop hook fires once the agent has already answered. The answer stays the turn's reply; the
+  // hook and what the agent does about it follow it.
+  it("keeps the answer as the turn's reply when a stop hook fires after it", () => {
     const events = [
       userMsg("t0", "go"),
       tkMsg("t1", "tk start s1", "k1"),
       result("t1", "k1", startOut("s1", "Do it")),
-      userMsg("t2", "Stop hook feedback:\nhook", "sh1", { display: "chip", display_label: "Stop hook feedback" }),
-      workMsg("t3", "Edit", "w1"),
-      result("t3", "w1", "ok"),
-      assistantText("t4", "Now the tests.", "narr"),
-      workMsg("t5", "Bash", "w2"),
-      result("t5", "w2", "ok"),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      tkMsg("t3", "tk close s1", "k2"),
+      result("t3", "k2", closeOut("s1", "Do it", "did it")),
+      assistantText("t4", "Here is what changed.", "answer"),
+      stopHook("t5", "sh1"),
+      workMsg("t6", "Bash", "w2"),
+      result("t6", "w2", "ok"),
+      assistantText("t7", "Back at the repo root.", "after"),
     ];
     const sections = run(events);
-    const steps = stepItems(sections[0].items);
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "narr", "a-w2"]);
-    expect(steps[0].narration).toBe("Now the tests.");
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "sh1"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["answer"]);
+    // The step closed before the hook, so nothing carries over.
+    expect(sections[1].items.map((i) => i.kind)).toEqual(["ungrouped"]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
+  });
+
+  it("keeps a plain reply above a notice that follows it in a turn with no steps", () => {
+    const events = [
+      userMsg("t0", "what's up?"),
+      assistantText("t1", "Nothing yet.", "answer"),
+      notice("t2", "n1"),
+      assistantText("t3", "The build finished too.", "followup"),
+    ];
+    const sections = run(events);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "n1"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["answer"]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["followup"]);
+  });
+
+  // Two background tasks finishing together deliver two notices back to back. The open step shows
+  // once below them, not also as an empty node between them.
+  it("carries an open step past back-to-back notices without an empty node between them", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "Waiting on both.", "wrapup"),
+      notice("t4", "n1"),
+      notice("t5", "n2"),
+      workMsg("t6", "Bash", "w2"),
+      result("t6", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "n1", "n2"]);
+    expect(sections[1].items).toEqual([]);
+    const live = stepItems(sections[2].items);
+    expect(live).toHaveLength(1);
+    expect(live[0].ticket_id).toBe("s1");
+    expect(live[0].is_frontier).toBe(true);
+    expect(live[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
+  // The retiring agent's summary turn is one handoff node that takes all of its work, so a chip
+  // landing inside it stays in that turn rather than cutting the node off from its switch.
+  it("leaves a chip that lands inside an open handoff in the handoff's turn", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t0", "do the thing"),
+      summaryRequest("t1"),
+      workMsg("t2", "Write", "w1"),
+      stopHook("t3", "sh1"),
+      workMsg("t4", "Bash", "w2"),
+      agentSwitch("t5", "sw1"),
+      assistantText("t6", "hello from codex"),
+    ];
+    const sections = run(events);
+    expect(sections).toHaveLength(2);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["handoff", "chip"]);
+    const node = handoffNodeOf(sections[0].items[0]);
+    expect(node.events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
+    expect(node.switch?.event_id).toBe("sw1");
   });
 });
 
@@ -1664,10 +1734,10 @@ describe("agent switches", () => {
     expect(switchOnly[1].items).toEqual([]);
     const replied = buildSections([agentSwitch("t4", "sw1"), assistantText("t5", "hi"), prompt], new Map(), true);
     expect(handoffNodeOf(replied[0].items[0]).prompt).toBeNull();
-    expect(replied[1].items.map((i) => i.kind)).toEqual(["chip"]);
+    expect(replied.map((s) => s.user_event?.event_id ?? null)).toEqual([null, null, "u-p"]);
     const other = buildSections([agentSwitch("t4", "sw1"), chip], new Map(), true);
     expect(handoffNodeOf(other[0].items[0]).prompt).toBeNull();
-    expect(other[1].items.map((i) => i.kind)).toEqual(["chip"]);
+    expect(other.map((s) => s.user_event?.event_id ?? null)).toEqual([null, null, "u-c"]);
   });
 
   it("opens the successor's section on the message the switch carries", () => {

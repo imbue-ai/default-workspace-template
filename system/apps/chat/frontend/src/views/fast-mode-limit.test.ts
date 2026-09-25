@@ -83,7 +83,7 @@ function conversation(count: number): TranscriptEvent[] {
 }
 
 describe("countUserTurns", () => {
-  it("counts the user's own turns and not the seed's, the hidden lines, or the verdicts", () => {
+  it("counts the user's own turns and not the seed's, the hidden lines, the verdicts, or the chips", () => {
     const events = [
       userMsg("Wait.. what is honest software?", "seed-0", { source: "seed" }),
       assistantMsg("seed-1"),
@@ -93,6 +93,12 @@ describe("countUserTurns", () => {
         display: "permission_resolution",
         resolution: "granted",
         request_id: "r1",
+      }),
+      // A chip or notice breaks the progress timeline but is not a turn the user took.
+      userMsg("Stop hook feedback:\nhook", "chip", { display: "chip", display_label: "Stop hook feedback" }),
+      userMsg("<task-notification>\n</task-notification>", "notice", {
+        display: "notice",
+        display_label: "Background task completed",
       }),
     ];
     expect(countUserTurns(events)).toBe(2);

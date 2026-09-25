@@ -29,19 +29,19 @@
  * of the step rather than buried in it. The turn's wrap-up reply is simply the
  * final run of ungrouped prose, rendered below the timeline.
  *
- * A system chip (Stop-hook feedback, a background-task notice, a fleet nudge)
- * splits a step into *stints*, and that ejection runs per stint. Prose closing a
- * stint is a delivered reply, and the chip's POSITION is what proves it: a chip
- * is a user-side line, so it only arrives at a request boundary, which leaves it
- * two possible spots. Either it follows a tool result -- the stint ends in work
- * and ejection has nothing to take -- or it follows prose, which can only happen
- * when that response ended with text and no tool call, i.e. the agent stopped
- * there. Work it does once woken must not retroactively bury that reply inside
- * the step that happened to still be open.
- *
  * A step still open when the next user message arrives carries over: it
  * re-renders at the top of the new turn, while the prior turn's node freezes at
- * its last-known state.
+ * its last-known state. A turn the agent did nothing in (two boundaries back to
+ * back) keeps no copy, so the step shows once, under the later boundary.
+ *
+ * A system chip or notice (Stop-hook feedback, a browser-fleet nudge, a finished
+ * background task, a bash-mode command and its output) breaks the timeline the
+ * same way, though it is not a turn the user took: it lands between two of the
+ * agent's requests, so whatever the agent does next happens after it. The
+ * section closes there, any open step carries over, and the chip heads the next
+ * section. The reply the agent gave before it stays above it, and the work it
+ * does after renders below it. The one exception is a chip landing inside an
+ * open handoff node, which stays in the handoff's turn.
  *
  * One message is never grouped under a step: an agent permission request. It
  * is lifted out into a dedicated inline break (the `permission` timeline item)
@@ -158,7 +158,8 @@ export type TimelineItem =
       event: AssistantMessageEvent;
       resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
     }
-  /** A non-boundary user message shown inline: a stop-hook chip, a background-task notice. */
+  /** A system chip or notice that landed inside an open handoff node, shown inline after it.
+   *  Anywhere else a chip heads a section of its own (SectionView.user_event). */
   | { kind: "chip"; event: UserMessageEvent }
   /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
    *  request in the window, at the switch itself, when its prompt reached it). */
@@ -166,8 +167,10 @@ export type TimelineItem =
 
 /** A turn: the user message, its timeline, and the wrap-up reply below it. */
 export interface SectionView {
-  /** The boundary user message that opened this section, or null for content
-   *  that precedes the first user message. */
+  /** The user message that opened this section -- a human turn, or a system chip
+   *  or notice the agent resumed after -- or null for content that precedes the
+   *  first user message or follows a permission verdict or an agent switch that
+   *  carries no message. */
   user_event: UserMessageEvent | null;
   key: string;
   items: TimelineItem[];
@@ -398,9 +401,7 @@ type SectionEntry =
   /** A permission request, lifted out of any open step to render inline as a
    *  visible break (see hasPermissionRequest / the `permission` TimelineItem). */
   | { kind: "permission"; event: AssistantMessageEvent }
-  /** A collapsed system chip. It sits in the skeleton because its POSITION is
-   *  what lets the ejection pass tell a delivered reply from mid-step narration
-   *  (see collectEjectedProse). */
+  /** A system chip or notice that landed inside an open handoff node. */
   | { kind: "chip"; event: UserMessageEvent }
   /** The handoff node, at the summary request that opened it or at a switch with no request. */
   | { kind: "handoff"; node: HandoffNode }
@@ -591,25 +592,25 @@ export function buildSections(
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
+      if (
+        current !== null &&
+        current.open_handoff !== null &&
+        (isSystemChipUserMessage(e) || isNoticeUserMessage(e))
+      ) {
+        // The handoff node takes the retiring agent's whole summary turn, so a chip landing
+        // inside it stays in that turn, at its spot after the node.
+        current.entries.push({ kind: "chip", event: e });
+        continue;
+      }
       if (isNonBoundaryUserMessage(e)) {
-        // Collapsed system chips (Stop-hook feedback, browser-fleet nudges,
-        // background task-notifications) fold into the current section as a chip
-        // rather than opening a new turn. The backend's display decision says
-        // which is which; nothing is re-derived here. A chip goes into the skeleton
-        // so it both renders at its chronological spot and marks the turn end that
-        // ends a step's stint (see collectEjectedProse).
-        if (isSystemChipUserMessage(e) || isNoticeUserMessage(e)) {
-          if (current === null) current = ensureSection(null, "section-pre");
-          current.entries.push({ kind: "chip", event: e });
-        }
-        // The other non-boundary messages -- skill expansions and hidden
-        // framework injections (/welcome, image notes, resume markers) -- render
-        // nowhere on the user rail, so they are dropped here.
+        // Skill expansions and hidden framework injections (/welcome, image notes, resume
+        // markers) render nowhere on the user rail, so they are dropped here.
         continue;
       }
 
-      // Real user turn: close the prior section (carrying open steps) and open
-      // a new one.
+      // A boundary -- a real user turn, a status line, or a system chip or notice (see the
+      // module docstring): close the prior section (carrying open steps) and open a new one
+      // headed by the message.
       lastSwitched = null;
       carryover = current === null ? [] : openStepsAtEnd(current);
       current = ensureSection(e, `section-${e.event_id}`);
@@ -739,51 +740,18 @@ function openStepsAtEnd(section: SectionBuilder): string[] {
   return section.step_order.filter((id) => section.steps.get(id)!.status === "active");
 }
 
-/** Collect the in-step prose to eject as closing remarks, working stint by
- *  stint.
- *
- *  A *stint* is a run of one step's events uninterrupted by a system chip.
- *  Prose at the end of a stint is a delivered reply, proven by where the chip
- *  sits rather than by what kind of chip it is: an injected user-side line only
- *  arrives at a request boundary, so it either follows a tool result (the stint
- *  ends in work, and there is nothing to eject) or follows prose, which happens
- *  only when that response ended with text and no tool call -- the agent
- *  stopped there. Both halves are visible in any transcript: a text block never
- *  follows a tool_use inside one response, and an injected line never lands
- *  directly after a text-only one. That makes the rule independent of WHEN the
- *  harness delivers a chip, including one it queued while the agent was busy.
- *
- *  Without the split, work the agent does after being woken would retroactively
- *  turn that reply into mid-step narration and bury it inside the collapsed
- *  step -- the step happened to still be open, so the prose stopped being
- *  "after the step's last work".
- *
- *  The live frontier step's LAST stint is exempt: nothing has ended it, so its
- *  trailing prose is in-flight narration shown as a caption (see step 3). Its
- *  earlier stints are not exempt -- a chip ended each of those.
- */
+/** Collect each step's closing remarks: the prose it spoke after its last work
+ *  in this section. The live frontier step is exempt: nothing has ended it, so
+ *  its trailing prose is in-flight narration shown as a caption (see step 3). */
 function collectEjectedProse(section: SectionBuilder, frontierId: string | null): Set<string> {
-  const stintsByStep = new Map<string, AssistantMessageEvent[][]>();
-  for (const id of section.step_order) stintsByStep.set(id, [[]]);
-  for (const entry of section.entries) {
-    if (entry.kind === "chip") {
-      for (const stints of stintsByStep.values()) stints.push([]);
-    } else if (entry.kind === "event" && entry.step_id !== null) {
-      const stints = stintsByStep.get(entry.step_id);
-      if (stints !== undefined) stints[stints.length - 1].push(entry.event);
-    }
-  }
-
   const ejected = new Set<string>();
-  for (const [id, stints] of stintsByStep) {
-    for (let s = 0; s < stints.length; s++) {
-      if (id === frontierId && s === stints.length - 1) continue;
-      const stint = stints[s];
-      let lastWorkIdx = -1;
-      for (let i = 0; i < stint.length; i++) if (isWork(stint[i])) lastWorkIdx = i;
-      for (let i = lastWorkIdx + 1; i < stint.length; i++) {
-        if (isProse(stint[i])) ejected.add(stint[i].event_id);
-      }
+  for (const id of section.step_order) {
+    if (id === frontierId) continue;
+    const events = section.steps.get(id)!.events;
+    let lastWorkIdx = -1;
+    for (let i = 0; i < events.length; i++) if (isWork(events[i])) lastWorkIdx = i;
+    for (let i = lastWorkIdx + 1; i < events.length; i++) {
+      if (isProse(events[i])) ejected.add(events[i].event_id);
     }
   }
   return ejected;
@@ -810,8 +778,21 @@ function finalizeSection(
   // its node comes off the timeline rather than standing as an empty line.
   section.entries = section.entries.filter((entry) => entry.kind !== "handoff" || !isFreshStartNode(entry.node));
 
-  // 1. Ejection: prose spoken inside a step at the end of a stint (so it is NOT
-  //    narration, which is prose *followed* by more work in the same stint). It
+  // A section the agent did nothing in (two boundaries back to back) holds only the steps it
+  // carried over, which the next section shows again: drop them rather than show each twice.
+  const isUntouched = section.entries.every((entry) => {
+    if (entry.kind !== "step") return false;
+    const node = section.steps.get(entry.id)!;
+    return node.is_carryover && node.status === "active" && node.events.length === 0;
+  });
+  if (!is_tail && isUntouched) {
+    section.entries = [];
+    section.steps.clear();
+    section.step_order = [];
+  }
+
+  // 1. Ejection: prose spoken inside a step AFTER its last work (so it is NOT
+  //    narration, which is prose *followed* by more work in the same step). It
   //    is the step's closing remark -- ejected from the step so it renders in
   //    the ungrouped inline stream right after the step node, rather than buried
   //    inside it. (If it is the last thing in the section it becomes the
@@ -849,10 +830,7 @@ function finalizeSection(
     // Prose the agent just spoke inside the live frontier step is that step's
     // in-flight narration (a caption under the still-spinning step), not the
     // turn's wrap-up reply -- the step has not closed, so there is no reply yet.
-    // Prose step 1 already ejected is exempt from that: a chip ended the stint
-    // it closed, so it is a delivered reply and belongs below the timeline even
-    // though the step it came from is still the frontier.
-    if (en.step_id !== null && en.step_id === frontierId && !ejectedIds.has(en.event.event_id)) continue;
+    if (en.step_id !== null && en.step_id === frontierId) continue;
     trailing_reply.push(en.event);
     trailingIds.add(en.event.event_id);
   }

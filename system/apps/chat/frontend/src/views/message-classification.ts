@@ -78,9 +78,9 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
 // all derive from the single classification above.
 
 /**
- * True for a user_message that is NOT a genuine human turn and so must not be
- * treated as a turn boundary -- folding one of these into the running turn keeps
- * a single logical turn from being split into several visible ones.
+ * True for a user_message that does NOT open a new section of the progress
+ * timeline: a skill expansion or a hidden framework injection, which renders no
+ * row of its own there.
  */
 export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolean {
   // Derived from the KIND_SPEC registry (its `boundary` column) so the boundary
@@ -88,8 +88,14 @@ export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolea
   return !KIND_SPEC[classifyUserMessage(event).kind].boundary;
 }
 
-/** True when the message folds into the current turn as a collapsed chip (rather
- *  than being dropped): the SystemChip kinds. */
+/** True for a user_message that is a turn of the conversation (the registry's `isTurn`
+ *  column). */
+export function isTurnUserMessage(event: ClassifiableUserMessage): boolean {
+  return KIND_SPEC[classifyUserMessage(event).kind].isTurn;
+}
+
+/** True when the message shows as a collapsed chip (rather than being dropped):
+ *  the SystemChip kinds. */
 export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
 }
