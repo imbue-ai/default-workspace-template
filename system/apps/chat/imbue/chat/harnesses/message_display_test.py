@@ -6,6 +6,7 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 """
 
 import importlib.util
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -376,23 +377,24 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
     assert is_non_turn_tail(report) is False
 
 
+def _compose_report(description: str, command: Sequence[str] = ("make",), output: str = "built\n") -> str:
+    """A report composed by the real ``run_in_background.py``, for a command that finished."""
+    return _load_system_script("run_in_background.py").compose_report(
+        description=description,
+        command=command,
+        returncode=0,
+        output=output,
+        output_path=Path("data/.tasks/run-in-background/x/output.log"),
+    )
+
+
 def test_text_that_merely_mentions_the_background_task_tag_is_a_human_turn() -> None:
     assert classify_user_message(f"why did the <{BACKGROUND_TASK_REPORT_TAG}> message show up twice?") is None
 
 
 def test_a_stopped_queue_keeps_the_users_text_and_gives_up_its_reports() -> None:
     """Reports composed by the real script, joined with the user's queued text the way a Stop hands a queue back."""
-    module = _load_system_script("run_in_background.py")
-    reports = [
-        module.compose_report(
-            description=description,
-            command=["make"],
-            returncode=0,
-            output="<output> of its own\n",
-            output_path=Path("data/.tasks/run-in-background/x/output.log"),
-        )
-        for description in ("Build", "Test")
-    ]
+    reports = [_compose_report(description, output="<output> of its own\n") for description in ("Build", "Test")]
     block = "\n".join(["fix the header too", reports[0], "and the footer", reports[1]])
 
     assert split_background_task_reports(block) == ("fix the header too\nand the footer", tuple(reports))
@@ -404,14 +406,11 @@ def test_a_stopped_queue_splits_only_whole_line_reports() -> None:
     """A report's output is the command's raw text, so a search over this code can print the closing
     tag mid-line; only a tag on a line of its own ends the report. A report the user quotes mid-line
     is the user's text."""
-    module = _load_system_script("run_in_background.py")
     tag = BACKGROUND_TASK_REPORT_TAG
-    report = module.compose_report(
-        description="Search the chat app",
+    report = _compose_report(
+        "Search the chat app",
         command=["rg", tag],
-        returncode=0,
         output=f'QueuedMessageView.test.ts:106:  "<{tag}>\\n<summary>Wait</summary>\\n</{tag}>";\n',
-        output_path=Path("data/.tasks/run-in-background/x/output.log"),
     )
     quoting = f"why is <{tag}><summary>Build</summary>it failed</{tag}> shown twice?"
 
@@ -421,18 +420,10 @@ def test_a_stopped_queue_splits_only_whole_line_reports() -> None:
 @pytest.mark.parametrize("separator", ["\n", "\n\n"])
 def test_a_report_flushed_into_the_users_turn_shows_only_the_users_words(separator: str) -> None:
     """codex's tap resend, pi's flush, and antigravity's queue each send the queue as one message."""
-    module = _load_system_script("run_in_background.py")
-    report = module.compose_report(
-        description="Build",
-        command=["make"],
-        returncode=0,
-        output="built\n",
-        output_path=Path("data/.tasks/run-in-background/x/output.log"),
-    )
+    report = _compose_report("Build")
 
     decision = classify_user_message(separator.join(["fix the header too", report, "and the footer"]))
 
     assert decision is not None
     assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
     assert decision.display_body == "fix the header too\nand the footer"
-
