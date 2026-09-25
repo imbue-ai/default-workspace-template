@@ -1111,6 +1111,39 @@ def test_an_open_asked_for_minimized_places_the_window_out_of_sight_and_leaves_a
     assert [placement["is_minimized"] for placement in _placements(client, "c1")] == [False]
 
 
+def test_an_open_asked_to_sit_beside_a_window_snaps_the_pair_and_keeps_both_frames(
+    client: FlaskClient, app: Flask
+) -> None:
+    _register_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+    anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
+    # A frame of the anchor's own first, so the pairing can be shown not to spend it.
+    _op(client, "place", {"window": anchor, "frame": "0.1,0.2,0.5,0.6"}, requester)
+
+    opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester)
+    assert opened.status_code == 200
+    window_id = opened.get_json()["window_id"]
+
+    placements = _placements(client, "c1")
+    by_window = {placement["window_id"]: placement for placement in placements}
+    assert by_window[anchor]["state"] == "SNAPPED_LEFT"
+    assert by_window[window_id]["state"] == "SNAPPED_RIGHT"
+    assert [by_window[anchor]["is_minimized"], by_window[window_id]["is_minimized"]] == [False, False]
+    assert [placement["window_id"] for placement in placements][-1] == window_id
+    # Snapping sets the state and leaves the frame, so a restore returns the anchor where it stood.
+    assert by_window[anchor]["frame"] == {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.6}
+
+
+def test_an_open_beside_a_window_the_desktop_does_not_have_still_opens_it(client: FlaskClient, app: Flask) -> None:
+    """The pairing is the open's courtesy: a chat the user closed costs the open its placement, not its window."""
+    _register_client(app, "c1", "home")
+    opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "self"}, _TERMINAL_REQUESTER)
+    assert opened.status_code == 200
+    (placement,) = _placements(client, "c1")
+    assert placement["window_id"] == opened.get_json()["window_id"]
+    assert (placement["state"], placement["is_minimized"]) == ("NORMAL", False)
+
+
 def test_a_whole_app_refresh_reaches_every_client_and_needs_no_target(client: FlaskClient, app: Flask) -> None:
     first_queue = _register_client(app, "c1", "home")
     second_queue = _register_client(app, "c2", "home")

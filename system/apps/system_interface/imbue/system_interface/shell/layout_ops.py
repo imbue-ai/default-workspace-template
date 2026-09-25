@@ -98,6 +98,11 @@ class DesktopOpArguments(FrozenModel):
         description="Whether an ``open`` places the window minimized for the target client; a window it finds instead "
         "is left as placed",
     )
+    beside: str = Field(
+        default="",
+        description="A window an ``open`` lays its window beside for the target client: that one snapped to the left "
+        "half, the opened one to the right half and on top",
+    )
     zone: str = Field(default="", description="``left``, ``right``, or ``maximized`` for ``place``")
     frame: str = Field(default="", description="``x,y,width,height`` in fractions for ``place``")
     mode: ShortcutMode = Field(default=ShortcutMode.FOCUS, description="A shortcut's mode for ``shortcut_set``")

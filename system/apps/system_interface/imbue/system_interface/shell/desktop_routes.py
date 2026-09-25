@@ -753,6 +753,45 @@ def _op_window(
     return window.id
 
 
+def _pair_beside(
+    shell: ShellState,
+    arguments: DesktopOpArguments,
+    target: _DesktopOpTarget,
+    requester: OpRequester | None,
+    window_id: WindowId,
+) -> None:
+    """Lay the window an ``open`` landed on beside the window ``beside`` names, for the target client alone: the
+    named one snapped to the left half, the opened one to the right half and on top of the stack. Both keep their
+    own frames, so ``restore`` returns each to where it stood.
+
+    The pairing is the open's courtesy, not its point: an open whose ``beside`` names no window on this desktop --
+    a chat the user closed, an agent that is nobody's chat -- still opens its window, where it would have landed.
+    """
+    if not arguments.beside:
+        return
+    desktop = target.desktop
+    try:
+        anchor = _resolve_window(
+            desktop,
+            shell.windows_for_client(desktop, target.client_id),
+            shell.read_desktop_layout(desktop, target.client_id),
+            arguments.beside,
+            requester,
+        )
+    except WindowNotFoundError:
+        logger.info("open beside={} matched no window on desktop {}; left the window as placed", arguments.beside, desktop.id)
+        return
+    if anchor.id == window_id:
+        return
+    shell.edit_desktop_layout(
+        desktop,
+        target.client_id,
+        lambda current: with_window_state(
+            with_window_state(current, anchor.id, WindowState.SNAPPED_LEFT), window_id, WindowState.SNAPPED_RIGHT
+        ),
+    )
+
+
 def dispatch_desktop_op(
     shell: ShellState, op: str, args_raw: Mapping[str, Any], requester: OpRequester | None
 ) -> ResponseReturnValue:
@@ -787,6 +826,7 @@ def dispatch_desktop_op(
                 _open_request(shell, arguments, target.client_id, target.desktop.id),
                 arguments.minimized,
             ).window.id
+            _pair_beside(shell, arguments, target, requester, window_id)
         case "refresh":
             return _refresh_window(shell, arguments, target, requester)
         case _ if op in SHORTCUT_OPS:

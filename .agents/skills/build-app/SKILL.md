@@ -439,8 +439,14 @@ launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-python3 system/scripts/layout.py open <name>
+python3 system/scripts/layout.py open <name> --beside
 ```
+
+`--beside` lays it beside the chat that asked for it -- their chat on the left
+half, what you built on the right -- instead of on top of the conversation.
+Each keeps its own frame, so either can be put back. Drop the flag only for an
+app the user wanted running rather than shown; with no chat on that desktop it
+is already a no-op.
 
 With no `--desktop`, the op edits the desktop the target client is looking
 at, which is where the user expects the new window. (Pass `--desktop <name>`

@@ -8,6 +8,8 @@ Subcommands:
     load <desktop>                      Switch the target client onto a desktop.
     open <app|url> [--path P | --launch ID --param k=v ...] [--if-present focus|new] [--minimized]
                                         Open a window of an app (a bare https:// URL opens a new browser on that page).
+    open ... --beside [window]          ... and lay it beside that window (your own chat by default): that one
+                                        snapped to the left half, the opened one to the right half and on top.
     focus <window>                      Restore and raise a window.
     minimize <window>                   Put a window out of sight (its frame is kept).
     restore <window>                    Bring a minimized or maximized window back to its frame.
@@ -633,13 +635,21 @@ def _cmd_open(args: argparse.Namespace) -> int:
         return err
     if args.if_present:
         op_args["if_present"] = args.if_present
+    if args.minimized and args.beside is not None:
+        _fail("--minimized puts the window out of sight and --beside puts it on half the screen; pass one or the other")
     if args.minimized:
         op_args["minimized"] = True
+    beside = ""
+    if args.beside is not None:
+        beside = _window_ref(args.beside)
+        op_args["beside"] = beside
     op_args.update(_target_args(args.desktop, args.client))
+    alongside = f" beside {beside}" if beside else ""
     return _run_desktop_op(
         "open",
         op_args,
-        lambda answer: f"opened window {_describe_window(answer, answer.get('window_id'))} on {_describe_target(answer)}",
+        lambda answer: f"opened window {_describe_window(answer, answer.get('window_id'))}{alongside} "
+        f"on {_describe_target(answer)}",
         emit=_print_window_id,
     )
 
@@ -869,6 +879,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Place a window this open creates minimized, so it does not land over what the user is doing; "
         "a window found already at the path is left as it is.",
+    )
+    p_open.add_argument(
+        "--beside",
+        nargs="?",
+        const=_SELF_REF,
+        default=None,
+        metavar="WINDOW",
+        help="Lay the opened window beside this one (bare, your own chat): that window snapped to the left half, "
+        "the opened one to the right half and on top. Ignored when the named window is not on the desktop.",
     )
     _add_target_arguments(p_open)
     p_open.set_defaults(func=_cmd_open)
