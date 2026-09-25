@@ -25,19 +25,17 @@ export function renderMarkdown(source: string): string {
 /**
  * Keep a clicked message link from replacing the conversation.
  *
- * A web link is left alone: the desktop app opens external links in the browser.
- * An absolute path is a file the chat backend serves as a download (see the
- * show-files-in-chat skill); ``download`` makes a missing file fail as a download
- * rather than load an error page over the chat. Any other path (relative, a
- * fragment, ``file:``) cannot open anything from the chat's origin, so it is
- * unwrapped to its text.
- * A dotted "scheme" is a file name with a line number (``q4.md:12``), not a URL.
+ * A web link is left alone: the desktop app opens external http(s), mailto and
+ * tel links in the browser. An absolute path is a file the chat backend serves
+ * as a download (see the show-files-in-chat skill); ``download`` makes a missing
+ * file fail as a download rather than load an error page over the chat. Anything
+ * else (a relative path, a fragment, another scheme) cannot open anything from
+ * the chat's origin, so it is unwrapped to its text.
  */
 function rewritePathLinks(root: DocumentFragment): void {
   for (const anchor of Array.from(root.querySelectorAll("a"))) {
     const href = anchor.getAttribute("href") ?? "";
-    const isWebLink = /^[a-z][a-z\d+-]*:/i.test(href) && !/^file:/i.test(href);
-    if (isWebLink || href.startsWith("//")) continue;
+    if (/^(?:https?:|mailto:|tel:|\/\/)/i.test(href)) continue;
     if (href.startsWith("/")) {
       anchor.setAttribute("download", "");
       continue;
