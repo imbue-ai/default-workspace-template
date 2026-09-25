@@ -154,7 +154,11 @@ from update_apply_contract import (
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
 from update_environment import default_sweep_homes
-from update_history_rewrite import DEFAULT_SCRATCH_DIR, HistoryRewriteError, rewrite_history
+from update_history_rewrite import (
+    DEFAULT_SCRATCH_DIR,
+    HistoryRewriteError,
+    rewrite_history,
+)
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -226,8 +230,12 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
+    app_version = (
+        args.app_version if args.app_version is not None else fetch_app_template_ref()
+    )
+    target = resolve_target(
+        args.override, tags, remote=args.remote, app_version=app_version
+    )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
@@ -489,7 +497,9 @@ def _cmd_rewrite_history(args: argparse.Namespace) -> int:
     scratch = Path(args.scratch)
     print(
         rewrite_history(
-            repo_root, args.ref, scratch if scratch.is_absolute() else repo_root / scratch
+            repo_root,
+            args.ref,
+            scratch if scratch.is_absolute() else repo_root / scratch,
         ).to_json()
     )
     return 0
