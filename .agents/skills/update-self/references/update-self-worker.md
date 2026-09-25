@@ -35,8 +35,8 @@ git fetch upstream --tags
 BASE=$(git merge-base HEAD "$TARGET_REF")
 ```
 
-**A retry after a rolled-back apply of this same target must revert the
-rollback first.** The apply rolls back as a *forward revert*, so `HEAD` carries
+**A pass after a rolled-back apply must revert the rollback first.** The
+apply rolls back as a *forward revert*, so `HEAD` carries
 a `Roll back update apply (restore to ...)` commit whose parent is the landed
 merge: git then counts the target's content as already merged, and a plain
 `git merge "$TARGET_REF"` lands only what the target gained since -- a tree
