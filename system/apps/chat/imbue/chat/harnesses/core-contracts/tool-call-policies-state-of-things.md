@@ -127,8 +127,7 @@ Three things about it are load-bearing:
   explicit exit 2 blocks. This is a seatbelt, not a boundary -- the agent could `rm` it.
 
 Only the outermost `bash -c` is guarded (`MNGR_AGY_BASH_SHIM` marks the environment), so a
-build's own nested shell is not policed -- the same "nested harness is unguarded" norm pi
-already sets. `MNGR_AGY_SHIM_OFF=1` disables it without a redeploy.
+build's own nested shell is not policed. `MNGR_AGY_SHIM_OFF=1` disables it without a redeploy.
 
 **#5 is n/a on agy, not merely unwired.** Its skip list is keyed on claude TOOL NAMES; under
 the shim every call is `Bash`, so it would nudge agy's read-only shell work while never seeing
