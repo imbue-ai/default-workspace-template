@@ -77,6 +77,9 @@ describe("stageElementReferences", () => {
   it("leaves a text with no reference block alone, uploading nothing", () => {
     const text = 'Explain what I attached in REF-x\n\n```json\n{"other": 1}\n```';
     expect(stageElementReferences(chatId, text)).toBe(text);
+    // A block under the key that is not a reference (nothing to name a file or a chip by) is left alone too.
+    const malformed = `Explain what I attached in ${ID_A}\n\n${jsonBlock({ element_reference: {} })}`;
+    expect(stageElementReferences(chatId, malformed)).toBe(malformed);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(getComposerAttachments(chatId)).toEqual([]);
   });

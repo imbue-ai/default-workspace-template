@@ -239,7 +239,7 @@ Nothing new: the reference file goes up `POST /api/uploads` as any attachment do
 
 ### 7.2 Frontend: attaching
 
-`models/elementReferences.ts` exports `stageElementReferences(chatId, text)`: it finds every fenced `json` block in `text` whose JSON parses to an object with the one key `element_reference`, stages each as an attachment of the chat's composer through the attachment store (a `File` named `<reference_id>.json` holding the envelope pretty-printed, with the reference's one-line summary for the chip), and answers the text with the blocks removed and the blank lines that set them off collapsed.
+`models/elementReferences.ts` exports `stageElementReferences(chatId, text)`: it finds every fenced `json` block in `text` whose JSON parses to an object with the one key `element_reference` holding a reference (`referenceEnvelopeOf` checks the fields the chat reads: a well-formed `reference_id`, the tag, id, classes, app, and page path; a block without them is left in the text), stages each as an attachment of the chat's composer through the attachment store (a `File` named `<reference_id>.json` holding the envelope pretty-printed, with the reference's one-line summary for the chip), and answers the text with the blocks removed and the blank lines that set them off collapsed.
 A text with no reference block is answered unchanged and stages nothing.
 
 It runs inside `prependToComposer`, the one door every draft enters the composer by: the root applying a pending intake or drafting from its rail (through the page's embed API when the page is loaded, else this document's own copy), a chat page drafting from its own menu, and a block handed back by a sibling view.

@@ -312,7 +312,29 @@ export function referenceSummaryOf(reference: ElementReference): string {
   return place === "" ? element : `${element} in ${place}`;
 }
 
-/** The envelope a block's JSON is, when it is one; null for any other block. */
+function isStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+/** Whether ``value`` carries what a chat reads off a reference (the id that names its file, and what its summary
+ *  says), with the right shapes: a block that lacks them is not a reference, whatever key it travels under. */
+function isReferenceLike(value: unknown): value is ElementReference {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const { reference_id, tag, id, classes, app, page_path } = value as Record<string, unknown>;
+  return (
+    typeof reference_id === "string" &&
+    REFERENCE_ID_PATTERN.test(reference_id) &&
+    typeof tag === "string" &&
+    isStringOrNull(id) &&
+    Array.isArray(classes) &&
+    classes.every((name) => typeof name === "string") &&
+    isStringOrNull(app) &&
+    typeof page_path === "string"
+  );
+}
+
+/** The envelope a block's JSON is, when it is one: an object under the one key, holding a reference; null for any
+ *  other block. */
 export function referenceEnvelopeOf(json: string): ElementReferenceEnvelope | null {
   let parsed: unknown;
   try {
@@ -324,6 +346,6 @@ export function referenceEnvelopeOf(json: string): ElementReferenceEnvelope | nu
   const keys = Object.keys(parsed);
   if (keys.length !== 1 || keys[0] !== ELEMENT_REFERENCE_KEY) return null;
   const inner = (parsed as Record<string, unknown>)[ELEMENT_REFERENCE_KEY];
-  if (inner === null || typeof inner !== "object" || Array.isArray(inner)) return null;
-  return parsed as ElementReferenceEnvelope;
+  if (!isReferenceLike(inner)) return null;
+  return { [ELEMENT_REFERENCE_KEY]: inner };
 }

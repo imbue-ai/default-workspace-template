@@ -209,13 +209,22 @@ describe("the block", () => {
     expect(referenceEnvelopeOf(json)).toEqual({ [ELEMENT_REFERENCE_KEY]: built });
   });
 
-  it("recognises only an object under the one key as an envelope", () => {
+  it("recognises only a reference under the one key as an envelope", () => {
+    render('<p id="para">x</p>');
+    const built = describeElement(byId("para"), CLICK, SCOPE);
+    const withFields = (fields: Record<string, unknown>): string =>
+      JSON.stringify({ [ELEMENT_REFERENCE_KEY]: { ...built, ...fields } });
     expect(referenceEnvelopeOf("not json")).toBeNull();
     expect(referenceEnvelopeOf('{"other": {}}')).toBeNull();
     expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {}, "extra": 1}`)).toBeNull();
     expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": "text"}`)).toBeNull();
-    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {"tag": "p"}}`)).toEqual({
-      [ELEMENT_REFERENCE_KEY]: { tag: "p" },
-    });
+    // What a chat reads off a reference has to be there, in shape: the id names the file, the rest is the summary.
+    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {}}`)).toBeNull();
+    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {"tag": "p"}}`)).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ reference_id: "REF-short" }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ classes: "lead" }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ id: 7 }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ app: undefined }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({}))).toEqual({ [ELEMENT_REFERENCE_KEY]: built });
   });
 });
