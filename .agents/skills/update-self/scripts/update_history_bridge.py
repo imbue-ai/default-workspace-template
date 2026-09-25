@@ -231,6 +231,7 @@ def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
 
     with tempfile.TemporaryDirectory() as scratch:
         fork, twin = _find_fork(repo, target, Path(scratch) / "index")
+    stale = _drop_recorded_graft(repo, state)
     parents = _git(
         repo, "rev-parse", f"{twin}^@", env={"GIT_NO_REPLACE_OBJECTS": "1"}
     ).split()
@@ -243,7 +244,7 @@ def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
         raise HistoryBridgeError(
             f"the graft on {twin[:12]} gives a merge base of {bridged}, not the fork point {fork[:12]}"
         )
-    return HistoryBridge(True, fork, twin, None)
+    return HistoryBridge(True, fork, twin, None if stale == twin else stale)
 
 
 def drop_history_bridge(repo: Path, state: Path) -> HistoryBridge:
