@@ -39,6 +39,7 @@ import {
   addChatsUpdatedListener,
   getChatById,
   getProvisionalChat,
+  hasReceivedChatList,
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
@@ -461,6 +462,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     });
   }
 
+  /** Whether a transcript 404 is the answer rather than a race. A new chat's page can load before
+   *  the chat app has told it about the chat, and the reload that follows the chat coming up is
+   *  still in flight when it does: both are the chat not known yet, which reads as an empty chat.
+   *  Only a chat the app lists (or has no record of) with no retry pending has no conversation. */
+  function isNotFoundSettled(chatId: string): boolean {
+    return hasReceivedChatList() && !(notFoundRetryInFlight && currentChatId === chatId);
+  }
+
   function renderMessages(chatId: string): m.Vnode {
     // A provisional record short-circuits the load: there is no agent to read yet. A load that
     // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
@@ -480,6 +489,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       manageStreamConnection(chatId);
     }
 
+    if (isConversationNotFound(chatId) && !isNotFoundSettled(chatId)) {
+      return renderEmptyConversation("message-list-loading", []);
+    }
     if (isConversationNotFound(chatId)) {
       fetchScreenCapture(chatId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [

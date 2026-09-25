@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type m from "mithril";
 
 // vi.mock factories are hoisted above module scope, so anything they close over must come from
@@ -19,12 +19,16 @@ const mocks = vi.hoisted(() => {
     noteLoadedArrivals: vi.fn(),
     // The page's not-yet-real bubbles, as the outgoing view renders them.
     outgoingBubbles: [] as unknown[],
+    // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
+    isConversationNotFound: false,
+    isChatListReceived: true,
   };
 });
 
 vi.mock("../models/Chats", () => ({
   getChatById: () => mocks.chat,
   getProvisionalChat: () => mocks.proto,
+  hasReceivedChatList: () => mocks.isChatListReceived,
   launchChat: (chatId: string, accountId: string) => mocks.launchChat(chatId, accountId),
   addChatsUpdatedListener: (listener: () => void) => {
     mocks.chatsUpdatedListener = listener;
@@ -47,7 +51,7 @@ vi.mock("../models/Response", () => ({
   getFirstOffset: () => 0,
   getRenderVersion: () => 0,
   getTotalEventCount: () => 0,
-  isConversationNotFound: () => false,
+  isConversationNotFound: () => mocks.isConversationNotFound,
   noteLoadedArrivals: mocks.noteLoadedArrivals,
 }));
 vi.mock("../models/StreamingMessage", () => ({
@@ -177,6 +181,8 @@ function bubbleListOf(tree: unknown): AnyVnode | undefined {
 
 describe("ChatPanel over a provisional chat", () => {
   beforeEach(() => {
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
     mocks.launchChat.mockReset();
     mocks.launchChat.mockImplementation(async () => ({}));
     mocks.chat = undefined;
@@ -264,8 +270,64 @@ describe("ChatPanel over a provisional chat", () => {
   });
 });
 
+describe("ChatPanel over a transcript that 404'd", () => {
+  beforeEach(() => {
+    mocks.proto = undefined;
+    mocks.chat = undefined;
+    mocks.outgoingBubbles = [];
+    mocks.isConversationNotFound = true;
+    mocks.isChatListReceived = true;
+    mocks.loadSnapshotWithStream.mockReset();
+    mocks.loadSnapshotWithStream.mockImplementation(async () => undefined);
+  });
+
+  afterEach(() => {
+    mocks.loadSnapshotWithStream.mockImplementation(async () => undefined);
+  });
+
+  it("draws a chat the page has not been told about yet as an empty chat, not as one with no conversation", () => {
+    // A new chat's page can load, and its transcript 404, before the chat app's list reaches it.
+    mocks.isChatListReceived = false;
+
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).not.toContain("No conversation data");
+    expect(findByClass(tree, "message-list-loading")).toBeTruthy();
+  });
+
+  it("says a chat the app does not list has no conversation", () => {
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).toContain("No conversation data");
+  });
+
+  it("keeps a chat that has just come up empty while its transcript is reloaded", async () => {
+    let finishReload: () => void = () => {};
+    mocks.loadSnapshotWithStream.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          finishReload = () => resolve(undefined);
+        }),
+    );
+    const render = mountPanel();
+    render();
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    mocks.chatsUpdatedListener?.();
+
+    const reloading = render();
+
+    expect(renderedText(reloading)).not.toContain("No conversation data");
+    mocks.isConversationNotFound = false;
+    finishReload();
+    await flushAsync();
+    expect(renderedText(render())).not.toContain("No conversation data");
+  });
+});
+
 describe("ChatPanel over a seeded chat", () => {
   beforeEach(() => {
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
     mocks.fetchEvents.mockClear();
     mocks.loadSnapshotWithStream.mockClear();
     mocks.connectToStream.mockClear();
