@@ -98,7 +98,7 @@ Do not confuse "no errors" with "correct behavior" -- a command that exits 0 but
 Then crystallize the verified behavior into formal tests. 
 Assert on things that are true if and only if the feature worked correctly -- this ensures tests are both reliable and meaningful.
 
-To find which tests a change calls for, run `uv run app-manifest select-tests --diff-base <the commit before the change>` from the repo root: it prints the commands to run, in order. The chat app's and the shell's suites (`system/apps/chat`, `system/apps/system_interface`, each run from its own directory) skip their browser tests by default; pass `-m ''` to run everything, or `-m release` for only the browser tests. Both suites fail any run under their coverage floor, so a run of only some of their tests (`-m release`, or named files) needs `--no-cov`. Naming a browser test file without `-m ''` or `-m release` reports it as deselected and runs nothing.
+To find which tests a change calls for, commit it, then run `uv run app-manifest select-tests --diff-base <the commit before the change>` from the repo root (it reads commits, not uncommitted edits): it prints the commands to run, in order. The chat app's and the shell's suites (`system/apps/chat`, `system/apps/system_interface`, each run from its own directory) skip their browser tests by default; pass `-m ''` to run everything, or `-m release` for only the browser tests. Both suites fail any run under their coverage floor, so a run of only some of their tests (`-m release`, or named files) needs `--no-cov`. Naming a browser test file without `-m ''` or `-m release` reports it as deselected and runs nothing.
 
 # Communication
 
