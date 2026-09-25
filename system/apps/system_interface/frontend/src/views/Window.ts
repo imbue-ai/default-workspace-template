@@ -54,9 +54,6 @@ export interface WindowAttrs {
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
    *  launcher is open. */
   readonly isShielded: boolean;
-  /** Whether this client's layout places the window; a window settling on another client's open is not
-   *  placed here and shows a placeholder instead of a page. */
-  readonly isPlacedHere: boolean;
   /** Offered when the app is stopped and the workspace can start it; null otherwise. */
   readonly onStartApp: (() => void) | null;
   readonly onRaise: () => void;
@@ -84,9 +81,8 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch, isPlacedHere } = attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch } = attrs;
       const isStopped = app !== undefined && !app.is_running;
-      const isSettlingElsewhere = window.is_settling && !isPlacedHere;
       const isResizable = !isCompact && !isTouch;
       return m(
         "div",
@@ -139,19 +135,7 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  isStopped
-                    ? stoppedPlaceholder(app, attrs.onStartApp)
-                    : isSettlingElsewhere
-                      ? m(
-                          "div",
-                          {
-                            "data-settling": "",
-                            class:
-                              "flex h-full w-full items-center justify-center bg-page text-(length:--font-size-row) text-faint",
-                          },
-                          "Starting on another screen…",
-                        )
-                      : null,
+                  isStopped ? stoppedPlaceholder(app, attrs.onStartApp) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document.

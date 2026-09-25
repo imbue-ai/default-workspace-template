@@ -23,7 +23,6 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isMenuOpen: false,
     sizeMenuTrigger: {},
     isShielded: false,
-    isPlacedHere: true,
     onStartApp: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
@@ -124,21 +123,6 @@ describe("Window", () => {
       render({ app: appRecord("docs", { is_running: false }), onStartApp: null }).querySelector(
         "[data-stopped-app] button",
       ),
-    ).toBeNull();
-  });
-
-  it("says a window settling on another client's open is starting elsewhere", () => {
-    const element = render({
-      window: windowRecord("win-1", "docs", "/new", { is_settling: true }),
-      isPlacedHere: false,
-    });
-    expect(element.querySelector("[data-settling]")).not.toBeNull();
-    unmountViews();
-    expect(
-      render({
-        window: windowRecord("win-1", "docs", "/new", { is_settling: true }),
-        isPlacedHere: true,
-      }).querySelector("[data-settling]"),
     ).toBeNull();
   });
 

@@ -7,17 +7,24 @@
  * the socket. Everything that reads or writes the shell goes through here.
  */
 
-import type { AppLifecycleAction, PlacementsSaveRequest, WindowOpenOutcome, WindowOpenRequest } from "../model/api";
+import type {
+  AppLifecycleAction,
+  LaunchOutcome,
+  LaunchRequest,
+  LaunchTarget,
+  PlacementsSaveRequest,
+  WindowOpenOutcome,
+  WindowOpenRequest,
+} from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import {
-  DRAFT_PARAM,
   NO_TEXT_APP_REASON,
   chatPath,
+  freeTextParams,
   freeTextRowsOf,
   launchPathOf,
-  launchPathWithParams,
   launchRowKindOf,
-  textPathOf,
+  textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
 import type {
@@ -112,6 +119,8 @@ export interface DesktopApi {
   moveDesktopShortcut(desktopId: string, app: string, launch: string, cell: GridCell): Promise<Desktop>;
   removeDesktopShortcut(desktopId: string, app: string, launch: string): Promise<Desktop>;
   openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome>;
+  /** Run a launch path (post-launch-paths plan section 5.3): the shell resolves the page and opens or navigates. */
+  launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome>;
   closeWindow(desktopId: string, windowId: string): Promise<void>;
   reportWindowLocation(
     desktopId: string,
@@ -214,7 +223,6 @@ export class DesktopStore {
   private replacedDesktop: ReplacedDesktop | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new SaveIdMinter();
-  private readonly pendingRestores = new Set<string>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private saveInFlight: Promise<void> | null = null;
   private layoutFetchSequence = 0;
@@ -275,13 +283,6 @@ export class DesktopStore {
   /** How many times the shell has handed over a layout, which carries this client's paths for independent windows. */
   getLayoutLoadsRevision(): number {
     return this.layoutLoadsRevision;
-  }
-
-  /** Whether this client's layout holds a placement for the window. While a window settles, only the
-   *  client that opened it has one (the shell places the requesting client's layout at open, and every
-   *  other client defers its gestures on the window), so this tells the opener from the rest. */
-  isPlacedHere(windowId: string): boolean {
-    return this.state.layout.placements.some((placement) => placement.window_id === windowId);
   }
 
   gridDimensions(): GridDimensions {
@@ -457,7 +458,7 @@ export class DesktopStore {
     if (link.open !== null) {
       if (appByName(this.state, link.open.app) === undefined)
         console.warn(`[si] deep link ignored: no app ${link.open.app}`);
-      else await this.openWindowAt(link.open.app, link.open.path, null, "focus");
+      else await this.openWindowAt(link.open.app, link.open.path, "focus");
     }
     if (link.launch !== null) {
       const app = appByName(this.state, link.launch.app);
@@ -465,7 +466,7 @@ export class DesktopStore {
       if (app === undefined || launchPath === null) {
         console.warn(`[si] deep link ignored: no launch path ${link.launch.app}:${link.launch.launch}`);
       } else {
-        await this.openWindowAt(app.name, launchPath.path, launchPath.id, "new");
+        await this.launchAt(app.name, launchPath.id, {}, { kind: "new" });
       }
     }
   }
@@ -484,21 +485,8 @@ export class DesktopStore {
       // The active desktop was deleted and the reducer landed on the fallback: this client follows as it
       // would a push, telling the shell and fetching the layout it now shows.
       this.cancelGesture();
-      this.pendingRestores.clear();
       this.reportClientState("");
       void this.refetchLayout();
-      return;
-    }
-    // A restore deferred while its window settled runs once the window has a real path.
-    const desktop = activeDesktop(this.state);
-    if (desktop === null) return;
-    for (const windowId of [...this.pendingRestores]) {
-      const window = desktop.windows.find((candidate) => candidate.id === windowId);
-      if (window === undefined) this.pendingRestores.delete(windowId);
-      else if (!window.is_settling) {
-        this.pendingRestores.delete(windowId);
-        this.dispatch({ type: "window_raised", windowId });
-      }
     }
   }
 
@@ -544,16 +532,21 @@ export class DesktopStore {
     return (await this.deps.api.fetchAvatars()).designs;
   }
 
-  /** Hand ``text`` to the pinned window that takes a draft (plan section 4.7): this client's view of it is pointed
-   *  at the draft path, as an agent's navigate would be, and the window is restored and raised; the page drafts the
-   *  text into a chat's composer and reports the selection back. False when no pinned app on this desktop takes one. */
+  /** Hand ``text`` to the pinned window that takes a draft (plan section 4.7): its app's draft launch path runs
+   *  into this client's view of that window with the text as the draft param, and the window is restored and
+   *  raised; the app drafts the text into a composer and the page reports where it landed. False when no pinned
+   *  app on this desktop takes one, or the launch was refused. */
   async draftIntoPinnedWindow(text: string): Promise<boolean> {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
-    const path = launchPathWithParams(target.launchPath, { [DRAFT_PARAM]: text });
-    const isTaken = await this.navigateOwnWindow(target.window.id, path);
+    const launched = await this.launchAt(
+      target.window.app,
+      target.launchPath.id,
+      freeTextParams(target.launchPath, text),
+      { kind: "window", windowId: target.window.id },
+    );
     this.restoreWindow(target.window.id);
-    return isTaken;
+    return launched !== null;
   }
 
   /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window already showing it is
@@ -571,7 +564,7 @@ export class DesktopStore {
     const app = chatApp(this.state);
     if (app === null) return false;
     const pinned = pinnedWindowOf(this.state, app.name);
-    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), null, "focus")) !== null;
+    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), "focus")) !== null;
     const isTaken = await this.navigateOwnWindow(pinned.id, chatPath(chatId));
     this.restoreWindow(pinned.id);
     return isTaken;
@@ -592,23 +585,31 @@ export class DesktopStore {
       this.deps.notify(`Could not move the window: ${(error as Error).message}`);
       return false;
     }
+    this.applyOwnNavigation(found, reported);
+    return true;
+  }
+
+  /** Take the window the shell answered a navigation of this client's own with, as a load the pages follow. */
+  private applyOwnNavigation(found: { desktop: Desktop; window: WindowRecord }, reported: WindowRecord): void {
     // Marked only once the answer is applied, for the one follow that application triggers: set any earlier, a
     // refusal or a broadcast landing meanwhile would leave the mark to lift the guard for some other follow.
     if (found.window.scope === "independent") {
-      if (found.desktop.id !== this.state.activeDesktopId) return true;
-      this.ownNavigation = { windowId, path };
+      if (found.desktop.id !== this.state.activeDesktopId) return;
+      this.ownNavigation = { windowId: found.window.id, path: reported.path };
       this.layoutLoadsRevision += 1;
       this.dispatch({
         type: "window_paths_loaded",
         desktopId: found.desktop.id,
-        windowPaths: { ...this.state.layout.window_paths, [windowId]: { path: reported.path, title: reported.title } },
+        windowPaths: {
+          ...this.state.layout.window_paths,
+          [found.window.id]: { path: reported.path, title: reported.title },
+        },
       });
-      return true;
+      return;
     }
-    this.ownNavigation = { windowId, path };
+    this.ownNavigation = { windowId: found.window.id, path: reported.path };
     this.desktopsRevision += 1;
     this.dispatch({ type: "window_location_reported", desktopId: found.desktop.id, window: reported });
-    return true;
   }
 
   /** The navigation this client asked for itself since the pages last followed, handed over once. */
@@ -704,8 +705,6 @@ export class DesktopStore {
     if (previous === desktopId) return;
     await this.flushPendingSave();
     this.cancelGesture();
-    // A restore deferred on the desktop being left is not owed to the user when they come back.
-    this.pendingRestores.clear();
     this.dispatch({ type: "desktop_activated", desktopId });
     this.reportClientState(options.isFollowingPush === true ? "" : (previous ?? ""));
     await this.refetchLayout();
@@ -823,7 +822,7 @@ export class DesktopStore {
         this.raiseWindow(run.windowId);
         return;
       case "open":
-        await this.openWindowAt(run.app, run.path, run.launch, "new");
+        await this.launchAt(run.app, run.launch, {}, { kind: "new" });
         return;
       case "connecting":
         this.deps.notify(STILL_CONNECTING_NOTICE);
@@ -849,8 +848,8 @@ export class DesktopStore {
     return { app, launchPath };
   }
 
-  /** Run a launch-path row (launcher plan section 3.3): a launch path at its app's pin path raises the pinned window
-   *  on the active desktop and opens nothing; every other opens a new window at the path. */
+  /** Run a launch-path row (launcher plan section 3.3): a GET launch path at its app's pin path raises the pinned
+   *  window on the active desktop and opens nothing; every other launches into a new window. */
   async runLaunchRow(appName: string, launchId: string): Promise<void> {
     const found = this.launchOf(appName, launchId);
     if (found === null) return;
@@ -861,30 +860,33 @@ export class DesktopStore {
         return;
       }
     }
-    await this.openWindowAt(found.app.name, found.launchPath.path, found.launchPath.id, "new");
+    await this.launchAt(found.app.name, found.launchPath.id, {}, { kind: "new" });
   }
 
-  /** Run a free-text row with ``text`` (launcher plan section 3.2), pinned-first: when the app has an independent
-   *  pinned window on the active desktop, this client's view of it is pointed at the launch path with the text
-   *  (the write an agent's navigate makes, which moves this client's page alone) and the window is restored and
-   *  raised; otherwise a new window opens at that path. A linked pinned window is never navigated to a launch
-   *  path, since every client would run it. False when the text cannot go (over the path bound) or the shell
-   *  refused, each told to the user. */
+  /** Run a free-text row with ``text`` (launcher plan section 3.2, post-launch-paths plan section 4.1),
+   *  pinned-first: when the app has a pinned window on the active desktop, the launch runs into this client's view
+   *  of it (the page the launch answers is pure, so a linked window is safe too) and the window is restored and
+   *  raised; otherwise the launch opens a new window. False when the text cannot go (a GET launch path over the
+   *  path bound) or the shell refused, each told to the user. */
   async runFreeText(appName: string, launchId: string, text: string): Promise<boolean> {
     const found = this.launchOf(appName, launchId);
     if (found === null) return false;
-    const target = textPathOf(found.launchPath, text);
-    if (target.kind === "disabled") {
-      this.deps.notify(target.reason);
+    const disabledReason = textRowDisabledReason(found.launchPath, text);
+    if (disabledReason !== null) {
+      this.deps.notify(disabledReason);
       return false;
     }
+    const params = freeTextParams(found.launchPath, text);
     const pinned = pinnedWindowOf(this.state, found.app.name);
-    if (pinned !== null && pinned.scope === "independent") {
-      const isTaken = await this.navigateOwnWindow(pinned.id, target.path);
+    if (pinned !== null) {
+      const launched = await this.launchAt(found.app.name, found.launchPath.id, params, {
+        kind: "window",
+        windowId: pinned.id,
+      });
       this.restoreWindow(pinned.id);
-      return isTaken;
+      return launched !== null;
     }
-    return (await this.openWindowAt(found.app.name, target.path, found.launchPath.id, "new")) !== null;
+    return (await this.launchAt(found.app.name, found.launchPath.id, params, { kind: "new" })) !== null;
   }
 
   /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
@@ -900,7 +902,7 @@ export class DesktopStore {
 
   /** Every open goes through the shell's one route; the answer is applied at once and the layout
    *  refetched for the stamp the shell wrote. Answers the window id, or null when the shell refused. */
-  async openWindowAt(app: string, path: string, launch: string | null, ifPresent: IfPresent): Promise<string | null> {
+  async openWindowAt(app: string, path: string, ifPresent: IfPresent): Promise<string | null> {
     const desktopId = this.state.activeDesktopId;
     if (desktopId === null) return null;
     // The shell writes the new placement over the stored layout, and the refetch takes that: a gesture
@@ -908,16 +910,46 @@ export class DesktopStore {
     await this.flushPendingSave();
     let outcome: WindowOpenOutcome;
     try {
-      outcome = await this.deps.api.openWindow(desktopId, {
+      outcome = await this.deps.api.openWindow(desktopId, { app, path, clientId: this.deps.clientId, ifPresent });
+    } catch (error) {
+      this.deps.notify(`Could not open ${app}: ${(error as Error).message}`);
+      return null;
+    }
+    this.dispatch({ type: "window_opened_here", desktopId, window: outcome.window, isNew: outcome.isNew });
+    void this.refetchLayout();
+    return outcome.window.id;
+  }
+
+  /** Run a launch path through the shell's launch route (post-launch-paths plan section 5.3): the shell resolves the
+   *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there or points the
+   *  named window at it. An opened or focused window is taken as an open is; a navigated one as this client's own
+   *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user). */
+  async launchAt(
+    app: string,
+    launchId: string,
+    params: Readonly<Record<string, string>>,
+    target: LaunchTarget,
+  ): Promise<string | null> {
+    const desktopId = this.state.activeDesktopId;
+    if (desktopId === null) return null;
+    await this.flushPendingSave();
+    let outcome: LaunchOutcome;
+    try {
+      outcome = await this.deps.api.launch(desktopId, {
         app,
-        path,
+        launch: launchId,
+        params,
         clientId: this.deps.clientId,
-        ifPresent,
-        launch,
+        target,
       });
     } catch (error) {
       this.deps.notify(`Could not open ${app}: ${(error as Error).message}`);
       return null;
+    }
+    if (target.kind === "window") {
+      const found = findWindow(this.state, target.windowId);
+      if (found !== null) this.applyOwnNavigation(found, outcome.window);
+      return outcome.window.id;
     }
     this.dispatch({ type: "window_opened_here", desktopId, window: outcome.window, isNew: outcome.isNew });
     void this.refetchLayout();
@@ -929,7 +961,7 @@ export class DesktopStore {
     const found = findWindow(this.state, windowId);
     if (found === null) return;
     if (found.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(found.desktop.id);
-    await this.openWindowAt(found.window.app, path, null, ifPresent);
+    await this.openWindowAt(found.window.app, path, ifPresent);
   }
 
   async closeWindow(windowId: string): Promise<void> {
@@ -945,7 +977,6 @@ export class DesktopStore {
       this.deps.notify(`Could not close the window: ${(error as Error).message}`);
       return;
     }
-    this.pendingRestores.delete(windowId);
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
@@ -972,18 +1003,7 @@ export class DesktopStore {
     await this.closeWindow(windowId);
   }
 
-  /** Whether showing the window has to wait: it is still settling on another client's open, and this
-   *  client has no placement for it. Showing it now would create its page at the launch path and run
-   *  the launch a second time, so the restore is queued for when the window has a real path. */
-  private deferWhileSettling(windowId: string): boolean {
-    const found = findWindow(this.state, windowId);
-    if (found === null || !found.window.is_settling || this.isPlacedHere(windowId)) return false;
-    this.pendingRestores.add(windowId);
-    return true;
-  }
-
   raiseWindow(windowId: string): void {
-    if (this.deferWhileSettling(windowId)) return;
     this.dispatch({ type: "window_raised", windowId });
   }
 
@@ -991,13 +1011,12 @@ export class DesktopStore {
     this.dispatch({ type: "window_minimized", windowId });
   }
 
-  /** Restore a minimized window (the taskbar's verb): raised, and deferred while it settles elsewhere. */
+  /** Restore a minimized window (the taskbar's verb): raised. */
   restoreWindow(windowId: string): void {
     this.raiseWindow(windowId);
   }
 
   setWindowState(windowId: string, state: WindowState): void {
-    if (this.deferWhileSettling(windowId)) return;
     this.dispatch({ type: "window_state_set", windowId, state });
   }
 
@@ -1009,7 +1028,7 @@ export class DesktopStore {
   }
 
   toggleMaximized(windowId: string): void {
-    if (this.state.modes.isCompact || this.deferWhileSettling(windowId)) return;
+    if (this.state.modes.isCompact) return;
     const placement = placementOf(this.state.layout, windowId);
     if (placement.state === "MAXIMIZED") this.dispatch({ type: "window_restored", windowId });
     else this.dispatch({ type: "window_state_set", windowId, state: "MAXIMIZED" });
@@ -1030,14 +1049,13 @@ export class DesktopStore {
   /** A page reported where it is; posted to the window's location route when it differs from the stored
    *  record (this client's own for an independent window), and the record the route answers is taken at once,
    *  so the stored path is the reported one before the broadcast lands (a broadcast from another cause
-   *  meanwhile must not read the report as a move to follow). A settling window's first report ends the
-   *  settling, so it always goes. Answers whether the shell took the report (or had nothing to take); false
-   *  when it refused. */
+   *  meanwhile must not read the report as a move to follow). Answers whether the shell took the report (or had
+   *  nothing to take); false when it refused. */
   async reportLocation(windowId: string, path: string, title: string): Promise<boolean> {
     const found = findWindow(this.state, windowId);
     if (found === null) return false;
     const seen = effectiveWindow(this.state, found.window);
-    if (!seen.is_settling && seen.path === path && seen.title === title) return true;
+    if (seen.path === path && seen.title === title) return true;
     this.latestReportedPaths.set(windowId, path);
     let reported: WindowRecord;
     try {

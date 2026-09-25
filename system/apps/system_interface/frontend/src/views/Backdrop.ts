@@ -127,7 +127,6 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   isMenuOpen: attrs.openMenuWindowId === window.id,
                   sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                   isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
-                  isPlacedHere: store.isPlacedHere(window.id),
                   onStartApp:
                     app !== undefined && !app.is_running && store.canStopApp(app)
                       ? () => void store.setAppLifecycle(app.name, "start")

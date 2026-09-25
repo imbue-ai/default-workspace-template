@@ -63,8 +63,8 @@ Deleting a desktop closes its windows (their pages are destroyed in every client
 
 ### 3.3 Windows
 
-A window is `{id, app, path, title, opened_at, is_settling}` on exactly one desktop, in `desktops.json` under its desktop, in opening order.
-`is_settling` is true from an open at a launch path until the page's first location report: while it is true, the stored path is the launch path (with its query string), and a client other than the opener creates no page for the window, so a launch path that creates something runs once (section 4.6).
+A window is `{id, app, path, title, opened_at}` on exactly one desktop, in `desktops.json` under its desktop, in opening order.
+Its path is always a page that is safe to load any number of times: a launch path that creates something is a POST the shell makes once, before the window opens at the page the app answers (the post-launch-paths plan), so no window is ever mid-launch.
 The id is `win-<16 hex>`, minted by the shell when the window is opened.
 `path` obeys the rule an instance URL obeyed: a single leading slash, at most 2048 characters, no control characters.
 `title` is what the page last reported, trimmed, at most 256 characters; empty means "show the app's display name".
@@ -142,7 +142,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 The shell learns who is asking from the `X-Imbue-Identity` header every request carries (the share identity spec): an `owner` flag, and a `user_id` with an `email` when the workspace is shared and the requester is signed in; what to call them and their profile picture is the account's profile, fetched from imbue_cloud (contracts.md section 5.1).
 A page's first act is to post its arrival (`POST /api/clients/<client_id>/arrive`), and the answer is the desktop the client lands on; it then reads the inventory (`GET /api/inventory`: the desktops, the apps, and the clients in one answer), so it knows every app before it draws a shortcut, and the socket carries the changes from then on.
 The owner, and any request without a `user_id`, land as before: the client's stored desktop, else the first.
-A **visiting user** (`owner` false with a `user_id`) landing on someone else's desktop would open and close that person's windows, so on their first arrival the shell makes them a desktop: named after them (display name, else the email's local part, else `Guest`, made unique), with the next free glyph and its colour, seeded from the first desktop (its shortcuts, its wallpaper, and a new window at the path of each of its settled windows, so they see what is open without touching the originals).
+A **visiting user** (`owner` false with a `user_id`) landing on someone else's desktop would open and close that person's windows, so on their first arrival the shell makes them a desktop: named after them (display name, else the email's local part, else `Guest`, made unique), with the next free glyph and its colour, seeded from the first desktop (its shortcuts, its wallpaper, and a new window at the path of each of its windows, so they see what is open without touching the originals).
 The shell remembers it in `users.json` and stamps the client's record with the `user_id`; every later client of that user lands on that desktop, and a returning client keeps the desktop it was on (one that last arrived as someone else, or anonymously, is not returning: it lands on the user's desktop).
 If the desktop was deleted meanwhile, the next arrival seeds another and the page shows a notice naming the deleted one once.
 Every desktop stays shared and visible to everyone in the switcher; the user's desktop is theirs by convention, not by access control.
@@ -212,8 +212,7 @@ A page that differs is navigated: `shell:navigate {path}` when the page declared
 Either way the client records the stored path as that page's last report at once, so a broadcast that arrives before the page has landed does not navigate it twice; the page's own report then confirms it, or, if the page ended up elsewhere, replaces the stored path through the location route.
 The title needs no navigation and updates the title bar and taskbar entry live.
 
-A launch path with params opens the page at the path plus the query string; the page's first report replaces it with wherever the page ended up (`/new?message=...` becomes `/?chat=<id>`), the window's stored path follows, and the window stops settling.
-Until then only the opening client has a page for the window: another client shows its taskbar entry dimmed and defers a restore until the window settles, and a reload of the opener's page while settling runs the launch path again, which is accepted.
+A GET launch path with params opens the page at the path plus the query string; a POST launch path is posted the params by the shell and the window opens at the page the app answers (`/?chat=<id>`, say), so every client has a page for the window from the start and a reload of any of them runs nothing again (the post-launch-paths plan).
 
 ### 4.7 First visit and windows opened elsewhere
 
@@ -389,7 +388,7 @@ Each keeps its pages, its own state, and its own verbs, and adopts the contract:
 The chat app serves three kinds of page on its origin:
 
 - `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows its list and an empty slot.
-- `/new` is the root with a chat just created and selected (the `new` launch path; `message` and `account_id` params as today); the root reports `/?chat=<id>` once the chat exists.
+- `POST /api/chats/intake` is where a text enters a chat from outside a chat page (the `new`, `send`, and `draft` launch paths, all POST): it creates or picks the chat and answers the root's path with it selected, `/?chat=<id>`, or with a pending intake for the root to finish (`/?intake=<token>`; the post-launch-paths plan section 3).
 - `/<chat-id>` is one chat and nothing else, exactly today's chat page, for direct launches (an agent's `open chat /<id>`, minds deep links, the inner frame); `/<chat-id>.<agent-id>.<session-id>` is a sub-agent view, also as today.
 
 The root and the chat page share an origin, so the root drives the inner frame directly: it sets its `src`, reads its document title, and forwards `shell:shown` and `shell:hidden` into it by calling into its window rather than by messaging.
@@ -406,7 +405,7 @@ Client-activity reports on send continue, with the client id from the handshake.
 
 ttyd cannot serve a launch path or report a location, so the terminal becomes two registered programs: `terminal` serves a small wrapper page on the app origin, and `terminal-pty`, `internal = true`, is ttyd on its own origin.
 The wrapper at `/?session=<name>` embeds `https://<terminal-pty origin>/?arg=_&arg=session&arg=<name>[&arg=<workdir>]` in an inner frame, reports its path and the session name as its title, and handles `shell:navigate` by re-pointing the inner frame.
-`/new[?workdir=]` allocates the lowest free `terminal-<N>`, creates the tmux session, and redirects to `/?session=terminal-<N>`.
+`POST /new` (the `new` launch path, `workdir` optional) allocates the lowest free `terminal-<N>`, creates the tmux session, and answers `{"path": "/?session=terminal-<N>"}` for the shell to open the window at.
 The wrapper posts the `ttyd-focus` message into its inner frame when the shell grants focus, as the shell does today.
 Session switching inside tmux is no longer reported to the shell; a reload reattaches to the session in the URL.
 The store of remembered terminals, their recreation at startup, and the dispatch scripts stay as they are.
@@ -420,7 +419,7 @@ There is nothing to navigate in-app, so it declares no navigation capability and
 
 ### 9.4 Browser
 
-The browser daemon keeps its pages at `/?session=<name>` and gains `/new[?url=]`, which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) and redirects; the browser is stopped, its profile kept, once a window has shown it and none does any more.
+The browser daemon keeps its pages at `/?session=<name>` and gains `POST /new` (the `new` launch path, `url` optional), which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) as `{"path": "/?session=<name>"}`; the browser is stopped, its profile kept, once a window has shown it and none does any more.
 Its page reports its path and the page title, and handles `shell:navigate` by switching session.
 The fleet CLI and the daemon's own routes are untouched.
 

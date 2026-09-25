@@ -18,6 +18,7 @@ mode = "new"
 id = "new"
 label = "Terminal"
 path = "/new"
+method = "POST"
 params = [{name = "workdir", label = "Working directory", required = false}]
 
 # A terminal preview serves the wrapper pages on a free port, unregistered, over a copy of
