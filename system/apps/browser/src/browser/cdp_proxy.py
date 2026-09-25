@@ -201,8 +201,7 @@ class BrowserProxy:
                 await client.send(_error(frame.get("id"), frame.get("sessionId"), verdict))
                 continue
             await upstream.send(raw)
-            if frame.get("method") not in _ALWAYS_FORWARDED:
-                self._schedule_follow(frame)
+            self._schedule_follow(frame)
 
     async def _browser_to_client(self, client: Any, upstream: Any) -> None:
         async for raw in upstream:
@@ -250,9 +249,11 @@ class BrowserProxy:
 
         `run_action` used to call `_foreground_active()` after every action, and that single
         call is the whole 'agent acts -> pane follows' behavior. Direct CDP has no such hook,
-        and nothing fails without it -- the human's view just silently goes stale.
+        and nothing fails without it -- the human's view just silently goes stale. A resume
+        (`_ALWAYS_FORWARDED`) is not the agent acting on a tab, so it never moves the pane.
         """
-        if not frame.get("method"):
+        method = frame.get("method")
+        if not method or method in _ALWAYS_FORWARDED:
             return
         target = self._sessions.get(frame.get("sessionId", ""))
         loop = asyncio.get_running_loop()
