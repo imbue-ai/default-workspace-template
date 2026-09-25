@@ -6,8 +6,9 @@ of MemTotal at that ``oom_score_adj``), then a hog at ``oom_score_adj`` -1000
 that grows in small steps until earlyoom has shed the last sleeper. Every
 second it snapshots each process's ``oom_score_adj`` and RSS; each kill (from
 the shed ledger, with earlyoom's own log line for detail) is judged against the
-snapshot taken just before it: the victim must have had the highest predicted
-badness among the processes earlyoom could pick,
+last snapshot taken before earlyoom's ``sending SIG...`` line for it appeared:
+the victim must have had the highest predicted badness among the processes
+earlyoom could pick,
 
     VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal) / 1000
 
@@ -18,7 +19,7 @@ stops the drill at once and frees the hog's memory.
 
 Stdlib-only and self-contained, so it can be sent into a workspace inside the
 command (``mngr exec`` does not pass its stdin through):
-``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 - --bands 1000,900,600,300,75,25"``.
+``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 - --bands 1000,900,800,600,300"``.
 It must run as a process allowed to set -1000 (root under gVisor, or anywhere
 with ``CAP_SYS_RESOURCE``). Prints one JSON verdict on stdout and exits 0 only
 when the drill passed.
@@ -152,11 +153,17 @@ class Snapshot(NamedTuple):
 
 
 def last_snapshot_with(
-    pid: int, snapshots: "deque[Snapshot]", tolerance_kib: int
+    pid: int,
+    snapshots: "deque[Snapshot]",
+    tolerance_kib: int,
+    chosen_at: float | None,
 ) -> Snapshot | None:
     """The newest snapshot in which ``pid`` still held its memory: the state
     just before earlyoom killed it.
 
+    Only snapshots taken before ``chosen_at``, when earlyoom's kill line for
+    ``pid`` was first seen, count: a victim that ignores SIGTERM lives on for
+    seconds, and a process started meanwhile was not there to be chosen.
     A kill only shrinks its victim. Later snapshots can still list it, first
     with part or all of its memory already released (earlyoom calls
     process_mrelease right after the signal), then as an unreaped zombie with
@@ -165,6 +172,7 @@ def last_snapshot_with(
     held = [
         (snapshot, sample.vm_rss_kib)
         for snapshot in snapshots
+        if chosen_at is None or snapshot.taken_at < chosen_at
         for sample in snapshot.samples
         if sample.pid == pid and sample.vm_rss_kib is not None
     ]
@@ -300,19 +308,28 @@ def read_new_ledger_kills(ledger: Path, offset: int) -> tuple[list[dict], int]:
     return records, offset + len(complete) + 1
 
 
-def earlyoom_kill_line(log: Path, offset: int, pid: int) -> str | None:
-    """earlyoom's own ``sending SIG... to process <pid>`` line, past ``offset``."""
+_KILL_LINE = re.compile(r"sending SIG\w+ to process (\d+) ")
+
+
+def read_new_kill_lines(log: Path, offset: int) -> tuple[list[tuple[int, str]], int]:
+    """earlyoom's ``sending SIG... to process <pid>`` lines appended past byte
+    ``offset`` as ``(pid, line)``, and the new offset. A partial last line is
+    left for the next read."""
     try:
         with open(log, "rb") as handle:
             handle.seek(offset)
-            text = handle.read().decode("utf-8", errors="replace")
+            data = handle.read()
     except OSError:
-        return None
-    pattern = re.compile(rf"sending SIG\w+ to process {pid} ")
-    for line in text.splitlines():
-        if pattern.search(line):
-            return line
-    return None
+        return [], offset
+    complete, newline, _partial = data.rpartition(b"\n")
+    if not newline:
+        return [], offset
+    lines: list[tuple[int, str]] = []
+    for line in complete.decode("utf-8", errors="replace").splitlines():
+        match = _KILL_LINE.search(line)
+        if match:
+            lines.append((int(match.group(1)), line))
+    return lines, offset + len(complete) + 1
 
 
 def file_size(path: Path) -> int:
@@ -330,16 +347,17 @@ def _judge_record(
     avoid_regex: re.Pattern[str] | None,
     excluded: set[int],
     tolerance_kib: int,
-    earlyoom_log: Path,
-    log_offset: int,
+    kill_lines: dict[int, tuple[float, str]],
 ) -> tuple[dict, str]:
     """One kill's report entry, and the failure it amounts to ("" if none).
 
-    ``excluded`` also holds every earlier victim: two kills can land between
-    the same pair of snapshots, and the second must not be judged against the
-    first victim."""
+    ``kill_lines`` maps a victim's pid to when its earlyoom kill line was first
+    seen, and the line. ``excluded`` also holds every earlier victim: two kills
+    can land between the same pair of snapshots, and the second must not be
+    judged against the first victim."""
     pid = int(record.get("pid", 0))
-    snapshot = last_snapshot_with(pid, snapshots, tolerance_kib)
+    chosen_at, kill_line = kill_lines.get(pid, (None, None))
+    snapshot = last_snapshot_with(pid, snapshots, tolerance_kib, chosen_at)
     samples = snapshot.samples if snapshot is not None else snapshots[-1].samples
     judgement = judge_kill(
         pid, predict_ranking(samples, total_kib, avoid_regex, excluded), tolerance_kib
@@ -350,7 +368,7 @@ def _judge_record(
         "comm": record.get("comm"),
         "band": sleepers[pid][1] if pid in sleepers else None,
         "ledger": record,
-        "earlyoom_log_line": earlyoom_kill_line(earlyoom_log, log_offset, pid),
+        "earlyoom_log_line": kill_line,
         "snapshot_age_seconds": round(time.time() - snapshot.taken_at, 2)
         if snapshot is not None
         else None,
@@ -442,6 +460,7 @@ def main() -> int:
         )
     step_kib = int(meminfo["MemTotal"] * args.step_percent / 100)
     excluded = {earlyoom_pid, os.getpid(), hog.pid}
+    kill_lines: dict[int, tuple[float, str]] = {}
 
     kills: list[dict] = []
     failure = ""
@@ -458,6 +477,10 @@ def main() -> int:
             if time.monotonic() > deadline:
                 failure = f"timed out after {args.timeout:.0f}s with sleepers left"
                 break
+            # Read before the ledger: a victim's kill line precedes its record.
+            new_lines, log_offset = read_new_kill_lines(args.earlyoom_log, log_offset)
+            for pid, line in new_lines:
+                kill_lines.setdefault(pid, (time.time(), line))
             records, ledger_offset = read_new_ledger_kills(args.ledger, ledger_offset)
             for record in records:
                 kill, record_failure = _judge_record(
@@ -468,8 +491,7 @@ def main() -> int:
                     avoid_regex,
                     excluded,
                     tolerance_kib,
-                    args.earlyoom_log,
-                    log_offset,
+                    kill_lines,
                 )
                 kills.append(kill)
                 excluded.add(kill["pid"])

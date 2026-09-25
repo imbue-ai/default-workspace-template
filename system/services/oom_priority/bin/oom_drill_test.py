@@ -138,10 +138,54 @@ def test_a_kill_is_judged_against_the_last_snapshot_before_its_victim_shrank() -
     after = oom_drill.Snapshot(2.0, [_sample(50, "pytest", 900, 20_000)])
     snapshots = deque([before, released, zombie, after])
 
-    assert oom_drill.last_snapshot_with(60, snapshots, tolerance_kib=1024) is before
+    assert oom_drill.last_snapshot_with(60, snapshots, 1024, None) is before
     # pid 50 never shrank beyond the tolerance, so its newest snapshot counts.
-    assert oom_drill.last_snapshot_with(50, snapshots, tolerance_kib=1024) is after
-    assert oom_drill.last_snapshot_with(99, snapshots, tolerance_kib=1024) is None
+    assert oom_drill.last_snapshot_with(50, snapshots, 1024, None) is after
+    assert oom_drill.last_snapshot_with(99, snapshots, 1024, None) is None
+
+
+def test_a_kill_is_judged_against_the_snapshots_from_before_earlyoom_chose_it() -> None:
+    # earlyoom chose pid 60 (an interactive bash, which ignores SIGTERM) at
+    # t=2.0, then waited seconds for it to exit. A process that started during
+    # that wait outranks it, but was not there to be chosen.
+    at_choice = oom_drill.Snapshot(1.5, [_sample(60, "bash", 200, 12_000)])
+    during_wait = oom_drill.Snapshot(
+        4.0,
+        [_sample(60, "bash", 200, 12_000), _sample(61, "containerd", 200, 40_000)],
+    )
+    snapshots = deque([at_choice, during_wait])
+
+    snapshot = oom_drill.last_snapshot_with(
+        60, snapshots, tolerance_kib=1024, chosen_at=2.0
+    )
+    assert snapshot is at_choice
+    ranking = oom_drill.predict_ranking(
+        snapshot.samples, _TOTAL_KIB, _AVOID, excluded_pids=set()
+    )
+    assert oom_drill.judge_kill(60, ranking, tolerance_kib=1024).verdict == "right"
+
+
+def test_earlyoom_kill_lines_are_read_whole_and_new(tmp_path: Path) -> None:
+    log = tmp_path / "earlyoom-stderr.log"
+    log.write_text('sending SIGTERM to process 5 uid 0 "old": oom_score 1\n')
+    offset = log.stat().st_size
+    with open(log, "a") as handle:
+        handle.write(
+            "mem avail:  3 of 3922 MiB ( 0.08%)\n"
+            'sending SIGTERM to process 60 uid 0 "bash": oom_score 802\n'
+            "escalating to SIGKILL after 5.103 seconds\n"
+            "sending SIGKILL to process 61 uid"
+        )
+
+    lines, offset = oom_drill.read_new_kill_lines(log, offset)
+    assert [pid for pid, _line in lines] == [60]
+
+    with open(log, "a") as handle:
+        handle.write(' 501 "containerd": oom_score 805\n')
+    lines, _offset = oom_drill.read_new_kill_lines(log, offset)
+    assert lines == [
+        (61, 'sending SIGKILL to process 61 uid 501 "containerd": oom_score 805')
+    ]
 
 
 def test_status_memory_reads_gvisor_and_kernel_threads() -> None:
