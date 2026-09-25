@@ -136,7 +136,9 @@ after you can read the files you wrote, so what they need from you is what to
 call, what shape to expect, and what is missing.
 
 **Items 1, 2, 4, 5 and 6 come to around 300 words together.** Item 3 has no
-target -- it is the part the next node cannot work without.
+target -- it is the part the next node cannot work without. Where your subtask's
+whole deliverable is the contract and you write no code, item 3 is the report:
+say all of it, and the target does not apply to you.
 
 1. **What you built** -- three sentences. No subheadings and no walkthrough of
    the page or the module.
