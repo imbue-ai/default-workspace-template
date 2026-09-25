@@ -326,6 +326,10 @@ class HarnessSpec(FrozenModel):
     # the rebind's edit, the sessions a rebind carries along). None for a harness no account can run:
     # no lane signs in to it, so nothing binds one.
     binding_class: type[AccountBinding] | None = None
+    # Whether mngr can compact this harness's context (its agent class implements mngr's
+    # ``HasCompactionMixin``). The autocompact sweep skips every other harness, since
+    # `mngr autocompact run` would only start up, discover the agent, and refuse.
+    supports_compaction: bool = False
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -356,6 +360,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_LIMIT_POPUP,
         ),
+        supports_compaction=True,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -392,6 +397,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_LIMIT_POPUP,
         ),
+        supports_compaction=True,
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -419,6 +425,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
             _MODEL_BAR_POPUP,
         ),
+        supports_compaction=True,
     ),
     # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
     # transcript watcher, activity tracker, model resolver or catalog of its own. It is
