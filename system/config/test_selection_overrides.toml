@@ -9,7 +9,7 @@
 #
 # `paths` are gitignore-style globs over repo-root-relative paths. A suite is a test file
 # or a suite directory (a package, a skill, or `system/scripts`); an empty `suites` list
-# says the always-run set already covers the paths.
+# says no suite beyond the always-run set can observe the paths.
 
 # The cross-cutting system/scripts guards, run for every change beside system/*.py.
 always_run = [

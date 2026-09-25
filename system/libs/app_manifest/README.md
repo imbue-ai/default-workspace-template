@@ -249,7 +249,7 @@ can observe the path and record it in the override file.
 `system/config/test_selection_overrides.toml` holds what the declarations
 cannot show: `always_run` (the cross-cutting guards), `[[consumer]]` entries
 (`paths` globs, the `suites` they select, and a `note`; an empty `suites` says
-the always-run set covers the paths), and `[[integration]]` entries for tests
+no suite beyond the always-run set can observe the paths), and `[[integration]]` entries for tests
 that drive a real installed tool (`test`, the `paths` that select it, and a
 `note`). Paths are gitignore-style globs over repo-root-relative paths; a suite
 is a test file or a suite directory. A suite that does not exist fails the

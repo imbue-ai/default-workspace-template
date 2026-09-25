@@ -272,8 +272,8 @@ each listed path is one the selector could not map, and the full root suite is
 among the lines in its place: run the lines as printed. Then decide which
 suites can actually observe a change to that path, record it in
 `system/config/test_selection_overrides.toml`
-(a `[[consumer]]` entry; an empty `suites` when the always-run set already
-covers it) as part of your change, and re-run `select-tests` to confirm the
+(a `[[consumer]]` entry; an empty `suites` when no suite beyond the always-run
+set can observe it) as part of your change, and re-run `select-tests` to confirm the
 path is classified, so the next change to it runs only what it needs. When the
 path is built-in
 (AGENTS.md, "Updates", has the test), name it in your `done` report under
