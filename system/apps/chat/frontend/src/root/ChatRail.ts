@@ -59,7 +59,7 @@ function monogramOf(row: ChatRow): string {
   return title === "" ? "?" : title.slice(0, 1).toUpperCase();
 }
 
-// ---------- per-browser rail state ----------
+// Per-browser rail state
 
 let collapsedChoice: boolean | null = null;
 
@@ -83,7 +83,7 @@ function setCollapsed(collapsed: boolean): void {
   }
 }
 
-// ---------- renames, deletes, menus ----------
+// Renames, deletes, and the row menu
 
 interface RenameState {
   chatId: string;
@@ -199,7 +199,7 @@ function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow
   return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
 }
 
-// ---------- marks ----------
+// The status marks
 
 /** A plus, drawn here because the shared icon set has no bare one. */
 function plusGlyph(): m.Vnode {
@@ -253,7 +253,7 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
   });
 }
 
-// ---------- the component ----------
+// The component
 
 export const ChatRail: m.Component<ChatRailAttrs> = {
   onremove() {
