@@ -64,15 +64,15 @@ async function bootstrap(): Promise<void> {
   // optimistic pick made for the old agent would otherwise sit on the bar until its timeout.
   addActiveAgentChangedListener((chatId) => forgetPendingChoice(chatId));
   initShellPermissionResolutions();
+  const isChatPage = sessionId === "";
   // Only the chat's own page reports the chat's presence: a subagent view is a second page
   // of the same chat in the same client, and its reports would overwrite the chat page's.
   const connection = connectChatToShell(chatId, {
-    isPresenceReported: sessionId === "",
-    path: sessionId === "" ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
+    isPresenceReported: isChatPage,
+    path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
   });
   // The element menu (element-reference-menu plan section 7.3): a chat page drafts a reference straight into its
   // own composer, whoever frames it; a sub-agent view has no composer and asks the shell, through the root.
-  const isChatPage = sessionId === "";
   installElementContextMenu({
     connection,
     handshake: getShellHandshake,
