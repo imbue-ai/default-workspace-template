@@ -29,7 +29,7 @@ _LOG_FORMAT = "%H%x00%T%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%s"
 
 
 class HistoryBridgeError(Exception):
-    """No bridge could be built; nothing in the repo changed."""
+    """The history bridge could not be built or dropped; the message says why."""
 
 
 @dataclass(frozen=True)
