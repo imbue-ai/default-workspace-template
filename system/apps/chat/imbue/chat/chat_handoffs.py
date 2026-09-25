@@ -212,13 +212,14 @@ def summary_request_message(path: Path) -> str:
 @pure
 def is_genuine_user_turn(event: dict[str, Any]) -> bool:
     """Whether a transcript event is a turn that carries the user's own words: a ``user_message`` with no
-    display decision, a seeded chat's first send, or a handoff prompt.
+    display decision, one sent with machine context (``prompt_with_context``), or a handoff prompt.
 
     A chip (the summary request itself, a nudge), a hidden framework line (``/welcome``), or a
     permission verdict is not one. The handoff prompt is, although it renders as a chip: it
     carries the message the user switched with and the summary, so a successor that has only
-    received it has context to hand on. So is a seeded chat's first send, whose context block
-    is stripped for display but whose words are the user's own.
+    received it has context to hand on. So is a message sent with machine context -- a seeded
+    chat's first send, or a turn flushed together with background-task reports -- whose context is
+    stripped for display but whose words are the user's own.
     """
     if event.get("type") != "user_message":
         return False

@@ -434,7 +434,8 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
 }
 
 /** True for a transcript event that carries the user's own words: a ``user_message`` with no display
- *  decision, a seeded chat's first send (whose context block is stripped for display), or the
+ *  decision, one sent with machine context stripped for display (a seeded chat's first send, or a
+ *  turn a harness flushed together with background-task reports), or the
  *  handoff prompt a successor started with (a chip that holds the message the user switched with).
  *  The backend's rule for whether a handoff has anything to summarize (``has_user_turn``), read
  *  here so the page can tell a fresh chat, whose switch needs no dialog, from one with context. */
