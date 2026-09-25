@@ -94,6 +94,9 @@ function renderStatusMessage(label: string, body: string, expansionKey: string):
 /** A notice's lead when the backend's decision names none. */
 export const NOTICE_FALLBACK_LABEL = "Background task completed";
 
+/** The space below a notice's transcript row. */
+export const NOTICE_ROW_SPACING_CLASS = "mb-2";
+
 /** A one-line notice on the agent's rail: a tick, the lead, and the summary. The lead carries
  *  the weight because it is what the eye is scanning for down a long transcript; the summary is
  *  ordinary prose beside it. */
@@ -169,7 +172,7 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
       : kind === UserMessageKind.StatusMessage
         ? "message message-system-status-row"
         : kind === UserMessageKind.Notice
-          ? "message message-notice-row mb-2"
+          ? `message message-notice-row ${NOTICE_ROW_SPACING_CLASS}`
           : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.

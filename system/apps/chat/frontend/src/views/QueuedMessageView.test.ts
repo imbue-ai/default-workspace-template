@@ -124,6 +124,27 @@ describe("renderQueuedMessages", () => {
     expect(renderedText(findByClass(nodes, USER_BUBBLE_CLASS))).toContain("my own words");
   });
 
+  it("draws a report the backend is sending like the transcript notice it becomes, and a parked one muted", () => {
+    const report =
+      "<background-task-report>\n<summary>Wait for the worker (finished)</summary>\nExit code: 0\n</background-task-report>";
+    const reportEntry = (queued_id: string, is_sending: boolean): QueuedMessage => ({
+      ...queuedMessage(queued_id, report, is_sending),
+      display: "notice",
+      display_label: "Background task",
+      display_body: "Wait for the worker (finished)",
+    });
+
+    mocks.queued = [reportEntry("q1", true)];
+    const sendingClass = String(findByClass(renderQueuedMessages("agent-1"), "queued-notice")?.attrs?.className);
+    expect(sendingClass).not.toContain("opacity-85");
+    expect(sendingClass).toContain("mb-2");
+
+    mocks.queued = [reportEntry("q1", false), queuedMessage("q2", "boop")];
+    const parkedClass = String(findByClass(renderQueuedMessages("agent-1"), "queued-notice")?.attrs?.className);
+    expect(parkedClass).toContain("opacity-85");
+    expect(parkedClass).not.toContain("mb-2");
+  });
+
   it("gives the shoulder-tap button the exact hover tooltip text", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
     const button = findByClass(renderQueuedMessages("agent-1"), "queued-action--flush");

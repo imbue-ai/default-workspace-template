@@ -33,6 +33,7 @@ import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import {
   NOTICE_FALLBACK_LABEL,
+  NOTICE_ROW_SPACING_CLASS,
   USER_BUBBLE_CLASS,
   USER_MESSAGE_ROW_CLASS,
   renderNotice,
@@ -101,7 +102,15 @@ function renderQueuedBubble(queued: QueuedMessage, isInGroup: boolean): m.Vnode 
     display_body: queued.display_body ?? undefined,
   });
   if (cls.kind === UserMessageKind.Notice) {
-    return m("div", { class: "queued-message queued-notice opacity-85", key: `queued-${queued.queued_id}` }, [
+    // A notice being sent is drawn like the transcript row it becomes, as a sending bubble is.
+    const rowClass = [
+      "queued-message queued-notice",
+      queued.is_sending === true ? null : "opacity-85",
+      isInGroup ? null : NOTICE_ROW_SPACING_CLASS,
+    ]
+      .filter((part) => part !== null)
+      .join(" ");
+    return m("div", { class: rowClass, key: `queued-${queued.queued_id}` }, [
       renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body),
     ]);
   }
