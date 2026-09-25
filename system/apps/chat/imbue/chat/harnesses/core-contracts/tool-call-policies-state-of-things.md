@@ -160,8 +160,10 @@ auto-discovers from `.pi/extensions/` in the project. Two extensions here carry 
   agy shim, it feeds the **same scripts claude runs** the claude-shaped payload they parse on
   stdin, in claude's order, and refuses the call (`{block, reason}`) on exit 2 with the
   script's stderr as the reason. Once every guard passes it prepends the output of
-  `agent_rewrite_bash_command.py --prefix-only` to `input.command`. Editing a guard script
-  updates pi along with claude, codex and agy.
+  `agent_rewrite_bash_command.py --prefix-only` to `input.command`. Any other guard or rewrite
+  outcome fails open and leaves a line in `pi_policy_guards.log` in the agent's state dir, as
+  the shim does in `agy_shim.log`. Editing a guard script updates pi along with claude, codex
+  and agy.
 * **The tk step discipline** lives in `.pi/extensions/tk_workflow.ts` — the require-steps
   nudge on `tool_result`, the open-steps carryover on `before_agent_start`, and the stop
   nudge on `agent_settled`. pi composes across extensions (`tool_result` handlers chain like

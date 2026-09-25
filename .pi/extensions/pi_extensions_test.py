@@ -316,6 +316,35 @@ def test_a_refused_command_is_left_as_written(tmp_path: Path) -> None:
     assert command == "git rebase -i HEAD~2"
 
 
+def test_a_broken_guard_or_rewrite_fails_open_and_is_logged(tmp_path: Path) -> None:
+    """Only exit 2 refuses. A guard that crashes, and a rewrite script that is missing,
+    let the command run as written, and each leaves a line in the state dir's log."""
+    work_dir = tmp_path / "work"
+    scripts = work_dir / "system" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "agent_prevent_commit_rewrite.sh").write_text(
+        "echo 'guard crashed' >&2\nexit 1\n"
+    )
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    payload = {"toolName": "bash", "input": {"command": "git rebase -i HEAD~2"}}
+    out = _event_output(
+        _run_event(
+            tmp_path,
+            _POLICY_GUARDS,
+            "tool_call",
+            payload,
+            work_dir=work_dir,
+            env={"MNGR_AGENT_STATE_DIR": str(state_dir)},
+        )
+    )
+    assert out["result"] is None
+    assert out["payload"]["input"]["command"] == "git rebase -i HEAD~2"
+    log = (state_dir / "pi_policy_guards.log").read_text()
+    assert "agent_prevent_commit_rewrite.sh exited 1: guard crashed; failing open" in log
+    assert "agent_rewrite_bash_command.py exited 2" in log
+
+
 def test_require_steps_reminder_rides_the_tool_result_when_no_step_is_in_progress(
     tmp_path: Path,
 ) -> None:

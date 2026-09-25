@@ -13,11 +13,14 @@
 // See system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md for
 // what each one enforces and how the other harnesses reach it.
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 const WORK_DIR = process.env.MNGR_AGENT_WORK_DIR || process.cwd();
 const SCRIPTS = join(WORK_DIR, "system", "scripts");
+// A file, not stderr: pi is a TUI, and stderr would land on the agent's screen.
+const LOG_PATH = join(process.env.MNGR_AGENT_STATE_DIR || "/tmp", "pi_policy_guards.log");
 
 interface Guard {
   script: string;
@@ -44,11 +47,26 @@ function scriptEnv() {
   return { ...process.env, BASH_ENV: undefined, ENV: undefined };
 }
 
+/** Record a fail-open path, so a guard that stopped running is visible. Never throws. */
+function note(message: string): void {
+  try {
+    appendFileSync(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // Nowhere left to report to; the command must still run.
+  }
+}
+
+function describeFailure(result: SpawnSyncReturns<string>): string {
+  if (result.error) return String(result.error);
+  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+  return `exited ${result.status ?? result.signal}${stderr ? `: ${stderr}` : ""}`;
+}
+
 /** The reason to refuse `command`, from the first guard that refuses it, else null.
  *
  * Only exit 2 refuses, as on claude. Anything else -- a missing script (bash exits
- * 127), a crash -- lets the command through: a broken guard must not block every
- * command. Never throws. */
+ * 127), a crash -- lets the command through and is noted in LOG_PATH: a broken guard
+ * must not block every command. Never throws. */
 function refusalReason(command: string): string | null {
   const payload = JSON.stringify({ tool_name: "Bash", tool_input: { command } });
   for (const guard of GUARDS) {
@@ -59,8 +77,9 @@ function refusalReason(command: string): string | null {
         const reason = typeof result.stderr === "string" ? result.stderr.trim() : "";
         return reason || "Blocked by a policy check.";
       }
-    } catch {
-      // Fail open, per guard.
+      if (result.status !== 0) note(`guard ${guard.script} ${describeFailure(result)}; failing open`);
+    } catch (error) {
+      note(`guard ${guard.script} threw ${String(error)}; failing open`);
     }
   }
   return null;
@@ -73,10 +92,12 @@ function refusalReason(command: string): string | null {
 function rewritePrefix(): string {
   try {
     const result = spawnSync("python3", [REWRITE_SCRIPT, "--prefix-only"], { encoding: "utf-8", env: scriptEnv() });
-    return result.status === 0 && typeof result.stdout === "string" ? result.stdout : "";
-  } catch {
-    return "";
+    if (result.status === 0 && typeof result.stdout === "string") return result.stdout;
+    note(`rewrite ${REWRITE_SCRIPT} ${describeFailure(result)}; running the command unprefixed`);
+  } catch (error) {
+    note(`rewrite ${REWRITE_SCRIPT} threw ${String(error)}; running the command unprefixed`);
   }
+  return "";
 }
 
 export default function policyGuards(pi: any): void {
