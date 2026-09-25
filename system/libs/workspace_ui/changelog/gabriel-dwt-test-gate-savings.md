@@ -1,0 +1,1 @@
+`npm test` no longer runs eslint and prettier: the Vitest lint-and-format wrapper (`src/lint-and-format-checks.ts`) is gone. `npm run lint` is eslint alone, the new `npm run typecheck` is `tsc --noEmit` (the library has no build to typecheck it), and `npm run format:check` is prettier.
