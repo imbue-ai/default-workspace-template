@@ -198,6 +198,9 @@ function _startUpload(chatId: string, file: File, summary: string | undefined): 
       _patchAttachment(chatId, localId, { status: "ready", uploaded });
     })
     .catch((error: unknown) => {
+      // Logged as well as marked: a document that stages for another (the root, for a page not
+      // loaded yet) never renders the chip, and a failed item is not persisted for the page to see.
+      console.warn(`The upload of ${file.name} for chat ${chatId} failed`, error);
       _patchAttachment(chatId, localId, { status: "error", error: describeRequestError(error) });
     });
 }

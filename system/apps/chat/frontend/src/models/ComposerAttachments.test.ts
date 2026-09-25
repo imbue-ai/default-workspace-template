@@ -51,6 +51,7 @@ function stored(): unknown[] | null {
 
 describe("persistence", () => {
   it("persists a ready attachment, with its summary, and not one still uploading or failed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     uploadAnswers.push(() => Promise.resolve(new Response("nope", { status: 500 })));
     uploadFilesToComposer(chatId, [new File(["bad"], "bad.txt")]);
     uploadDescribedFileToComposer(chatId, new File(["{}"], "REF-abcdefghijk.json"), "p#para in docs /");
@@ -58,6 +59,9 @@ describe("persistence", () => {
     await settle();
     const [failed, ready] = getComposerAttachments(chatId);
     expect(failed.status).toBe("error");
+    // A failure is logged as well as marked: the document that staged it may render no chip.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("bad.txt"), expect.anything());
+    warn.mockRestore();
     expect(ready.status).toBe("ready");
     expect(stored()).toEqual([
       {
