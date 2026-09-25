@@ -396,3 +396,21 @@ def test_a_stopped_queue_keeps_the_users_text_and_gives_up_its_reports() -> None
     assert split_background_task_reports(block) == ("fix the header too\nand the footer", tuple(reports))
     assert split_background_task_reports(reports[0]) == ("", (reports[0],))
     assert split_background_task_reports("only my words") == ("only my words", ())
+
+
+def test_a_stopped_queue_splits_only_whole_line_reports() -> None:
+    """A report's output is the command's raw text, so a search over this code can print the closing
+    tag mid-line; only a tag on a line of its own ends the report. A report the user quotes mid-line
+    is the user's text."""
+    module = _load_system_script("run_in_background.py")
+    tag = BACKGROUND_TASK_REPORT_TAG
+    report = module.compose_report(
+        description="Search the chat app",
+        command=["rg", tag],
+        returncode=0,
+        output=f'QueuedMessageView.test.ts:106:  "<{tag}>\\n<summary>Wait</summary>\\n</{tag}>";\n',
+        output_path=Path("data/.tasks/run-in-background/x/output.log"),
+    )
+    quoting = f"why is <{tag}><summary>Build</summary>it failed</{tag}> shown twice?"
+
+    assert split_background_task_reports("\n".join([quoting, report])) == (quoting, (report,))

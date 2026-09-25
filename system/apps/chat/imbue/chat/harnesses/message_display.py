@@ -64,9 +64,12 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 _BACKGROUND_TASK_REPORT_RE = re.compile(
     rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
 )
-# One report anywhere in a text that joins several messages (a queue handed back on Stop).
+# One report in a text that newline-joins several messages (a queue handed back on Stop). A
+# report is a whole message, so its tags sit on lines of their own; its output is the command's
+# raw text and may carry the tag mid-line.
 _EMBEDDED_BACKGROUND_TASK_REPORT_RE = re.compile(
-    rf"<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>[^\n]*?</summary>[\s\S]*?</{BACKGROUND_TASK_REPORT_TAG}>"
+    rf"^<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>[^\n]*?</summary>[\s\S]*?^</{BACKGROUND_TASK_REPORT_TAG}>$",
+    re.MULTILINE,
 )
 # Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own words
 # follow it). Non-greedy, since the block never nests.
