@@ -37,7 +37,6 @@ run_in_background = _load_script_module(
 seed_welcome_chat = _load_script_module(
     "seed_welcome_chat_for_fixtures", "seed_welcome_chat.py"
 )
-welcome_count = _load_script_module("welcome_count_for_fixtures", "welcome_count.py")
 
 
 def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:

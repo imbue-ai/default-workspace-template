@@ -62,7 +62,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > **A TEMPLATE MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid template is always the FULL tree `build_template.sh` assembles on
 > `mngr/<slug>`: the clean DEFAULT_WORKSPACE_TEMPLATE base (`pyproject.toml`, `system/supervisord.conf`,
-> `.mngr/`, `.agents/skills/` including the generated template `/welcome`, `system/config/parent.toml`,
+> `.mngr/`, `.agents/skills/`, `system/config/parent.toml`,
 > etc.) plus the selected app/feature paths -- never just the app code plus a
 > README. That full tree is what makes `/use-template`'s template path work:
 > another mind must be creatable FROM the published repo, not merely able to
@@ -235,7 +235,7 @@ dispatch anyway, handle it in place:
   `--slug`/`--title` to `build_template.sh`.
 - Renamed after the script has run (worker mid-run or done): rename in
   place -- `git mv` the manifest and thumbnail to the new slug names, update
-  the front-matter `title:` and the generated welcome's slug references,
+  the front-matter `title:`,
   commit (in the worker's worktree). This preserves any FILL-IN prose and
   bespoke SVG already done. Do NOT re-run the script under a new slug in an
   already-assembled worktree: it would regenerate the manifest from scratch and
@@ -693,8 +693,7 @@ you still need for the push.
 in the worker's worktree: clean base + overlay + secret scan + the manifest
 pair (`template.md` prose skeleton and `template.toml`, the latter
 carrying forward the lineage of whatever manifest it overrides) + placeholder
-thumbnail + regenerated README + a template-specific `/welcome` written
-into the snapshot + boot smoke-check + manifest validation + a single
+thumbnail + regenerated README + boot smoke-check + manifest validation + a single
 commit. It communicates purely via its exit code -- `0` on success (the
 assembled commit is on `mngr/<slug>`), non-zero otherwise (see §5). It prints
 a summary of what it assembled to stderr. The worker then supplies the two
@@ -767,7 +766,7 @@ mechanism. Present the proposal to the user ONCE, in plain language:
   Check EVERY entry before writing the message. Each must be covered by an
   include or data path the user confirmed in §1 (equal to it, inside it, or
   containing it), or be a file the assembly generates: `template.md`,
-  `template.toml`, `template.svg`, `README.md`, `.agents/skills/welcome`, and
+  `template.toml`, `template.svg`, `README.md`, and
   the removed `docs/VERSION_HISTORY.md`. Anything else -- another app, skill,
   service, or data path -- means the base or the include set is wrong: do NOT
   present the publish; re-resolve `BASE_REF` per §2, fix the include set, and
@@ -1316,8 +1315,7 @@ report the blocker; do not improvise a substitute publish.
 
 A repo holds exactly ONE template. Publishing from a mind that already has a
 `template.md` / `.toml` / `.svg` **overrides** them -- the new manifest
-replaces the old rather than landing beside it, and the generated `/welcome`
-targets the newly-published slug.
+replaces the old rather than landing beside it.
 
 What survives the override is the **lineage chain**. Before its reset,
 `build_template.sh` reads the outgoing `template.toml` and carries forward
@@ -1425,16 +1423,13 @@ What it does, in order (see the script for the exact commands):
    distinctive `minds-placeholder-thumbnail` marker comment; the worker MUST
    replace the whole file with a bespoke SVG before reporting done, and the
    marker makes §8's pre-push gate a deterministic grep.
-9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
-   template-specific welcome describing the
-   newly-published template.
-10. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is
-    WORKSPACE-only -- the SOURCE mind's own record of what it came from and
-    everything it has published -- and never belongs in a published template.
-    A mind created from this template grows its own ledger on demand (this
-    skill's §8 step 4 and the update apply -- `update-self`'s
-    `scripts/update_self.py` -- write the starter the first time it
-    is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can
-    never make an empty include set look publishable.
-11. Validates `system/supervisord.conf` WITHOUT starting the daemon (never
+9. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is
+   WORKSPACE-only -- the SOURCE mind's own record of what it came from and
+   everything it has published -- and never belongs in a published template.
+   A mind created from this template grows its own ledger on demand (this
+   skill's §8 step 4 and the update apply -- `update-self`'s
+   `scripts/update_self.py` -- write the starter the first time it
+   is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can
+   never make an empty include set look publishable.
+10. Validates `system/supervisord.conf` WITHOUT starting the daemon (never
     `supervisord -t`), then makes a single commit for the assembled snapshot.
