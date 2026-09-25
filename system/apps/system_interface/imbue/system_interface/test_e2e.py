@@ -649,8 +649,10 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(_shown_windows(page)).to_have_count(0)
     expect(page.locator("[data-taskbar] [data-launcher-field]")).to_be_visible()
     expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
+    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible()
+    # The wallpaper is the app layout's, so it spans the taskbar too; the backdrop is clear over it.
     assert (
-        page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')
+        page.locator(".app-layout")
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
         .endswith('/wallpapers/bundled/dawn")')
     )
@@ -1750,8 +1752,11 @@ def test_a_phone_shows_a_floating_entry_in_the_bar_without_rewriting_its_mode(tm
             expect(_window(phone_page, pinned["id"])).to_have_attribute(
                 "data-window-state", "MAXIMIZED", timeout=15000
             )
+            # The second tap minimizes only the entry of the FOCUSED window; focus lands on its own
+            # broadcast, after the state does, so a tap before it arrives raises the window again.
+            expect(_window(phone_page, pinned["id"])).to_have_attribute("data-focused", "true", timeout=15000)
             phone_entry.tap()
-            expect(_shown_windows(phone_page)).to_have_count(0)
+            expect(_shown_windows(phone_page)).to_have_count(0, timeout=15000)
             # A long press (a touch press held still) opens the entry's menu, which offers no Float (its Close minimizes)
             # on a phone.
             phone_entry.dispatch_event(
