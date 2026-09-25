@@ -818,6 +818,8 @@ def dispatch_desktop_op(
     # fix rather than which client to name.
     if op == LOAD_OP and _requested_desktop(args_raw) is None:
         raise LayoutOpError("'load' requires a desktop name in args.desktop")
+    if op == "open" and arguments.minimized and arguments.beside:
+        raise LayoutOpError("'open' puts the window out of sight with minimized or beside another window, not both")
     if op == "refresh" and arguments.app:
         return _refresh_app(shell, arguments.app, requester)
     if op == RELOAD_SYSTEM_INTERFACE_OP:

@@ -1148,14 +1148,18 @@ def test_an_open_beside_a_window_the_desktop_does_not_have_still_opens_it(
     assert (placement["state"], placement["is_minimized"]) == ("NORMAL", False)
 
 
-def test_an_open_beside_a_spelling_that_is_no_window_is_refused_before_it_opens_anything(
+def test_an_open_whose_beside_is_no_window_or_fights_minimized_is_refused_before_it_opens(
     client: FlaskClient, app: Flask
 ) -> None:
-    """A ``beside`` the window rule refuses is the caller's mistake, not a window that is simply not there, so the
-    op is refused rather than half applied: nothing is left on the desktop to wonder about."""
+    """A ``beside`` the window rule refuses is the caller's mistake, not a window that is simply not there, and a
+    ``beside`` asked for alongside ``minimized`` is two places at once: either is refused rather than half applied,
+    so nothing is left on the desktop to wonder about."""
     _register_client(app, "c1", "home")
     refused = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "Not A Window"}, _TERMINAL_REQUESTER)
     assert refused.status_code == 400 and "window" in refused.get_json()["detail"]
+    # Out of sight and across half the screen are two different places to put a window.
+    both = _op(client, "open", {"app": "files", "beside": "self", "minimized": True}, _TERMINAL_REQUESTER)
+    assert both.status_code == 400 and "not both" in both.get_json()["detail"]
     assert _desktop_windows(client) == []
 
 
