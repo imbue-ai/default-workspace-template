@@ -8,8 +8,8 @@
 # observe a change to it and record that here, in the same change.
 #
 # `paths` are gitignore-style globs over repo-root-relative paths. A suite is a test file
-# or a suite directory (a package, a skill, or `system/scripts`); an empty `suites` list
-# says no suite beyond the always-run set can observe the paths.
+# or a directory holding tests (a package, a skill, `system/scripts`, `.pi/extensions`, ...);
+# an empty `suites` list says no suite beyond the always-run set can observe the paths.
 
 # The cross-cutting system/scripts guards, run for every change beside system/*.py.
 always_run = [
