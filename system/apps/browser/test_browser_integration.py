@@ -409,13 +409,8 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
     async def go() -> None:
         first = bsession.BrowserSessionManager()
         await first.restore()  # fresh workspace -> EMPTY fleet (no default browser)
-        try:
-            # Every browser is created on demand now; create one and remember its name.
-            try:
-                browser = await _create_running(first)
-            except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-                pytest.skip(f"Chromium unavailable in this environment: {e}")
-            _require_running(browser)
+        # Every browser is created on demand now; create one and remember its name.
+        async with _running_browser(first) as browser:
             name = browser.browser_id
             assert browser._cdp is not None and browser._chrome is not None
             # The profile path is the persistent one, NOT a temp copy. The path itself must
@@ -438,8 +433,6 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
             with contextlib.suppress(Exception):
                 await browser._cdp.send("Browser.close")
             await asyncio.sleep(1)
-        finally:
-            await first.shutdown()
 
         second = bsession.BrowserSessionManager()
         await second.restore()  # the saved browser comes back by name
