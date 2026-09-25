@@ -1,0 +1,1 @@
+The README's `layout.py open files --path` example now names a folder by its absolute path (`/home/user/workspace/data/notes/`): the file viewer serves the container's filesystem root and opens at the workspace folder, so a folder is no longer named relative to `data/`.
