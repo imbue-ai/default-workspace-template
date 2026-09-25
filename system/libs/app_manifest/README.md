@@ -220,7 +220,8 @@ A path selects:
 - what the override file says.
 
 Every change that is not entirely documentation (README and changelog files
-anywhere, and other markdown outside `.agents/` and `system/`) also runs the
+anywhere, and other markdown outside `.agents/` and `system/{scripts,libs,services,apps}/`,
+where markdown is prose an agent runs) also runs the
 always-run set: `system/*.py` and the cross-cutting guards the override file
 lists. A change made only of documentation selects nothing.
 
