@@ -109,7 +109,8 @@ function _persist(chatId: string, attachments: readonly ComposerAttachment[]): v
   }
 }
 
-/** The stored list of ``chatId`` as ready attachments, adopted once into memory (the first read after a load). */
+/** The stored list of ``chatId`` as ready attachments: what the first read after a load adopts, and what a list
+ *  another document wrote is taken in as. */
 function _hydrate(chatId: string): ComposerAttachment[] {
   return _storedAttachmentsOf(chatId).map((attachment) => ({ ...attachment, status: "ready" as const }));
 }
