@@ -829,11 +829,14 @@ def _select_for_package(
 ) -> list[_PytestRequest]:
     """The package's own suite, the suites of the members that depend on it, the tests of the
     unpackaged scripts that import it or one of those members, and, for an app, the tests of
-    the directories its manifest references."""
+    the directories its manifest references. A test file reaches only its own suite, since
+    nothing that depends on the package runs its tests."""
     layout = context.layout
     requests = _own_unit_requests(
         layout, path, _reason(path, ChangedPathClass.PACKAGE, f"changed in {unit.directory}")
     )
+    if is_test_file_name(path):
+        return requests
     requests.extend(_referenced_directory_requests(layout, path, unit.directory))
     requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, unit.directory))
     for consumer in context.python_consumers.get(unit.directory, ()):

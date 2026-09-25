@@ -77,6 +77,12 @@ def test_a_shared_library_change_runs_the_tests_of_scripts_importing_a_consumer(
     assert "uv run pytest system/scripts/mid_report_test.py" in _command_lines(selection)
 
 
+def test_a_shared_library_test_change_runs_only_the_librarys_own_suite(workspace: Path) -> None:
+    selection = _select(workspace, ["system/libs/corelib/src/corelib/core_test.py"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/libs/corelib"]
+
+
 def test_a_consumer_change_does_not_run_what_it_consumes(workspace: Path) -> None:
     selection = _select(workspace, ["system/apps/notes/src/notes/core.py"])
 

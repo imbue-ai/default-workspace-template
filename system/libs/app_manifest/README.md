@@ -205,7 +205,8 @@ A path selects:
   and `test_<stem>*.py`; a deleted script needs no pair);
 - its consumers: every workspace member that depends on its package, directly
   or transitively (`pyproject.toml` dependencies and dependency groups), and
-  the unpackaged scripts that import one of its modules;
+  the unpackaged scripts that import one of its modules (not for a test file,
+  which nothing that depends on the package runs);
 - for a `uv.lock` change, every member that depends on a package the lock
   upgraded (a package only added selects nothing beyond the member whose
   `pyproject.toml` added it);
@@ -214,8 +215,9 @@ A path selects:
   after `npm ci && npm run build`, plus the browser tests of every app whose
   frontend is among them;
 - the app whose manifest references it, or whose supervisord block it holds;
-- for a path in an app, the tests beneath each directory the app's manifest
-  references (a referenced skill drives the app's surface);
+- for a path in an app other than a test file, the tests beneath each
+  directory the app's manifest references (a referenced skill drives the
+  app's surface);
 - every test file that names it;
 - what the override file says.
 
