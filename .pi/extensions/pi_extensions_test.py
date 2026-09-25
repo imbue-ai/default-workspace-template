@@ -133,9 +133,12 @@ def _run_event(
         pytest.skip("node with TypeScript module support is not available")
     driver = tmp_path / "driver.mjs"
     driver.write_text(_DRIVER_MJS)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
     full_env = {
         "PATH": os.environ.get("PATH", ""),
         "MNGR_AGENT_WORK_DIR": str(work_dir),
+        "MNGR_AGENT_STATE_DIR": str(state_dir),
     }
     full_env.update(env or {})
     return subprocess.run(
