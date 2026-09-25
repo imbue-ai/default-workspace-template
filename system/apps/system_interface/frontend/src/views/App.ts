@@ -701,9 +701,11 @@ export function App(): m.Component<AppAttrs> {
       const root = vnode.dom as HTMLElement;
       detachGestures = vnode.attrs.gestures.attach(root, gestureListener(current, root));
       // The element menu over the shell's own chrome (element-reference-menu plan section 6): what a right-click
-      // the views do not handle themselves opens, drawn as the desktop's one menu.
+      // the views do not handle themselves opens, drawn as the desktop's one menu. The shell is no frame's page:
+      // its draft route is the store's, and a draft can always go.
       uninstallContextMenu = installElementContextMenu({
-        connection: { isFramed: true, draftText: (text) => void current.draftText(text) },
+        draft: (text) => void current.draftText(text),
+        isDraftAvailable: () => true,
         scope: (target) => shellReferenceScope(current, target.element),
         open: (rows, point) => {
           openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));

@@ -28,23 +28,49 @@ export interface ContextMenuPoint {
   y: number;
 }
 
-export interface ContextMenuOptions {
-  connection: ContextMenuConnection;
+interface ContextMenuBaseOptions {
   /** The page's last handshake, read at every right-click (so a getter); the scope of every reference. */
   handshake?: () => ReferenceHandshake | null;
   /** The scope of a reference, for a page that knows more than its handshake says (the shell, which is no
    *  frame's page); ``handshake`` when unset. */
   scope?: (target: ContextMenuTarget) => ReferenceScope;
-  /** Where a draft goes; the connection's ``draftText`` when unset (section 3.4). */
-  draft?: (text: string) => void;
-  /** Whether Explain and Modify can run; ``connection.isFramed`` when unset (section 4.7). */
-  isDraftAvailable?: () => boolean;
   /** A page's own rows for the target, first in the menu. */
   extraRows?: (target: ContextMenuTarget) => readonly ContextMenuRow[];
   /** Draw the rows at the point; the framework-free renderer when unset. */
   open?: (rows: readonly ContextMenuRow[], point: ContextMenuPoint) => void;
   /** The document to listen on; the page's own when unset (a test hands in another). */
   document?: Document;
+}
+
+/** A page a shell may frame: a draft goes through its connection unless it says otherwise. */
+interface ConnectedContextMenuOptions extends ContextMenuBaseOptions {
+  connection: ContextMenuConnection;
+  /** Where a draft goes; the connection's ``draftText`` when unset (section 3.4). */
+  draft?: (text: string) => void;
+  /** Whether Explain and Modify can run; ``connection.isFramed`` when unset (section 4.7). */
+  isDraftAvailable?: () => boolean;
+}
+
+/** A page with a draft route of its own and no connection (the shell, whose route is its store). */
+interface RoutedContextMenuOptions extends ContextMenuBaseOptions {
+  connection?: undefined;
+  draft: (text: string) => void;
+  isDraftAvailable: () => boolean;
+}
+
+export type ContextMenuOptions = ConnectedContextMenuOptions | RoutedContextMenuOptions;
+
+/** Where a draft goes and whether it can, from either shape of the options. */
+function draftRouteOf(options: ContextMenuOptions): {
+  draft: (text: string) => void;
+  isDraftAvailable: () => boolean;
+} {
+  if (options.connection === undefined) return { draft: options.draft, isDraftAvailable: options.isDraftAvailable };
+  const { connection } = options;
+  return {
+    draft: options.draft ?? ((text: string) => connection.draftText(text)),
+    isDraftAvailable: options.isDraftAvailable ?? (() => connection.isFramed),
+  };
 }
 
 /** Marks the document the installer listens on, so a second install is a no-op. */
@@ -67,8 +93,7 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   if (existing !== undefined) return existing;
   if (ownerDocument.documentElement.hasAttribute(CONTEXT_MENU_INSTALLED_ATTR)) return () => undefined;
   const open = options.open ?? createDefaultRenderer(ownerDocument);
-  const draft = options.draft ?? ((text: string) => options.connection.draftText(text));
-  const isDraftAvailable = options.isDraftAvailable ?? (() => options.connection.isFramed);
+  const { draft, isDraftAvailable } = draftRouteOf(options);
   const scopeOf = options.scope ?? (() => scopeOfHandshake(options.handshake?.() ?? null));
 
   const onContextMenu = (event: MouseEvent): void => {

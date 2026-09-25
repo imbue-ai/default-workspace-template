@@ -89,6 +89,16 @@ describe("installElementContextMenu", () => {
     expect(text).toContain('"id":"para"');
   });
 
+  it("takes a draft route of the page's own in place of a connection", () => {
+    const draft = vi.fn<(text: string) => void>();
+    uninstall = installElementContextMenu({ draft, isDraftAvailable: () => true, handshake: () => null });
+    rightClick(document.getElementById("para") as Element);
+    expect(row("explain-element").getAttribute("aria-disabled")).toBeNull();
+    row("explain-element").click();
+    expect(draft).toHaveBeenCalledTimes(1);
+    expect(draft.mock.calls[0][0]).toContain('"app":null');
+  });
+
   it("greys the draft rows on a page no shell frames", () => {
     connection = { isFramed: false, draftText: vi.fn<(text: string) => void>() };
     uninstall = installElementContextMenu({ connection, handshake: () => null });
