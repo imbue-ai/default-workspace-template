@@ -190,7 +190,7 @@ describe("elementReferenceRows", () => {
     const reference = describeElement(byId("para"), CLICK, SCOPE);
     const draft = vi.fn();
     const rows = elementReferenceRows(reference, draft, true);
-    expect(keysOf(rows)).toEqual(["copy-element-path", "explain-element", "modify-element"]);
+    expect(keysOf(rows)).toEqual(["copy-reference", "explain-element", "modify-element"]);
     expect(rows.map((row) => (row.kind === "divider" ? "|" : row.label))).toEqual([
       "Copy reference",
       "Explain...",
@@ -237,7 +237,7 @@ describe("elementMenuRows", () => {
       "copy-link",
       "open-link",
       "|",
-      "copy-element-path",
+      "copy-reference",
       "explain-element",
       "modify-element",
     ]);
@@ -245,7 +245,7 @@ describe("elementMenuRows", () => {
 
   it("draws no divider before the reference rows when nothing else applies", () => {
     expect(keysOf(elementMenuRows(targetOf(byId("para")), SCOPE, vi.fn(), true, []))).toEqual([
-      "copy-element-path",
+      "copy-reference",
       "explain-element",
       "modify-element",
     ]);

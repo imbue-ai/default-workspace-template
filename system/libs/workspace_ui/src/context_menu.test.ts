@@ -62,7 +62,7 @@ describe("installElementContextMenu", () => {
     const keys = Array.from(opened!.querySelectorAll(`[${CONTEXT_MENU_ROW_ATTR}]`)).map((button) =>
       button.getAttribute(CONTEXT_MENU_ROW_ATTR),
     );
-    expect(keys).toEqual(["copy-element-path", "explain-element", "modify-element"]);
+    expect(keys).toEqual(["copy-reference", "explain-element", "modify-element"]);
   });
 
   it("yields to a right-click the page already handled", () => {
@@ -162,7 +162,7 @@ describe("installElementContextMenu", () => {
       "paste",
       "select-all",
       "|",
-      "copy-element-path",
+      "copy-reference",
       "explain-element",
       "modify-element",
     ]);

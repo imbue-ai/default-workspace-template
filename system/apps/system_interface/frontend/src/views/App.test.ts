@@ -326,7 +326,7 @@ describe("the element menu", () => {
     m.redraw.sync();
     expect(event.defaultPrevented).toBe(true);
     expect(document.body.querySelector(".element-menu")).not.toBeNull();
-    expect(menuRowKeys()).toEqual(["copy-element-path", "explain-element", "modify-element"]);
+    expect(menuRowKeys()).toEqual(["copy-reference", "explain-element", "modify-element"]);
     pressEscape();
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
@@ -351,7 +351,7 @@ describe("the element menu", () => {
     entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     m.redraw.sync();
     const keys = menuRowKeys();
-    expect(keys.slice(-3)).toEqual(["copy-element-path", "explain-element", "modify-element"]);
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
     expect(keys).toContain("close");
     (document.querySelector('[data-menu-row="explain-element"]') as HTMLElement).click();
     await settle();

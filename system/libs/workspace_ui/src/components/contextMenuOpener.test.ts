@@ -24,7 +24,7 @@ describe("createContextMenuOpener", () => {
       [
         { kind: "action", key: "explain-element", label: "Explain...", onSelect },
         { kind: "divider" },
-        { kind: "action", key: "copy-element-path", label: "Copy reference", onSelect: () => undefined },
+        { kind: "action", key: "copy-reference", label: "Copy reference", onSelect: () => undefined },
       ],
       { x: 12, y: 34 },
     );

@@ -248,7 +248,7 @@ export function elementReferenceRows(
     onSelect: () => draft(draftTextOf(prompt, block)),
   });
   return [
-    { kind: "action", key: "copy-element-path", label: "Copy reference", onSelect: () => void copyText(block) },
+    { kind: "action", key: "copy-reference", label: "Copy reference", onSelect: () => void copyText(block) },
     draftRow("explain-element", "Explain...", explainPromptOf(reference.reference_id)),
     draftRow("modify-element", "Modify...", modifyPromptOf(reference.reference_id)),
   ];
