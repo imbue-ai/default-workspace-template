@@ -64,7 +64,7 @@ Every field is present; a fact the page does not know is `null` (a scalar) or em
 | `aria_label` | The `aria-label` attribute, or `null` |
 | `selection_text` | The document's selected text at the click, or `""` |
 | `selection_box` | `{"x", "y", "width", "height"}`: the client rect of the selection's range, or `null` with no selection |
-| `input_value` | The value of an input, textarea, or select, else `null` |
+| `input_value` | The value of an input, textarea, or select, else `null`; a password field's value is never carried (the reference reaches the clipboard, a message, and a file), so it is `null` there too |
 | `link_href` | The `href` of the nearest enclosing anchor, or `null` |
 | `image_src` | The `src` of an image element, or `null` |
 | `selector` | A CSS selector that matches exactly this element in the document (section 3.1.1) |
@@ -321,7 +321,7 @@ This is the one change outside the template, in the mngr repository's `apps/mind
 
 ## 13. Testing
 
-- `element_reference.test.ts`: the reference of an element with an id, with data attributes, of a repeated row (the `:nth-of-type` and the uniqueness check), of an editable field (`input_value`), of a link and an image, of a text node target, and on a top-level visit; the reference id, the file name, the file text, the summary, and the block.
+- `element_reference.test.ts`: the reference of an element with an id, with data attributes, of a repeated row (the `:nth-of-type` and the uniqueness check), of an editable field (`input_value`, and `null` for a password field), of a link and an image, of a text node target, and on a top-level visit; the reference id, the file name, the file text, the summary, and the block.
 - `context_menu_rows.test.ts`: which standard rows each kind of target admits; the draft texts of the reference rows; Paste absent without `readText`.
 - `context_menu.test.ts`: the installer opens on `contextmenu`, yields to a `defaultPrevented` event, closes on Escape and on a press outside, runs a row, and installs once.
 - `app_contract.test.ts`: `draftText` posts `shell:draft-text`; the handshake carries `app`.

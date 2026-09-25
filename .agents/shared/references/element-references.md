@@ -23,7 +23,7 @@ the click. Every field is present; a fact the page did not know is `null` or emp
 | `role`, `aria_label` | Its `role` and `aria-label` attributes |
 | `selector` | A CSS selector matching exactly this element in the live page, or `null` when none could be built |
 | `selection_text`, `selection_box` | The text the user had highlighted at the click, whole, and its rectangle |
-| `input_value` | The value of an input, textarea, or select |
+| `input_value` | The value of an input, textarea, or select; `null` for a password field, whose value is never carried |
 | `link_href`, `image_src` | The nearest enclosing link's URL; an image's URL |
 | `pointer`, `bounding_box`, `viewport` | Where the click landed, the element's rectangle, and the page's size, all in CSS pixels |
 

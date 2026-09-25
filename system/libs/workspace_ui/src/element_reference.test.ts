@@ -72,12 +72,14 @@ describe("describeElement", () => {
     expect(Object.keys(reference.bounding_box)).toEqual(["x", "y", "width", "height"]);
   });
 
-  it("reads a field's value, its editability, and an image's source", () => {
+  it("reads a field's value, its editability, and an image's source, and never a password", () => {
     render(
-      '<input id="name" value="Ada"><textarea id="notes">hi</textarea><img id="pic" src="/a.png"><button id="go">Go</button>',
+      '<input id="name" value="Ada"><textarea id="notes">hi</textarea><img id="pic" src="/a.png"><button id="go">Go</button>' +
+        '<input id="secret" type="password" value="hunter2">',
     );
     expect(describeElement(byId("name"), CLICK, SCOPE).input_value).toBe("Ada");
     expect(describeElement(byId("notes"), CLICK, SCOPE).input_value).toBe("hi");
+    expect(describeElement(byId("secret"), CLICK, SCOPE).input_value).toBeNull();
     expect(describeElement(byId("pic"), CLICK, SCOPE).image_src).toBe(`${window.location.origin}/a.png`);
     expect(isEditableElement(byId("name"))).toBe(true);
     expect(isEditableElement(byId("notes"))).toBe(true);

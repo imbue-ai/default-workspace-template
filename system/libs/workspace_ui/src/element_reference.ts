@@ -115,9 +115,12 @@ export function contentEditableRegionOf(element: Element): Element | null {
   return value === "" || value === "true" || value === "plaintext-only" ? region : null;
 }
 
-/** The value of a field, or null for an element that has none. */
+/** The value of a field, or null for an element that has none. A password field's value is never read: the
+ *  reference reaches the clipboard, a chat message, and a file, and the secret must not travel in plain text
+ *  (the same reason the menu withholds Cut and Copy there). */
 export function inputValueOf(element: Element): string | null {
   if (!INPUT_VALUE_TAGS.has(element.tagName.toLowerCase())) return null;
+  if (element instanceof HTMLInputElement && element.type === "password") return null;
   return (element as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
 }
 
