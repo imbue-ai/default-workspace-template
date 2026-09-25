@@ -137,6 +137,14 @@ def _bridge(workspace: Path, capsys) -> dict:
     return json.loads(capsys.readouterr().out)
 
 
+def _drop(workspace: Path, capsys) -> dict:
+    assert (
+        update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
+        == 0
+    )
+    return json.loads(capsys.readouterr().out)
+
+
 def _replace_refs(repo: Path) -> list[str]:
     return _git(repo, "replace", "-l").splitlines()
 
@@ -278,10 +286,7 @@ def test_bridge_history_replaces_a_graft_an_earlier_pass_left(
 
     assert result["dropped"] == stale
     assert _replace_refs(workspace) == [result["twin"]]
-    assert (
-        update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
-        == 0
-    )
+    _drop(workspace, capsys)
     assert _replace_refs(workspace) == []
 
 
@@ -342,12 +347,9 @@ def test_bridge_history_refuses_a_workspace_it_cannot_match_and_changes_nothing(
 def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
     twin = _bridge(workspace, capsys)["twin"]
 
-    assert (
-        update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
-        == 0
-    )
+    result = _drop(workspace, capsys)
 
-    assert json.loads(capsys.readouterr().out)["dropped"] == twin
+    assert result["dropped"] == twin
     assert _replace_refs(workspace) == []
     assert list((workspace / DEFAULT_STATE_PATH).parent.iterdir()) == []
     assert (
@@ -364,12 +366,9 @@ def test_bridge_history_drop_forgets_a_record_whose_graft_is_gone(
     twin = _bridge(workspace, capsys)["twin"]
     _git(workspace, "replace", "-d", twin)
 
-    assert (
-        update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
-        == 0
-    )
+    result = _drop(workspace, capsys)
 
-    assert json.loads(capsys.readouterr().out)["dropped"] == twin
+    assert result["dropped"] == twin
     assert list((workspace / DEFAULT_STATE_PATH).parent.iterdir()) == []
 
 
