@@ -270,15 +270,15 @@ In `system/libs/workspace_ui/src/`:
 
 - `element_reference.ts`: `ElementReference`, `describeElement(target, click, scope)`, `uniqueSelectorFor(element)`, `referenceBlock(reference)`, `ELEMENT_REFERENCE_BLOCK_LIMIT`, `isOversizeBlock(block)`, and the pointer-form types.
   Pure over the DOM: no framework, no message primitive.
-- `context_menu_rows.ts`: `ContextMenuTarget` (the element, the selection text, the click), `standardContextMenuRows(target)`, `elementReferenceRows(reference, draft)`, the prompt texts, and the clipboard helpers.
+- `context_menu_rows.ts`: `ContextMenuTarget` (the element, the selection text, the click), `standardContextMenuRows(target)`, `elementReferenceRows(reference, draft, isDraftAvailable)` (Explain and Modify grey with the section 4.7 tooltip when the last is false), the prompt texts, and the clipboard helpers.
   Its row type is structurally an `ActionRow` or a `DividerRow` of the shared Menu, so the built-ins pass the rows straight to `createMenu` and the framework-free renderer draws the same objects.
-- `context_menu.ts`: `installElementContextMenu({connection, handshake, draft?, isDraftAvailable?, extraRows?, open?})`, the one implementation of section 4.1: the document listener, the target and selection capture, the reference, and the rows.
-  `handshake` is a getter for the page's last handshake, `null` before one; `draft` defaults to `connection.draftText` and `isDraftAvailable` to `connection.isFramed`; `extraRows(target)` puts a page's own rows first; `open(rows, point)` replaces the renderer.
+- `context_menu.ts`: `installElementContextMenu({connection, handshake, scope?, draft?, isDraftAvailable?, extraRows?, open?, document?})`, the one implementation of section 4.1: the document listener, the target and selection capture, the reference, and the rows.
+  `handshake` is a getter for the page's last handshake, `null` before one; `scope(target)` replaces the scope the handshake gives, for a page that knows more than its handshake says (the shell, section 6); `draft` defaults to `connection.draftText` and `isDraftAvailable` to `connection.isFramed`; `extraRows(target)` puts a page's own rows first; `open(rows, point)` replaces the renderer; `document` is the document to listen on, the page's own by default.
   The default renderer is framework-free, for pages without Mithril: a fixed card of buttons with inline styles, closed by a press outside, Escape, or a pick.
   It returns an uninstaller, and a second install on a document already carrying its marker is a no-op that answers the first's uninstaller.
   Built as a second library entry of `vite.contract.config.ts` into `_static/context_menu.js`, bundling the two modules above and nothing else.
 - `components/contextMenuOpener.ts`: `createContextMenuOpener()` answers an `open` for the built-ins, backed by `createMenu` and rendered through a render root of its own under `<body>`, so every Mithril page draws the shared Menu without a slot for it and none repeats the capture logic.
-- `components/menu.ts` is unchanged.
+- `components/menu.ts`: the sheet under an open menu prevents the default of a `contextmenu` event, so a right-click that closes a menu is a handled event the installer yields to (section 12) and the browser's own menu stays away; nothing else changes.
 
 `app_manifest.registry` gains `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` beside the contract's, and the built-in apps that serve the contract module serve this one the same way.
 
