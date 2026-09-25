@@ -23,7 +23,7 @@ import socket
 import threading
 import time
 import urllib.request
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -73,6 +73,31 @@ async def _create_running(manager: "bsession.BrowserSessionManager", name: str |
     for task in list(manager._launch_tasks):
         await task
     return session
+
+
+@contextlib.asynccontextmanager
+async def _running_browser(
+    manager: "bsession.BrowserSessionManager", *, with_proxy: bool = False
+) -> "AsyncIterator[bsession.LiveBrowser]":
+    """A real Chromium launched through ``manager``, which is shut down on exit. Skips the test
+    when this host cannot run one. ``with_proxy`` also serves the fleet's CDP proxy, which an
+    agent attach goes through."""
+    proxy = ProxyServer(port=0) if with_proxy else None
+    if proxy is not None:
+        await proxy.start()
+        bsession.set_proxy_server(proxy)
+    try:
+        try:
+            browser = await _create_running(manager)
+        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+            pytest.skip(f"Chromium unavailable in this environment: {e}")
+        _require_running(browser)
+        yield browser
+    finally:
+        await manager.shutdown()
+        if proxy is not None:
+            await proxy.stop()
+            bsession.set_proxy_server(None)
 
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
@@ -323,18 +348,7 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
     # browser-use, the fleet's own CDP client sees the tab, a capability token is minted,
     # and the attach URL an agent would hand to `playwright-cli` is well-formed.
     async def go() -> None:
-        manager = bsession.BrowserSessionManager()
-        proxy = ProxyServer(port=0)
-        await proxy.start()
-        bsession.set_proxy_server(proxy)
-        try:
-            browser = await _create_running(manager)
-        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-            await proxy.stop()
-            bsession.set_proxy_server(None)
-            pytest.skip(f"Chromium unavailable in this environment: {e}")
-        try:
-            _require_running(browser)
+        async with _running_browser(bsession.BrowserSessionManager(), with_proxy=True) as browser:
             # The fleet's own channel works and reports exactly the real pages -- the
             # same filter playwright-cli's `tab-list` applies, so `ls` cannot disagree.
             tabs = await browser._tab_list()
@@ -356,10 +370,6 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
             body = await asyncio.to_thread(fetch_version)
             assert real_port not in body, "the proxy leaked the upstream debug port"
             assert json.loads(body)["webSocketDebuggerUrl"].startswith("ws://127.0.0.1:")
-        finally:
-            await manager.shutdown()
-            await proxy.stop()
-            bsession.set_proxy_server(None)
 
     asyncio.run(go())
 
@@ -372,12 +382,7 @@ def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     # poll of the fleet's own CDP client must still notice.
     async def go() -> None:
         manager = bsession.BrowserSessionManager()
-        try:
-            browser = await _create_running(manager)
-        except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-            pytest.skip(f"Chromium unavailable in this environment: {e}")
-        try:
-            _require_running(browser)
+        async with _running_browser(manager) as browser:
             assert await browser._chrome_alive() is True
             assert browser._chrome is not None
             await asyncio.to_thread(browser._chrome.kill)  # earlyoom / segfault, nobody attached
@@ -386,8 +391,6 @@ def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
             assert browser._crashed is True and browser._lifecycle == "crashed"
             # A crashed browser must free its fleet slot, or `new` fails forever after.
             assert browser.browser_id not in [b["browser_id"] for b in await manager.list_browsers() if not b["crashed"]]
-        finally:
-            await manager.shutdown()
 
     asyncio.run(go())
 
@@ -654,13 +657,7 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
         opener = _PageServer({"/": "<title>opener</title>", "/child": "<title>child</title>"})
         with opener:
             async def go() -> None:
-                manager = bsession.BrowserSessionManager()
-                try:
-                    browser = await _create_running(manager)
-                except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-                    pytest.skip(f"Chromium unavailable in this environment: {e}")
-                try:
-                    _require_running(browser)
+                async with _running_browser(bsession.BrowserSessionManager()) as browser:
                     assert browser._cdp is not None and browser._display is not None
                     session_id = await _only_page_session(browser, f"{opener.origin}/")
                     await _evaluate(browser, session_id, (
@@ -681,8 +678,6 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
                         child = await _page_session(browser, created["targetId"])
                         assert await _evaluate(browser, child, "window.opener !== null") is keeps_opener, label
                         await browser._cdp.close_target(created["targetId"])
-                finally:
-                    await manager.shutdown()
 
             asyncio.run(go())
 
@@ -698,18 +693,7 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
     pages = _PageServer({"/": "<title>opener</title>", "/child": "<title>child</title>"})
     with pages:
         async def go() -> None:
-            manager = bsession.BrowserSessionManager()
-            proxy = ProxyServer(port=0)
-            await proxy.start()
-            bsession.set_proxy_server(proxy)
-            try:
-                browser = await _create_running(manager)
-            except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-                await proxy.stop()
-                bsession.set_proxy_server(None)
-                pytest.skip(f"Chromium unavailable in this environment: {e}")
-            try:
-                _require_running(browser)
+            async with _running_browser(bsession.BrowserSessionManager(), with_proxy=True) as browser:
                 assert browser._cdp is not None
                 session_id = await _only_page_session(browser, f"{pages.origin}/")
                 attach = await browser.attach_for("agent-under-test", "Tester")
@@ -727,10 +711,6 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
                         assert await _evaluate(browser, child, "document.title") == "child"
                     except CdpError as e:
                         raise AssertionError(f"a page stopped answering after the handoff: {e}") from e
-            finally:
-                await manager.shutdown()
-                await proxy.stop()
-                bsession.set_proxy_server(None)
 
         asyncio.run(go())
 
@@ -747,13 +727,7 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
     )})
     with pages:
         async def go() -> None:
-            manager = bsession.BrowserSessionManager()
-            try:
-                browser = await _create_running(manager)
-            except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-                pytest.skip(f"Chromium unavailable in this environment: {e}")
-            try:
-                _require_running(browser)
+            async with _running_browser(bsession.BrowserSessionManager()) as browser:
                 display = browser._display
                 assert display is not None
                 session_id = await _only_page_session(browser, f"{pages.origin}/")
@@ -796,8 +770,6 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                 finally:
                     mediastream._unregister_clip_sink(browser.browser_id, viewer_sink)
                     viewer_input.close()
-            finally:
-                await manager.shutdown()
 
         asyncio.run(go())
 
