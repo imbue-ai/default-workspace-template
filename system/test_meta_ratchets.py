@@ -139,14 +139,23 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
     git internals), all of which are gitignored.
     """
     candidates = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.sh"],
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.sh",
+        ],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
     violations: list[str] = []
-    for rel in candidates.stdout.splitlines():
+    for rel in filter(None, candidates.stdout.split("\0")):
         script = _REPO_ROOT / rel
         if _VENDORED_DIR in script.parents or not script.is_file():
             continue
