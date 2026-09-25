@@ -71,7 +71,8 @@ function _storedAttachmentsOf(chatId: string): StoredAttachment[] {
   let raw: string | null;
   try {
     raw = localStorage.getItem(storageKey(chatId));
-  } catch {
+  } catch (error) {
+    console.warn(`The stored attachments of chat ${chatId} could not be read; starting with none`, error);
     return [];
   }
   if (raw === null) return [];
@@ -102,8 +103,9 @@ function _persist(chatId: string, attachments: readonly ComposerAttachment[]): v
     } else {
       localStorage.setItem(storageKey(chatId), JSON.stringify(stored));
     }
-  } catch {
-    // Storage may be full or refused; the in-memory list still serves this document.
+  } catch (error) {
+    // The in-memory list still serves this document; only a reload or another document loses the chips.
+    console.warn(`The attachments of chat ${chatId} could not be persisted`, error);
   }
 }
 
