@@ -503,6 +503,7 @@ class _PageServer:
     def __exit__(self, *_exc: Any) -> None:
         self._server.shutdown()
         self._thread.join(timeout=5)
+        self._server.server_close()
 
 
 async def _page_session(browser: "bsession.LiveBrowser", target_id: str) -> str:
