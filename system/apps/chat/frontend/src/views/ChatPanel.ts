@@ -317,6 +317,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       launchError = null;
       return renderStarting(chatId);
     }
+    if (provisional.phase === "awaiting_first_send") {
+      // A chat with no seed that waits for its first send (an intake that could not launch it at once,
+      // post-launch-paths plan section 3.7): an empty conversation over the composer, whose send launches it.
+      return renderEmptyConversation("message-list-empty message-list-awaiting", renderOutgoingMessages(chatId));
+    }
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },

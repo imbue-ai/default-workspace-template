@@ -34,18 +34,8 @@ describe("resolveLaunchRun", () => {
 
   it("a focus shortcut with nothing to focus, and a new shortcut always, open at the launch path", () => {
     const state = stateWith();
-    expect(resolveLaunchRun(state, "notes", "new", "focus")).toEqual({
-      kind: "open",
-      app: "notes",
-      path: "/new",
-      launch: "new",
-    });
-    expect(resolveLaunchRun(state, "docs", "new", "new")).toEqual({
-      kind: "open",
-      app: "docs",
-      path: "/new",
-      launch: "new",
-    });
+    expect(resolveLaunchRun(state, "notes", "new", "focus")).toEqual({ kind: "open", app: "notes", launch: "new" });
+    expect(resolveLaunchRun(state, "docs", "new", "new")).toEqual({ kind: "open", app: "docs", launch: "new" });
   });
 
   it("says why a shortcut cannot run", () => {
@@ -57,6 +47,19 @@ describe("resolveLaunchRun", () => {
     expect(resolveLaunchRun(state, "docs", "odd", "focus")).toEqual({
       kind: "unavailable",
       reason: "Docs has no launch path odd",
+    });
+  });
+
+  it("an unknown app is connecting, not unregistered, until the first app list lands", () => {
+    const connecting = [
+      { type: "desktops_updated", desktops: [home] } as DesktopEvent,
+      { type: "desktop_activated", desktopId: "home" } as DesktopEvent,
+    ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
+    expect(resolveLaunchRun(connecting, "docs", "new", "focus")).toEqual({ kind: "connecting" });
+    const loaded = reduceDesktopState(connecting, { type: "apps_updated", apps: [] });
+    expect(resolveLaunchRun(loaded, "docs", "new", "focus")).toEqual({
+      kind: "unavailable",
+      reason: "docs is not registered",
     });
   });
 });

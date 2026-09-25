@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseClientArrival,
   WireShapeError,
   isSameWindowPaths,
   parseAppRecord,
@@ -8,7 +9,9 @@ import {
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
+  parseInventory,
   parseLayout,
+  parsePresentUsers,
   parseWallpaperListings,
   shortcutKey,
 } from "./records";
@@ -18,7 +21,6 @@ const DESKTOP_WIRE = {
   name: "Home",
   color: "#2f6b4f",
   glyph: 0,
-  sharing: "shared",
   wallpaper: { kind: "bundled", name: "dawn" },
   shortcuts: [{ target: { kind: "launch", app: "docs", launch: "new" }, mode: "new", cell: { column: 0, row: 0 } }],
   windows: [
@@ -28,7 +30,6 @@ const DESKTOP_WIRE = {
       path: "/?doc=1",
       title: "Plan",
       opened_at: "2026-09-19T14:11:02.824Z",
-      is_settling: false,
     },
   ],
 };
@@ -59,8 +60,25 @@ describe("parseDesktop", () => {
   it("reads a null wallpaper and refuses a desktop of the wrong shape", () => {
     expect(parseDesktop({ ...DESKTOP_WIRE, wallpaper: null }).wallpaper).toBeNull();
     expect(() => parseDesktop({ ...DESKTOP_WIRE, windows: "none" })).toThrow(WireShapeError);
-    expect(() => parseDesktop({ ...DESKTOP_WIRE, sharing: "public" })).toThrow(WireShapeError);
     expect(() => parseDesktop([])).toThrow(WireShapeError);
+  });
+});
+
+describe("parseClientArrival", () => {
+  it("reads the arrival with and without a seeded desktop, and refuses the wrong shape", () => {
+    const plain = parseClientArrival({ desktop_id: "home", created_desktop: null, replaced_desktop_name: null });
+    expect(plain).toEqual({ desktop_id: "home", created_desktop: null, replaced_desktop_name: null });
+    const seeded = parseClientArrival({
+      desktop_id: "alice",
+      created_desktop: { ...DESKTOP_WIRE, id: "alice", name: "Alice" },
+      replaced_desktop_name: "Alice",
+    });
+    expect(seeded.created_desktop?.name).toBe("Alice");
+    expect(seeded.replaced_desktop_name).toBe("Alice");
+    expect(
+      parseClientArrival({ desktop_id: null, created_desktop: null, replaced_desktop_name: null }).desktop_id,
+    ).toBeNull();
+    expect(() => parseClientArrival({ desktop_id: 7 })).toThrow(WireShapeError);
   });
 });
 
@@ -130,10 +148,34 @@ describe("parseAppRecord", () => {
     expect(app.display_name).toBe("docs");
     expect(app.icon).toBe("");
     expect(app.launch_paths[0].params).toEqual(["message"]);
+    // A launch path without a method, presets, or text params is a GET taking no text.
+    expect(app.launch_paths[0].method).toBe("GET");
+    expect(app.launch_paths[0].presets).toEqual({});
+    expect(app.launch_paths[0].text_param).toBeNull();
+    expect(app.launch_paths[0].draft_param).toBeNull();
     expect(app.default_shortcut).toEqual({ launch: "new", mode: "new" });
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
     expect(app.pin).toBeNull();
+  });
+
+  it("reads a POST launch path with its presets and draft param, and refuses a method or a preset off the wire's shape", () => {
+    const wire = { name: "docs", url: "http://127.0.0.1:1" };
+    const drafting = {
+      id: "draft",
+      label: "Draft into docs",
+      path: "/api/intake",
+      method: "POST",
+      params: ["message"],
+      presets: { target: "current_chat", is_draft: "true" },
+      draft_param: "message",
+    };
+    const app = parseAppRecord({ ...wire, launch_paths: [drafting] });
+    expect(app.launch_paths[0]).toEqual({ ...drafting, text_param: null });
+    expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, method: "PUT" }] })).toThrow(WireShapeError);
+    expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, presets: { is_draft: true } }] })).toThrow(
+      WireShapeError,
+    );
   });
 
   it("reads an app's pin and refuses one outside the vocabularies", () => {
@@ -158,6 +200,54 @@ describe("parseAppRecord", () => {
     expect(app.default_shortcut).toEqual({ launch: "new", mode: "focus" });
     expect(app.launcher_rank).toBeNull();
     expect(app.launch_paths).toEqual([]);
+  });
+});
+
+const PRESENT_USER_WIRE = {
+  user_id: "user-owner-9c21",
+  email: "owner@example.com",
+  display_name: null,
+  profile_picture_url: "https://accounts.example.com/users/user-owner-9c21/profile-picture/9a7b",
+  owner: true,
+  first_seen: "2026-09-19T10:00:00.000000000Z",
+  last_seen: "2026-09-19T10:00:30.000000000Z",
+};
+
+describe("parsePresentUsers", () => {
+  it("reads the contract's user objects, a missing name or profile picture as null", () => {
+    expect(parsePresentUsers([PRESENT_USER_WIRE])).toEqual([PRESENT_USER_WIRE]);
+    const { display_name: _name, profile_picture_url: _picture, ...nameless } = PRESENT_USER_WIRE;
+    expect(parsePresentUsers([nameless])).toEqual([
+      { ...PRESENT_USER_WIRE, display_name: null, profile_picture_url: null },
+    ]);
+    expect(parsePresentUsers([])).toEqual([]);
+  });
+
+  it("refuses a user without an email or with a non-boolean owner, and a `users` that is not a list", () => {
+    expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, email: undefined }])).toThrow(WireShapeError);
+    expect(() => parsePresentUsers([{ ...PRESENT_USER_WIRE, owner: "yes" }])).toThrow(WireShapeError);
+    expect(() => parsePresentUsers({ users: [] })).toThrow(WireShapeError);
+  });
+});
+
+describe("parseInventory", () => {
+  it("reads the desktops, the apps, and the clients, and leaves the agent's fields aside", () => {
+    const inventory = parseInventory({
+      is_preview: false,
+      desktops: [DESKTOP_WIRE],
+      apps: [{ name: "docs", url: "http://127.0.0.1:7001" }],
+      clients: [{ id: "c1", active_desktop: "home", last_seen: "now", is_connected: true, shown: ["win-1"] }],
+    });
+    expect(inventory.desktops.map((desktop) => desktop.id)).toEqual(["home"]);
+    expect(inventory.apps.map((app) => app.name)).toEqual(["docs"]);
+    expect(inventory.clients.map((client) => client.id)).toEqual(["c1"]);
+    expect(inventory).not.toHaveProperty("is_preview");
+  });
+
+  it("refuses a document missing any of the three lists", () => {
+    expect(() => parseInventory({ desktops: [], apps: [] })).toThrow(WireShapeError);
+    expect(() => parseInventory({ desktops: [], clients: [] })).toThrow(WireShapeError);
+    expect(() => parseInventory([])).toThrow(WireShapeError);
   });
 });
 

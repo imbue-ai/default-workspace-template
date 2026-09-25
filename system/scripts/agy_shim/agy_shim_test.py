@@ -185,18 +185,29 @@ def _with_open_step(tmp_path: Path) -> dict[str, str]:
     state = tmp_path / "state"
     state.mkdir()
     (state / "active").write_text("")
-    subprocess.run(
-        [
-            str(_WORK_DIR / "system" / "vendor" / "tk" / "ticket"),
-            "create",
-            "--step",
-            "An open step",
-        ],
-        env={**os.environ, "TICKETS_DIR": str(tickets)},
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    ticket = str(_WORK_DIR / "system" / "vendor" / "tk" / "ticket")
+    env = {**os.environ, "TICKETS_DIR": str(tickets)}
+
+    def run_tk(*arguments: str) -> str:
+        # Checked, and the output carried onto the failure: a setup step that fails
+        # quietly leaves the tickets dir in a state no caller asked for, and the
+        # tests then fail somewhere else entirely with no sign of why.
+        result = subprocess.run(
+            [ticket, *arguments], env=env, capture_output=True, text=True, timeout=30
+        )
+        assert result.returncode == 0, (
+            f"tk {' '.join(arguments)} failed ({result.returncode}): "
+            f"{result.stdout}{result.stderr}"
+        )
+        return result.stdout
+
+    # `create` only declares the step; `start` is what makes one in_progress, which is
+    # what "an open step" means to both policies. Without it the tickets dir holds a
+    # declared-but-unstarted step, and the shim correctly emits the OTHER reminder
+    # ("none is currently in_progress") -- which is what these tests then saw.
+    created = run_tk("create", "--step", "An open step")
+    step_id = created.split("Created ", 1)[1].split(":", 1)[0].strip()
+    run_tk("start", step_id)
     return {"TICKETS_DIR": str(tickets), "MNGR_AGENT_STATE_DIR": str(state)}
 
 
@@ -220,21 +231,34 @@ def test_the_reminder_does_not_repeat_within_one_turn(tmp_path: Path) -> None:
     assert "Open task reminder" not in result.stderr
 
 
+def _recreate_with_a_new_inode(marker: Path) -> None:
+    """Replace `marker` with a file the kernel gave a different inode number.
+
+    The turn key IS the inode, so a recreate that reuses the old number is not a new
+    turn and the reminder correctly stays quiet. Holding the freed number down with
+    other files makes reuse unlikely but never impossible -- CI hit the reuse and read
+    it as a failure. Rename the confirmed-new inode into place instead, and say so
+    plainly if the loop cannot get one, so this can never fail as if it were the shim.
+    """
+    original_inode = marker.stat().st_ino
+    for attempt in range(64):
+        candidate = marker.with_name(f"{marker.name}.candidate{attempt}")
+        candidate.write_text("")
+        if candidate.stat().st_ino != original_inode:
+            candidate.replace(marker)
+            return
+        candidate.unlink()
+    raise AssertionError(
+        f"could not obtain an inode other than {original_inode} in 64 attempts"
+    )
+
+
 def test_the_reminder_returns_on_the_next_turn(tmp_path: Path) -> None:
     """The idle->busy edge of a new turn recreates the marker, which is a new inode."""
     env = _with_open_step(tmp_path)
     _run("-c", "echo first", env=env)
     marker = Path(env["MNGR_AGENT_STATE_DIR"]) / "active"
-    marker.unlink()
-    # Force a genuinely different inode. A bare unlink+create often reuses the SAME one -- CI
-    # did exactly that and the reminder correctly did not re-fire, so asserting on a recreate
-    # would be asserting on the kernel's allocator rather than on this code.
-    hold = [tmp_path / f"hold{i}" for i in range(64)]
-    for h in hold:
-        h.write_text("")
-    marker.write_text("")
-    for h in hold:
-        h.unlink()
+    _recreate_with_a_new_inode(marker)
     result = _run("-c", "echo next-turn", env=env)
     assert "Open task reminder" in result.stderr
 

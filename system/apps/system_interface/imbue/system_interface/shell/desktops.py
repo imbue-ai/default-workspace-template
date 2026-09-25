@@ -3,15 +3,16 @@
 import re
 from collections.abc import Callable
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
-from pydantic import ValidationError
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -42,11 +43,12 @@ from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
-from imbue.system_interface.shell.primitives import SharingMode
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
@@ -56,6 +58,31 @@ DESKTOPS_FILENAME: Final[str] = "desktops.json"
 DEFAULT_DESKTOP_NAME: Final[str] = "Home"
 DEFAULT_DESKTOP_COLOR: Final[str] = "#2f6b4f"
 DEFAULT_DESKTOP_GLYPH: Final[int] = 0
+
+# Each glyph's signature colour, in glyph order: the frontend's ``SQUIGGLE_GLYPHS`` palette, which is what the
+# settings dialog offers, so a desktop the shell names itself wears a colour the dialog could have picked.
+DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
+    "#F0603A",
+    "#16A34A",
+    "#E3A400",
+    "#45BC4E",
+    "#12B5A5",
+    "#17A2C4",
+    "#3B82F6",
+    "#7C5CFF",
+    "#B455E8",
+    "#EC4899",
+)
+# What a user's desktop is called when their identity offers no usable name.
+FALLBACK_USER_DESKTOP_NAME: Final[str] = "Guest"
+# The key desktops.json carried per desktop before every desktop was shared (the sharing mode); an old file may
+# still hold it.
+# CLEANUP: drop ``_RETIRED_DESKTOP_KEYS`` and the strip in ``_read_unlocked`` around late November 2026, once every
+# workspace has rewritten its desktops.json without the key (the first write after this release does).
+_RETIRED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset({"sharing"})
+# CLEANUP: drop ``_RETIRED_WINDOW_KEYS`` and its strip in ``_without_retired_keys`` around late December 2026, once
+# every workspace has rewritten its desktops.json without the key (the first write after this release does).
+_RETIRED_WINDOW_KEYS: Final[frozenset[str]] = frozenset({"is_settling"})
 
 _COLOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}")
 _SLUG_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
@@ -97,17 +124,96 @@ def validated_desktop_glyph(glyph: int) -> int:
 
 
 @pure
+def next_glyph_index(used_glyphs: Sequence[int]) -> int:
+    """The glyph a desktop the shell names gets: the first nobody uses, then repeating (the frontend's rule)."""
+    used = set(used_glyphs)
+    for index in range(GLYPH_COUNT):
+        if index not in used:
+            return index
+    return len(used_glyphs) % GLYPH_COUNT
+
+
+@pure
+def unique_desktop_name(base: str, existing: Sequence[Desktop]) -> str:
+    """``base``, or ``base 2``, ``base 3``, ... until neither the name nor its id is taken (the frontend's rule)."""
+    taken_names = {desktop.name.strip().lower() for desktop in existing}
+    taken_ids = {str(desktop.id) for desktop in existing}
+    candidate = base
+    suffix = 1
+    while candidate.lower() in taken_names or str(slugify_desktop_name(candidate)) in taken_ids:
+        suffix += 1
+        candidate = f"{base} {suffix}"
+    return candidate
+
+
+@pure
+def _sluggable(name: str) -> bool:
+    try:
+        slugify_desktop_name(name)
+    except DesktopValueError:
+        return False
+    return True
+
+
+@pure
+def desktop_name_for_user(display_name: str | None, email: str | None, existing: Sequence[Desktop]) -> str:
+    """What a visiting user's desktop is called: their profile's display name, else the local part of their email,
+    else a fallback, made unique among the existing desktops."""
+    candidates = [
+        (display_name or "").strip(),
+        (email or "").split("@")[0].strip(),
+        FALLBACK_USER_DESKTOP_NAME,
+    ]
+    base = next(candidate for candidate in candidates if candidate and _sluggable(candidate))
+    return unique_desktop_name(base, existing)
+
+
+@pure
 def default_desktop(shortcuts: Sequence[DesktopShortcut]) -> Desktop:
     return Desktop(
         id=slugify_desktop_name(DEFAULT_DESKTOP_NAME),
         name=DEFAULT_DESKTOP_NAME,
         color=DEFAULT_DESKTOP_COLOR,
         glyph=DEFAULT_DESKTOP_GLYPH,
-        sharing=SharingMode.SHARED,
         wallpaper=None,
         shortcuts=tuple(shortcuts),
         windows=(),
     )
+
+
+@pure
+def _without_retired_window_keys(desktop: dict[str, Any]) -> dict[str, Any]:
+    windows = desktop.get("windows")
+    if not isinstance(windows, list):
+        return desktop
+    return {
+        **desktop,
+        "windows": [
+            {key: value for key, value in window.items() if key not in _RETIRED_WINDOW_KEYS}
+            if isinstance(window, dict)
+            else window
+            for window in windows
+        ],
+    }
+
+
+@pure
+def _without_retired_keys(raw: dict[str, Any]) -> dict[str, Any]:
+    """The raw desktops document with the keys this version no longer stores dropped from every desktop and window."""
+    desktops = raw.get("desktops")
+    if not isinstance(desktops, list):
+        return raw
+    return {
+        **raw,
+        "desktops": [
+            _without_retired_window_keys(
+                {key: value for key, value in desktop.items() if key not in _RETIRED_DESKTOP_KEYS}
+            )
+            if isinstance(desktop, dict)
+            else desktop
+            for desktop in desktops
+        ],
+    }
 
 
 @pure
@@ -120,6 +226,18 @@ def resolve_active_desktop(record: ClientRecord | None, desktops: Sequence[Deskt
         if any(desktop.id == record.active_desktop for desktop in desktops):
             return record.active_desktop
     return desktops[0].id
+
+
+@pure
+def desktop_kept_by_returning_client(
+    record: ClientRecord | None, user_id: UserId, desktop_ids: AbstractSet[DesktopId]
+) -> DesktopId | None:
+    """The desktop a visiting user's client keeps on arrival (desktop plan section 3.10): the one it was on, when it
+    last arrived as this same user and that desktop still exists; None for a new client, for one that last arrived
+    as someone else (or anonymously), and for one whose desktop is gone."""
+    if record is None or record.user_id != user_id or record.active_desktop is None:
+        return None
+    return record.active_desktop if record.active_desktop in desktop_ids else None
 
 
 @pure
@@ -142,16 +260,12 @@ class DesktopStore(MutableModel):
     def _read_unlocked(self) -> DesktopsDocument | None:
         """The stored document, or None when the file is absent, unreadable, or of another version (logged)."""
         raw = read_json_object(self._path())
-        if raw is None:
-            return None
-        if raw.get("version") != DESKTOPS_FILE_VERSION:
-            logger.warning("Ignored a desktops file of version {!r} at {}", raw.get("version"), self._path())
-            return None
-        try:
-            return DesktopsDocument.model_validate(raw)
-        except ValidationError as e:
-            logger.warning("Ignored an unreadable desktops file at {}: {}", self._path(), e.errors()[0]["msg"])
-            return None
+        return parse_versioned_document(
+            _without_retired_keys(raw) if raw is not None else None,
+            DesktopsDocument,
+            DESKTOPS_FILE_VERSION,
+            self._path(),
+        )
 
     def _write_unlocked(self, document: DesktopsDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))
@@ -199,38 +313,42 @@ class DesktopStore(MutableModel):
     ) -> Desktop:
         """Register a new desktop with its seeded shortcuts and pinned windows and no wallpaper; two names that
         shorten to one id conflict."""
-        desktop = Desktop(
-            id=slugify_desktop_name(name),
-            name=validated_desktop_name(name),
-            color=validated_desktop_color(color),
-            glyph=validated_desktop_glyph(glyph),
-            sharing=SharingMode.SHARED,
-            wallpaper=None,
-            shortcuts=tuple(shortcuts),
-            windows=tuple(windows),
+        return self.add_desktop(
+            Desktop(
+                id=slugify_desktop_name(name),
+                name=validated_desktop_name(name),
+                color=validated_desktop_color(color),
+                glyph=validated_desktop_glyph(glyph),
+                wallpaper=None,
+                shortcuts=tuple(shortcuts),
+                windows=tuple(windows),
+            )
         )
+
+    def add_desktop(self, desktop: Desktop) -> Desktop:
+        """Append a fully formed desktop (a created or a seeded one); an id already taken conflicts."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             existing_desktops = document.desktops if document is not None else ()
             existing = next((candidate for candidate in existing_desktops if candidate.id == desktop.id), None)
             if existing is not None:
                 raise DesktopConflictError(
-                    f"Desktop name {name!r} conflicts with existing desktop {existing.name!r} (both shorten to '{desktop.id}')"
+                    f"Desktop name {desktop.name!r} conflicts with existing desktop {existing.name!r} "
+                    f"(both shorten to '{desktop.id}')"
                 )
             self._write_unlocked(
                 DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(*existing_desktops, desktop))
             )
         return desktop
 
-    def update_settings(self, desktop_id: str, name: str, color: str, glyph: int, sharing: SharingMode) -> Desktop:
-        """Replace one desktop's display metadata and sharing mode; the id, wallpaper, shortcuts, and windows stay."""
+    def update_settings(self, desktop_id: str, name: str, color: str, glyph: int) -> Desktop:
+        """Replace one desktop's display metadata; the id, wallpaper, shortcuts, and windows stay."""
         return self._replace(
             desktop_id,
             lambda desktop: desktop.model_copy_update(
                 to_update(desktop.field_ref().name, validated_desktop_name(name)),
                 to_update(desktop.field_ref().color, validated_desktop_color(color)),
                 to_update(desktop.field_ref().glyph, validated_desktop_glyph(glyph)),
-                to_update(desktop.field_ref().sharing, sharing),
             ),
         )
 
