@@ -113,7 +113,7 @@ def forget(
     keep_monthly: int,
     env_overrides: Mapping[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    """`restic forget --group-by '' --keep-* ... --keep-tag <restore-marker>...` (does not prune).
+    """`restic forget --group-by '' --keep-within 1h --keep-* ... --keep-tag <restore-marker>...` (does not prune).
 
     Restic applies the keep-* policy once per *group*, and its default grouping
     (`host,paths`) puts every one of our snapshots in a group of its own: the
@@ -129,11 +129,18 @@ def forget(
     entry (the markers otherwise share the hour with the ordinary hourly backups
     and lose the keep-hourly bucket). The runner ages the old markers out
     separately so they stay bounded.
+
+    `--keep-within 1h` keeps every snapshot taken within an hour of the newest
+    one. Without it, any extra tick in the same hour (a restarted service, a
+    changed restic.env, "back up now") would thin away the hour's previous
+    snapshot -- the one a user may have just picked to restore.
     """
     args = [
         "forget",
         "--group-by",
         "",
+        "--keep-within",
+        "1h",
         "--keep-hourly",
         str(keep_hourly),
         "--keep-daily",
