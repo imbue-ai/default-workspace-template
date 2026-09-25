@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -228,12 +229,13 @@ def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
     if shared is not None:
         return HistoryBridge(False, shared, None, _drop_recorded_graft(repo, state))
 
-    state.parent.mkdir(parents=True, exist_ok=True)
-    fork, twin = _find_fork(repo, target, state.parent / "history-bridge.index")
+    with tempfile.TemporaryDirectory() as scratch:
+        fork, twin = _find_fork(repo, target, Path(scratch) / "index")
     parents = _git(
         repo, "rev-parse", f"{twin}^@", env={"GIT_NO_REPLACE_OBJECTS": "1"}
     ).split()
     _git(repo, "replace", "-f", "--graft", twin, *parents, fork)
+    state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(json.dumps({"twin": twin, "fork_point": fork}))
     bridged = _merge_base(repo, "HEAD", target, is_graft_seen=True)
     if bridged != fork:
