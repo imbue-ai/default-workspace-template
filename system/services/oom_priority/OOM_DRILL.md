@@ -19,8 +19,9 @@ base64-encoded:
 mngr exec <agent> "echo $(base64 < system/services/oom_priority/bin/oom_drill.py | tr -d '\n') | base64 -d | python3 - --bands 1000,900,800,600,300"
 ```
 
-Stop the browser and every chat first, so the drill's sleepers are what earlyoom
-has to choose from. Anything still running that outranks a sleeper is shed
+The drill sheds processes for real, so run it only on a disposable workspace,
+never a user's. Stop the browser and every chat first, so the drill's sleepers
+are what earlyoom has to choose from. Anything still running that outranks a sleeper is shed
 before it, for real, so keep the lowest band above what remains: the built-in
 services sit at 25-80, and on a Lima workspace the terminal's shell and the
 rootless Docker daemons sit at 200.
