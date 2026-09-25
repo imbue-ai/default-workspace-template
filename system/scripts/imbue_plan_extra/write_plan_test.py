@@ -57,12 +57,30 @@ def _make_run_dir(tmp_path: Path) -> Path:
     return run_dir
 
 
+_PROMPT_TEXT = "Route this build into nodes.\n"
+
+
+def _make_prompt(tmp_path: Path) -> Path:
+    """A flow's own prompt, the way a skill that carries its plan out supplies one."""
+    prompt = tmp_path / "planner-prompt.md"
+    prompt.write_text(_PROMPT_TEXT)
+    return prompt
+
+
 def test_foreground_writes_the_plan_without_the_recorder_header(tmp_path: Path) -> None:
     environment = _environment_with_fake_claude(tmp_path, f"echo '{_FAKE_PLAN}'")
     run_dir = _make_run_dir(tmp_path)
 
     result = _run_script(
-        ["--run-dir", str(run_dir), "build-app-parallel"], environment, ""
+        [
+            "--run-dir",
+            str(run_dir),
+            "--prompt",
+            str(_make_prompt(tmp_path)),
+            "build-app-parallel",
+        ],
+        environment,
+        "",
     )
 
     assert result.returncode == 0, result.stderr
@@ -79,7 +97,15 @@ def test_foreground_planner_failure_exits_1_and_keeps_its_output(
     run_dir = _make_run_dir(tmp_path)
 
     result = _run_script(
-        ["--run-dir", str(run_dir), "build-app-parallel"], environment, ""
+        [
+            "--run-dir",
+            str(run_dir),
+            "--prompt",
+            str(_make_prompt(tmp_path)),
+            "build-app-parallel",
+        ],
+        environment,
+        "",
     )
 
     assert result.returncode == 1
@@ -97,12 +123,29 @@ def test_foreground_refuses_a_missing_brief_or_an_existing_plan(
     empty_run_dir.mkdir()
     run_dir = _make_run_dir(tmp_path)
     (run_dir / "plan.md").write_text("an earlier plan\n")
+    prompt = _make_prompt(tmp_path)
 
     missing_brief = _run_script(
-        ["--run-dir", str(empty_run_dir), "build-app-parallel"], environment, ""
+        [
+            "--run-dir",
+            str(empty_run_dir),
+            "--prompt",
+            str(prompt),
+            "build-app-parallel",
+        ],
+        environment,
+        "",
     )
     existing_plan = _run_script(
-        ["--run-dir", str(run_dir), "build-app-parallel"], environment, ""
+        [
+            "--run-dir",
+            str(run_dir),
+            "--prompt",
+            str(_make_prompt(tmp_path)),
+            "build-app-parallel",
+        ],
+        environment,
+        "",
     )
 
     assert missing_brief.returncode == 2
@@ -129,3 +172,41 @@ def test_detached_recorder_still_records_a_headed_plan(tmp_path: Path) -> None:
     plan_text = plan_path.read_text()
     assert plan_text.startswith("> DO NOT USE THIS PLAN.")
     assert plan_text.rstrip().endswith(_FAKE_PLAN)
+
+
+def test_foreground_feeds_the_prompt_it_is_given_to_the_planner(tmp_path: Path) -> None:
+    # The fake claude echoes its own stdin, so the plan file shows what it was fed.
+    environment = _environment_with_fake_claude(tmp_path, 'cat "$PROMPT_ECHO_FILE"')
+    run_dir = _make_run_dir(tmp_path)
+    prompt = _make_prompt(tmp_path)
+    environment["PROMPT_ECHO_FILE"] = str(prompt)
+
+    result = _run_script(
+        ["--run-dir", str(run_dir), "--prompt", str(prompt), "build-app-parallel"],
+        environment,
+        "",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _PROMPT_TEXT in (run_dir / "plan.md").read_text()
+
+
+def test_foreground_refuses_a_prompt_that_does_not_exist(tmp_path: Path) -> None:
+    environment = _environment_with_fake_claude(tmp_path, f"printf '%s' '{_FAKE_PLAN}'")
+    run_dir = _make_run_dir(tmp_path)
+
+    result = _run_script(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--prompt",
+            str(tmp_path / "nope.md"),
+            "build-app-parallel",
+        ],
+        environment,
+        "",
+    )
+
+    assert result.returncode == 2
+    assert "no prompt" in result.stderr
+    assert not (run_dir / "plan.md").exists()

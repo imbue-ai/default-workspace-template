@@ -7,8 +7,15 @@
 #   <the brief>
 #   EOF
 #
-# <flow> names the skill being routed, and selects prompts/<flow>.md. Each flow
-# carries its own complete prompt; this script is what they share.
+# <flow> names the skill being routed. With no --prompt it also selects
+# prompts/<flow>.md. Each flow carries its own complete prompt; this script is
+# what they share -- the headless, read-only, budget-capped claude run and the
+# run directory around it, which is all that is generic.
+#
+# A flow whose plan is carried out keeps its prompt with the skill that carries
+# it out, and passes the path:
+#
+#   .../write_plan.sh --run-dir <dir> --prompt <path-to-prompt.md> <flow>
 #
 # Returns immediately: the first invocation prints the run directory it created,
 # re-execs itself detached, and exits 0. The calling agent never waits and never
@@ -65,17 +72,33 @@ set -euo pipefail
 
 readonly SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly WORK_DIR="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
-# --run-dir selects foreground mode (see the header). Parsed before the flow.
+# --run-dir selects foreground mode and --prompt supplies the flow's own
+# instructions (see the header). Both are parsed before the flow.
 FOREGROUND_RUN_DIR=""
-if [ "${1:-}" = "--run-dir" ]; then
-    FOREGROUND_RUN_DIR="${2:-}"
-    shift 2 || shift $#
-fi
+PROMPT_FILE=""
+while true; do
+    case "${1:-}" in
+        --run-dir)
+            FOREGROUND_RUN_DIR="${2:-}"
+            shift 2 || shift $#
+            ;;
+        --prompt)
+            # Resolved against the caller's cwd now, because the child cds to
+            # the work dir before it reads this.
+            PROMPT_FILE="$(cd "$(dirname "${2:-.}")" 2>/dev/null && pwd)/$(basename "${2:-}")"
+            shift 2 || shift $#
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 readonly FOREGROUND_RUN_DIR
-# $1 names the flow being routed and selects its prompt. Declared before the
-# paths below, which are built from it.
+readonly PROMPT_FILE
+# $1 names the flow being routed. It labels the run and, with no --prompt, also
+# selects prompts/<flow>.md. Declared before the paths below, built from it.
 readonly FLOW="${1:-}"
-readonly INSTRUCTIONS="${SELF_DIR}/prompts/${FLOW}.md"
+readonly INSTRUCTIONS="${PROMPT_FILE:-${SELF_DIR}/prompts/${FLOW}.md}"
 readonly PLANS_DIR="${WORK_DIR}/data/.imbue/plans/${FLOW}"
 
 # Ceiling on one plan run. A plan is a single read-and-write turn; anything past
@@ -142,9 +165,9 @@ if [ -z "${IMBUE_PLAN_EXTRA_RUN_DIR:-}" ] && [ -z "$FOREGROUND_RUN_DIR" ]; then
     # setsid is util-linux, so it is present in the workspace container but not on
     # a macOS checkout; nohup alone still detaches from the caller's stdio.
     if command -v setsid >/dev/null 2>&1; then
-        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" setsid nohup "$0" "$FLOW" </dev/null >>"${run_dir}/log" 2>&1 &
+        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" setsid nohup "$0" ${PROMPT_FILE:+--prompt "$PROMPT_FILE"} "$FLOW" </dev/null >>"${run_dir}/log" 2>&1 &
     else
-        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" nohup "$0" "$FLOW" </dev/null >>"${run_dir}/log" 2>&1 &
+        IMBUE_PLAN_EXTRA_RUN_DIR="$run_dir" nohup "$0" ${PROMPT_FILE:+--prompt "$PROMPT_FILE"} "$FLOW" </dev/null >>"${run_dir}/log" 2>&1 &
     fi
     disown || true
     exit 0

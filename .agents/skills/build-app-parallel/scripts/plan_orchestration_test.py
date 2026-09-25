@@ -82,12 +82,7 @@ def test_planner_prompt_examples_are_valid_plans() -> None:
     """The example plans the planner is shown must parse, so the prompt and the
     parser cannot drift apart."""
     prompt = (
-        Path(__file__).parents[4]
-        / "system"
-        / "scripts"
-        / "imbue_plan_extra"
-        / "prompts"
-        / "build-app-parallel.md"
+        Path(__file__).parent.parent / "references" / "planner-prompt.md"
     ).read_text()
     example_blocks = re.findall(
         r"<output>\n(capability = .*?)\n</output>", prompt, re.DOTALL
