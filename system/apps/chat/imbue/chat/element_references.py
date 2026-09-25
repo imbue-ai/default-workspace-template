@@ -54,10 +54,11 @@ def write_element_reference_file(envelope: ElementReferenceEnvelope, directory: 
     Raises ElementReferenceWriteError when the directory or the file cannot be written.
     """
     destination = directory / f"{uuid.uuid4().hex}.json"
+    # Created private before anything is written into it, so the reference is never readable more widely.
     try:
         directory.mkdir(parents=True, exist_ok=True)
+        destination.touch(mode=0o600)
         destination.write_text(json.dumps(envelope.model_dump(), indent=2) + "\n")
-        destination.chmod(0o600)
     except OSError as e:
         raise ElementReferenceWriteError(f"could not write the reference file {destination}") from e
     return destination
