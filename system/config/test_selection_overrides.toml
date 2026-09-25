@@ -117,8 +117,8 @@ paths = [
     "system/scripts/agent_tk_standalone.sh",
     "system/scripts/imbue_plan_extra/**",
 ]
-suites = ["system/scripts/agy_shim", ".pi/extensions", "system/scripts/agent_tk_standalone_check_test.py"]
-note = "agent hooks, run by the agy shim's and the pi extensions' tests"
+suites = ["system/scripts/agy_shim"]
+note = "agent hooks, run by the agy shim's tests; the always-run wiring guard checks each one's wiring"
 
 [[consumer]]
 paths = [".agents/shared/scripts/preview_wrapper_server.py"]
