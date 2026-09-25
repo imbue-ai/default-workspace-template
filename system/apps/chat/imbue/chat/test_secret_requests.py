@@ -12,6 +12,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import httpx
 from werkzeug.serving import make_server
@@ -36,7 +37,7 @@ _AGENT_ID = "agent-00000000000000000000000000000031"
 
 
 @contextmanager
-def _running_chat_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Iterator[tuple[str, SecretRequestStore]]:
+def _running_chat_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Iterator[str]:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     seed_agent_state(manager, _AGENT_ID, name="chat-1")
     manager.note_agent_list_known()
@@ -49,7 +50,7 @@ def _running_chat_app(tmp_path: Path, messenger: RecordingMngrMessenger) -> Iter
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", store
+        yield f"http://127.0.0.1:{server.server_port}"
     finally:
         server.shutdown()
         thread.join(timeout=10)
@@ -72,24 +73,32 @@ def _run_request_script(
     )
 
 
+def _file_and_submit(
+    tmp_path: Path, base_url: str, value: str
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any], dict[str, Any]]:
+    """File a request for ``svc``'s ``SVC_TOKEN`` through the script and submit ``value`` as the card would; returns
+    the script's run, the request it printed, and the submit's answer."""
+    completed = _run_request_script(
+        tmp_path, base_url, "--file", "svc", "--var", "SVC_TOKEN", "--rationale", "to call the widget API"
+    )
+    assert completed.returncode == 0, completed.stderr
+    filed = json.loads(completed.stdout)
+    response = httpx.post(
+        f"{base_url}/api/secret-requests/{filed['request_id']}/submit",
+        json={"values": {"SVC_TOKEN": value}},
+        timeout=30,
+    )
+    assert response.status_code == 200, response.text
+    return completed, filed, response.json()
+
+
 def test_a_request_filed_by_the_script_is_answered_into_the_file_and_the_chat(tmp_path: Path) -> None:
     messenger = RecordingMngrMessenger()
     value = "sk-live-" + "7" * 32
-    with _running_chat_app(tmp_path, messenger) as (base_url, store):
-        completed = _run_request_script(
-            tmp_path, base_url, "--file", "svc", "--var", "SVC_TOKEN", "--rationale", "to call the widget API"
-        )
-        assert completed.returncode == 0, completed.stderr
-        filed = json.loads(completed.stdout)
-        assert filed["file"] == "svc" and filed["variables"] == ["SVC_TOKEN"] and filed["status"] == "pending"
-
-        response = httpx.post(
-            f"{base_url}/api/secret-requests/{filed['request_id']}/submit",
-            json={"values": {"SVC_TOKEN": value}},
-            timeout=30,
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["is_notice_delivered"] is True
+    with _running_chat_app(tmp_path, messenger) as base_url:
+        completed, filed, submitted = _file_and_submit(tmp_path, base_url, value)
+    assert filed["file"] == "svc" and filed["variables"] == ["SVC_TOKEN"] and filed["status"] == "pending"
+    assert submitted["is_notice_delivered"] is True
 
     env_file = tmp_path / "data" / ".secrets" / "svc.env"
     assert env_file.read_text() == f"SVC_TOKEN='{value}'\n"
@@ -107,20 +116,9 @@ def test_a_request_filed_by_the_script_is_answered_into_the_file_and_the_chat(tm
 
 def test_a_notice_the_agent_refuses_keeps_the_file_and_answers_undelivered(tmp_path: Path) -> None:
     messenger = RecordingMngrMessenger(succeeds=False)
-    with _running_chat_app(tmp_path, messenger) as (base_url, _):
-        completed = _run_request_script(
-            tmp_path, base_url, "--file", "svc", "--var", "SVC_TOKEN", "--rationale", "to call the widget API"
-        )
-        assert completed.returncode == 0, completed.stderr
-        filed = json.loads(completed.stdout)
-        response = httpx.post(
-            f"{base_url}/api/secret-requests/{filed['request_id']}/submit",
-            json={"values": {"SVC_TOKEN": "v"}},
-            timeout=30,
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["is_notice_delivered"] is False
-
+    with _running_chat_app(tmp_path, messenger) as base_url:
+        _, _, submitted = _file_and_submit(tmp_path, base_url, "v")
+    assert submitted["is_notice_delivered"] is False
     assert len(messenger.sent) == 1
     assert (tmp_path / "data" / ".secrets" / "svc.env").read_text() == "SVC_TOKEN='v'\n"
 
@@ -138,7 +136,7 @@ def test_the_script_reports_what_the_chat_app_refused(tmp_path: Path) -> None:
     """A filing the chat app rejects (here: for a chat it does not know) has to reach the
     agent as the chat app's own reason, not as a bare non-zero exit."""
     messenger = RecordingMngrMessenger()
-    with _running_chat_app(tmp_path, messenger) as (base_url, _):
+    with _running_chat_app(tmp_path, messenger) as base_url:
         completed = _run_request_script(
             tmp_path, base_url, "--file", "svc", "--var", "SVC_TOKEN", "--rationale", "why", chat_id="agent-unknown"
         )
