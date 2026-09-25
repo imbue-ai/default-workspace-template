@@ -117,9 +117,9 @@ lead, merge exactly one level with `--no-ff`, destroy a merged sibling and stop
 a stuck one, and await it with `--timeout 60m`.
 
 - Each sibling's task file carries the same `operation` and `type` as yours plus
-  its boundary in prose; when your run carries a scope file, give the sibling its
-  own `scope_file` path beside its task file and your `diff_base`, since Step 1
-  fails loudly without them. Say in the body that it runs only its scope's tests and
+  its boundary in prose, and your `diff_base`; when your run carries a scope
+  file, also give the sibling its own `scope_file` path beside its task file,
+  since Step 1 fails loudly without them. Say in the body that it runs only its scope's tests and
   **skips the "Review gates" section below**, because you run that verification
   once on the merged result, and that a small out-of-scope edit is allowed but
   must be listed in its `done` report.
