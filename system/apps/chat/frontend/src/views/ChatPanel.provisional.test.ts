@@ -171,6 +171,18 @@ function creating(): void {
   };
 }
 
+/** A chat with no seed that waits for its first send (an intake that could not launch it at once). */
+function awaiting(accountId: string): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 2",
+    account_id: accountId,
+    phase: "awaiting_first_send",
+    error: null,
+    is_seeded: false,
+  };
+}
+
 /** The list the page's bubbles sit in: the child of the scroll area's content, by its class. */
 function bubbleListOf(tree: unknown): AnyVnode | undefined {
   const wrapper = findByClass(tree, "message-list-wrapper");
@@ -187,6 +199,7 @@ describe("ChatPanel over a provisional chat", () => {
     mocks.launchChat.mockImplementation(async () => ({}));
     mocks.chat = undefined;
     mocks.outgoingBubbles = [];
+    mocks.fetchEvents.mockClear();
   });
 
   it("shows a chat being created as an empty conversation, with no placeholder text", () => {
@@ -225,6 +238,20 @@ describe("ChatPanel over a provisional chat", () => {
 
     expect(bubbleListOf(starting)?.children).toEqual([bubble]);
     expect(bubbleListOf(started)?.children).toEqual([bubble]);
+  });
+
+  it("shows an unseeded chat awaiting its first send as an empty conversation with no placeholder, not a failure", () => {
+    awaiting("");
+    const render = mountPanel();
+
+    const tree = render();
+
+    expect(findByClass(tree, "message-list-awaiting")).toBeTruthy();
+    expect(findByClass(tree, "message-list-create-failed")).toBeUndefined();
+    expect(findByClass(tree, "message-list-creating")).toBeUndefined();
+    expect(renderedText(tree).trim()).toBe("");
+    // Nothing to read: the chat has no seed and no agent.
+    expect(mocks.fetchEvents).not.toHaveBeenCalled();
   });
 
   it("shows a failed create's reason and retries it on the record's account", () => {

@@ -1,0 +1,1 @@
+The manage-scheduled-tasks skill now says that a boot whose timezone fetch fails keeps the last applied zone (from `data/.state/user_timezone`), and that a timezone set by hand should also be written there so later boots keep it.

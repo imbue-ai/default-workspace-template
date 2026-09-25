@@ -204,7 +204,7 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
-version = "2.1.269"
+version = "2.1.280"
 # Do not provision a per-agent Claude config dir. A claude is bound to a
 # provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
 # account's folder under ~/.minds/accounts (the chat app's own creates, and the
@@ -314,7 +314,10 @@ check_installation = false
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
 #   so they never appear in the transcript.
-config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }
+# - apps = false: disable ChatGPT account app/connector sync -- it's an OAuth side channel
+#   to third-party services that bypasses the latchkey gateway (codex's counterpart of
+#   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
+config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. Codex refuses to
 # re-add a cached Git marketplace if its source declaration has disappeared.
@@ -481,8 +484,10 @@ ssh_bind_address = "127.0.0.1"
 # per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
 # slices run under runsc from the bake).
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
-# persist or ride a backup.
-default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
+# persist or ride a backup. It says `exec` because Docker mounts a bare
+# `--tmpfs` noexec, and a stub executable a test writes under /tmp and puts on
+# PATH is then skipped, so the real binary it stands in for runs instead.
+default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
 
 [providers.lima]
 # is_enabled=false (mirrors [providers.docker]) is load-bearing: the lima backend

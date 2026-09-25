@@ -88,6 +88,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 cell,
                 rect: cellRect(cell, metrics),
                 app: appByName(state, shortcut.target.app),
+                isAppsLoaded: state.isAppsLoaded,
                 isSelected: attrs.selectedShortcutKey === key,
                 isLifted: liftedKey === key,
                 isRunOnClick: state.modes.isTouch,
@@ -128,7 +129,6 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   isTouch: state.modes.isTouch,
                   isMenuOpen: attrs.openMenuWindowId === window.id,
                   isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
-                  isPlacedHere: store.isPlacedHere(window.id),
                   onStartApp:
                     app !== undefined && !app.is_running && store.canStopApp(app)
                       ? () => void store.setAppLifecycle(app.name, "start")

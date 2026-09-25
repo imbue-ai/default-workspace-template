@@ -29,5 +29,5 @@ def desktop_answer(
     }
 
 
-def window_json(window_id: str, app: str, path: str, title: str = "", is_settling: bool = False) -> dict[str, Any]:
-    return {"id": window_id, "app": app, "path": path, "title": title, "opened_at": "2026-09-04T00:00:00+00:00", "is_settling": is_settling}
+def window_json(window_id: str, app: str, path: str, title: str = "") -> dict[str, Any]:
+    return {"id": window_id, "app": app, "path": path, "title": title, "opened_at": "2026-09-04T00:00:00+00:00"}
