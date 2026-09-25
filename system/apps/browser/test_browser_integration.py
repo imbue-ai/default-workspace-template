@@ -745,8 +745,8 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
 
                 def paste(text: str) -> int:
                     with runner.application.test_request_context():
-                        response = mediastream.clipboard_paste(browser.browser_id, browser, text.encode(), "text/plain")
-                    return response.status_code
+                        returned = mediastream.clipboard_paste(browser.browser_id, browser, text.encode(), "text/plain")
+                        return runner.application.make_response(returned).status_code
 
                 def viewer_sink(_message: str) -> None:
                     """The paste route refuses without a registered viewer; this one ignores copy-outs."""
