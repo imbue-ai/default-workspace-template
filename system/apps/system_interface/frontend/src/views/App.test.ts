@@ -331,6 +331,20 @@ describe("the element menu", () => {
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
+  it("stays closed for a right-click on a window's shield, which is the press that closes the launcher", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    const shield = focusedShield() as HTMLElement;
+    expect(shield).not.toBeNull();
+    shield.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+    shield.dispatchEvent(event);
+    m.redraw.sync();
+    expect(store.isLauncherOpen()).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.body.querySelector(".element-menu")).toBeNull();
+  });
+
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
     const buddy = appRecord("buddy", {
       pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },

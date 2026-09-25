@@ -134,12 +134,14 @@ export function Window(): m.Component<WindowAttrs> {
                   isStopped ? stoppedPlaceholder(app, attrs.onStartApp) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
-                  // the document.
+                  // the document. A right-click here is that press and nothing more: handled, so the
+                  // desktop's element menu yields to it (element-reference-menu plan section 12).
                   attrs.isShielded
                     ? m("div", {
                         "data-window-shield": "",
                         class: "absolute inset-0 cursor-default",
                         onpointerdown: (event: PointerEvent) => event.preventDefault(),
+                        oncontextmenu: (event: MouseEvent) => event.preventDefault(),
                       })
                     : null,
                 ],
