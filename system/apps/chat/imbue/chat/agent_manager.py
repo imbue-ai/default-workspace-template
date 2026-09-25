@@ -1024,7 +1024,7 @@ class AgentManager:
             autocompactor
             if autocompactor is not None
             else ChatAutoCompactor.build(
-                list_compactable_chat_agent_names=manager.get_compactable_chat_agent_names,
+                list_running_chat_agent_names=manager.get_running_chat_agent_names,
                 mngr_binary=mngr_binary,
             )
         )
@@ -1445,12 +1445,11 @@ class AgentManager:
                 return False
             return bool(self._pending_permission_ids_by_agent.get(chat.active_agent_id))
 
-    def get_compactable_chat_agent_names(self) -> list[str]:
-        """Names of chat agents that currently have a running agent process on a harness that can compact.
+    def get_running_chat_agent_names(self) -> list[str]:
+        """Names of chat agents that currently have a running agent process.
 
         Excludes workers (``agent_created=true``), the primary services agent
-        (``is_primary=true``), dead/stopped agent processes, and agents whose
-        harness does not declare ``supports_compaction``.
+        (``is_primary=true``), and dead/stopped agent processes.
         """
         with self._lock:
             return [
@@ -1459,7 +1458,6 @@ class AgentManager:
                 if agent.labels.get("agent_created") != "true"
                 and agent.labels.get("is_primary") != "true"
                 and not is_lifecycle_dead(agent.state)
-                and get_harness_spec(agent.harness).supports_compaction
             ]
 
     # Chat-level: switches (moving a chat to another harness or account; ``chat_handoffs.py`` and

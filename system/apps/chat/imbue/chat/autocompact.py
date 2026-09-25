@@ -20,11 +20,11 @@ class ChatAutoCompactor:
     """Schedules periodic context compaction checks for active chat agents.
 
     Runs `mngr autocompact run <agent name>` once every interval for each
-    running chat agent whose harness can compact. All collaborators are injectable for
+    chat agent that is currently running. All collaborators are injectable for
     unit testing without subprocesses or real agents.
     """
 
-    _list_compactable_chat_agent_names: Callable[[], Sequence[str]]
+    _list_running_chat_agent_names: Callable[[], Sequence[str]]
     _runner: Callable[..., FinishedProcess]
     _mngr_binary: str
     _interval_seconds: float
@@ -36,7 +36,7 @@ class ChatAutoCompactor:
     @classmethod
     def build(
         cls,
-        list_compactable_chat_agent_names: Callable[[], Sequence[str]],
+        list_running_chat_agent_names: Callable[[], Sequence[str]],
         runner: Callable[..., FinishedProcess] = run_local_command_modern_version,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         interval_seconds: float = _DEFAULT_SWEEP_INTERVAL_SECONDS,
@@ -44,7 +44,7 @@ class ChatAutoCompactor:
         max_concurrency: int = _DEFAULT_CHECK_CONCURRENCY,
     ) -> "ChatAutoCompactor":
         instance = cls.__new__(cls)
-        instance._list_compactable_chat_agent_names = list_compactable_chat_agent_names
+        instance._list_running_chat_agent_names = list_running_chat_agent_names
         instance._runner = runner
         instance._mngr_binary = mngr_binary
         instance._interval_seconds = interval_seconds
@@ -75,10 +75,10 @@ class ChatAutoCompactor:
             self._thread = None
 
     def sweep(self) -> list[FinishedProcess | None]:
-        """Perform one pass of autocompact checks across all compactable chat agents."""
+        """Perform one pass of autocompact checks across all running chat agents."""
         if self._stop_event.is_set():
             return []
-        names = self._list_compactable_chat_agent_names()
+        names = self._list_running_chat_agent_names()
         if not names:
             return []
 
@@ -89,7 +89,9 @@ class ChatAutoCompactor:
                     results.append(result)
         return results
 
-    def _check_agent_for_sweep(self, agent_name: str) -> tuple[bool, FinishedProcess | None]:
+    def _check_agent_for_sweep(
+        self, agent_name: str
+    ) -> tuple[bool, FinishedProcess | None]:
         if self._stop_event.is_set():
             return (False, None)
         return (True, self.check_agent(agent_name))
@@ -112,7 +114,9 @@ class ChatAutoCompactor:
             return result
         if result.returncode == 1:
             # `mngr autocompact run` returns exit code 1 if the agent does not support compaction.
-            logger.debug("Failed to run autocompact for {}: {}", agent_name, result.stderr)
+            logger.debug(
+                "Failed to run autocompact for {}: {}", agent_name, result.stderr
+            )
             return None
         logger.warning(
             "Failed to run autocompact for {}: return code {}, stderr: {}",
