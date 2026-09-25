@@ -6,7 +6,12 @@ import type {
   AssistantMessageEvent,
   UserMessageEvent,
 } from "../models/Response";
-import { buildConversationRows, isSubagentRunning } from "./conversation-rows";
+import {
+  buildConversationRows,
+  isSubagentRunning,
+  ESTIMATED_ASSISTANT_HEIGHT_PX,
+  ESTIMATED_CHIP_ROW_HEIGHT_PX,
+} from "./conversation-rows";
 
 // --- Event builders (mirroring turn-grouping.test.ts) ---
 
@@ -71,6 +76,44 @@ function result(callId: string, output: string): ToolResultEvent {
     // decoration lines, so the stamp carries them verbatim.
     tk_stamp: output,
     is_error: false,
+  };
+}
+
+/** A plain (non-tk) tool call -- the kind that renders as a chip. */
+function toolMsg(ts: string, callId: string, note: string): AssistantMessageEvent {
+  return {
+    timestamp: ts,
+    type: "assistant_message",
+    event_id: `a-${callId}`,
+    source: "test",
+    model: "m",
+    text: "",
+    tool_calls: [{ tool_call_id: callId, tool_name: "Bash", input_chars: 24, action_note: note }],
+    stop_reason: "tool_use",
+    usage: null,
+    is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
+
+/** A delegation call, which renders as its own sub-agent card rather than a chip. */
+function agentMsg(ts: string, callId: string, description: string): AssistantMessageEvent {
+  return {
+    timestamp: ts,
+    type: "assistant_message",
+    event_id: `a-${callId}`,
+    source: "test",
+    model: "m",
+    text: "",
+    tool_calls: [{ tool_call_id: callId, tool_name: "Agent", input_chars: 24, description }],
+    stop_reason: "tool_use",
+    usage: null,
+    is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -139,6 +182,85 @@ describe("buildConversationRows", () => {
       true,
     );
     expect(withStep.map((r) => r.key)).toEqual(["u-t1", "progress-section-u-t1", "n1", "progress-section-n1"]);
+  });
+
+  // Back-to-back tool calls arrive as separate events; on separate rows each
+  // would render as a lone chip a full message gap below the last.
+  it("merges a run of consecutive tool-call events into one chip row", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      toolMsg("t2", "c1", "Show the current date"),
+      toolMsg("t3", "c2", "Check the app is running"),
+      assistantText("t4", "that is it", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    // One row for both calls, standing where the first of them does, and the
+    // wrap-up reply below it.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4"]);
+    const chipRow = rows.find((r) => r.key === "a-c1")!;
+    expect(chipRow.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
+    expect(chipRow.anchorEventId).toBe("a-c1");
+  });
+
+  // The line of intent and the calls that carry it out are one message, so the
+  // chips sit tucked under the sentence rather than a message gap below it.
+  it("tucks a chip run onto the prose that introduces it", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      assistantText("t2", "Checking how much disk and memory this workspace is using."),
+      toolMsg("t3", "c1", "Check disk usage"),
+      toolMsg("t4", "c2", "Check disk and memory"),
+      assistantText("t5", "plenty of room", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    // The prose and both calls are one row, standing where the prose does; the
+    // result stays its own message below.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t5"]);
+    expect(rows.find((r) => r.key === "a-t2")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
+  });
+
+  // Only chip-only events accrete onto a run: prose is a message in its own
+  // right, so it ends the run in progress and heads the next one.
+  it("ends a chip run at prose, which then heads a run of its own", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      toolMsg("t2", "c1", "Show the current date"),
+      toolMsg("t3", "c2", "Check the app is running"),
+      assistantText("t4", "halfway there"),
+      toolMsg("t5", "c3", "Read the log"),
+      assistantText("t6", "done", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    // c1+c2 on one chip row, then the mid-turn prose heading a row that takes
+    // c3 with it, then the wrap-up reply.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4", "a-t6"]);
+    expect(rows.find((r) => r.key === "a-c1")!.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
+    expect(rows.find((r) => r.key === "a-t4")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
+  });
+
+  // A sub-agent is a whole conversation rather than an action, so its card is
+  // not a chip: it cannot join the chip row above it, and ends that run.
+  it("ends a chip run at a sub-agent card", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "go"),
+      toolMsg("t2", "c1", "Show the current date"),
+      agentMsg("t3", "c2", "Explore the codebase"),
+      toolMsg("t4", "c3", "Read the log"),
+      assistantText("t5", "done", "end_turn"),
+    ];
+
+    const rows = buildConversationRows("agent-1", events, true);
+
+    // The card does not fold into c1's chip row; it heads its own, which c3
+    // then joins the way it would inside a single event.
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-c2", "a-t5"]);
+    expect(rows.find((r) => r.key === "a-c2")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
   });
 
   // A chat that moved to another agent shows the seam as its own row, the handoff node keyed by

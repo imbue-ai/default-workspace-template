@@ -7,8 +7,9 @@ files: the model tracking (re-deriving an agent's choice whenever its live
 the one shared primitive that already exists --
 :class:`~imbue.chat.watcher_common.WakeOnChangeHandler` plus
 ``POLL_INTERVAL_SECONDS`` -- into a small object that watches a set of paths and
-invokes ``on_change`` on every real filesystem event (with the poll interval as a
-safety net for missed events).
+invokes ``on_change`` on real filesystem events, batched to at most one call per
+``min_cycle_interval_seconds`` (with the poll interval as a safety net for missed
+events).
 
 Per-path rule: an existing directory is watched recursively (so codex's rotating
 rollout files under a stable sessions root all wake the loop without rescheduling);
@@ -21,6 +22,7 @@ watcher's lazy observer start.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -36,7 +38,8 @@ class PathWatcher:
     """Watches a fixed set of paths and calls ``on_change`` when any of them change.
 
     ``on_change`` is invoked once at start (so the initial value is derived) and
-    then on every wake -- a watchdog event or the poll-interval timeout. It must be
+    then on every wake -- a watchdog event or the poll-interval timeout -- with wakes
+    closer together than ``min_cycle_interval_seconds`` batched into one call. It must be
     cheap and idempotent: callers rely on their own no-op guard to suppress
     redundant work, exactly as the activity recompute does.
     """
@@ -53,12 +56,19 @@ class PathWatcher:
     _observer: Any
     _watched_dirs: set[str]
     _thread: threading.Thread | None
+    _min_cycle_interval_seconds: float
 
     @classmethod
-    def build(cls, paths: tuple[Path, ...], on_change: Callable[[], None]) -> "PathWatcher":
+    def build(
+        cls, paths: tuple[Path, ...], on_change: Callable[[], None], min_cycle_interval_seconds: float
+    ) -> "PathWatcher":
+        """``min_cycle_interval_seconds`` batches wakes: a wake that comes sooner than that
+        after the previous ``on_change`` started waits out the rest of it, so a burst of
+        writes costs one call instead of one per write."""
         self = cls.__new__(cls)
         self._paths = paths
         self._on_change = on_change
+        self._min_cycle_interval_seconds = min_cycle_interval_seconds
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
         self._observer_lock = threading.Lock()
@@ -96,14 +106,20 @@ class PathWatcher:
 
     def _run(self) -> None:
         self._ensure_observers()
+        cycle_started_at = time.monotonic()
         self._on_change()
         while not self._stop_event.is_set():
             self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
+            remaining = cycle_started_at + self._min_cycle_interval_seconds - time.monotonic()
+            if remaining > 0:
+                self._stop_event.wait(timeout=remaining)
+            # Cleared after the batching wait, so the wakes that land during it are absorbed.
             self._wake_event.clear()
             if self._stop_event.is_set():
                 break
             # Retry scheduling any dir that has since appeared, then re-derive.
             self._ensure_observers()
+            cycle_started_at = time.monotonic()
             self._on_change()
 
     def _ensure_observers(self) -> None:

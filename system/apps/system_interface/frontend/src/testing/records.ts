@@ -24,9 +24,30 @@ function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-/** A launch path ``new`` at ``/new`` with no params. */
+/** An app ranked first whose free-text rows are GET launch paths, each at ``/<id>`` taking the typed text as
+ *  ``message``: what the page-path bound applies to, unlike the chat-like app's POST rows. */
+export function getMethodFreeTextAppRecord(name: string, launchIds: readonly string[]): AppRecord {
+  return appRecord(name, {
+    launcher_rank: 1,
+    launch_paths: launchIds.map((id) =>
+      launchPathRecord({ id, path: `/${id}`, params: ["message"], text_param: "message" }),
+    ),
+  });
+}
+
+/** A GET launch path ``new`` at ``/new`` with no params and no presets. */
 export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPath {
-  return { id: "new", label: "New", path: "/new", params: [], text_param: null, ...overrides };
+  return {
+    id: "new",
+    label: "New",
+    path: "/new",
+    method: "GET",
+    params: [],
+    presets: {},
+    text_param: null,
+    draft_param: null,
+    ...overrides,
+  };
 }
 
 /** A running, non-critical, supervised app with one ``new`` launch path at ``/new``. */
@@ -49,35 +70,49 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
   };
 }
 
-/** An app shaped like the chat's manifest: ranked, an independent avatar pin at ``/``, a ``root`` launch path at
- *  the pin's path taking a ``draft``, and ``new`` and ``send`` launch paths taking ``message`` as typed text. */
+/** An app shaped like the chat's manifest: ranked, an independent avatar pin at ``/``, a GET ``root`` launch path at
+ *  the pin's path, POST ``new`` and ``send`` launch paths at its intake route taking ``message`` as typed text, and
+ *  a POST ``draft`` launch path there taking ``message`` as drafted text. */
 export function chatLikeAppRecord(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
   const displayName = capitalized(name);
   return appRecord(name, {
     launcher_rank: 10,
     pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
     launch_paths: [
-      launchPathRecord({ id: "root", label: displayName, path: "/", params: ["draft"] }),
+      launchPathRecord({ id: "root", label: displayName, path: "/" }),
       launchPathRecord({
         id: "new",
         label: `New ${displayName}`,
-        path: "/new",
+        path: "/api/chats/intake",
+        method: "POST",
         params: ["message"],
+        presets: { target: "new_chat" },
         text_param: "message",
       }),
       launchPathRecord({
         id: "send",
         label: `Send to ${name}...`,
-        path: "/send",
+        path: "/api/chats/intake",
+        method: "POST",
         params: ["message"],
+        presets: { target: "chat_selector" },
         text_param: "message",
+      }),
+      launchPathRecord({
+        id: "draft",
+        label: `Draft into ${name}`,
+        path: "/api/chats/intake",
+        method: "POST",
+        params: ["message"],
+        presets: { target: "current_chat", is_draft: "true" },
+        draft_param: "message",
       }),
     ],
     ...overrides,
   });
 }
 
-/** A settled window of ``app`` at ``path`` with an empty title. */
+/** A window of ``app`` at ``path`` with an empty title. */
 export function windowRecord(
   id: string,
   app: string,
@@ -90,7 +125,6 @@ export function windowRecord(
     path,
     title: "",
     opened_at: "2026-09-19T00:00:00Z",
-    is_settling: false,
     is_pinned: false,
     scope: "linked",
     ...overrides,

@@ -27,6 +27,7 @@ from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
+from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import SaveId
 from imbue.system_interface.shell.primitives import ShortcutTargetKind
 from imbue.system_interface.shell.primitives import UserId
@@ -192,8 +193,11 @@ def launch_path_wire_json(launch_path: RegistryLaunchPath) -> dict[str, Any]:
         "id": str(launch_path.id),
         "label": str(launch_path.label),
         "path": str(launch_path.path),
+        "method": launch_path.method.value,
         "params": [str(param) for param in launch_path.params],
+        "presets": {str(name): value for name, value in launch_path.presets.items()},
         "text_param": str(launch_path.text_param) if launch_path.text_param is not None else None,
+        "draft_param": str(launch_path.draft_param) if launch_path.draft_param is not None else None,
     }
 
 
@@ -259,7 +263,6 @@ class Window(FrozenModel):
     path: WindowPath = Field(description="The path under the app origin the page is at (with its query string)")
     title: WindowTitle = Field(description="What the page last reported; empty means the app's display name")
     opened_at: AwareDatetime = Field(description="When the window was opened")
-    is_settling: bool = Field(description="True from an open at a launch path until the page's first location report")
     is_pinned: bool = Field(
         default=False, description="Whether this is the app's pinned window on the desktop: permanent, never closed"
     )
@@ -321,14 +324,47 @@ class WindowOpenRequest(FrozenModel):
     """The body of ``POST /api/desktops/<id>/windows`` (desktop contracts.md section 5.3)."""
 
     app: AppName = Field(description="The app to open a page of")
-    path: WindowPath = Field(description="The path under the app origin, with a query string for a launch path")
+    path: WindowPath = Field(description="The path under the app origin the page is at, query string included")
     client_id: ClientId = Field(description="The requesting client, whose placement is written at once")
     if_present: IfPresent = Field(
         default=IfPresent.FOCUS, description="Focus a window already at the path, or open another"
     )
-    launch: LaunchPathId | None = Field(
-        default=None, description="The launch path the path was built from, when it was"
+
+
+class LaunchTarget(FrozenModel):
+    """Where a launch's page goes (post-launch-paths plan section 3.3)."""
+
+    kind: LaunchTargetKind = Field(description="A new window, a window already at the path, or a named window")
+    window_id: WindowId | None = Field(
+        default=None, description="The window this client points at the page; required for the window kind"
     )
+
+    @model_validator(mode="after")
+    def _check_window_named_for_the_window_kind(self) -> "LaunchTarget":
+        if (self.kind is LaunchTargetKind.WINDOW) != (self.window_id is not None):
+            raise InvalidShellValueError("a launch target names a window exactly when its kind is 'window'")
+        return self
+
+
+class LaunchRequest(FrozenModel):
+    """The body of ``POST /api/desktops/<id>/launch`` (post-launch-paths plan section 5.3)."""
+
+    app: AppName = Field(description="The app whose launch path runs")
+    launch: LaunchPathId = Field(description="The launch path's id (the synthesized ``open`` included)")
+    params: dict[str, str] = Field(default_factory=dict, description="The caller's values for the declared params")
+    client_id: ClientId = Field(description="The requesting client, whose placement or page follows the launch")
+    target: LaunchTarget = Field(description="Where the page the launch answers goes")
+    minimized: bool = Field(
+        default=False, description="Whether a window this launch opens is placed minimized for the client"
+    )
+
+
+class LaunchOutcome(FrozenModel):
+    """What a launch came to: the window showing the page, the page's path, and whether the window was opened."""
+
+    window: Window = Field(description="The window opened, focused, or navigated, as the requesting client sees it")
+    path: WindowPath = Field(description="The page path the launch resolved to")
+    is_new: bool = Field(description="True when a window was opened for the page")
 
 
 class StoredWindowPath(FrozenModel):
