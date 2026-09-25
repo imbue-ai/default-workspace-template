@@ -38,6 +38,7 @@ import type {
   EntryMode,
   EntryPresentation,
   FloatingPosition,
+  Frame,
   GridCell,
   IfPresent,
   Inventory,
@@ -768,14 +769,37 @@ export class DesktopStore {
     }
   }
 
+  /** Move a shortcut to a cell, showing it there at once and putting it back if the shell refuses:
+   *  a drop that waited on the round trip would draw the icon in the cell it came from meanwhile.
+   *
+   *  Both writes move the ONE shortcut in whatever the desktop is by then, rather than restoring a
+   *  snapshot taken before the request: a later drop, or a broadcast that landed in between, is
+   *  someone else's edit and is not this refusal's to undo. */
   async moveShortcut(app: string, launch: string, cell: GridCell): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
+    const from = desktop.shortcuts.find(
+      (shortcut) => shortcut.target.app === app && shortcut.target.launch === launch,
+    )?.cell;
+    this.withShortcutAt(app, launch, cell);
     try {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
+      if (from !== undefined) this.withShortcutAt(app, launch, from);
       this.deps.notify(`Could not move the shortcut: ${(error as Error).message}`);
     }
+  }
+
+  /** The active desktop with one shortcut's cell rewritten, taken as the desktop of record. */
+  private withShortcutAt(app: string, launch: string, cell: GridCell): void {
+    const desktop = activeDesktop(this.state);
+    if (desktop === null) return;
+    this.takeDesktop({
+      ...desktop,
+      shortcuts: desktop.shortcuts.map((shortcut) =>
+        shortcut.target.app === app && shortcut.target.launch === launch ? { ...shortcut, cell } : shortcut,
+      ),
+    });
   }
 
   async removeShortcut(app: string, launch: string): Promise<void> {
@@ -996,6 +1020,13 @@ export class DesktopStore {
     this.dispatch({ type: "window_state_set", windowId, state });
   }
 
+  /** Place a window at a fraction of the backdrop -- the size menu's halves and quarters, which no
+   *  window state stands for. Normal, shown and raised, as a drag that ends away from an edge leaves it. */
+  setWindowFrame(windowId: string, frame: Frame): void {
+    if (this.state.modes.isCompact) return;
+    this.dispatch({ type: "window_frame_set", windowId, frame });
+  }
+
   toggleMaximized(windowId: string): void {
     if (this.state.modes.isCompact) return;
     const placement = placementOf(this.state.layout, windowId);
@@ -1194,9 +1225,12 @@ export class DesktopStore {
     this.updateShortcutDrag(pointer);
     const settled = this.gesture;
     this.gesture = null;
+    // The move goes in BEFORE the redraw: with the gesture gone and the shortcut still recorded
+    // in the cell it was lifted from, a redraw here draws the icon back where it started.
+    if (settled !== null && settled.kind === "shortcut") {
+      void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
+    }
     this.notifyListeners();
-    if (settled === null || settled.kind !== "shortcut") return;
-    void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
   }
 
   /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. Nothing moves
