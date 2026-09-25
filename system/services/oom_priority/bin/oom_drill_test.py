@@ -165,6 +165,36 @@ def test_a_kill_is_judged_against_the_snapshots_from_before_earlyoom_chose_it() 
     assert oom_drill.judge_kill(60, ranking, tolerance_kib=1024).verdict == "right"
 
 
+def test_a_victim_first_listed_after_earlyoom_chose_it_is_unpredicted() -> None:
+    # pid 62, a service supervisord had just restarted, was chosen at t=2.0
+    # before any snapshot listed it. Only a snapshot from the SIGTERM wait
+    # does, next to a newcomer that outranks it.
+    before_choice = oom_drill.Snapshot(1.5, [_sample(60, "python3", 300, 12_000)])
+    during_wait = oom_drill.Snapshot(
+        4.0,
+        [
+            _sample(60, "python3", 300, 12_000),
+            _sample(62, "browser-service", 300, 30_000),
+            _sample(63, "containerd", 300, 40_000),
+        ],
+    )
+    snapshots = deque([before_choice, during_wait])
+
+    assert oom_drill.last_snapshot_with(62, snapshots, 1024, chosen_at=2.0) is None
+    judged = oom_drill.newest_snapshot_before(snapshots, chosen_at=2.0)
+    assert judged is before_choice
+    ranking = oom_drill.predict_ranking(
+        judged.samples, _TOTAL_KIB, _AVOID, excluded_pids=set()
+    )
+    assert oom_drill.judge_kill(62, ranking, tolerance_kib=1024).verdict == (
+        "unpredicted"
+    )
+    # Without a choice time, or with none of the snapshots that old, the
+    # newest is all there is.
+    assert oom_drill.newest_snapshot_before(snapshots, None) is during_wait
+    assert oom_drill.newest_snapshot_before(snapshots, chosen_at=1.0) is during_wait
+
+
 def test_earlyoom_kill_lines_are_read_whole_and_new(tmp_path: Path) -> None:
     log = tmp_path / "earlyoom-stderr.log"
     log.write_text('sending SIGTERM to process 5 uid 0 "old": oom_score 1\n')
