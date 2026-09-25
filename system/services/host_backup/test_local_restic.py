@@ -281,12 +281,7 @@ def test_forget_thins_snapshots_that_each_came_from_their_own_snapshot_path(
 def test_forget_keeps_every_snapshot_within_an_hour_of_the_latest(
     tmp_path: Path,
 ) -> None:
-    """An extra tick in the same hour must not thin away the hour's previous snapshot.
-
-    A restore re-injecting restic.env, a service restart or "back up now" each
-    start a tick; the snapshot it replaces as the hour's newest may be the one
-    a user is restoring right then.
-    """
+    """An extra tick in the same hour must not thin away the hour's previous snapshot."""
     repo_dir = tmp_path / "repo"
     source_dir = tmp_path / "source"
     source_dir.mkdir()
