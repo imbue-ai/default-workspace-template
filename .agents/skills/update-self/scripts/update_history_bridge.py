@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-# CLEANUP: remove this module, its `bridge-history` subcommand, and the SKILL.md
-# steps that run it once no supported workspace predates the history rewrite.
+# CLEANUP: remove this module, its `bridge-history` subcommand, and the skill
+# prose that names it once no supported workspace predates the history rewrite.
 
 REWRITTEN_PATHS = ("libs/mngr", "vendor/mngr", "system/vendor/mngr")
 
