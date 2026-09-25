@@ -12,8 +12,7 @@ You orchestrate. You do not build the app yourself:
 - **A planner** reads `build-app` and the workspace and writes a plan: a small
   graph of nodes, each one piece of the build, with what each depends on. It is
   a headless, read-only Claude run on this flow's own prompt,
-  `references/planner-prompt.md`, launched by the shared runner in
-  `system/scripts/imbue_plan_extra/`.
+  `references/planner-prompt.md`, started by `scripts/run_planner.sh`.
 - **Workers** build the nodes, several at once, all inside one git checkout made
   for this build (the build folder). Each follows
   `references/worker-node.md` and reports back.
@@ -135,9 +134,7 @@ give it; waiting it out inside your turn keeps the floor. Send the user nothing
 while it runs:
 
 ```bash
-system/scripts/imbue_plan_extra/write_plan.sh --run-dir "$RUN" \
-    --prompt .agents/skills/build-app-parallel/references/planner-prompt.md \
-    build-app-parallel
+.agents/skills/build-app-parallel/scripts/run_planner.sh "$RUN"
 ```
 
 When it exits 0, check the plan:
