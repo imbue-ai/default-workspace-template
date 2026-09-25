@@ -235,11 +235,11 @@ def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
     parents = _git(
         repo, "rev-parse", f"{twin}^@", env={"GIT_NO_REPLACE_OBJECTS": "1"}
     ).split()
-    _git(repo, "replace", "-f", "--graft", twin, *parents, fork)
     state.parent.mkdir(parents=True, exist_ok=True)
     pending = state.with_suffix(".json.tmp")
     pending.write_text(json.dumps({"twin": twin, "fork_point": fork}))
     pending.replace(state)
+    _git(repo, "replace", "-f", "--graft", twin, *parents, fork)
     bridged = _merge_base(repo, "HEAD", target, is_graft_seen=True)
     if bridged != fork:
         _drop_recorded_graft(repo, state)

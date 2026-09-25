@@ -358,6 +358,21 @@ def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
     )
 
 
+def test_bridge_history_drop_forgets_a_record_whose_graft_is_gone(
+    workspace, capsys
+) -> None:
+    twin = _bridge(workspace, capsys)["twin"]
+    _git(workspace, "replace", "-d", twin)
+
+    assert (
+        update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out)["dropped"] == twin
+    assert list((workspace / "data/.state/update-self").iterdir()) == []
+
+
 def test_a_descendant_with_the_fork_tree_is_the_merge_base(
     tmp_path, template, upstream, capsys
 ) -> None:
