@@ -51,9 +51,7 @@ PREVIEW_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_-]{0,3
 
 # The <file> of data/.secrets/<file>.env, as the chat app's secret card writes it, and a
 # POSIX shell identifier for each variable the file sets (what `source` accepts).
-SECRET_FILE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^[a-z0-9][a-z0-9-]{0,63}$"
-)
+SECRET_FILE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 ENV_VAR_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
