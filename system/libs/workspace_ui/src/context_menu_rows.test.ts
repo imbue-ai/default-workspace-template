@@ -44,6 +44,7 @@ beforeEach(() => {
     '<p id="para">plain words</p>' +
     '<input id="field" value="hello world">' +
     '<input id="mail" type="email" value="a@b.example">' +
+    '<input id="secret" type="password" value="hunter2">' +
     '<a id="link" href="/docs/intro">intro</a>' +
     '<img id="pic" src="/a.png">' +
     '<div id="note" contenteditable="true">editable</div>';
@@ -97,6 +98,12 @@ describe("standardContextMenuRows", () => {
       "paste",
       "select-all",
     ]);
+  });
+
+  it("withholds Cut and Copy on a password field with a selection, keeping Paste and Select All", () => {
+    const secret = byId("secret") as HTMLInputElement;
+    secret.setSelectionRange(0, 6);
+    expect(keysOf(standardContextMenuRows(targetOf(secret)))).toEqual(["paste", "select-all"]);
   });
 
   it("withholds Paste where the browser withholds readText", () => {

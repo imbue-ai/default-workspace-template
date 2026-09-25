@@ -105,9 +105,11 @@ function isFieldElement(element: Element): element is HTMLInputElement | HTMLTex
   return element instanceof HTMLInputElement && SELECTION_API_INPUT_TYPES.has(element.type);
 }
 
-/** The text a field has selected, or "" (a contenteditable region's selection is the document's). */
+/** The text a field has selected, or "" (a contenteditable region's selection is the document's). A password
+ *  field's selection is never read, so Cut and Copy are not offered there, as the browser's own menu withholds
+ *  them: the secret must not land on the clipboard in plain text. */
 function fieldSelectionOf(element: Element): string {
-  if (!isFieldElement(element)) return "";
+  if (!isFieldElement(element) || element.type === "password") return "";
   const start = element.selectionStart ?? 0;
   const end = element.selectionEnd ?? 0;
   return element.value.slice(start, end);
