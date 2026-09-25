@@ -102,7 +102,7 @@ Assert on things that are true if and only if the feature worked correctly -- th
 
 If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
 
-When a chat reply mentions a workspace file, write its path in code formatting (`data/reports/q4.md`), not as a markdown link. The chat renders only web links and absolute-path download links (the `show-files-in-chat` skill); any other path link shows as plain text. If the user should look at the file, suggest they open it in the File Viewer.
+When a chat reply mentions a workspace file, write its path in code formatting (`data/reports/q4.md`), not as a markdown link. The chat renders only web links and absolute-path download links (the `show-files-in-chat` skill); any other path link shows as plain text. If the user should look at a file under `data/`, suggest they open it in the File Viewer (it shows only `data/`).
 
 If the user asks you to read or act on something in a third-party tool they have an account with -- including a link they paste, such as a Notion page, Google Doc, or Slack thread -- run `latchkey services list --viable` before anything else, and use the `latchkey` skill for anything it lists (its names may differ from the product's, e.g. Notion is `notion-mcp`). That is how you reach the accounts the user connected in Minds; use the web tools or the browser only for tools latchkey does not cover.
 
