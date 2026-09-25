@@ -20,7 +20,7 @@ import { postJson } from "@imbue/workspace-ui/src/models/http";
 const JSON_BLOCK_PATTERN = /```json\n([^\n]*)\n```/g;
 
 /** Write an envelope to a reference file through the chat app; answers the file's path. */
-export async function storeElementReference(envelope: ElementReferenceEnvelope): Promise<string> {
+async function storeElementReference(envelope: ElementReferenceEnvelope): Promise<string> {
   const answer = await postJson<{ path: string }>(apiUrl("/api/element-references"), { reference: envelope });
   return answer.path;
 }
