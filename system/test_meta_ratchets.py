@@ -136,14 +136,23 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
     venv, whose third-party scripts are not this template's to govern.
     """
     listed = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.sh"],
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.sh",
+        ],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
     violations: list[str] = []
-    for rel in listed.stdout.splitlines():
+    for rel in filter(None, listed.stdout.split("\0")):
         script = _REPO_ROOT / rel
         if _VENDORED_DIR in script.parents or not script.is_file():
             continue
