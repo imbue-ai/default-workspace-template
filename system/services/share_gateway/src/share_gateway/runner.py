@@ -16,6 +16,12 @@ secret file also records which relay token it was minted under, so a secret
 that survived an unshare and re-share the runner was down for is replaced at
 start rather than reused (every share carries a new relay token).
 
+A failed bring-up (the connector unreachable, certificate issuance refused) is
+retried on a fixed backoff schedule rather than every tick, and a refusal the
+connector marks as permanent halts retries until the materials change; each
+outcome is reported in ``data/.state/share_gateway/status.json`` (see
+``retry_state``).
+
 Same watch idiom as the other material-gated services: inotify when available,
 10-second mtime polling as the fallback.
 """
@@ -51,6 +57,14 @@ from share_gateway.materials import discard_signing_secret
 from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
+from share_gateway.retry_state import STATUS_HALTED
+from share_gateway.retry_state import STATUS_RETRYING
+from share_gateway.retry_state import STATUS_UP
+from share_gateway.retry_state import ProvisioningRetryState
+from share_gateway.retry_state import ShareStackStartError
+from share_gateway.retry_state import remove_gateway_status
+from share_gateway.retry_state import utc_now
+from share_gateway.retry_state import write_gateway_status
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
 
@@ -220,8 +234,12 @@ def _converge_frpc_processes(stack: ShareStack) -> None:
         _start_frpc_for_relay(stack, added_relay_id)
 
 
-def _start_stack(materials: ShareMaterials) -> ShareStack | None:
-    """Provision (cert + relay assignment) and start (gateway thread, caddy, per-relay frpc) one share's stack."""
+def _start_stack(materials: ShareMaterials) -> ShareStack:
+    """Provision (cert + relay assignment) and start (gateway thread, caddy, per-relay frpc) one share's stack.
+
+    Raises :class:`ShareStackStartError` when the connector-dependent steps
+    fail; the caller schedules the retry.
+    """
     try:
         ensure_share_certificate(
             key_path=materials_module.TLS_KEY_FILE,
@@ -231,13 +249,17 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
             relay_token=materials.relay_token,
         )
     except CertProvisioningError as exc:
-        _log(f"certificate provisioning failed (will retry on next change/poll): {exc}")
-        return None
+        raise ShareStackStartError(
+            f"certificate provisioning failed: {exc}",
+            is_retryable=exc.is_retryable,
+            retry_after_seconds=exc.retry_after_seconds,
+        ) from exc
 
     assignment = load_assignment(materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH)
     if assignment is None:
-        _log("no relay assignment available yet (will retry on next change/poll)")
-        return None
+        raise ShareStackStartError(
+            "no relay assignment available yet", is_retryable=True, retry_after_seconds=None
+        )
 
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
     stack = ShareStack(materials, auth_label, assignment)
@@ -266,6 +288,41 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
     _log(
         f"Share stack up for {materials.workspace_domain} "
         f"(tunnels: {', '.join(sorted(stack.assignment.endpoint_by_relay_id)) or 'none'})"
+    )
+    return stack
+
+
+def _try_start_stack(materials: ShareMaterials, retry_state: ProvisioningRetryState) -> ShareStack | None:
+    """One bring-up attempt: on failure, schedule the retry and report it in the status file."""
+    try:
+        stack = _start_stack(materials)
+    except ShareStackStartError as exc:
+        delay = retry_state.record_failure(exc, time.monotonic())
+        if delay is None:
+            _log(f"{exc}; not retrying until the share materials change")
+            state = STATUS_HALTED
+        else:
+            _log(f"{exc}; retrying in {delay}s (attempt {retry_state.failed_attempt_count})")
+            state = STATUS_RETRYING
+        write_gateway_status(
+            materials_module.GATEWAY_STATUS_FILE,
+            state=state,
+            workspace_domain=materials.workspace_domain,
+            failed_attempt_count=retry_state.failed_attempt_count,
+            last_error=str(exc),
+            next_retry_in_seconds=delay,
+            now=utc_now(),
+        )
+        return None
+    retry_state.reset()
+    write_gateway_status(
+        materials_module.GATEWAY_STATUS_FILE,
+        state=STATUS_UP,
+        workspace_domain=materials.workspace_domain,
+        failed_attempt_count=0,
+        last_error="",
+        next_retry_in_seconds=None,
+        now=utc_now(),
     )
     return stack
 
@@ -362,6 +419,10 @@ def main() -> None:
 
     inotify_fd = _try_setup_inotify([materials_module.MATERIALS_FILE, APPS_TOML_PATH])
     stack: ShareStack | None = None
+    retry_state = ProvisioningRetryState()
+    # The materials the retry schedule applies to: a changed share.env (a
+    # re-share, a rotated token) is a fresh start and forgets earlier failures.
+    retried_materials: ShareMaterials | None = None
 
     def _handle_signal(signum: int, frame: object) -> None:
         _stop_stack(stack)
@@ -373,25 +434,36 @@ def main() -> None:
     while True:
         materials = read_share_materials(materials_module.MATERIALS_FILE)
 
+        if materials is not None and materials != retried_materials:
+            retry_state.reset()
+            retried_materials = materials
+
         if materials is None and stack is not None:
             _log("Share materials removed; tearing the stack down")
             _stop_stack(stack)
             discard_signing_secret(materials_module.SIGNING_SECRET_FILE)
             _log("Discarded the session signing secret; every existing session is now invalid")
             stack = None
-        elif materials is not None and stack is None:
-            stack = _start_stack(materials)
-        elif materials is not None and stack is not None and materials != stack.materials:
+            remove_gateway_status(materials_module.GATEWAY_STATUS_FILE)
+        elif materials is None:
+            # Unshared and idle: an unshare that happened while the stack was
+            # still failing to come up leaves no stale status behind, and a
+            # secret the last unshare left behind (the runner was not up to
+            # see the materials go) must not sign the next share, or every
+            # cookie it signed would open that one too.
+            remove_gateway_status(materials_module.GATEWAY_STATUS_FILE)
+            retried_materials = None
+            if discard_signing_secret(materials_module.SIGNING_SECRET_FILE):
+                _log("Discarded a session signing secret left by an earlier share; its sessions are now invalid")
+        elif stack is None:
+            if retry_state.is_attempt_due(time.monotonic()):
+                stack = _try_start_stack(materials, retry_state)
+        elif materials != stack.materials:
             _log("Share materials changed; restarting the stack")
             _stop_stack(stack)
-            stack = _start_stack(materials)
-        elif stack is not None:
+            stack = _try_start_stack(materials, retry_state)
+        else:
             stack = _tick_running_stack(stack)
-        elif discard_signing_secret(materials_module.SIGNING_SECRET_FILE):
-            # Idle with no share: a secret the last unshare left behind (the
-            # runner was not up to see the materials go) must not sign the
-            # next share, or every cookie it signed would open that one too.
-            _log("Discarded a session signing secret left by an earlier share; its sessions are now invalid")
 
         if inotify_fd is not None:
             _wait_for_change_inotify(inotify_fd, POLL_INTERVAL_SECONDS)
