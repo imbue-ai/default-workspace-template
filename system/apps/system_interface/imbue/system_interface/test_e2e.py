@@ -609,8 +609,10 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(_shown_windows(page)).to_have_count(0)
     expect(page.locator("[data-taskbar] [data-launcher-field]")).to_be_visible()
     expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
+    expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible()
+    # The wallpaper is the app layout's, so it spans the taskbar too; the backdrop is clear over it.
     assert (
-        page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')
+        page.locator(".app-layout")
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
         .endswith('/wallpapers/bundled/dawn")')
     )
