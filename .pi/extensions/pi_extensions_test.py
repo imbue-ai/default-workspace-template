@@ -341,7 +341,9 @@ def test_a_broken_guard_or_rewrite_fails_open_and_is_logged(tmp_path: Path) -> N
     assert out["result"] is None
     assert out["payload"]["input"]["command"] == "git rebase -i HEAD~2"
     log = (state_dir / "pi_policy_guards.log").read_text()
-    assert "agent_prevent_commit_rewrite.sh exited 1: guard crashed; failing open" in log
+    assert (
+        "agent_prevent_commit_rewrite.sh exited 1: guard crashed; failing open" in log
+    )
     assert "agent_rewrite_bash_command.py exited 2" in log
 
 
