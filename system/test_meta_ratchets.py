@@ -72,7 +72,7 @@ def _extract_test_function_names(file_path: Path) -> frozenset[str]:
     )
 
 
-# --- Meta: ensure every project has ratchets ---
+# Meta: ensure every project has ratchets
 
 
 def test_every_project_has_test_ratchets_file() -> None:
@@ -124,7 +124,7 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
     )
 
 
-# --- Repo-wide ratchets ---
+# Repo-wide ratchets
 
 
 def _find_bash_scripts_without_strict_mode() -> list[str]:
@@ -273,7 +273,7 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
     )
 
 
-# --- Retired-terminology ratchets (the creation rename) ---
+# Retired-terminology ratchets (the creation rename)
 #
 # The workspace vocabulary is: users make "creations" -- apps (opened as
 # tabs), skills (an automation is a skill run on a schedule), data, and
@@ -400,7 +400,7 @@ def test_prevent_application_terminology() -> None:
     )
 
 
-# --- Apps are apps, not services ---
+# Apps are apps, not services
 #
 # The shell is a window manager over apps; "service" is a background program
 # with no tab. The shell's own code, its frontend, and the frontend library the
