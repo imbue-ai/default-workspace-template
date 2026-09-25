@@ -197,6 +197,16 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
 
     assert scaffold_flask_lib._pick_port(root, None, _nothing_listens) == 8082
 
+    # The real scaffold writes its pick into the new drop-in. Which free port that
+    # is depends on what this machine listens on, but it is never a held one.
+    result = _scaffold(root, "news")
+    assert result.returncode == 0, result.stderr
+    written = scaffold_flask_lib.LOCALHOST_PORT_RE.search(
+        (root / "system/supervisord.conf.d/news.conf").read_text()
+    )
+    assert written is not None
+    assert int(written.group(1)) not in {8080, 8081}
+
 
 def test_auto_picked_port_skips_a_port_something_already_listens_on(
     tmp_path: Path,
