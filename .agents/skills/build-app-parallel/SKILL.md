@@ -140,7 +140,7 @@ system/scripts/imbue_plan_extra/write_plan.sh --run-dir "$RUN" build-app-paralle
 When it exits 0, check the plan:
 
 ```bash
-python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py parse --run-dir "$RUN"
+python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py parse --run-dir "$RUN" --reduce-access
 ```
 
 If `parse` exits 2, the message names what is wrong. Move `plan.md` aside to
