@@ -101,14 +101,14 @@ def test_a_task_notification_summary_drops_a_zero_exit_code_and_keeps_any_other(
     """Every ordinary completion carries "(exit code 0)", so it says nothing "completed" has
     not; a non-zero one is the whole news."""
     zero = classify_user_message(
-        "<task-notification>\n<summary>Background command \"build\" completed (exit code 0)</summary>\n"
+        '<task-notification>\n<summary>Background command "build" completed (exit code 0)</summary>\n'
         "</task-notification>"
     )
     assert zero is not None
     assert zero.display_body == 'Background command "build" completed'
 
     failed = classify_user_message(
-        "<task-notification>\n<summary>Background command \"build\" completed (exit code 2)</summary>\n"
+        '<task-notification>\n<summary>Background command "build" completed (exit code 2)</summary>\n'
         "</task-notification>"
     )
     assert failed is not None
@@ -396,4 +396,3 @@ def test_a_stopped_queue_keeps_the_users_text_and_gives_up_its_reports() -> None
     assert split_background_task_reports(block) == ("fix the header too\nand the footer", tuple(reports))
     assert split_background_task_reports(reports[0]) == ("", (reports[0],))
     assert split_background_task_reports("only my words") == ("only my words", ())
-
