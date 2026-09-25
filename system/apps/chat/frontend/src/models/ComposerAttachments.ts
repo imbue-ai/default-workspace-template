@@ -75,12 +75,18 @@ function _storedAttachmentsOf(chatId: string): StoredAttachment[] {
     return [];
   }
   if (raw === null) return [];
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as StoredAttachment[]) : [];
-  } catch {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.warn(`Discarding the stored attachments of chat ${chatId}: they do not parse`, error);
     return [];
   }
+  if (!Array.isArray(parsed)) {
+    console.warn(`Discarding the stored attachments of chat ${chatId}: they are not a list`, parsed);
+    return [];
+  }
+  return parsed as StoredAttachment[];
 }
 
 function _persist(chatId: string, attachments: readonly ComposerAttachment[]): void {
