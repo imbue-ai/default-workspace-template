@@ -858,7 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=None,
         metavar="NAME=VALUE",
-        help="A launch path parameter (repeatable), e.g. --param workdir=/data, --param path=/notes/.",
+        help="A launch path parameter (repeatable), e.g. --param workdir=/data, --param path=/home/user/workspace/data/notes/.",
     )
     p_open.add_argument(
         "--if-present",
