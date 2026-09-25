@@ -13,6 +13,7 @@ browser for the agent. Refusing frames was measured to recover cleanly.
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -85,15 +86,15 @@ class _Upstream:
 class _Client:
     """Stands in for the agent's socket: yields the given frames, records the proxy's replies."""
 
-    def __init__(self, frames: "list[dict[str, Any]]") -> None:
+    def __init__(self, frames: list[dict[str, Any]]) -> None:
         self._frames = frames
         self.replies: list[str] = []
 
-    async def _frames_as_raw(self) -> Any:
+    async def _frames_as_raw(self) -> AsyncIterator[str]:
         for frame in self._frames:
             yield json.dumps(frame)
 
-    def __aiter__(self) -> Any:
+    def __aiter__(self) -> AsyncIterator[str]:
         return self._frames_as_raw()
 
     async def send(self, raw: str) -> None:
