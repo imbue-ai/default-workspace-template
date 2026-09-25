@@ -25,6 +25,9 @@ They are spread across files that would otherwise drift silently:
    fires when the first chat agent is created on first boot --
    ``setup_system.sh`` fails the build on an installer mismatch, and this test
    catches a desync between the two pinned values at merge time.
+4. The chat app's baked model catalog fixture is lifted from one claude build, so it must be
+   the one for the pinned version: a bump that forgets to regenerate it would otherwise pass
+   every catalog test against the old binary's models.
 """
 
 from __future__ import annotations
@@ -46,6 +49,9 @@ _REPO_ROOT = Path(__file__).parents[1]
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
 _DOCKERFILE_PATH = _REPO_ROOT / "system" / "Dockerfile"
 _SETUP_SYSTEM_PATH = _REPO_ROOT / "system" / "scripts" / "setup_system.sh"
+_CHAT_CLAUDE_HARNESS_DIR = (
+    _REPO_ROOT / "system" / "apps" / "chat" / "imbue" / "chat" / "harnesses" / "claude"
+)
 
 
 def _load_raw_settings() -> dict[str, Any]:
@@ -112,6 +118,17 @@ def test_claude_version_pin_is_consistent_across_settings_and_setup_script() -> 
     setup_version = setup_match.group(1)
 
     assert settings_version == setup_version
+
+
+def test_baked_model_catalog_fixture_is_the_pinned_versions() -> None:
+    settings_version = _load_raw_settings()["agent_types"]["claude"]["version"]
+    fixtures = sorted(
+        path.name
+        for path in _CHAT_CLAUDE_HARNESS_DIR.glob("baked_model_catalog_v*.json")
+    )
+    assert fixtures == [
+        f"baked_model_catalog_v{settings_version.replace('.', '_')}.json"
+    ]
 
 
 def test_dockerfile_carries_no_toolchain_version_pin() -> None:
