@@ -436,3 +436,12 @@ def test_a_report_flushed_into_the_users_turn_shows_only_the_users_words(
     assert decision is not None
     assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
     assert decision.display_body == words
+
+
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+def test_reports_flushed_together_show_one_notice_naming_each(separator: str) -> None:
+    decision = classify_user_message(separator.join([_compose_report("Build"), _compose_report("Test")]))
+
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_body == "Build (finished); Test (finished)"

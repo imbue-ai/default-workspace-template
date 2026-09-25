@@ -257,8 +257,11 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
     words, reports = split_background_task_reports(content)
     if reports and words:
         return None
+    # Several reports flushed together are one message, so its one notice names each of them.
+    each_report = (_BACKGROUND_TASK_REPORT_RE.match(report) for report in reports)
+    summaries = "; ".join(report.group(1).strip() for report in each_report if report is not None)
     return MessageDisplay(
-        display=DisplayKind.NOTICE, display_label="Background task", display_body=match.group(1).strip()
+        display=DisplayKind.NOTICE, display_label="Background task", display_body=summaries or match.group(1).strip()
     )
 
 
