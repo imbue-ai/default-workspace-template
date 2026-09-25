@@ -64,8 +64,6 @@ def test_validate_manifest_checks_the_references_only_when_given_a_repo_root(
     assert "docs/system/news.md" in with_root.output
 
 
-# --- footprint and references ---------------------------------------------------
-
 
 def test_footprint_writes_the_scope_file_for_an_app_to_stdout(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
