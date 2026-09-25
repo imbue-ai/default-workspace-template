@@ -120,6 +120,31 @@ def test_a_new_script_with_no_pair_is_unclassified_and_brings_in_the_full_root_s
     assert "test_selection_overrides.toml" in rendered
 
 
+def test_a_deleted_script_and_its_test_are_classified_without_the_full_root_suite(
+    workspace: Path,
+) -> None:
+    write_repo_file(
+        workspace,
+        "system/scripts/gate_callers_test.py",
+        "# Runs system/scripts/create_gate.py.\ndef test_callers() -> None:\n    pass\n",
+    )
+    commit_everything(workspace, "a test that names the gate")
+    (workspace / "system/scripts/create_gate.py").unlink()
+    (workspace / "system/scripts/test_create_gate.py").unlink()
+    commit_everything(workspace, "retire the gate")
+
+    selection = _select(
+        workspace, ["system/scripts/create_gate.py", "system/scripts/test_create_gate.py"]
+    )
+
+    assert not selection.is_full_root
+    assert selection.unclassified == ()
+    assert _command_lines(selection) == [
+        _ALWAYS_RUN,
+        "uv run pytest system/scripts/gate_callers_test.py",
+    ]
+
+
 def test_the_full_root_suite_replaces_the_root_collected_runs_but_not_the_own_root_suites(
     workspace: Path,
 ) -> None:

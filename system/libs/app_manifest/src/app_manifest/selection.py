@@ -813,7 +813,9 @@ def _select_for_owning_unit(context: _SelectionContext, path: str) -> _PathOutco
             paired = _own_unit_requests(
                 layout, path, _reason(path, ChangedPathClass.PAIRED_SCRIPT, "paired by filename")
             )
-            if not paired:
+            # A deleted script leaves nothing to pair with or map; the tests that name it and
+            # the always-run guards are what can observe that it is gone.
+            if not paired and (layout.repo_root / path).exists():
                 return _PathOutcome()
             return _PathOutcome(
                 classes=(ChangedPathClass.PAIRED_SCRIPT,), pytest_requests=tuple(paired)

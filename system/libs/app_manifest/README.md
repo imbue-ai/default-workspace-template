@@ -202,7 +202,7 @@ A path selects:
   (`.agents/skills/<name>`) it sits in, or, in the flat script directories
   (`system/scripts`, `.agents/shared/scripts`), the tests paired with it by
   filename (`<stem>.py`, `<stem>.sh` and `<stem>/` pair with `<stem>_test.py`
-  and `test_<stem>*.py`);
+  and `test_<stem>*.py`; a deleted script needs no pair);
 - its consumers: every workspace member that depends on its package, directly
   or transitively (`pyproject.toml` dependencies and dependency groups), and
   the unpackaged scripts that import one of its modules;
