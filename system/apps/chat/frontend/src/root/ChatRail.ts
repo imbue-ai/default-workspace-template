@@ -14,7 +14,7 @@ import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { elementReferenceRows, targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
+import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { isUnread } from "./chatUnread";
@@ -194,8 +194,8 @@ function rowMenuRows(attrs: ChatRailAttrs, row: ChatRow): MenuRow[] {
 
 /** The reference rows for a right-click on a row's element, built as the menu opens. */
 function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow[] {
-  const click = { clientX: event.clientX, clientY: event.clientY, pageX: event.pageX, pageY: event.pageY };
-  const reference = describeElement(targetElementOf(event), click, attrs.referenceScope);
+  const target = targetOfEvent(event, document);
+  const reference = describeElement(target.element, target.click, attrs.referenceScope);
   return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
 }
 
