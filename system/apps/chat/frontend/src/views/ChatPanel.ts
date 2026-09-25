@@ -39,6 +39,7 @@ import {
   addChatsUpdatedListener,
   getChatById,
   getProvisionalChat,
+  hasReceivedChatList,
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
@@ -51,6 +52,7 @@ import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
 import { ModelProviderMenu } from "./ModelProviderMenu";
+import { ConnectingIndicator } from "./ConnectingIndicator";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
@@ -291,19 +293,19 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       });
   }
 
-  /** The page of a chat whose create is running: an empty transcript with the composer's held
-   *  "Sending" bubbles (a message typed now waits for the agent to land, see MessageInput), so
-   *  the message is visibly waiting rather than gone. */
+  /** A conversation with nothing in it yet -- being created, loading, or empty -- drawn as the
+   *  transcript's own empty list with no placeholder text, so a new chat is ready to type into
+   *  at once and moving between these states never changes the page. ``stateClass`` names the
+   *  state for tests and styles; ``nodes`` are messages already on their way (a send typed while
+   *  the chat is created), laid out where the transcript will put them. */
+  function renderEmptyConversation(stateClass: string, nodes: m.Children[]): m.Vnode {
+    return m("div", { class: `message-list-wrapper ${stateClass}` }, [m("div", { class: MESSAGE_LIST_CLASS }, nodes)]);
+  }
+
+  /** The page of a chat whose create is running. A message typed now waits for the agent to
+   *  land (see MessageInput). */
   function renderStarting(chatId: string): m.Vnode {
-    const outgoing = renderOutgoingMessages(chatId);
-    return m("div", { class: "message-list-creating flex flex-col h-full" }, [
-      m(
-        "div",
-        { class: "flex-1 flex items-center justify-center" },
-        m("p", { class: "text-secondary" }, "Starting the chat..."),
-      ),
-      outgoing.length > 0 ? m("div", { class: MESSAGE_LIST_CLASS }, outgoing) : null,
-    ]);
+    return renderEmptyConversation("message-list-creating", renderOutgoingMessages(chatId));
   }
 
   /** The page of a chat that is not an agent yet, by its phase. */
@@ -314,6 +316,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       // later failure's own reason.
       launchError = null;
       return renderStarting(chatId);
+    }
+    if (provisional.phase === "awaiting_first_send") {
+      // A chat with no seed that waits for its first send (an intake that could not launch it at once,
+      // post-launch-paths plan section 3.7): an empty conversation over the composer, whose send launches it.
+      return renderEmptyConversation("message-list-empty message-list-awaiting", renderOutgoingMessages(chatId));
     }
     return m(
       "div",
@@ -460,6 +467,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     });
   }
 
+  /** Whether a transcript 404 is the answer rather than a race. A new chat's page can load before
+   *  the chat app has told it about the chat, and the reload that follows the chat coming up is
+   *  still in flight when it does: both are the chat not known yet, which reads as an empty chat.
+   *  Only a chat the app lists (or has no record of) with no retry pending has no conversation. */
+  function isNotFoundSettled(chatId: string): boolean {
+    return hasReceivedChatList() && !(notFoundRetryInFlight && currentChatId === chatId);
+  }
+
   function renderMessages(chatId: string): m.Vnode {
     // A provisional record short-circuits the load: there is no agent to read yet. A load that
     // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
@@ -479,6 +494,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       manageStreamConnection(chatId);
     }
 
+    if (isConversationNotFound(chatId) && !isNotFoundSettled(chatId)) {
+      return renderEmptyConversation("message-list-loading", []);
+    }
     if (isConversationNotFound(chatId)) {
       fetchScreenCapture(chatId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
@@ -515,14 +533,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // error state as soon as any reload succeeds -- the window menu's Refresh or the
     // stream's background reconnect, neither of which goes through loadChat.
     // The phase, not just the error: a load that is in flight -- including a retry -- must not
-    // fall through to "No events yet for this agent.", which claims an answer it does not have.
+    // fall through to the empty state, which claims an answer it does not have.
     const load = getConversationLoadState(chatId);
     if (hasNothingToShow && load.phase === "loading") {
-      return m(
-        "div",
-        { class: "message-list-loading flex items-center justify-center h-full" },
-        m("p", { class: "text-secondary" }, "Loading events..."),
-      );
+      return renderEmptyConversation("message-list-loading", []);
     }
 
     if (hasNothingToShow && load.error !== null) {
@@ -557,14 +571,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     const events = getEventsForChat(chatId);
 
     if (events.length === 0) {
-      // No transcript yet -- but render any queued or in-flight message rather
-      // than the empty-state placeholder (see tailNodes above).
       if (tailNodes.length === 0) {
-        return m(
-          "div",
-          { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-secondary" }, "No events yet for this agent."),
-        );
+        return renderEmptyConversation("message-list-empty", []);
       }
       return m("div", { class: "message-list-wrapper" }, [
         failedReloadNotice,
@@ -622,7 +630,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
         ),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
-        // own not-yet-real sends.
+        // own not-yet-delivered sends.
         ...renderHeldSends(chatId),
         ...renderOutgoingMessages(chatId),
       ]),
@@ -792,6 +800,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
               },
               [
                 m(ModelProviderMenu, { chatId }),
+                m(ConnectingIndicator, { chatId }),
                 m(FastModeNotice, { chatId }),
                 // The terminal back face attaches to the agent's own tmux session, which
                 // a chat still being created does not have: without a name the terminal

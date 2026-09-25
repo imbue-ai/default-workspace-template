@@ -3,8 +3,10 @@ import shlex
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -106,6 +108,7 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session_watcher import TranscriptReader
+from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
@@ -213,22 +216,15 @@ DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 
 
-# The create templates a chat's launch stacks on ``chat`` (``.mngr/settings.toml``): ``welcome``
-# delivers ``/welcome`` to a chat that starts with nothing to say, and ``fast`` launches the
-# fast-capable harnesses in fast mode when the chat's fast mode (``chat_fast_mode.py``) calls for it.
-WELCOME_ROLE_TEMPLATE: Final[str] = "welcome"
+# The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
+# fast mode (``chat_fast_mode.py``) calls for it: it launches the fast-capable harnesses in fast mode.
 FAST_ROLE_TEMPLATE: Final[str] = "fast"
 
 
 @pure
-def launch_role_templates(message: str, is_fast: bool) -> tuple[str, ...]:
-    """The templates a chat create stacks beyond the caller's: a greeting for a silent start, fast mode when the chat's mode calls for it."""
-    templates: list[str] = []
-    if message == "":
-        templates.append(WELCOME_ROLE_TEMPLATE)
-    if is_fast:
-        templates.append(FAST_ROLE_TEMPLATE)
-    return tuple(templates)
+def launch_role_templates(is_fast: bool) -> tuple[str, ...]:
+    """The templates a chat create stacks beyond the caller's: fast mode when the chat's mode calls for it."""
+    return (FAST_ROLE_TEMPLATE,) if is_fast else ()
 
 
 @pure
@@ -358,9 +354,8 @@ def _build_chat_create_command(
     for setting in settings:
         cmd.extend(["-S", setting])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
-    # once the harness signals readiness, exactly as the ``welcome`` template's ``/welcome``
-    # does (a CLI ``--message`` takes precedence over a template's). A create that has a model
-    # to apply first withholds its message and sends it afterwards, so it passes none here.
+    # once the harness signals readiness. A create that has a model to apply first withholds
+    # its message and sends it afterwards, so it passes none here.
     if initial_message:
         cmd.extend(["--message", initial_message])
     return cmd
@@ -673,6 +668,7 @@ def chat_snapshot_for_active_agent(
     chat: _ResolvedChat,
     is_permission_pending: bool,
     shoulder_tap_available: bool,
+    is_connecting: bool,
     last_messaged_at: float | None,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
@@ -707,6 +703,7 @@ def chat_snapshot_for_active_agent(
             model_choice=agent.model_choice,
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
+            is_connecting=is_connecting,
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -898,6 +895,9 @@ class AgentManager:
     # from the transcript events the watcher parses. A non-empty set is the chat's
     # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
+    # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up. A
+    # non-empty set is the snapshot's ``is_connecting``.
+    _connecting_message_ids_by_agent: dict[str, set[str]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1001,6 +1001,7 @@ class AgentManager:
             manager._auto_open.request_open(restored_chat_id)
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
+        manager._connecting_message_ids_by_agent = {}
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -1221,6 +1222,9 @@ class AgentManager:
             pending_by_agent = {
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
+            connecting_by_agent = {
+                agent.id: bool(self._connecting_message_ids_by_agent.get(agent.id)) for agent, _chat in listed
+            }
         last_messaged = self._message_stamps.read()
         return [
             chat_snapshot_for_active_agent(
@@ -1228,6 +1232,7 @@ class AgentManager:
                 chat,
                 pending_by_agent[agent.id],
                 self._shoulder_tap_available(agent),
+                connecting_by_agent[agent.id],
                 last_messaged.get(chat.chat_id),
             )
             for agent, chat in listed
@@ -1242,10 +1247,16 @@ class AgentManager:
             chat = self._resolve_chat_locked(parsed)
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
+            is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
         if chat is None or agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_active_agent(
-            agent, chat, is_pending, self._shoulder_tap_available(agent), self._message_stamps.read().get(chat.chat_id)
+            agent,
+            chat,
+            is_pending,
+            self._shoulder_tap_available(agent),
+            is_connecting,
+            self._message_stamps.read().get(chat.chat_id),
         )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
@@ -2209,7 +2220,7 @@ class AgentManager:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
         # The chat's fast mode travels with it: a successor starts fast when the chat would.
-        role_templates = (FAST_ROLE_TEMPLATE,) if self.get_fast_mode_state(spec.chat_id).launches_fast else ()
+        role_templates = launch_role_templates(self.get_fast_mode_state(spec.chat_id).launches_fast)
         return _build_chat_create_command(
             self._mngr_binary,
             spec.name,
@@ -2388,6 +2399,27 @@ class AgentManager:
                 return
             self._agents[agent_id] = agent_state.model_copy_update(to_update(agent_state.field_ref().state, "WAITING"))
         self._broadcast_chats_updated()
+
+    @contextmanager
+    def track_connecting_send(self, agent_id: str, message_id: str) -> Iterator[Callable[[], None]]:
+        """Scope one send's delivery. The yielded callable marks the send as waiting for the agent to
+        come up (the snapshot's ``is_connecting``); leaving the scope clears the mark."""
+        try:
+            yield lambda: self._set_send_connecting(agent_id, message_id, is_connecting=True)
+        finally:
+            self._set_send_connecting(agent_id, message_id, is_connecting=False)
+
+    def _set_send_connecting(self, agent_id: str, message_id: str, *, is_connecting: bool) -> None:
+        with self._lock:
+            message_ids = self._connecting_message_ids_by_agent.get(agent_id, set())
+            was_connecting = bool(message_ids)
+            updated_message_ids = (message_ids | {message_id}) if is_connecting else (message_ids - {message_id})
+            if updated_message_ids:
+                self._connecting_message_ids_by_agent[agent_id] = updated_message_ids
+            else:
+                self._connecting_message_ids_by_agent.pop(agent_id, None)
+        if bool(updated_message_ids) != was_connecting:
+            self._broadcast_chats_updated()
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
@@ -2693,6 +2725,28 @@ class AgentManager:
         self._auto_open.request_open(chat_id)
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
+    def mint_awaiting_chat(self, account_id: str) -> ProvisionalChat:
+        """Mint a chat with no seed that waits for its first send (post-launch-paths plan section 3.7).
+
+        What an intake falls back to when it cannot launch a new chat at once: a draft into a new
+        chat, or a first message with nothing signed in. The chat is listed as provisional in the
+        ``awaiting_first_send`` phase under a minted "Chat N" name, with the account the intake
+        resolved (or none), and its page shows an empty conversation with the composer; the first
+        send launches it through ``create_chat`` by ``chat_id``. It has no record, so a restart of
+        this app drops it.
+        """
+        chat_id = ChatId(str(AgentId()))
+        with self._lock:
+            provisional = ProvisionalChat(
+                chat_id=chat_id,
+                name=self._mint_display_name_locked(""),
+                account_id=account_id,
+                phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
+            )
+            self._provisional_chats[chat_id] = provisional
+        self._broadcaster.broadcast_provisional_chat_created(provisional)
+        return provisional
+
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
         """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
@@ -2784,8 +2838,8 @@ class AgentManager:
         provider chooser before it creates).
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
-        create --message`` after the harness signals readiness. A chat that starts with no
-        message gets ``/welcome`` instead, through the ``welcome`` template. A chat minted
+        create --message`` after the harness signals readiness; a chat that starts with no
+        message sends none and waits for the user. A chat minted
         earlier keeps the message it was minted with, so a launch that names one beside
         ``chat_id`` is refused like a name; the exception is a seeded chat awaiting its first send, whose
         message is exactly what the launch brings.
@@ -2852,6 +2906,11 @@ class AgentManager:
                         )
                     else:
                         message = provisional.message
+                elif provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
+                    # An unseeded chat awaiting its first send (an intake that could not launch at once,
+                    # ``chat_intakes.py``) is launched by whatever its launch brings: the first message, or
+                    # nothing, for an intake that arrived with no text and no account.
+                    pass
                 elif message:
                     raise AgentCreationError(
                         f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
@@ -2907,7 +2966,7 @@ class AgentManager:
         except AccountError as e:
             _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
-        role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode.launches_fast))
+        role_templates = (*extra_role_templates, *launch_role_templates(fast_mode.launches_fast))
 
         # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
         # this app renders from a file, which no harness transcript holds, so its launch carries
@@ -3584,6 +3643,9 @@ class AgentManager:
             state_dir=state_dir,
             send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
             notify_agents_changed=self._broadcast_chats_updated,
+            is_harness_starting_up=lambda: is_harness_starting_up(
+                state_dir, spec.startup_ready_marker, spec.process_started_marker_filename
+            ),
             is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),

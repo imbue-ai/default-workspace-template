@@ -6,11 +6,19 @@ beside it in ``activity_state``. Registered in ``harnesses.registry``.
 """
 
 from typing import ClassVar
+from typing import Final
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import resolve_is_agent_running
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.claude.activity_state import derive
+from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
+
+# Written by claude's SessionStart hook; mngr's launch command deletes it first. Kept in sync with
+# the ``session_started`` file mngr_claude's claude_config.py hook touches and plugin.py waits on.
+CLAUDE_STARTUP_READY_MARKER: Final[StartupReadyMarker] = StartupReadyMarker(
+    filename="session_started", is_deleted_at_launch=True
+)
 
 
 class ClaudeActivityTracker(HarnessActivityTracker):
