@@ -2,7 +2,7 @@
 
 Apps: everything you can open as a tab in the workspace. Each app is a folder
 here -- the built-in ones ship with the template, and apps your mind builds for
-you land here too (see the build-app skill). The top-level `apps` symlink
+you land here too (see the build-app-parallel skill). The top-level `apps` symlink
 points at this folder.
 
 Built-in apps:
