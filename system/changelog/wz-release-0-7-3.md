@@ -1,0 +1,1 @@
+- Pinned mngr to public commit `d756070f9c` (the mirror of mngr `54e692b6bc`) for the minds 0.7.3 release (`minds-v0.7.3`).
