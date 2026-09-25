@@ -131,30 +131,58 @@ need.
 
 The body of a `done` report is the handoff the nodes after you read, and it is
 pasted whole into the task file of every node that depends on you, so keep it
-short for their sake. Report only what is not already in the folder: the nodes
-after you can read the files you wrote, so what they need from you is what to
-call, what shape to expect, and what is missing.
+short for their sake.
 
-**Items 1, 2, 4, 5 and 6 come to around 300 words together.** Item 3 has no
-target -- it is the part the next node cannot work without. Where your subtask's
-whole deliverable is the contract and you write no code, item 3 is the report:
-say all of it, and the target does not apply to you.
+Which of the three shapes below you use follows from what your subtask hands
+over. Each names the one part with no word target -- the part the next node
+cannot work without -- and a rough target for the rest.
 
-1. **What you built** -- three sentences. No subheadings and no walkthrough of
-   the page or the module.
-2. **Files you created or changed** -- the paths, one per line, with nothing
-   said about each.
-3. **Contracts** later nodes build against: routes and what they return,
-   function signatures, data shapes, the app name, package folder and port. A
-   list of the things themselves, not prose about them. Be complete here.
-4. **Decisions a later node could trip over** -- one line each, and only where a
-   node would otherwise contradict you or guess wrong. A field you capped at 500
-   characters is one; your palette, your copy and your reasons for either are
-   not, because they are in the files.
-5. **What you left stubbed or undone**, and anything you need changed outside
-   your boundary -- one line each.
-6. **How to see it** -- the command, and at most one sentence. Not a recital of
-   what you checked or what it showed.
+### If you settled something: a decision, a spec, a contract
+
+Nothing you produced is in the folder, so the report is the deliverable.
+
+- **The contract itself** -- fields and their types and rules, function
+  signatures, routes and what they return, ordering, validation, the states a
+  page must cover. No target: say all of it.
+- **Decisions the contract does not make obvious**, with the reason in the same
+  line, only where a node would otherwise pick differently.
+- **What you deliberately left open** for a later node to settle.
+
+Around 150 words beyond the contract. No files list and no way to run it.
+
+### If you built something
+
+The code is in the folder, so name the parts of it that cannot be guessed.
+
+- **The seams a later node binds to** -- exported names, routes and what they
+  return, element ids, data shapes, the app name, package folder and port. A
+  list of the things themselves, not prose about them. No target: be complete.
+- **What you built** -- three sentences, no subheadings.
+- **Files you created or changed** -- the paths, one per line, nothing said
+  about each.
+- **Where you departed from the contract you were given**, and any decision a
+  later node could contradict -- one line each. A field you capped at 500
+  characters is one; your palette and your copy are not, because they are in the
+  files.
+- **What you left stubbed**, and anything you need changed outside your
+  boundary -- one line each.
+- **How to run it** -- the command, and nothing about what you saw.
+
+Around 300 words beyond the seams.
+
+### If you checked something
+
+Your findings are the deliverable, and a failure is worth more than a pass.
+
+- **What failed** -- for each: what you did, what you expected, what happened,
+  and the file and line it comes from. No target: enough for the next node to
+  fix it without repeating your work.
+- **What you exercised** -- the commands and the scenarios, as a list.
+- **What held** -- one line for the lot.
+- **What you did not cover**, and why.
+- **Tests you added** -- the paths.
+
+Around 200 words beyond the failures.
 
 Use `stuck` when you cannot finish the subtask: say why in one or two sentences
 and what you would need.
