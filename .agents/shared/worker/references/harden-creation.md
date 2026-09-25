@@ -283,9 +283,12 @@ it in its report of built-in issues for the pass.
 **A command that dies from a signal.** Exit status 137 or 143, or `Killed`
 with no failure output, is not a test failure until the shed ledger says it is
 not a shed. Note the time before each command (`date -u
-+%Y-%m-%dT%H:%M:%S`), and on a signal death look for sheds since then:
++%Y-%m-%dT%H:%M:%S`), and on a signal death look for sheds since then, with
+the time you noted written into the lookup (a shell variable does not survive
+from one command to the next):
 
 ```bash
+STARTED_AT=2026-09-24T11:00:00  # the time you noted before the command
 jq -c --arg since "$STARTED_AT" \
     'select(.type == "process_shed" and .timestamp >= $since)' \
     /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
