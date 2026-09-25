@@ -17,9 +17,13 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: ChatSnapshot | null } = { agent: null };
+const agentState: { agent: ChatSnapshot | null; provisional: { account_id: string } | undefined } = {
+  agent: null,
+  provisional: undefined,
+};
 vi.mock("../models/Chats", () => ({
-  getChatById: () => agentState.agent,
+  getChatById: () => agentState.agent ?? undefined,
+  getProvisionalChat: () => agentState.provisional,
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -83,7 +87,13 @@ vi.mock("./fast-mode-limit", () => ({
 }));
 vi.mock("../models/Response", () => ({ getEventsForChat: () => [] }));
 
-const providerState: { accounts: unknown[]; defaultId: string | null } = { accounts: [], defaultId: null };
+const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: boolean } = {
+  accounts: [],
+  defaultId: null,
+  isLoaded: true,
+};
+// Every time something opened the provider chooser, with whether it asked to hear of the sign-in.
+const chooserOpens: { hasOnSignedIn: boolean }[] = [];
 // Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
 const pins: [string, boolean][] = [];
 vi.mock("../models/Providers", () => ({
@@ -94,7 +104,11 @@ vi.mock("../models/Providers", () => ({
     return Promise.resolve();
   },
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
-  openProviderChooser: () => undefined,
+  accountForFirstSend: (id: string) =>
+    providerState.accounts.find((a) => (a as { id: string }).id === id) ?? providerState.accounts[0] ?? null,
+  areAccountsLoaded: () => providerState.isLoaded,
+  openProviderChooser: (intent: { onSignedIn?: unknown } = {}) =>
+    chooserOpens.push({ hasOnSignedIn: intent.onSignedIn !== undefined }),
   deleteAccount: () => Promise.resolve(),
   renameAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
@@ -209,6 +223,9 @@ beforeEach(() => {
   chatSettingsState.settings = DEFAULT_CHAT_SETTINGS;
   chatSettingsState.loads = 0;
   providerState.defaultId = null;
+  providerState.isLoaded = true;
+  chooserOpens.length = 0;
+  agentState.provisional = undefined;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
@@ -217,8 +234,56 @@ beforeEach(() => {
 });
 
 describe("the combo card", () => {
-  it("renders nothing when the agent is unknown", () => {
+  it("renders nothing for a chat the page knows nothing about yet", () => {
     agentState.agent = null;
+    render();
+    expect(ROOT().innerHTML).toBe("");
+  });
+
+  it("names the account a chat with no agent yet starts on, with no menu to open", () => {
+    agentState.agent = null;
+    agentState.provisional = { account_id: "" };
+    render();
+    expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
+    expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+  });
+
+  it("says a chat with no agent yet is not connected when no provider is signed in, and opens the chooser", () => {
+    agentState.agent = null;
+    agentState.provisional = { account_id: "" };
+    providerState.accounts = [];
+    render();
+    expect(screenText()).toContain("Not connected");
+    click(".model-selector-not-connected");
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: false }]);
+  });
+
+  it("does not call a chat not connected before the account list has loaded", () => {
+    providerState.isLoaded = false;
+    providerState.accounts = [];
+    agentState.agent = null;
+    agentState.provisional = { account_id: "" };
+    render();
+    expect(ROOT().innerHTML).toBe("");
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
+    settingsState.choice = null;
+    render();
+    expect(ROOT().innerHTML).toBe("");
+  });
+
+  it("says a running chat with no provider signed in is not connected, and switches it onto the one signed in", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
+    settingsState.choice = null;
+    providerState.accounts = [];
+    render();
+    expect(screenText()).toContain("Not connected");
+    click(".model-selector-not-connected");
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: true }]);
+  });
+
+  it("stays blank for a running chat that names no account while providers are signed in", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
+    settingsState.choice = null;
     render();
     expect(ROOT().innerHTML).toBe("");
   });
