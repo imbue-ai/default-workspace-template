@@ -560,10 +560,13 @@ def build_import_index(layout: RepoLayout) -> dict[str, tuple[str, ...]]:
         for module in member.module_names
     }
     member_directories = tuple(member.directory for member in layout.python_members)
+    collected_tests = frozenset(layout.test_files)
     importers: dict[str, set[str]] = defaultdict(set)
     for path in sorted(layout.tracked_files):
-        if not path.endswith(".py") or any(
-            is_path_covered_by(directory, path) for directory in member_directories
+        if (
+            not path.endswith(".py")
+            or any(is_path_covered_by(directory, path) for directory in member_directories)
+            or (is_test_file_name(path) and path not in collected_tests)
         ):
             continue
         for module in _imported_modules(layout.repo_root / path):

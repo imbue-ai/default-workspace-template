@@ -359,10 +359,16 @@ def test_an_ignored_vendored_subtree_selects_none_of_its_tests(workspace: Path) 
     write_repo_file(
         workspace, "system/vendor/tool/pyproject.toml", '[tool.pytest.ini_options]\naddopts = ["-q"]\n'
     )
-    write_repo_file(workspace, "system/vendor/tool/tool_test.py", "# Exercises system/scripts/forward_port.py.\n")
+    write_repo_file(
+        workspace,
+        "system/vendor/tool/tool_test.py",
+        "# Exercises system/scripts/forward_port.py.\nimport corelib\n",
+    )
     commit_everything(workspace, "vendor a tool")
 
-    selection = _select(workspace, ["system/scripts/forward_port.py"])
+    selection = _select(
+        workspace, ["system/scripts/forward_port.py", "system/libs/corelib/src/corelib/core.py"]
+    )
 
     assert not any("system/vendor/tool" in line for line in _command_lines(selection))
     assert "uv run pytest system/scripts/forward_port_test.py" in _command_lines(selection)
