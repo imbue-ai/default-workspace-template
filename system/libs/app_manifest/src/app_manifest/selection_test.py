@@ -366,4 +366,3 @@ def test_an_ignored_vendored_subtree_selects_none_of_its_tests(workspace: Path) 
 
     assert not any("system/vendor/tool" in line for line in _command_lines(selection))
     assert "uv run pytest system/scripts/forward_port_test.py" in _command_lines(selection)
-
