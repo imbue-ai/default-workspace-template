@@ -54,9 +54,7 @@ describe("the zone grid", () => {
       );
     expect(area(["left-half", "right-half"])).toBe(1);
     expect(area(["top-half", "bottom-half"])).toBe(1);
-    expect(
-      area(["top-left-quarter", "top-right-quarter", "bottom-left-quarter", "bottom-right-quarter"]),
-    ).toBe(1);
+    expect(area(["top-left-quarter", "top-right-quarter", "bottom-left-quarter", "bottom-right-quarter"])).toBe(1);
   });
 
   it("sets the state for a zone a window state stands for, and the frame for the rest", () => {
