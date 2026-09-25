@@ -19,7 +19,14 @@ plain ``python3``.
 
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Final
+
+# The labels the agent-creation paths stamp (see the module docstring).
+PRIMARY_LABEL: Final[str] = "is_primary"
+CHAT_LABEL: Final[str] = "user_created"
+WORKER_LABEL: Final[str] = "agent_created"
 
 
 def _labels_for_agent(agent_name: str) -> dict | None:
@@ -50,11 +57,16 @@ def _labels_for_agent(agent_name: str) -> dict | None:
     return None
 
 
+def is_label_true(labels: Mapping[str, object], label: str) -> bool:
+    """Whether ``labels`` sets ``label`` to true (mngr stores label values as strings)."""
+    return str(labels.get(label, "")).lower() == "true"
+
+
 def _has_true_label(agent_name: str, label: str) -> bool:
     labels = _labels_for_agent(agent_name)
     if labels is None:
         return False
-    return str(labels.get(label, "")).lower() == "true"
+    return is_label_true(labels, label)
 
 
 def is_worker_agent(agent_name: str) -> bool:
@@ -63,7 +75,7 @@ def is_worker_agent(agent_name: str) -> bool:
     Returns False when the host records are unavailable or the agent is not
     found, so the caller falls back to the protected user-agent band.
     """
-    return _has_true_label(agent_name, "agent_created")
+    return _has_true_label(agent_name, WORKER_LABEL)
 
 
 def is_chat_agent(agent_name: str) -> bool:
@@ -76,7 +88,7 @@ def is_chat_agent(agent_name: str) -> bool:
     not found, so an unclassifiable agent is treated as least-protected rather
     than given a chat's engagement-based protection.
     """
-    return _has_true_label(agent_name, "user_created")
+    return _has_true_label(agent_name, CHAT_LABEL)
 
 
 def is_primary_agent(agent_name: str) -> bool:
@@ -88,4 +100,4 @@ def is_primary_agent(agent_name: str) -> bool:
     or unclassified, so only an agent explicitly labelled ``is_primary=true`` is
     ever pinned.
     """
-    return _has_true_label(agent_name, "is_primary")
+    return _has_true_label(agent_name, PRIMARY_LABEL)
