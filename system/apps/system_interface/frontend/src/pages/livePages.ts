@@ -22,6 +22,7 @@
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
+  SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
@@ -30,7 +31,6 @@ import {
   SHELL_OPEN,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
-  SHELL_DRAFT_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageUrl } from "../model/pageUrl";
