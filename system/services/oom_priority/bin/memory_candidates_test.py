@@ -450,7 +450,8 @@ def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -
     }
 
     result = subprocess.run(
-        [sys.executable, str(_SCRIPT), "--json"], env=env, capture_output=True, text=True, timeout=60
+        # -S keeps site-packages off the path, so a non-stdlib import fails here as it would under python3.
+        [sys.executable, "-S", str(_SCRIPT), "--json"], env=env, capture_output=True, text=True, timeout=60
     )
 
     assert result.returncode == 0, result.stderr
