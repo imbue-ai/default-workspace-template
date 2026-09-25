@@ -157,7 +157,7 @@ Two references drafted before a send are two blocks, each under its own prompt l
 | Turning a draft text into a launch of the pinned app's draft launch path | The shell's store |
 | Which chat receives a draft, and holding it until the root applies it | The chat app's intake (the post-launch-paths plan) |
 | Writing a reference file and swapping the block for the pointer form | The chat app: its `POST /api/element-references` and the frontend helper every composer entry runs |
-| Serving the library's modules from an app's origin | Each app, at `/_static/app_contract.js` and `/_static/context_menu.js` |
+| Serving the library's modules from an app's origin | The shell and each agent-built app, at `/_static/app_contract.js` and `/_static/context_menu.js`; a built-in that draws the menu bundles the library from source |
 
 ### 3.6 Invariants
 
@@ -280,7 +280,7 @@ In `system/libs/workspace_ui/src/`:
 - `components/contextMenuOpener.ts`: `createContextMenuOpener()` answers an `open` for the built-ins, backed by `createMenu` and rendered through a render root of its own under `<body>`, so every Mithril page draws the shared Menu without a slot for it and none repeats the capture logic.
 - `components/menu.ts`: the sheet under an open menu prevents the default of a `contextmenu` event, so a right-click that closes a menu is a handled event the installer yields to (section 12) and the browser's own menu stays away; nothing else changes.
 
-`app_manifest.registry` gains `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` beside the contract's, and the built-in apps that serve the contract module serve this one the same way.
+`app_manifest.registry` gains `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` beside the contract's; the shell (section 6) and each scaffolded app (section 10) serve the module at that route, while the built-ins that draw the menu bundle the library from source and go on serving only the contract module.
 
 ## 10. Agent-built apps
 
