@@ -137,7 +137,7 @@ Which of the three shapes below you use follows from what your subtask hands
 over. Each names the one part with no word target -- the part the next node
 cannot work without -- and a rough target for the rest.
 
-### If you settled something: a decision, a spec, a contract
+### If your primary responsibility was a decision, a spec or a contract
 
 Nothing you produced is in the folder, so the report is the deliverable.
 
@@ -154,13 +154,14 @@ Nothing you produced is in the folder, so the report is the deliverable.
 
 Around 150 words beyond the contract. Nothing to run, so no command.
 
-### If you built something
+### If your primary responsibility was implementation
 
 The code is in the folder, so name the parts of it that cannot be guessed.
 
-- **The seams a later node binds to** -- exported names, routes and what they
-  return, element ids, data shapes, the app name, package folder and port. A
-  list of the things themselves, not prose about them. No target: be complete.
+- **The public interface a later node calls** -- exported names, routes and
+  what they return, element ids, data shapes, the app name, package folder and
+  port. A list of the things themselves, not prose about them. No target: be
+  complete.
 - **What you built** -- three sentences, no subheadings.
 - **Files you created or changed** -- the paths, one per line, nothing said
   about each.
@@ -172,9 +173,9 @@ The code is in the folder, so name the parts of it that cannot be guessed.
   boundary -- one line each.
 - **How to run it** -- the command, and nothing about what you saw.
 
-Around 300 words beyond the seams.
+Around 300 words beyond the interface.
 
-### If you checked something
+### If your primary responsibility was checking, testing, verification or validation
 
 Your findings are the deliverable, and a failure is worth more than a pass.
 
