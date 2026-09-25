@@ -111,6 +111,16 @@ describe("installElementContextMenu", () => {
     expect(card()!.style.left).toBe("70px");
   });
 
+  it("keeps the open card on a right-click on the card itself, describing none of its own buttons", () => {
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    rightClick(document.getElementById("para") as Element);
+    const opened = card();
+    const event = rightClick(row("explain-element"), { clientX: 90 });
+    expect(event.defaultPrevented).toBe(true);
+    expect(card()).toBe(opened);
+    expect(card()!.style.left).toBe("40px");
+  });
+
   it("takes a page's own renderer and its own rows", () => {
     const open = vi.fn();
     uninstall = installElementContextMenu({

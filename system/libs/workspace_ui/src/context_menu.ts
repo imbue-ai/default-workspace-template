@@ -154,6 +154,9 @@ export function createDefaultRenderer(
     next.setAttribute(CONTEXT_MENU_CARD_ATTR, "");
     next.setAttribute("role", "menu");
     next.setAttribute("style", CARD_STYLE);
+    // A right-click on the card itself is handled here, so the installer yields to it (as it
+    // yields to the shared Menu's sheet) rather than describing one of the card's own buttons.
+    next.addEventListener("contextmenu", (event) => event.preventDefault());
     for (const row of rows) {
       if (row.kind === "divider") {
         const divider = ownerDocument.createElement("hr");
