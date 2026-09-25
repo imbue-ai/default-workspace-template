@@ -294,7 +294,7 @@ def test_the_override_file_selects_consumers_and_integration_tests(workspace: Pa
 def test_an_override_naming_a_suite_that_does_not_exist_fails_loudly(workspace: Path) -> None:
     write_repo_file(
         workspace,
-        "system/libs/app_manifest/src/app_manifest/test_selection_overrides.toml",
+        "system/config/test_selection_overrides.toml",
         'always_run = []\n\n[[consumer]]\npaths = ["catalog/**"]\nsuites = ["system/apps/gone"]\nnote = "stale"\n\n',
     )
     commit_everything(workspace, "a stale override")

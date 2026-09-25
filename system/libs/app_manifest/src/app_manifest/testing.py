@@ -257,7 +257,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
     write_repo_file(repo_root, ".mngr/settings.toml", "")
     write_repo_file(repo_root, "catalog/templates.json", "[]\n")
-    write_repo_file(repo_root, "system/libs/app_manifest/src/app_manifest/test_selection_overrides.toml", _SELECTION_OVERRIDES)
+    write_repo_file(repo_root, "system/config/test_selection_overrides.toml", _SELECTION_OVERRIDES)
     commit_everything(repo_root, "workspace")
 
 

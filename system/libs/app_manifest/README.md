@@ -243,12 +243,15 @@ can observe the path and record it in the override file.
 
 ### The override file
 
-`src/app_manifest/test_selection_overrides.toml` holds what the declarations
+`system/config/test_selection_overrides.toml` holds what the declarations
 cannot show: `always_run` (the cross-cutting guards), `[[consumer]]` entries
 (`paths` globs, the `suites` they select, and a `note`; an empty `suites` says
 the always-run set covers the paths), and `[[integration]]` entries for tests
 that drive a real installed tool (`test`, the `paths` that select it, and a
 `note`). Paths are gitignore-style globs over repo-root-relative paths; a suite
 is a test file or a suite directory. A suite that does not exist fails the
-selection rather than selecting nothing.
+selection rather than selecting nothing. `test_repo_test_selection.py` holds the real tree to the
+mapping: every tracked path that is not documentation must classify, and every
+suite the file names must exist. CI runs it on every change, and a workspace
+runs it whenever the selector or the override file changes.
 

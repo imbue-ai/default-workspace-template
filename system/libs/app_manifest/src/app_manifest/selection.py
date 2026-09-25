@@ -4,8 +4,8 @@ A test runs when its subject changed: the package, skill directory, or script it
 or something that subject consumes. Consumers come from what the workspace already declares --
 ``pyproject.toml`` and ``package.json`` workspace dependencies, ``uv.lock``'s dependency edges,
 app manifests' ``[[references]]`` and supervisord wiring -- plus the test files that name a
-changed file, the workspace modules the unpackaged scripts import, and the override file beside
-this module for the consumers none of those can see. A small always-run set guards the
+changed file, the workspace modules the unpackaged scripts import, and the override file in
+``system/config/`` for the consumers none of those can see. A small always-run set guards the
 repo-wide invariants any edit can break. A path nothing classifies falls back to the full root
 suite, so a gap in the mapping costs time rather than coverage.
 """
@@ -63,7 +63,7 @@ from app_manifest.workspace_graph import read_own_root_units
 from app_manifest.workspace_graph import read_python_members
 
 OVERRIDES_PATH: Final[RepoRelativePath] = RepoRelativePath(
-    "system/libs/app_manifest/src/app_manifest/test_selection_overrides.toml"
+    "system/config/test_selection_overrides.toml"
 )
 
 
@@ -98,6 +98,8 @@ _NPM_ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset(
         "system/eslint.config.js",
         "system/tsconfig.base.json",
         "system/.prettierrc",
+        # The npm root's prebuild: every bundle compiles in the assets it fetches.
+        "system/scripts/fetch_mngr_assets.sh",
     }
 )
 _NPM_CHECK_SCRIPTS: Final[tuple[str, ...]] = ("test", "lint", "format:check")
