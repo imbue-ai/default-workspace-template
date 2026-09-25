@@ -133,8 +133,8 @@ note = "spawned by the isolated-instance server"
 
 [[consumer]]
 paths = ["system/scripts/env.d/**"]
-suites = ["system/services/env_converge", "system/libs/bootstrap/src/bootstrap/install_secret_scanners_test.py"]
-note = "units the env-converge service runs"
+suites = []
+note = "the boot units and overlay list the env-converge service runs, which no test runs"
 
 [[consumer]]
 paths = [
