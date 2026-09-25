@@ -15,7 +15,8 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 Order of decision (:func:`classify_user_message`):
 
 1. An explicit detector matches (stop hook, fleet, task-notification, background-task report,
-   skill, /welcome, a seeded chat's context block, model-bar traffic, a latchkey resolution)
+   skill, /welcome, a seeded chat's context block, model-bar traffic, a latchkey resolution,
+   reports merged into a turn with the user's words)
    -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
    ``is_meta`` yet deliberately surfaces as a chip.
 2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
@@ -256,6 +257,15 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
     )
 
 
+def _match_merged_background_task_reports(content: str) -> MessageDisplay | None:
+    """The user's words merged into one turn with reports that were queued beside them (a harness
+    that flushes its queue as one message); the page shows only the words."""
+    words, reports = split_background_task_reports(content)
+    if not reports:
+        return None
+    return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=words)
+
+
 def _match_browser_fleet(content: str) -> MessageDisplay | None:
     """A browser-fleet nudge; the sentinel is stripped so the chip shows the inner text."""
     match = _BROWSER_FLEET_RE.match(content)
@@ -351,6 +361,7 @@ _DETECTORS = (
     _match_local_command_output,
     _match_bash_block,
     _match_permission_resolution,
+    _match_merged_background_task_reports,
 )
 
 

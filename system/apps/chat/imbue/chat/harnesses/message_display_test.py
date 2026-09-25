@@ -9,6 +9,8 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
@@ -414,3 +416,23 @@ def test_a_stopped_queue_splits_only_whole_line_reports() -> None:
     quoting = f"why is <{tag}><summary>Build</summary>it failed</{tag}> shown twice?"
 
     assert split_background_task_reports("\n".join([quoting, report])) == (quoting, (report,))
+
+
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+def test_a_report_flushed_into_the_users_turn_shows_only_the_users_words(separator: str) -> None:
+    """codex's tap resend, pi's flush, and antigravity's queue each send the queue as one message."""
+    module = _load_system_script("run_in_background.py")
+    report = module.compose_report(
+        description="Build",
+        command=["make"],
+        returncode=0,
+        output="built\n",
+        output_path=Path("data/.tasks/run-in-background/x/output.log"),
+    )
+
+    decision = classify_user_message(separator.join(["fix the header too", report, "and the footer"]))
+
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "fix the header too\nand the footer"
+
