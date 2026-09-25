@@ -3,7 +3,7 @@
  * geometry, reducers, store, pages, gestures, views, and the wiring at the root. A module
  * imports only from its own layer or a lower one; the root-level boundary modules (``relay.ts``,
  * ``reload.ts``) and the shared library are below every layer. Walks the relative imports of
- * every non-test source, the way ``lint-and-format.test.ts`` registers the other code checks.
+ * every non-test source.
  */
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join, relative, resolve } from "path";

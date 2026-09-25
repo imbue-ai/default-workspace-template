@@ -40,5 +40,6 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 ```bash
 cd system && npm ci      # every frontend's dependencies
 cd system && npm test    # every package's tests, this one's included
+cd system && npm run lint && npm run format:check && npm run typecheck   # eslint, prettier, tsc
 cd system/libs/workspace_ui && npx vitest run
 ```

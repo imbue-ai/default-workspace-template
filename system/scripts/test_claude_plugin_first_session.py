@@ -39,13 +39,17 @@ _SKILL_LIST_PROMPT = (
 )
 
 
-def _requires_real_claude() -> None:
-    if shutil.which("claude") is None:
-        pytest.skip("the claude CLI is not installed")
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip(
-            "ANTHROPIC_API_KEY is not set; an isolated config dir has no other credential"
-        )
+# Marks, not a call in the test body: they are evaluated before any fixture runs,
+# so a skipped run never builds the fixture's worktree.
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("claude") is None, reason="the claude CLI is not installed"
+    ),
+    pytest.mark.skipif(
+        not os.environ.get("ANTHROPIC_API_KEY"),
+        reason="ANTHROPIC_API_KEY is not set; an isolated config dir has no other credential",
+    ),
+]
 
 
 @pytest.fixture
@@ -127,7 +131,6 @@ def _first_session_skill_list(worktree: Path, config_dir: Path, home: Path) -> s
 def test_provision_time_install_makes_plugin_skills_available_in_the_first_session(
     isolated_config_dir: Path, fresh_worktree: Path, tmp_path: Path
 ) -> None:
-    _requires_real_claude()
     home = tmp_path / "home"
     home.mkdir()
 
