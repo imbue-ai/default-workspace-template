@@ -241,15 +241,7 @@ export class LivePagesLayer implements PageDriver {
       if (app === undefined) return;
       const page = this.pages.get(window.id) ?? this.create(window, app);
       shownIds.add(window.id);
-      if (!app.is_running) {
-        page.isHeldForStop = true;
-        this.hide(page);
-        return;
-      }
-      if (page.isHeldForStop) {
-        page.isHeldForStop = false;
-        this.reloadPage(page);
-      }
+      if (!this.prepareShownPage(page, app)) return;
       const box = this.contentBox(window.id);
       if (box === null) {
         this.hide(page);
@@ -261,26 +253,8 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
-
-    // Only after the shell's own desktops update or layout load, never on a redraw or a local edit (an open, a
-    // close, a settings answer): between a page's own location report and the broadcast that stores it, the
-    // stored path is still the old one, and nothing must send the page back there.
-    const desktopsRevision = this.store.getDesktopsRevision();
-    const layoutLoadsRevision = this.store.getLayoutLoadsRevision();
-    if (
-      desktopsRevision !== this.followedDesktopsRevision ||
-      layoutLoadsRevision !== this.followedLayoutLoadsRevision
-    ) {
-      this.followedDesktopsRevision = desktopsRevision;
-      this.followedLayoutLoadsRevision = layoutLoadsRevision;
-      this.follow(windowsById);
-    }
-
-    if (focused !== this.lastFocusedWindowId) {
-      this.lastFocusedWindowId = focused;
-      const page = focused === null ? undefined : this.pages.get(focused);
-      if (page !== undefined) requestFrameFocus(page.wrapper);
-    }
+    this.followIfRevised(windowsById);
+    this.focusIfChanged(focused);
   }
 
   /** Solo mode (the pull-out-window spec, section 7.5): the one window's page over the whole host, live, and no
@@ -297,32 +271,52 @@ export class LivePagesLayer implements PageDriver {
     }
     if (found === undefined || app === undefined) return;
     const page = this.pages.get(soloWindowId) ?? this.create(found.window, app);
+    if (!this.prepareShownPage(page, app)) return;
+    const hostBox = this.host.getBoundingClientRect();
+    this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true);
+    if (page.greetedDesktopId !== null && page.greetedDesktopId !== found.desktop.id) this.greet(page);
+    this.followIfRevised(windowsById);
+    this.focusIfChanged(soloWindowId);
+  }
+
+  /** Whether a page about to be shown can be: a stopped app's page is hidden and held (false), and a held page
+   *  is reloaded once its app runs again. */
+  private prepareShownPage(page: LivePage, app: AppRecord): boolean {
     if (!app.is_running) {
       page.isHeldForStop = true;
       this.hide(page);
-      return;
+      return false;
     }
     if (page.isHeldForStop) {
       page.isHeldForStop = false;
       this.reloadPage(page);
     }
-    const hostBox = this.host.getBoundingClientRect();
-    this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true);
-    if (page.greetedDesktopId !== null && page.greetedDesktopId !== found.desktop.id) this.greet(page);
+    return true;
+  }
+
+  /** Follow the windows' paths only after the shell's own desktops update or layout load, never on a redraw or
+   *  a local edit (an open, a close, a settings answer): between a page's own location report and the broadcast
+   *  that stores it, the stored path is still the old one, and nothing must send the page back there. */
+  private followIfRevised(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
     const desktopsRevision = this.store.getDesktopsRevision();
     const layoutLoadsRevision = this.store.getLayoutLoadsRevision();
     if (
-      desktopsRevision !== this.followedDesktopsRevision ||
-      layoutLoadsRevision !== this.followedLayoutLoadsRevision
+      desktopsRevision === this.followedDesktopsRevision &&
+      layoutLoadsRevision === this.followedLayoutLoadsRevision
     ) {
-      this.followedDesktopsRevision = desktopsRevision;
-      this.followedLayoutLoadsRevision = layoutLoadsRevision;
-      this.follow(windowsById);
+      return;
     }
-    if (this.lastFocusedWindowId !== soloWindowId) {
-      this.lastFocusedWindowId = soloWindowId;
-      requestFrameFocus(page.wrapper);
-    }
+    this.followedDesktopsRevision = desktopsRevision;
+    this.followedLayoutLoadsRevision = layoutLoadsRevision;
+    this.follow(windowsById);
+  }
+
+  /** Give the focused window's page the frame focus once, when the focused window changes. */
+  private focusIfChanged(focused: string | null): void {
+    if (focused === this.lastFocusedWindowId) return;
+    this.lastFocusedWindowId = focused;
+    const page = focused === null ? undefined : this.pages.get(focused);
+    if (page !== undefined) requestFrameFocus(page.wrapper);
   }
 
   private follow(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
