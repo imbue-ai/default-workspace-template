@@ -62,7 +62,7 @@ def test_it_blocks_a_git_history_rewrite() -> None:
 
 
 def test_it_blocks_a_pipe_into_head() -> None:
-    result = _run("-c", "ls | head -5")
+    result = _run("-c", "pytest | head -5")
     assert result.returncode == 2
     assert "tail or head" in result.stderr
 

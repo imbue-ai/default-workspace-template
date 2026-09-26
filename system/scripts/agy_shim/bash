@@ -48,8 +48,7 @@ note() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$SHIM_LOG" 2>
 # Outermost call only. A command the agent runs may itself invoke bash (a build, a test runner,
 # `xargs -n1 bash -c`), and policing those would block third-party code the agent did not write,
 # re-apply the rewrite prefix at every level, and pay the whole checker cost per nesting level.
-# Nested harnesses being unguarded is already the house norm (see "which pi runs which
-# extension" in tool-call-policies-state-of-things.md). MNGR_AGY_SHIM_OFF is the kill switch.
+# MNGR_AGY_SHIM_OFF is the kill switch.
 if [ -n "${MNGR_AGY_BASH_SHIM:-}" ] || [ -n "${MNGR_AGY_SHIM_OFF:-}" ] || [ ! -d "$SCRIPTS_DIR" ]; then
     # Every other fail-open path logs. This one is the broadest -- an unset or wrong
     # MNGR_AGENT_WORK_DIR disables every guard -- so it must not be the silent one.
@@ -80,8 +79,7 @@ if [ -z "$PAYLOAD" ]; then
 fi
 
 # claude's PreToolUse order (.claude/settings.json), on the command the agent actually wrote --
-# the rewrite happens after, so no guard ever inspects a prefixed command. Getting that ordering
-# for free is the one thing this shim has over pi, which needs `mngrOriginalCommand` for it.
+# the rewrite happens after, so no guard ever inspects a prefixed command.
 for guard in \
     agent_prevent_commit_rewrite.sh \
     agent_block_pipe_tail_head.sh \

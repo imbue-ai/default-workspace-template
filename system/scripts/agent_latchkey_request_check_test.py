@@ -199,6 +199,6 @@ def test_main_exit_codes() -> None:
     assert checker.main(["check", f"{_REQUEST} > /tmp/out.json"]) == 2
     assert checker.main(["check", "--backgrounded", _REQUEST]) == 2
     # The flag is not mistaken for the command, and its absence leaves the
-    # positional-only call (the form pi's bridge uses) reading as foreground.
+    # positional-only call (the wrapper's form for a foreground call) reading as foreground.
     assert checker.main(["check", "--backgrounded"]) == 0
     assert checker.main(["check", _REQUEST]) == 0

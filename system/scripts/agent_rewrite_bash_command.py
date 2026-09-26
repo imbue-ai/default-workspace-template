@@ -177,10 +177,10 @@ def build_hook_output(
 
 def main() -> None:
     # ``--prefix-only`` emits just the prefix, with no payload and no JSON envelope, for a
-    # caller that already holds the command and must NOT round-trip it: antigravity has no
-    # usable PreToolUse hook, so its guards run from a shell shim that receives the command as
-    # argv. Passing it back out through JSON would replace any non-UTF-8 byte with U+FFFD and
-    # strip trailing newlines -- i.e. silently execute something the agent did not write.
+    # harness with no usable PreToolUse hook, which runs the guards itself and already holds
+    # the command. It must NOT round-trip the command: passing it back out through JSON would
+    # replace any non-UTF-8 byte with U+FFFD and strip trailing newlines -- i.e. silently
+    # execute something the agent did not write.
     # ``build_rewritten_command("")`` IS the prefix, so this shares one definition with the
     # claude/codex path rather than restating it.
     if "--prefix-only" in sys.argv[1:]:
