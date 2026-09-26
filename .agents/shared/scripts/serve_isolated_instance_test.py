@@ -170,6 +170,10 @@ def _all_healthy(_url: str) -> int:
     return 200
 
 
+def _plenty_of_disk(_path: Path) -> int:
+    return 1024**4
+
+
 def _up(
     tmp_path: Path,
     *,
@@ -910,6 +914,7 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
         sleeper=lambda _seconds: None,
+        free_space=_plenty_of_disk,
     )
 
     assert code == 0
@@ -1029,6 +1034,7 @@ def test_refresh_replays_the_named_ports_and_copies(tmp_path: Path) -> None:
             http=_FakeHttp(_all_healthy),
             spawner=_FakeSpawner(),
             sleeper=lambda _seconds: None,
+            free_space=_plenty_of_disk,
         )
         == 0
     )
