@@ -106,8 +106,10 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
 
   display_label?: string;
-  // The body to display when a wrapper sentinel was stripped (a fleet nudge), or when a
-  // machine-written context block was (a seeded chat's first send: the user's own words).
+  // The body to display when a wrapper sentinel was stripped (a fleet nudge), a notice's
+  // summary line, or the user's own words behind machine context (prompt_with_context: a
+  // seeded chat's context block, or background-task reports flushed into the turn). On a
+  // secret_resolution, the notice without the reports a harness flushed with it.
   display_body?: string;
   // permission_resolution / secret_resolution only: the verdict written onto the
   // earlier card (granted / denied / error for a permission card; stored / declined /

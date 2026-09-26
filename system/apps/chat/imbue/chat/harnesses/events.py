@@ -96,7 +96,8 @@ class DisplayKind(StrEnum):
     # tool_call only: render the secret card (password inputs) instead of a tool row.
     SECRET_REQUEST = "secret_request"
     # user_message only: the chat app's stored / declined / superseded notice -- no row; the
-    # ``resolution`` field is written onto the earlier secret card.
+    # ``resolution`` field is written onto the earlier secret card. ``display_body`` is the
+    # notice alone when a harness flushed background-task reports into the same message.
     SECRET_RESOLUTION = "secret_resolution"
     # A subtle inline status message (e.g. "Context was compacted").
     STATUS = "status"
