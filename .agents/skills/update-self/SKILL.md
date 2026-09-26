@@ -107,7 +107,7 @@ with open('system/config/parent.toml', 'rb') as f:
 if [ -f "$(git rev-parse --git-common-dir)/shallow" ]; then
     git fetch --unshallow upstream
 fi
-git fetch upstream --tags
+git fetch upstream --tags --force
 
 python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
     > /tmp/update-self-target.json || exit 1
@@ -146,7 +146,9 @@ version" prompt says so). If they decline, record `run-status verdict REFUSED
 it>"` and end the pass. Details in `references/version-ceiling.md`.
 
 To preview what the release changes, diff from the merge base (`git diff
---name-status "$(git merge-base HEAD "$REF")" "$REF"`), never from `HEAD`.
+--name-status "$(git merge-base HEAD "$REF")" "$REF"`), never from `HEAD`. A
+workspace that predates the template's history rewrite has no merge base until
+Step 3a bridges it, so its preview waits until then.
 
 ### 2a. Hand off to the target's own update-self flow
 
@@ -200,6 +202,26 @@ matches the target.
 **The user named it:** take the confirmation now as in Step 2, offering the
 capped ref; if they take it, set `$REF` to it and re-run §2a the same way. If
 they decline every option, record `run-status verdict REFUSED --detail "..."`.
+
+**Then bridge an old workspace to the target's history.** The template's
+history was rewritten once, so a workspace created before that shares no commit
+with `$REF` and the worker's merge would have no base. This grafts the
+workspace's fork point onto its rewritten twin in `$REF` for the rest of this
+pass; the workspace's own history is not touched, and for every other workspace
+it changes nothing. Fetch the tags again first, forced: an older copy of Step 2
+cannot move a tag this workspace already holds, and the bridge must be built
+against the commit the worker will merge:
+
+```bash
+git fetch upstream --tags --force
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    bridge-history --ref "$REF" || exit 1
+```
+
+Either `"bridged"` value needs nothing from the user. If it exits non-zero, it
+built no bridge: record `run-status verdict STUCK --detail "<the error line, in
+plain terms>"`, surface it, and stop. From here on, a pass that ends for any
+reason drops the bridge first (Step 6's opening command); a retry rebuilds it.
 
 ### 3b. Launch
 
@@ -400,7 +422,7 @@ carry on into §5 and get their verdict there.
   the error text, a pointer to `data/.tasks/update-self/reports/`) -- this is
   the one message where detail is preserved, because it gets pasted into bug
   reports. Record `run-status verdict STUCK --detail "<one plain line on what
-  failed>"`.
+  failed>"`, and drop the history bridge as Step 6 opens.
 - **`done`** -> the audit below.
 
 ### 5a. Audit the report
@@ -542,6 +564,14 @@ NEEDS_RECREATION --detail "<why, one plain line>"` (with
 exists, offered in the same breath).
 
 ## 6. Teardown
+
+Drop the history bridge, whatever the outcome (a no-op when Step 3a built none;
+a retry rebuilds it):
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    bridge-history --drop
+```
 
 If a stray preview of a critical app is registered (an older pass may have left
 one; the careful flow refuses its next pass on that app while one is), tear it

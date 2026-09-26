@@ -77,6 +77,14 @@ belong in tested code rather than agent prose:
     possibly-stale local copy. ``differs`` gates only which SKILL.md prose the
     lead follows, not the path.
 
+``bridge-history``
+    Give ``HEAD`` a merge base with the target when the workspace predates the
+    template's history rewrite: a ``git replace`` graft names the workspace's
+    fork point as a parent of its rewritten twin, for as long as the two
+    histories share no commit. A no-op for every other workspace, and the call
+    that drops the graft once a merge has landed. ``--drop`` removes the
+    recorded graft whatever the histories: the pass's teardown.
+
 ``apply``
     Land a prepared merge and make the live workspace consistent with it, as
     one atomic, idempotent, rollback-on-failure motion inside a single
@@ -116,9 +124,10 @@ The logic lives in the sibling modules, imported by name from this directory
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
 verdict and record the Mind app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
-``update_environment``, ``update_probes``, ``update_ledger``, and
-``update_apply`` (the apply and recover orchestration). All of it is covered
-by ``update_self_test.py``.
+``update_environment``, ``update_probes``, ``update_ledger``,
+``update_history_bridge``, and ``update_apply`` (the apply and recover
+orchestration). All of it is covered by ``update_self_test.py`` and
+``test_update_history_bridge.py``.
 """
 
 from __future__ import annotations
@@ -148,6 +157,12 @@ from update_apply_contract import (
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
 from update_environment import default_sweep_homes
+from update_history_bridge import (
+    DEFAULT_STATE_PATH,
+    HistoryBridgeError,
+    bridge_history,
+    drop_history_bridge,
+)
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -219,8 +234,12 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
+    app_version = (
+        args.app_version if args.app_version is not None else fetch_app_template_ref()
+    )
+    target = resolve_target(
+        args.override, tags, remote=args.remote, app_version=app_version
+    )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
@@ -474,6 +493,17 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
             {"skill_dir": str(staged_skill), "differs": differs, "ref": args.ref}
         )
     )
+    return 0
+
+
+def _cmd_bridge_history(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    state = Path(args.state)
+    state = state if state.is_absolute() else repo_root / state
+    if args.drop:
+        print(drop_history_bridge(repo_root, state).to_json())
+        return 0
+    print(bridge_history(repo_root, args.ref, state).to_json())
     return 0
 
 
@@ -770,6 +800,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
 
+    bridge_parser = sub.add_parser(
+        "bridge-history",
+        help="Graft a workspace that predates the template's history rewrite onto "
+        "the target's history while they share no commit; drop the graft after.",
+        parents=[common],
+    )
+    bridge_mode = bridge_parser.add_mutually_exclusive_group(required=True)
+    bridge_mode.add_argument("--ref", help="The resolved target ref.")
+    bridge_mode.add_argument(
+        "--drop",
+        action="store_true",
+        help="Only remove a graft this subcommand recorded, whatever the histories.",
+    )
+    bridge_parser.add_argument(
+        "--state",
+        default=DEFAULT_STATE_PATH,
+        help=f"Where the graft is recorded (default: {DEFAULT_STATE_PATH}).",
+    )
+    bridge_parser.set_defaults(func=_cmd_bridge_history)
+
     apply_parser = sub.add_parser(
         "apply",
         help="Land a prepared merge and make the live workspace consistent with "
@@ -967,6 +1017,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         AppVersionUnavailableError,
         NoUpdateTargetError,
         ApplyPreconditionError,
+        HistoryBridgeError,
     ) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it
