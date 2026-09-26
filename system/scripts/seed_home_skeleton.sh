@@ -17,6 +17,10 @@ if [ ! -e /home/user/.cache ] && [ ! -L /home/user/.cache ]; then
     ln -s /var/cache/user /home/user/.cache
 fi
 
+# Link ~/.mcpc (mcpc's state) into data/.secrets before the first agent starts;
+# env-converge runs the same unit on every boot and update.
+bash /home/user/workspace/system/scripts/env.d/1300-mcpc-home-link.sh
+
 # Root's interactive shells read $HOME/.bashrc, which lives on the volume now;
 # seed the PATH + mngr-env lines the image used to keep in /root/.bashrc.
 if [ ! -e /home/user/.bashrc ]; then

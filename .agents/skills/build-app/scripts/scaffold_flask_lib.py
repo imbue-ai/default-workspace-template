@@ -80,6 +80,9 @@ _FORWARD_PORT_PATH = (
 )
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+# The <name> of data/.secrets/<name>.env, as the chat app's secret card and
+# app_manifest.primitives.SECRET_FILE_NAME_PATTERN spell it.
+SECRET_FILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
 
@@ -125,6 +128,18 @@ def _validate_name(name: str) -> None:
         sys.exit(f"error: --name {name!r} could not be registered: {registration_problem}")
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
+
+
+def _validate_secrets_file(name: str) -> None:
+    # The name is spliced into the program's `bash -c` string as
+    # data/.secrets/<name>.env, so anything outside the slug would break the
+    # command or name a file the secret card can never write.
+    if not SECRET_FILE_NAME_RE.fullmatch(name):
+        sys.exit(
+            f"error: --secrets-file {name!r} must be lowercase letters, digits and "
+            "hyphens, starting with a letter or digit "
+            "(the <name> of data/.secrets/<name>.env)"
+        )
 
 
 def _supervisord_dropin_dir(supervisord_conf: Path) -> Path:
@@ -507,7 +522,7 @@ copies = {{data = "data/.apps/{name}"}}
 # workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {entry_point}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -550,7 +565,21 @@ def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
     return _supervisord_program_path(conf, name)
 
 
-def _write_supervisord_program(path: Path, name: str, package: str, port: int) -> None:
+def _entry_point_command(name: str, secrets_file: str | None) -> str:
+    """The program's entry point, wrapped so a declared secret file's variables reach it.
+
+    `with_secrets.py` is the one sanctioned reader of data/.secrets/ (see the
+    connect-external-service skill): it loads the file into the child's environment
+    and execs the app, so the value appears in no config file and no command line.
+    """
+    if secrets_file is None:
+        return name
+    return f"python3 system/scripts/with_secrets.py data/.secrets/{secrets_file}.env -- {name}"
+
+
+def _write_supervisord_program(
+    path: Path, name: str, package: str, port: int, secrets_file: str | None
+) -> None:
     """Write the app's supervisord program to its own drop-in file.
 
     The command is wrapped in `bash -c "..."` because supervisord exec's commands
@@ -564,7 +593,12 @@ def _write_supervisord_program(path: Path, name: str, package: str, port: int) -
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
+        _SUPERVISORD_PROGRAM_TEMPLATE.format(
+            name=name,
+            package=package,
+            port=port,
+            entry_point=_entry_point_command(name, secrets_file),
+        )
     )
 
 
@@ -677,6 +711,11 @@ def main() -> None:
         help="repo root (defaults to nearest ancestor containing pyproject.toml + system/supervisord.conf)",
     )
     parser.add_argument(
+        "--secrets-file",
+        default=None,
+        help="the <name> of a data/.secrets/<name>.env the app needs (requested through the connect-external-service skill); the program runs under with_secrets.py so its variables reach the app",
+    )
+    parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
         help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
@@ -689,6 +728,8 @@ def main() -> None:
     args = parser.parse_args()
 
     _validate_name(args.name)
+    if args.secrets_file is not None:
+        _validate_secrets_file(args.secrets_file)
     icon_markup = _read_and_validate_icon(Path(args.icon_file))
     repo_root = (
         Path(args.repo_root).resolve()
@@ -709,7 +750,9 @@ def main() -> None:
         list(args.extra_dep),
         icon_markup,
     )
-    _write_supervisord_program(program_path, args.name, package, port)
+    _write_supervisord_program(
+        program_path, args.name, package, port, args.secrets_file
+    )
 
     if not args.skip_uv_sync:
         _validate_manifest(repo_root, package)

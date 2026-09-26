@@ -1,0 +1,208 @@
+"""Tests for the `/api/secret-requests` routes: filing, the card's submit and decline, hydration,
+and the notice each verdict puts into the chat -- over a recording bridge in place of the router's."""
+
+import os
+from pathlib import Path
+
+import pytest
+from flask import Flask
+from flask.testing import FlaskClient
+
+from imbue.chat import secret_requests_endpoints
+from imbue.chat.mock_secret_request_bridge_test import RecordingSecretRequestBridge
+from imbue.chat.secret_requests import SecretRequestStore
+from imbue.chat.state import attach_state
+from imbue.chat.state import state_of
+from imbue.chat.testing import build_test_state
+
+_CHAT = "agent-00000000000000000000000000000001"
+_OTHER_CHAT = "agent-00000000000000000000000000000002"
+
+
+def _client(tmp_path: Path, bridge: RecordingSecretRequestBridge) -> tuple[FlaskClient, SecretRequestStore]:
+    store = SecretRequestStore(
+        requests_directory=tmp_path / "requests", secrets_directory=tmp_path / "data" / ".secrets"
+    )
+    application = Flask(__name__)
+    state = build_test_state(secret_requests=store)
+    state.secret_request_bridge = bridge
+    attach_state(application, state)
+    secret_requests_endpoints.register_routes(application)
+    return application.test_client(), store
+
+
+def _file(client: FlaskClient, chat_id: str = _CHAT, file: str = "svc", variables: list[str] | None = None) -> dict:
+    response = client.post(
+        "/api/secret-requests",
+        json={"chat_id": chat_id, "file": file, "variables": variables or ["SVC_TOKEN"], "rationale": "to call it"},
+    )
+    assert response.status_code == 201, response.get_json()
+    return response.get_json()
+
+
+def test_filing_returns_what_the_card_and_the_agent_need(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT})))
+    filed = _file(client, variables=["SVC_TOKEN", "SVC_URL"])
+    assert filed["request_id"].startswith("secret-")
+    assert filed["file"] == "svc"
+    assert filed["variables"] == ["SVC_TOKEN", "SVC_URL"]
+    assert filed["env_path"] == "data/.secrets/svc.env"
+    assert filed["status"] == "pending"
+    assert filed["existing_variables"] == []
+    assert filed["overwrites"] == []
+
+
+def test_a_submit_writes_the_file_and_tells_the_chat_the_names_not_the_values(tmp_path: Path) -> None:
+    bridge = RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT}))
+    client, _ = _client(tmp_path, bridge)
+    filed = _file(client, variables=["SVC_TOKEN", "SVC_URL"])
+    value = "sk-" + "q" * 30
+
+    response = client.post(
+        f"/api/secret-requests/{filed['request_id']}/submit", json={"values": {"SVC_TOKEN": value, "SVC_URL": "u"}}
+    )
+
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+    assert body["status"] == "stored"
+    assert body["is_notice_delivered"] is True
+    assert value not in response.get_data(as_text=True)
+    assert (tmp_path / "data" / ".secrets" / "svc.env").read_text() == f"SVC_TOKEN='{value}'\nSVC_URL='u'\n"
+    [(chat_id, notice)] = bridge.delivered
+    assert chat_id == _CHAT
+    assert (
+        notice
+        == f"Secret stored: data/.secrets/svc.env (SVC_TOKEN, SVC_URL) (secret: stored, request_id: {filed['request_id']})"
+    )
+    assert client.get(f"/api/secret-requests/{filed['request_id']}").get_json()["status"] == "stored"
+
+
+def test_a_decline_carries_the_note_into_the_chat(tmp_path: Path) -> None:
+    bridge = RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT}))
+    client, _ = _client(tmp_path, bridge)
+    filed = _file(client)
+
+    response = client.post(
+        f"/api/secret-requests/{filed['request_id']}/decline", json={"note": "use the other account"}
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "declined"
+    [(_, notice)] = bridge.delivered
+    assert notice == (
+        f"Secret declined: data/.secrets/svc.env (SVC_TOKEN) (secret: declined, request_id: {filed['request_id']}) "
+        "use the other account"
+    )
+    assert not (tmp_path / "data" / ".secrets" / "svc.env").exists()
+
+
+def test_a_preview_chat_answers_no_secret_card(tmp_path: Path) -> None:
+    """A secondary chat runs from an editing worktree, so its answer would land in the wrong
+    data/.secrets while the live agent is told it was stored."""
+    bridge = RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT}))
+    client, _ = _client(tmp_path, bridge)
+    filed = _file(client)
+    state_of(client.application).is_secondary = True
+
+    submitted = client.post(f"/api/secret-requests/{filed['request_id']}/submit", json={"values": {"SVC_TOKEN": "v"}})
+    declined = client.post(f"/api/secret-requests/{filed['request_id']}/decline", json={})
+
+    assert submitted.status_code == 409
+    assert declined.status_code == 409
+    assert not (tmp_path / "data" / ".secrets" / "svc.env").exists()
+    assert bridge.delivered == []
+    assert client.get(f"/api/secret-requests/{filed['request_id']}").get_json()["status"] == "pending"
+
+
+def test_the_file_is_kept_when_the_chat_cannot_take_the_notice(tmp_path: Path) -> None:
+    client, _ = _client(
+        tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT}), is_delivery_failing=True)
+    )
+    filed = _file(client)
+    response = client.post(f"/api/secret-requests/{filed['request_id']}/submit", json={"values": {"SVC_TOKEN": "v"}})
+    assert response.status_code == 200
+    assert response.get_json()["is_notice_delivered"] is False
+    assert (tmp_path / "data" / ".secrets" / "svc.env").read_text() == "SVC_TOKEN='v'\n"
+
+
+def test_a_newer_request_supersedes_the_pending_one_and_a_submit_on_it_is_refused(tmp_path: Path) -> None:
+    bridge = RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT, _OTHER_CHAT}))
+    client, _ = _client(tmp_path, bridge)
+    first = _file(client)
+    second = _file(client, chat_id=_OTHER_CHAT)
+
+    assert client.get(f"/api/secret-requests/{first['request_id']}").get_json()["status"] == "superseded"
+    refused = client.post(f"/api/secret-requests/{first['request_id']}/submit", json={"values": {"SVC_TOKEN": "v"}})
+    assert refused.status_code == 409
+    # The superseded request lived in another chat, which learns of it only through a notice.
+    assert bridge.delivered == [
+        (
+            _CHAT,
+            f"Secret request superseded by a newer request for data/.secrets/svc.env (secret: superseded, request_id: {first['request_id']})",
+        )
+    ]
+    assert client.get(f"/api/secret-requests/{second['request_id']}").get_json()["status"] == "pending"
+
+
+def test_a_supersession_within_one_chat_sends_no_notice(tmp_path: Path) -> None:
+    bridge = RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT}))
+    client, _ = _client(tmp_path, bridge)
+    _file(client)
+    _file(client)
+    assert bridge.delivered == []
+
+
+def test_filing_answers_like_the_message_route_for_an_unknown_or_not_yet_known_chat(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT})))
+    body = {"chat_id": _OTHER_CHAT, "file": "svc", "variables": ["A"], "rationale": "why"}
+    assert client.post("/api/secret-requests", json=body).status_code == 404
+    not_ready_client, _ = _client(tmp_path / "b", RecordingSecretRequestBridge(is_ready=False))
+    assert not_ready_client.post("/api/secret-requests", json=body).status_code == 503
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file, so there is nothing to refuse")
+def test_an_unreadable_existing_env_file_answers_with_a_reason_rather_than_crashing(tmp_path: Path) -> None:
+    """Filing reads the file already there to report what a submit would replace, so a
+    file the chat app cannot open has to come back as the route's own error body."""
+    client, _ = _client(tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT})))
+    secrets_directory = tmp_path / "data" / ".secrets"
+    secrets_directory.mkdir(parents=True)
+    unreadable = secrets_directory / "svc.env"
+    unreadable.write_text("SVC_TOKEN='v'\n")
+    unreadable.chmod(0o000)
+
+    response = client.post(
+        "/api/secret-requests",
+        json={"chat_id": _CHAT, "file": "svc", "variables": ["SVC_TOKEN"], "rationale": "why"},
+    )
+
+    assert response.status_code == 500
+    assert "svc.env" in response.get_json()["detail"]
+
+
+def test_malformed_bodies_are_400s_and_unknown_ids_are_404s(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT})))
+    assert client.post("/api/secret-requests", data="nope", content_type="application/json").status_code == 400
+    assert (
+        client.post(
+            "/api/secret-requests", json={"chat_id": _CHAT, "file": "Bad", "variables": ["A"], "rationale": "r"}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/secret-requests", json={"chat_id": _CHAT, "file": "svc", "variables": "A", "rationale": "r"}
+        ).status_code
+        == 400
+    )
+    filed = _file(client)
+    assert (
+        client.post(f"/api/secret-requests/{filed['request_id']}/submit", json={"values": {"OTHER": "v"}}).status_code
+        == 400
+    )
+    assert client.post(f"/api/secret-requests/{filed['request_id']}/submit", json={"values": "v"}).status_code == 400
+    assert client.post(f"/api/secret-requests/{filed['request_id']}/decline", json={"note": 3}).status_code == 400
+    assert client.get("/api/secret-requests/secret-00000000000000000000000000000000").status_code == 404
+    unknown = client.post("/api/secret-requests/nope/submit", json={"values": {}})
+    assert unknown.status_code == 404
+    assert unknown.get_json()["detail"] == "No secret request with id 'nope'"
