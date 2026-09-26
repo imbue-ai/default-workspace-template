@@ -162,6 +162,9 @@ let chats: ChatSnapshot[] = [];
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
+// Whether the chat app has sent its chat list at least once: before that, a chat the page names
+// may simply not be known here yet.
+let isChatListReceived = false;
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
 // is in flight: from the socket opening to the chat list that ends it. Null otherwise.
 let replayedProvisionalIds: Set<string> | null = null;
@@ -230,6 +233,7 @@ function scheduleReconnect(): void {
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "chats_updated": {
+      isChatListReceived = true;
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
       const serialized = JSON.stringify(event.chats);
@@ -348,6 +352,11 @@ export function initChats(): void {
 
 export function isConnected(): boolean {
   return connected;
+}
+
+/** Whether the chat app has sent its chat list yet; until it has, a chat missing from it is unknown, not gone. */
+export function hasReceivedChatList(): boolean {
+  return isChatListReceived;
 }
 
 /** Every chat the app lists: the backend keeps the workspace's services-only "primary" agent
@@ -479,4 +488,76 @@ async function postCreateChat(body: Record<string, string | ModelIdentity | null
     name: created.name ?? "",
     displayName: created.display_name ?? created.name ?? "",
   };
+}
+
+/** A held intake as ``GET /api/chats/intakes/<token>`` answers it (the backend's ``PendingIntakeView``). */
+export interface PendingIntake {
+  message: string;
+  isDraft: boolean;
+  // Whether the root has to offer the picker over the chats before the intake can be applied.
+  needsPick: boolean;
+  // The chat the intake resolved to; null for a choice the user makes.
+  chatId: string | null;
+}
+
+/** What applying a held intake came to (the backend's ``IntakeApplyResponse``). */
+export interface AppliedIntake {
+  chatId: string;
+  // Text for the chat's composer, unsent; null when nothing is drafted.
+  composerText: string | null;
+  // The first message of a chat awaiting its first send with no account: the root launches it with this.
+  firstMessage: string | null;
+}
+
+/** Thrown when a token names no held intake: it was applied, dismissed, or expired. */
+export class PendingIntakeGoneError extends Error {}
+
+async function readIntakeResponse<T>(response: Response, token: string): Promise<T> {
+  if (response.status === 404) throw new PendingIntakeGoneError(`no pending intake ${token}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail ?? `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+/** The held intake a token names. Throws ``PendingIntakeGoneError`` when it is gone. */
+export async function fetchPendingIntake(token: string): Promise<PendingIntake> {
+  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`));
+  const data = await readIntakeResponse<{
+    message: string;
+    is_draft: boolean;
+    needs_pick: boolean;
+    chat_id: string | null;
+  }>(response, token);
+  return { message: data.message, isDraft: data.is_draft, needsPick: data.needs_pick, chatId: data.chat_id };
+}
+
+/** Apply a held intake, on ``chatId`` when it needed a pick; the token is consumed. Throws
+ *  ``PendingIntakeGoneError`` when another apply got there first. */
+export async function applyPendingIntake(token: string, chatId: string | null = null): Promise<AppliedIntake> {
+  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}/apply`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chatId === null ? {} : { chat_id: chatId }),
+  });
+  const data = await readIntakeResponse<{
+    chat_id: string;
+    composer_text: string | null;
+    first_message: string | null;
+  }>(response, token);
+  return { chatId: data.chat_id, composerText: data.composer_text, firstMessage: data.first_message };
+}
+
+/** Drop a held intake unapplied (the picker was dismissed); a token already gone is fine. The dismissal never
+ *  waits on this, so a failure is logged rather than thrown. */
+export async function discardPendingIntake(token: string): Promise<void> {
+  try {
+    const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`), { method: "DELETE" });
+    if (!response.ok && response.status !== 404) {
+      console.warn(`Could not drop the pending intake ${token}: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    console.warn(`Could not drop the pending intake ${token}`, error);
+  }
 }

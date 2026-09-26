@@ -20,6 +20,7 @@ import os
 import queue
 import socket
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -66,7 +67,9 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
@@ -74,6 +77,8 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
+from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -445,6 +450,14 @@ class RecordingClientActivityShell:
         return "", 204
 
 
+def build_temporary_secret_request_store() -> SecretRequestStore:
+    """A store rooted in a fresh temporary directory, laid out like the workspace's data/."""
+    root = Path(tempfile.mkdtemp(prefix="chat-secret-requests-"))
+    return SecretRequestStore(
+        requests_directory=root / "state" / "secret-requests", secrets_directory=root / "data" / ".secrets"
+    )
+
+
 def build_test_state(
     *,
     config: Config | None = None,
@@ -452,6 +465,7 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    secret_requests: SecretRequestStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -482,6 +496,10 @@ def build_test_state(
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
+        # Never the production directories: a test that files a request must not write
+        # under this package's own data/. A test that reads the files back injects a store
+        # rooted in its tmp_path.
+        secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
     )
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
@@ -742,6 +760,33 @@ class RunningWorkspace(FrozenModel):
     )
 
 
+def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name: str = "Chat-1") -> ChatSnapshot:
+    """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
+    return ChatSnapshot(
+        chat_id=ChatId(chat_id),
+        title=name.replace("-", " "),
+        name=name,
+        project=None,
+        status=ChatStatus.IDLE,
+        labels={},
+        agent_ids=(chat_id,),
+        handoff=None,
+        active_agent=ActiveAgentSnapshot(
+            agent_id=chat_id,
+            name=name,
+            harness=HarnessType.CLAUDE,
+            account_id=None,
+            state="RUNNING",
+            activity_state=ActivityState.IDLE,
+            model_choice=None,
+            queued_messages=(),
+            shoulder_tap_available=False,
+            is_connecting=False,
+        ),
+        last_messaged_at=last_messaged_at,
+    )
+
+
 def seed_failed_chat(
     agent_manager: AgentManager,
     chat_id: ChatId,
@@ -789,9 +834,13 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
     fake_claude.chmod(0o755)
     fake_mngr = fake_bin_dir / "mngr"
     # A create takes a beat, so a page opened on a chat being created is seen in that phase;
-    # ``FAKE_MNGR_CREATE_EXIT_CODE`` in the environment makes it fail with that status.
+    # ``FAKE_MNGR_CREATE_RELEASE_FILE`` in the environment holds it until that file exists, and
+    # ``FAKE_MNGR_CREATE_EXIT_CODE`` makes it fail with that status.
     fake_mngr.write_text(
-        '#!/bin/sh\ncase "$1" in create) sleep 2; echo "create failed on purpose" >&2; '
+        '#!/bin/sh\ncase "$1" in create) sleep 2; '
+        'if [ -n "$FAKE_MNGR_CREATE_RELEASE_FILE" ]; then '
+        'while [ ! -e "$FAKE_MNGR_CREATE_RELEASE_FILE" ]; do sleep 0.1; done; fi; '
+        'echo "create failed on purpose" >&2; '
         'exit "${FAKE_MNGR_CREATE_EXIT_CODE:-0}" ;; esac\nexit 0\n'
     )
     fake_mngr.chmod(0o755)
@@ -842,19 +891,33 @@ def running_workspace(
     fake_bin_dir = _write_fake_binaries(tmp_path)
 
     registry_path = tmp_path / "registry" / "apps.toml"
-    rows = [
+    # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
+    # the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    write_registry(
+        registry_path,
         registry_row_toml(
             "chat",
             chat_url,
             is_critical=True,
-            default_shortcut=("new", "new"),
+            default_shortcut=("root", "new"),
             display_name="Chat",
-            launch_paths=(("new", "New Chat", "/new"), ("send", "Send to chat...", "/send")),
-            launch_params={"new": ("account_id", "message"), "send": ("message",)},
+            launch_paths=(
+                ("root", "Chat", "/"),
+                ("new", "New Chat", "/api/chats/intake"),
+                ("send", "Send to chat...", "/api/chats/intake"),
+                ("draft", "Draft into chat", "/api/chats/intake"),
+            ),
+            launch_params={"new": ("account_id", "message"), "send": ("message",), "draft": ("message",)},
             launch_text_params={"new": "message", "send": "message"},
-        )
-    ]
-    write_registry(registry_path, *rows)
+            launch_draft_params={"draft": "message"},
+            launch_methods={"new": "POST", "send": "POST", "draft": "POST"},
+            launch_presets={
+                "new": {"target": "new_chat"},
+                "send": {"target": "chat_selector"},
+                "draft": {"target": "current_chat", "is_draft": "true"},
+            },
+        ),
+    )
 
     with (
         patch.dict(

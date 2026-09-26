@@ -43,12 +43,14 @@ background agent, which is its own chat -- or the human).
   sweep; a shell that cannot be read is a skipped sweep. Several windows can show
   the one browser at once (each is a viewer of the same display). A workspace saved
   under a larger cap restores its first browser and registers the rest stopped.
-- **Launch path** (`GET /new[?url=]`, the manifest's `new` launch path): the browser,
-  as a redirect to its page `/?session=<name>` -- created when there is none, started
+- **Launch path** (`POST /new`, the manifest's `new` launch path, posted by the shell with
+  an optional `url`): the browser, answered as `{"path": "/?session=<name>"}`, the page the
+  shell then opens a window at (`docs/system/blueprint/post-launch-paths/`) -- created when there is none, started
   again when it was stopped, and answered as it is when it runs, with `url` opened
   as a new tab in front (an empty `url` opens nothing new, like no `url` at all; a
   `url` that is not an absolute `http(s)` URL is 400; 503 while Chromium is not
-  installed). `POST /browsers` with no name answers the same browser; with a name
+  installed; a refusal carries its reason as `{"detail"}`, which the shell passes on
+  to whoever ran the launch). `POST /browsers` with no name answers the same browser; with a name
   it is a create (409 for a duplicate or a full fleet). The shell opens a browser
   window at the launch path (`layout.py open browser`); everything else about a
   browser it learns from the page itself through the app contract. The `/browsers`
@@ -80,6 +82,15 @@ background agent, which is its own chat -- or the human).
   which the viewer, when framed, imports to report `/?session=<name>` and
   `Browser N` as its location; it declares no navigation capability, since a
   session switch is a whole new stream, so the shell reloads the frame to move it.
+- **One window, so pop-ups are tabs**: the stream shows a single browser window, and the
+  window guardian (`window_guardian.py`) closes any other (Ctrl+N, a tab dragged out). A page's
+  `window.open` pop-up -- the shape of most "Sign in with ..." buttons -- opens as a tab in
+  that window instead, keeping `window.opener`, so an OAuth callback can still hand its result
+  back and close itself. The fleet's own extension (`extensions/open_popups_as_tabs/`, loaded
+  alongside the vendored ones) does this by adding `popup=0` to the call's features. That
+  wrapper is visible to page script, which cuts against Fortress's stealth: `window.open`'s
+  `toString()` loses its function name. Letting the guardian keep a real pop-up window over the
+  main one would avoid that, at the cost of window stacking, focus and resize handling.
 - **Persistence**: the fleet survives a workspace stop/restart. Each browser gets
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium

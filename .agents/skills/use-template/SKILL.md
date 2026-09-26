@@ -36,20 +36,19 @@ anything else.
 
 **A. Template path — this mind was created from a template repo.** The mind
 already has the template's tree at its root (it *is* the template repo), so
-there is nothing to fetch. On this path adaptation starts IMMEDIATELY at boot:
-the published repo ships its own template-specific `/welcome` skill
-(generated into the snapshot by the publish flow, replacing the template's
-generic welcome), so the booting agent's first response is a custom welcome
-naming the template's title and one-line description (instead of the generic
-"Welcome to Mind" message), followed in the same turn — without waiting to be
-asked — by reading the manifest and asking the user how they want to adapt it.
-The manifest's "How to adapt it" section is the script for that conversation.
+there is nothing to fetch; the manifest (`template.md`, with `template.toml`
+beside it in v2) is at the repo root. When the user asks about or wants to set
+up the template this mind came from, read the manifest, tell them in plain
+language what the template is and what it needs from them, and ask how they
+want to adapt it. The manifest's "How to adapt it" section is the script for
+that conversation.
 A v2 repo has exactly one `template.md`, so there is nothing to choose:
 adapt it. (Only an older v1 repo can hold several slug-named
-`inspiration-<slug>.md` files; there, take the latest slug named in the welcome
-skill, treat the others as already-adapted reference material, and ask the user
-if it is ambiguous.) Skip step 1 below (the tree is already
-here) and go straight to reading the manifest.
+`inspiration-<slug>.md` files; there, take the latest slug named in the repo's
+welcome skill (`.agents/skills/welcome/SKILL.md`) when it has one, treat the
+others as already-adapted reference material, and ask the user if it is
+ambiguous.) Skip step 1 below (the tree is already here) and go straight to
+reading the manifest.
 
 **B. Merge path — the user gave you a template's git URL.** Bring the
 template into the *current* mind at the repo root, then adapt it. Do step 1
@@ -97,8 +96,8 @@ If the repo is private, the anonymous fetch fails with an auth error. Route git
 through the latchkey gateway instead (it proxies GitHub's git endpoints with the
 credential injected server-side; needs the `github-git` / `github-git-read`
 permission -- initiate it yourself like any other latchkey permission request,
-see the `latchkey` skill). Fetch the URL directly rather than persisting a
-gateway-URL remote:
+see `.agents/skills/connect-external-service/references/latchkey.md`). Fetch the
+URL directly rather than persisting a gateway-URL remote:
 
 ```bash
 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
@@ -180,7 +179,7 @@ presence is what tells you the format:
   `inspiration-<slug>.md` files and no TOML. Read the markdown exactly as
   before -- front matter (`title`, `description`, `thumbnail`, and optionally
   `format`), then the body sections. If several are present, take the latest
-  slug named in the repo's `/welcome` skill, or ask the user which they mean.
+  slug named in the repo's welcome skill, if it ships one, or ask the user which they mean.
   Older manifests may have `Apps included` instead of `How it works`,
   `Permissions it may need` instead of `Prerequisites`, `Holes` instead of
   `Requirements`, and no `How to adapt it`. A v1 template declares no
@@ -230,9 +229,10 @@ or would you rather it read something else, like email?"
 conversation:**
 
 1. Initiate every activation requirement YOURSELF, now -- one latchkey
-   permission request per `requires_permission:` line (see the `latchkey` skill: `latchkey curl -XPOST
-   http://latchkey-self.invalid/permission-requests`; the request opens the
-   approval/login flow in the minds app). Each request is its own tool call,
+   permission request per `requires_permission:` line (see
+   `.agents/skills/connect-external-service/references/latchkey.md`: `latchkey
+   curl -XPOST http://latchkey-self.invalid/permission-requests`; the request
+   opens the approval/login flow in the minds app). Each request is its own tool call,
    with nothing else in it; when a template needs several, file them one after
    another without waiting for verdicts in between. Do not merely tell the user a
    permission is needed — send the request so it appears for them to approve.
@@ -269,8 +269,22 @@ conversation:**
    - **cargo entries with rust absent** -- an upgrade will not help; rust has to
      be installed first.
 
-3. Wire up any `requires_secret:` values (ask the user for them), start the
-   services, and get the app running against THEIR data.
+3. **File one secret request per `[[requirements.secret]]` entry**, alongside
+   the permission requests and with the same posture: run the
+   `connect-external-service` skill's `request_secret.py` with the entry's
+   `file` and `variables` (and its `note` in your rationale), each in a tool
+   call of its own, then end the turn. When a `Secret stored:` message arrives
+   for an entry, connect the `mcp-servers.json` servers that run under that
+   file (the wrapper in a local server's command, or a hosted server's
+   `secretsFile`) and start the programs that run under it. A `Secret
+   declined:` message leaves that server and program out; the install still
+   completes, and you tell the user what stays unstarted and why. Nothing in
+   `mcp-servers.json` connects on its own, so connect every other server in it
+   too: one that needs no credential right away, one that signs in once the
+   user has signed in (the skill's `references/mcp.md` covers each). A legacy
+   entry with only a `name` is one bare variable: request it as a file named
+   after the app. Then start the remaining services and get the app running
+   against THEIR data.
 4. **Definition of done for a data-backed app: the user can open it and see
    their OWN data.** A service that starts cleanly or an endpoint that returns
    200 is NOT done — open the app's actual output yourself and confirm it

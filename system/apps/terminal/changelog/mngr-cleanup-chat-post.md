@@ -1,0 +1,1 @@
+The `new` launch path is a POST: the shell posts `workdir` to `/new` and the terminal answers `{"path": "/?session=terminal-<N>"}` after allocating the session, so no window ever sits at a URL that creates a session and a reload creates nothing. A `GET /new` answers 405.

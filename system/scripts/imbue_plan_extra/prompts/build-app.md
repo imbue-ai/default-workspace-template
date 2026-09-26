@@ -235,7 +235,7 @@ free nodes to run at the same time. `["all"]` suits a node that genuinely needs
 the whole history, such as a final assembly.
 
 Some nodes are mostly waiting. Connecting an account or granting access to an
-outside service -- the `latchkey` skill -- costs time rather than capability:
+outside service -- the `connect-external-service` skill -- costs time rather than capability:
 the request goes up to the user, and everyone waits on them. Put those on an empty access list wherever the
 work allows, so the waiting overlaps the pre-flight, the icon, or the mock.
 

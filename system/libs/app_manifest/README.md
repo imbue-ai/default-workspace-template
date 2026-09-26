@@ -20,9 +20,15 @@ The models behind a workspace app's two descriptions:
 
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
   cross-field rule of the contract is a validator), `LaunchPath`
-  (`id`, `label`, `path`, `params`, and an optional `text_param` naming the one
-  of its params the desktop's launcher fills with typed text; `open` is reserved
-  for the root launch path the shell synthesizes for an app that declares none),
+  (`id`, `label`, `path`, `method` (`GET`, the default, opens a window at the
+  path with the params as its query; `POST` posts them to the path and opens a
+  window at the path the app answers), `params`, `presets` (fixed name-value
+  pairs sent with every launch), and an optional `text_param` or `draft_param`
+  naming the one of its params the desktop fills with typed text, sent or
+  drafted; `client_id`, `desktop_id`, and `window_path` are reserved for the
+  shell's launch envelope and can name neither a param nor a preset; `open` is
+  reserved for the root launch path the shell synthesizes for an app that
+  declares none), `LaunchPathMethod`,
   `DefaultShortcut`
   (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
@@ -54,7 +60,8 @@ The models behind a workspace app's two descriptions:
   origin. `SHELL_APP_CONTRACT_PATH` is where the shell's frontend build writes
   the app contract module, which every app serves at `APP_CONTRACT_ROUTE` from
   its own origin (a cross-origin module import carries no cookie, and the
-  forwarder refuses it).
+  forwarder refuses it); `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` are
+  the same for the element context menu module built beside it.
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own

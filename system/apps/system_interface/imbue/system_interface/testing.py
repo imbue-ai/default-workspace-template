@@ -40,6 +40,7 @@ from imbue.system_interface.presence import build_presence_sweep
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.inventory import AppInventory
+from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -180,6 +181,8 @@ def build_test_state(
     presence_directory: Path | None = None,
     agent_events_path: Path | None = None,
     profiles: ProfileResolver | None = None,
+    wallpaper_files_directory: Path | None = None,
+    launch_poster: LaunchPoster | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -191,12 +194,14 @@ def build_test_state(
     where the update notice reads its record and finds the update-self script (a fresh temp
     directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
     package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
-    test fills itself. The avatar's catalog lives under the state directory, and its mood is read
-    from ``agent_events_path`` (a file under the state directory by default, absent until a test
-    writes it).
+    test fills itself, and ``wallpaper_files_directory`` the directory the workspace's own wallpaper
+    files are read from (one under the state directory by default). The avatar's catalog lives under
+    the state directory, and its mood is read from ``agent_events_path`` (a file under the state
+    directory by default, absent until a test writes it).
     ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
     the resolver that names and pictures each account (one that can reach no connector by default, so no test
-    fetches anything unless it says so).
+    fetches anything unless it says so). ``launch_poster`` answers the POST launches the shell would otherwise make
+    over loopback.
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_presence_directory = (
@@ -218,13 +223,16 @@ def build_test_state(
         registry_path=registry_path(),
         broadcaster=resolved_broadcaster,
         inventory=inventory,
-        wallpaper_files_directory=state_directory / "wallpapers",
+        wallpaper_files_directory=wallpaper_files_directory
+        if wallpaper_files_directory is not None
+        else state_directory / "wallpapers",
         avatar_catalog_directory=state_directory / "avatars",
         agent_events_path=agent_events_path
         if agent_events_path is not None
         else state_directory / "agent-events.jsonl",
         repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
         profiles=resolved_profiles,
+        launch_poster=launch_poster,
     )
     resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
     return SystemInterfaceState(

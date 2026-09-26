@@ -49,12 +49,11 @@ export interface WindowAttrs {
   readonly isCompact: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
+  /** Spread onto the maximize control: resting on it opens the window's size menu. */
+  readonly sizeMenuTrigger: m.Attributes;
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
    *  launcher is open. */
   readonly isShielded: boolean;
-  /** Whether this client's layout places the window; a window settling on another client's open is not
-   *  placed here and shows a placeholder instead of a page. */
-  readonly isPlacedHere: boolean;
   /** Offered when the app is stopped and the workspace can start it; null otherwise. */
   readonly onStartApp: (() => void) | null;
   readonly onRaise: () => void;
@@ -82,9 +81,8 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch, isPlacedHere } = attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch } = attrs;
       const isStopped = app !== undefined && !app.is_running;
-      const isSettlingElsewhere = window.is_settling && !isPlacedHere;
       const isResizable = !isCompact && !isTouch;
       return m(
         "div",
@@ -109,10 +107,11 @@ export function Window(): m.Component<WindowAttrs> {
             "div",
             {
               "data-window-frame": "",
+              // No border: the shadow is what separates a window from the backdrop, and a line
+              // around it only competes. Focus is the title bar's, which changes colour with it.
               class:
-                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) border " +
-                "shadow-(--desk-window-shadow) " +
-                (isFocused ? "border-default" : "border-subtle"),
+                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) " +
+                "shadow-(--desk-window-shadow)",
             },
             [
               m(TitleBar, {
@@ -122,6 +121,7 @@ export function Window(): m.Component<WindowAttrs> {
                 isFocused,
                 isCompact,
                 isMenuOpen: attrs.isMenuOpen,
+                sizeMenuTrigger: attrs.sizeMenuTrigger,
                 onControl: attrs.onControl,
                 onDoubleClick: attrs.onToggleMaximize,
               }),
@@ -135,27 +135,17 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  isStopped
-                    ? stoppedPlaceholder(app, attrs.onStartApp)
-                    : isSettlingElsewhere
-                      ? m(
-                          "div",
-                          {
-                            "data-settling": "",
-                            class:
-                              "flex h-full w-full items-center justify-center bg-page text-(length:--font-size-row) text-faint",
-                          },
-                          "Starting on another screen…",
-                        )
-                      : null,
+                  isStopped ? stoppedPlaceholder(app, attrs.onStartApp) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
-                  // the document.
+                  // the document. A right-click here is that press and nothing more: handled, so the
+                  // desktop's element menu yields to it (element-reference-menu plan section 12).
                   attrs.isShielded
                     ? m("div", {
                         "data-window-shield": "",
                         class: "absolute inset-0 cursor-default",
                         onpointerdown: (event: PointerEvent) => event.preventDefault(),
+                        oncontextmenu: (event: MouseEvent) => event.preventDefault(),
                       })
                     : null,
                 ],

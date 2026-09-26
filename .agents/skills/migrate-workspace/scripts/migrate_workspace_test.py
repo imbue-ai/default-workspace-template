@@ -142,7 +142,7 @@ def test_map_legacy_path_flags_the_overloaded_prefixes_as_ambiguous() -> None:
 
 def test_map_legacy_path_leaves_current_layout_paths_alone() -> None:
     for path in (
-        ".agents/skills/welcome/SKILL.md",
+        ".agents/skills/caretaker/SKILL.md",
         "system/apps/browser/README.md",
         "data/memories/note.md",
     ):
@@ -679,6 +679,21 @@ def test_scan_audit_legacy_path_pattern_ignores_current_layout_paths() -> None:
         kinds=["legacy-path"],
     )
     assert findings == []
+
+
+def test_scan_audit_flags_a_reference_to_the_renamed_latchkey_skill() -> None:
+    # The skill is `connect-external-service` now, so a migrated doc naming the old
+    # one sends the agent looking for a directory that is gone. A plain CLI call is
+    # not a reference to the skill and belongs to the `latchkey` kind alone.
+    findings = migrate_workspace.scan_audit(
+        {
+            "notes.md": "Follow the `latchkey` skill.\n",
+            "SKILL.md": "See .agents/skills/latchkey/SKILL.md for the payload.\n",
+            "fetch.sh": "latchkey curl https://slack.com/api/conversations.list\n",
+        },
+        kinds=["retired-skill"],
+    )
+    assert {finding.path for finding in findings} == {"notes.md", "SKILL.md"}
 
 
 def test_scan_audit_flags_an_account_scoped_latchkey_call() -> None:

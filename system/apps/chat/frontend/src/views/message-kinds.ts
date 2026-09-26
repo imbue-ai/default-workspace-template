@@ -79,7 +79,7 @@ export enum UserMessageKind {
   /** A skill expansion whose body is relocated into its `Tool: Skill` block. */
   SkillExpansion = "skill-expansion",
   /**
-   * A message with no visual at all: the seeded `/welcome`, and -- via the
+   * A message with no visual at all: an older chat's `/welcome`, and -- via the
    * general `isMeta` rule in classifyUserMessage -- every framework-injected,
    * model-only message that no explicit detector surfaces (the resume-
    * continuation marker, the image coordinate note, MCP-resource dumps, hook
@@ -94,6 +94,12 @@ export enum UserMessageKind {
    * catalogue is complete; `classifyUserMessage` never returns it.
    */
   PermissionResolution = "permission-resolution",
+  /**
+   * A secret-card notice (stored / declined / superseded): the same shape as a
+   * permission verdict, for the secret card -- detected by `secretResolutionOf` and
+   * handled by the same dedicated branch in turn-grouping.ts.
+   */
+  SecretResolution = "secret-resolution",
   /**
    * A subtle inline status message (e.g. "Context was compacted").
    */
@@ -150,7 +156,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   [UserMessageKind.Hidden]: {
     rail: Rail.None,
     boundary: false,
-    netVisual: "No DOM at all -- fully invisible (e.g. the seeded '/welcome').",
+    netVisual: "No DOM at all -- fully invisible (e.g. an older chat's '/welcome').",
   },
   [UserMessageKind.PermissionResolution]: {
     rail: Rail.None,
@@ -160,6 +166,14 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "onto the EARLIER permission-request card, and a fresh turn section opens " +
       "with no user bubble. Handled by parsePermissionResolution + turn-grouping, " +
       "not classifyUserMessage.",
+  },
+  [UserMessageKind.SecretResolution]: {
+    rail: Rail.None,
+    boundary: true,
+    netVisual:
+      "No row. Its verdict (stored / declined / superseded) is written onto the EARLIER " +
+      "secret card, and the message opens a new turn section with no user bubble. " +
+      "Handled by secretResolutionOf + turn-grouping, never by classifyUserMessage.",
   },
   [UserMessageKind.StatusMessage]: {
     rail: Rail.User,

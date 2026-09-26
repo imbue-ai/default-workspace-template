@@ -20,7 +20,7 @@ export interface TaskbarAttrs {
   readonly launcher: LauncherFieldAttrs;
   readonly tray: SystemTrayAttrs;
   readonly onEntryClick: (windowId: string) => void;
-  readonly onEntryContextMenu: (windowId: string, x: number, y: number) => void;
+  readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
 }
 
 export const Taskbar: m.Component<TaskbarAttrs> = {
@@ -32,7 +32,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
         "data-taskbar": "",
         class:
           "taskbar relative flex h-(--desk-taskbar-height) shrink-0 items-center gap-2 border-t border-default " +
-          "bg-(--desk-taskbar-surface) px-2 backdrop-blur",
+          "bg-(--desk-taskbar-surface) px-2 backdrop-blur-(--desk-taskbar-blur)",
       },
       [
         m(LauncherField, attrs.launcher),
@@ -50,7 +50,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
               isCompact: attrs.isCompact,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
-              onContextMenu: (x, y) => attrs.onEntryContextMenu(entry.window.id, x, y),
+              onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),
             }),
           ),
         ),

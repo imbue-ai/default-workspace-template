@@ -72,8 +72,8 @@ fi
 AGENT_NAME="${AGENT_NAME:-$SKILL}"
 
 # Singleton identity + the per-run trigger. The run message is a hidden
-# slash-command (like /welcome), so the user's first visible message is always
-# the agent's own output, never the command that produced it.
+# slash-command, so the user's first visible message is always the agent's own
+# output, never the command that produced it.
 AUTOMATION_FILTER="labels.automation == \"${SKILL}\""
 RUN_MESSAGE="/${SKILL}"
 

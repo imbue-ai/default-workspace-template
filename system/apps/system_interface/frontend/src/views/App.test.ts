@@ -9,7 +9,7 @@ import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
-import { FakeDesktopApi, FakeDesktopSocket, settle } from "../testing/fakeShell";
+import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
   desktopRecord,
@@ -237,27 +237,39 @@ function pressOn(element: HTMLElement): void {
   m.redraw.sync();
 }
 
+// The pinned app declares a launch path taking a draft, so a draft (the avatar chooser's prompt, an element
+// reference) is launched into this client's view of its window.
+const buddy = appRecord("buddy", {
+  pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
+  launch_paths: [
+    launchPathRecord({
+      id: "draft",
+      path: "/api/intake",
+      method: "POST",
+      params: ["message"],
+      presets: { is_draft: "true" },
+      draft_param: "message",
+    }),
+  ],
+});
+
+/** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
+function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
+  offerApps(api, socket, [appRecord("docs"), buddy, ...apps]);
+  api.postLaunchAnswer = "/?chat=agent-1";
+  api.desktops = [
+    desktopRecord("home", {
+      windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+    }),
+  ];
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  m.redraw.sync();
+  return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
+}
+
 describe("the avatar chooser", () => {
-  // The pinned app takes a draft at its home path, so the chooser's prompt goes to this client's view of its window.
-  const buddy = appRecord("buddy", {
-    pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
-    launch_paths: [launchPathRecord({ id: "root", path: "/", params: ["draft"] })],
-  });
-
-  /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
-  function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
-    socket.deliver().onAppsUpdated([appRecord("docs"), buddy, ...apps]);
-    socket.deliver().onDesktopsUpdated([
-      desktopRecord("home", {
-        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
-      }),
-    ]);
-    m.redraw.sync();
-    return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
-  }
-
   function openEntryMenuRow(entry: HTMLElement, key: string): void {
-    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     m.redraw.sync();
     (document.querySelector(`[data-menu-row="${key}"]`) as HTMLElement).click();
     m.redraw.sync();
@@ -272,8 +284,10 @@ describe("the avatar chooser", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
     await settle();
-    const prompt = new URLSearchParams({ draft: AVATAR_DESIGN_PROMPT }).toString();
-    expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?${prompt}:Buddy`);
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: AVATAR_DESIGN_PROMPT })}:window:win-9`,
+    );
+    expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?chat=agent-1:`);
     expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
 
     openEntryMenuRow(entry, "style-plain");
@@ -295,6 +309,58 @@ describe("the avatar chooser", () => {
     await settle();
     m.redraw.sync();
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+  });
+});
+
+describe("the element menu", () => {
+  function menuRowKeys(): string[] {
+    return Array.from(document.body.querySelectorAll('[data-menu-part="menu"] [data-menu-row]')).map(
+      (row) => row.getAttribute("data-menu-row") ?? "",
+    );
+  }
+
+  it("opens over the shell's own chrome on a right-click the views leave alone, with the reference rows", () => {
+    const area = document.querySelector("[data-backdrop-area]") as HTMLElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+    area.dispatchEvent(event);
+    m.redraw.sync();
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.body.querySelector(".element-menu")).not.toBeNull();
+    expect(menuRowKeys()).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    pressEscape();
+    expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
+  });
+
+  it("stays closed for a right-click on a window's shield, which is the press that closes the launcher", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    const shield = focusedShield() as HTMLElement;
+    expect(shield).not.toBeNull();
+    shield.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+    shield.dispatchEvent(event);
+    m.redraw.sync();
+    expect(store.isLauncherOpen()).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.body.querySelector(".element-menu")).toBeNull();
+  });
+
+  it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
+    pinnedEntry();
+    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    const keys = menuRowKeys();
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    expect(keys).toContain("close");
+    (document.querySelector('[data-menu-row="explain-element"]') as HTMLElement).click();
+    await settle();
+    const launch = api.calls.find((call) => call.startsWith("launch:home:buddy:draft:")) ?? "";
+    expect(launch).toContain("Explain what I attached in REF-");
+    expect(launch).toContain('\\"window_id\\":null');
+    expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
+    expect(launch).toContain('\\"app\\":\\"system_interface\\"');
+    expect(launch.endsWith(":window:win-9")).toBe(true);
   });
 });
 

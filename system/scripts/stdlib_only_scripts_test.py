@@ -32,7 +32,6 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "seed_welcome_chat.py",
     "set_mngr_pin.py",
     "tool_env.py",
-    "welcome_count.py",
 )
 
 

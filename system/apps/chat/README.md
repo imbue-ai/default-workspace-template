@@ -22,21 +22,16 @@ observe`, its own supervised service) writes, and serves:
   ordered by recency, with rename, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title; `GET /new` (the `new` launch path, `account_id` and `message`
-  params) serves the same document, and the root creates the chat and selects
-  it client-side; `GET /send` (the `send` launch path, `message` param) serves
-  it too, and the root sends the text through its ordinary send to the one chat
-  there is, or to the chat picked from a picker it opens over them when there
-  are more (with no chat it starts a new one with the text), selects that chat,
-  and reports the selection alone, so a reload sends nothing again. A `draft` query parameter on the root (the `root` launch
-  path's one param, what the desktop's "Design your own..." hands the pinned
-  chat window) puts its text, unsent, into the composer of the chat the URL
-  selects (else the shown one, else the most recently active one, else a chat
-  the root creates for it), and the root then reports the selection alone, so
-  a reload drafts nothing again. The root drives its inner frames through the
-  page's same-origin embed API (`frontend/src/embedApi.ts`) and forwards their
-  `minds:`, `shell:focused`, and `shell:open` messages through
-  `frontend/src/root/relay.ts`, the one module the embed ratchet allows.
+  chat's title. The page is pure: nothing is created or sent by loading it. An
+  `intake` query parameter names a pending intake (below) the root applies once
+  (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
+  unsent, a chat is picked from a picker the root opens over the list, or a chat
+  awaiting its first message is launched through the provider chooser; the root
+  then reports the selection alone, so a reload applies nothing again. The root
+  drives its inner frames through the page's same-origin embed API
+  (`frontend/src/embedApi.ts`) and forwards their `minds:`, `shell:focused`, and
+  `shell:open` messages through `frontend/src/root/relay.ts`, the one module the
+  embed ratchet allows.
 - `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the origin label of the terminal's pty (the terminal app's while
@@ -46,7 +41,9 @@ observe`, its own supervised service) writes, and serves:
   the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
-  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`.
+  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
+  `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
+  the transcript's secret card submits, declines, and re-reads it).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
@@ -202,6 +199,46 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+The intake route is how a text enters a chat from outside a chat page
+(`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
+text, how the receiving chat is chosen (`target`: `new_chat`, `current_chat` from
+the `window_path` the text was typed into, else the most recently messaged chat;
+`chat_selector`, the one chat there is or the user's pick; or `chat` with a
+`chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
+sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
+manifest declares the desktop's `new`, `send`, and `draft` launch paths as POSTs
+onto it with those fields preset, so the launcher's rows, the Getting Started
+tiles, the avatar dialog's "Design your own...", and `layout.py open chat
+--launch new --param message=...` all arrive here through the shell. The route
+answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
+a send or a create it finished on the server (a send is delivered in the
+background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a
+draft or a first message the page has to finish, and `/?intake=<token>` for a
+choice. A pending intake (`chat_intakes.py`) is held in memory under its one-time
+token for fifteen minutes: `GET /api/chats/intakes/<token>` says what the root has
+to do, `POST /api/chats/intakes/<token>/apply` (with the picked `chat_id` when a
+pick was needed) consumes it and answers the chat plus either `composer_text` or
+`first_message`, and `DELETE` drops it. A `new_chat` intake with nothing signed in,
+or a draft into a new chat, mints an unseeded provisional chat in the
+`awaiting_first_send` phase ("Chat N", the intake's account or none, no record, so a
+restart of this app drops it); its page shows an empty conversation over the
+composer, and its first send launches it as a seeded chat's does.
+
+An element reference (the right-click menu's description of an element,
+`docs/system/blueprint/element-reference-menu/`) enters a composer as an
+attachment: the reference travels as a fenced `json` block in a draft's text
+until it reaches a chat, and `models/elementReferences.ts` takes each block out
+wherever a draft enters a composer (`prependToComposer`: the root applying a
+pending intake or drafting from its rail, a chat page drafting from its own menu)
+and uploads it as a `REF-<id>.json` file through the ordinary `/api/uploads`
+path, so the composer shows a chip and the sent message names the file on its
+"See attachment here:" line. Ready attachments are persisted to localStorage
+beside the draft text, so a chip survives a reload and a page finds what the
+root staged for it before it loaded. Every chat page and the root draw the
+element context menu; a chat page drafts into its own composer, the root into
+the selected chat's (else through the shell), and a sub-agent view through the
+shell, its `shell:draft-text` relayed by the root.
+
 The create route is likewise how a chat is made from outside the chat page:
 `message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
@@ -242,11 +279,10 @@ out as typed, since a harness runs a command only when the slash leads the
 message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
-Every chat that starts with no message is greeted: the `welcome` create
-template (`.mngr/settings.toml`) sends `/welcome`, and the skill varies what it
-says by how many times it has run (`system/scripts/welcome_count.py`). Fast mode
-is a per-chat setting with three modes (`chat_fast_mode.py`, kept in the chat's
-folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+A chat that starts with no message sends nothing and waits for the user's
+first one. Fast mode is a per-chat setting with three modes
+(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`,
+`GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 **off** (standard speed throughout), **auto** (fast for the first
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
 (fast throughout). A new chat starts in the workspace's default mode
@@ -331,9 +367,10 @@ agent the live chat tracks, but reconciles no accounts, writes no memory scores,
 runs no automatic compaction, resumes no unfinished switch, opens no windows,
 reports no client activity to the shell, and registers nothing. Sends from it are
 real, but a switch to another account is refused, since it would write the chat's
-record into the scratch copy only. Point `CHAT_DATA_DIR` at a scratch copy of
-`data/.apps/chat/` so its writes (the message stamps, settings, and chat records)
-never land in the live chat's data.
+record into the scratch copy only, and so is an answer to a secret card, since the
+answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
+`data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
+secret requests) never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

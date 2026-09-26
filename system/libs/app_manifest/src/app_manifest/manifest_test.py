@@ -6,8 +6,10 @@ from pydantic import ValidationError
 
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import (
+    RESERVED_LAUNCH_PARAM_NAMES,
     AppManifest,
     EntryMode,
+    LaunchPathMethod,
     LocationScope,
     PinStyle,
     PreviewSpec,
@@ -116,6 +118,73 @@ def test_text_param_must_name_a_declared_param_and_defaults_to_none() -> None:
         AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": "message"}]})
     with pytest.raises(ValidationError, match="at least 1 character"):
         AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "text_param": ""}]})
+
+
+def test_a_launch_path_is_a_get_with_no_presets_and_no_draft_param_unless_it_says_otherwise() -> None:
+    launch_path = AppManifest.model_validate(_full_manifest_data()).launch_paths[0]
+    assert launch_path.method is LaunchPathMethod.GET
+    assert launch_path.presets == {}
+    assert launch_path.draft_param is None
+
+
+def test_a_post_launch_path_carries_its_method_presets_and_draft_param() -> None:
+    data = _full_manifest_data()
+    launch_path = {
+        **dict(data["launch_paths"][0]),  # type: ignore[index]
+        "path": "/api/intake",
+        "method": "POST",
+        "presets": {"target": "current_chat", "is_draft": "true"},
+        "text_param": None,
+        "draft_param": "path",
+    }
+    manifest = AppManifest.model_validate({**data, "launch_paths": [launch_path]})
+    assert manifest.launch_paths[0].method is LaunchPathMethod.POST
+    assert manifest.launch_paths[0].presets == {"target": "current_chat", "is_draft": "true"}
+    assert manifest.launch_paths[0].draft_param == "path"
+    assert manifest.launch_paths[0].text_param is None
+
+
+@pytest.mark.parametrize("method", ["get", "post", "PUT", ""])
+def test_a_launch_path_method_is_get_or_post_spelled_in_upper_case(method: str) -> None:
+    data = _full_manifest_data()
+    launch_path = {**dict(data["launch_paths"][0]), "method": method}  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate({**data, "launch_paths": [launch_path]})
+
+
+def test_a_launch_path_declares_at_most_one_of_text_param_and_draft_param() -> None:
+    data = _full_manifest_data()
+    launch_path = {**dict(data["launch_paths"][0]), "draft_param": "path"}  # type: ignore[index]
+    with pytest.raises(ValidationError, match="at most one of text_param and draft_param"):
+        AppManifest.model_validate({**data, "launch_paths": [launch_path]})
+    with pytest.raises(ValidationError, match="draft_param 'message' is not one of the launch path's params"):
+        AppManifest.model_validate(
+            {**data, "launch_paths": [{**launch_path, "text_param": None, "draft_param": "message"}]}
+        )
+
+
+def test_a_preset_may_not_shadow_a_param() -> None:
+    data = _full_manifest_data()
+    launch_path = {**dict(data["launch_paths"][0]), "presets": {"path": "/notes/"}}  # type: ignore[index]
+    with pytest.raises(ValidationError, match="preset 'path' is also one of the launch path's params"):
+        AppManifest.model_validate({**data, "launch_paths": [launch_path]})
+
+
+@pytest.mark.parametrize("reserved", sorted(RESERVED_LAUNCH_PARAM_NAMES))
+def test_the_launch_envelopes_names_are_reserved_for_params_and_presets(reserved: str) -> None:
+    data = _full_manifest_data()
+    launch_path = dict(data["launch_paths"][0])  # type: ignore[index]
+    with pytest.raises(ValidationError, match=f"{reserved!r} is reserved for the shell's launch envelope"):
+        AppManifest.model_validate({**data, "launch_paths": [{**launch_path, "presets": {reserved: "x"}}]})
+    with pytest.raises(ValidationError, match=f"{reserved!r} is reserved for the shell's launch envelope"):
+        AppManifest.model_validate(
+            {
+                **data,
+                "launch_paths": [
+                    {**launch_path, "params": [*launch_path["params"], {"name": reserved, "label": "Reserved"}]}
+                ],
+            }
+        )
 
 
 def test_duplicate_launch_path_ids_are_rejected() -> None:
@@ -816,3 +885,28 @@ def test_load_manifest_off_the_apps_layout_skips_the_location_rules_until_a_root
 
     with pytest.raises(ManifestLoadError, match="does not exist"):
         load_manifest(manifest_path, repo_root=tmp_path)
+
+
+def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_variable_list() -> None:
+    data = {
+        **_full_manifest_data(),
+        "secrets": [
+            {"file": "widget", "variables": ["WIDGET_TOKEN", "WIDGET_ORG"], "note": "a Widget API token"},
+            {"file": "mailer", "variables": ["SMTP_PASSWORD"]},
+        ],
+    }
+    manifest = AppManifest.model_validate(data)
+    assert [(str(secret.file), tuple(secret.variables)) for secret in manifest.secrets] == [
+        ("widget", ("WIDGET_TOKEN", "WIDGET_ORG")),
+        ("mailer", ("SMTP_PASSWORD",)),
+    ]
+    assert manifest.secrets[1].note is None
+    for bad in (
+        [{"file": "widget", "variables": ["A"]}, {"file": "widget", "variables": ["B"]}],
+        [{"file": "widget", "variables": []}],
+        [{"file": "widget", "variables": ["A", "A"]}],
+        [{"file": "Widget", "variables": ["A"]}],
+        [{"file": "widget", "variables": ["1A"]}],
+    ):
+        with pytest.raises(ValidationError):
+            AppManifest.model_validate({**_full_manifest_data(), "secrets": bad})

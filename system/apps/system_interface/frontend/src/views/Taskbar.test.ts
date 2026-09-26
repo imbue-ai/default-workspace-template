@@ -28,7 +28,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         look: null,
       },
       {
-        window: windowRecord("win-2", "docs", "/new", { is_settling: true }),
+        window: windowRecord("win-2", "docs", "/new"),
         app: docs,
         title: "Docs",
         isMinimized: true,
@@ -84,7 +84,6 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.getAttribute("data-taskbar-entry"))).toEqual(["win-1", "win-2", "win-3"]);
     expect(entries.map((entry) => entry.getAttribute("data-minimized"))).toEqual(["false", "true", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-focused"))).toEqual(["true", "false", "false"]);
-    expect(entries.map((entry) => entry.getAttribute("data-settling"))).toEqual(["false", "true", "false"]);
     expect(entries.map((entry) => entry.getAttribute("data-pinned"))).toEqual(["false", "false", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-pinned-entry"))).toEqual([null, null, "docs"]);
     expect(entries[2].getAttribute("data-entry-mode")).toBe("bar");
@@ -129,7 +128,7 @@ describe("Taskbar", () => {
     (taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement).dispatchEvent(
       new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }),
     );
-    expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40);
+    expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
   it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {

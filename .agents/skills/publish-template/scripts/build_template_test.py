@@ -3,8 +3,7 @@
 The assembly script had no test at all, which is how a workspace-wiping hazard
 survived in it. These run the real script over a real repo and assert on the
 files a publisher ships, because every one of them is read by someone who is
-not the publisher: the adopter's agent boots the generated `/welcome`, and a
-human browsing GitHub reads the generated README.
+not the publisher: a human browsing GitHub reads the generated README.
 """
 
 import os
@@ -60,7 +59,6 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
     for relative in (
         "system",
         "system/supervisord.conf.d",
-        ".agents/skills/welcome",
         "docs",
         ".agents/skills/publish-template/scripts",
         "system/services/env_converge/src/env_converge",
@@ -77,7 +75,6 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
         "[program:system_interface]\ncommand=bash -c 'system-interface'\n"
     )
     (source / "README.md").write_text("# base\n")
-    (source / ".agents/skills/welcome/SKILL.md").write_text("base welcome\n")
     (source / "docs/VERSION_HISTORY.md").write_text("# V\n")
     (source / ".gitignore").write_text("data/*\n")
     for name in (
@@ -99,9 +96,29 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
 
     (source / "system/apps/demo").mkdir(parents=True)
     (source / "system/apps/demo/main.py").write_text("x = 1\n")
+    # An MCP server the app relies on, included beside it.
+    (source / "mcp-servers.json").write_text(
+        '{"mcpServers": {"demo": {"command": "demo-mcp", "args": []}}}\n'
+    )
     _git("add", "-A", cwd=source)
     _git("commit", "-qm", "the app being published", cwd=source)
     return source, base_ref
+
+
+def _declare_secret(source: Path) -> None:
+    """Give the demo app a `[[secrets]]` declaration, and the live workspace the file it names.
+
+    The env file stays untracked: it is what the writer checks the declaration
+    against, never something the snapshot may contain.
+    """
+    (source / "system/apps/demo/app.toml").write_text(
+        'name = "demo"\ndisplay_name = "Demo"\nicon = "icon.svg"\n\n'
+        '[[secrets]]\nfile = "demo"\nvariables = ["DEMO_TOKEN"]\nnote = "a Demo API token"\n'
+    )
+    _git("add", "-A", cwd=source)
+    _git("commit", "-qm", "Declare the demo app's secret", cwd=source)
+    (source / "data/.secrets").mkdir(parents=True)
+    (source / "data/.secrets/demo.env").write_text("DEMO_TOKEN='x'\n")
 
 
 def _update_self(source: Path, base_ref: str) -> None:
@@ -170,6 +187,8 @@ def _assemble(
             "A demo.",
             "--include",
             "system/apps/demo",
+            "--include",
+            "mcp-servers.json",
             *extra,
         ],
         cwd=cwd,
@@ -184,9 +203,10 @@ def built_snapshot(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A template assembled by the real script, in a real linked worktree."""
     root = tmp_path_factory.mktemp("publish")
     source, base_ref = _make_source_repo(root)
+    _declare_secret(source)
     worktree = _linked_worktree(source, root)
 
-    completed = _assemble(worktree, base_ref)
+    completed = _assemble(worktree, base_ref, live_workspace=source)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     return worktree
@@ -209,6 +229,26 @@ def test_assembly_refuses_to_run_outside_a_throwaway_worktree(tmp_path: Path) ->
     assert completed.returncode == 2, completed.stdout + completed.stderr
     assert "MAIN worktree" in completed.stderr
     assert (source / "data/important.db").read_text() == "PRECIOUS USER DATA"
+
+
+@_needs_scanners
+def test_a_declared_secret_lands_in_both_halves_of_the_manifest(
+    built_snapshot: Path,
+) -> None:
+    """The TOML entry is generated from the app's declaration, and template.md gets
+    the matching requires_secret: line, which the validator counts against it."""
+    toml_text = (built_snapshot / "template.toml").read_text()
+    assert (
+        '[[requirements.secret]]\nfile = "demo"\nvariables = ["DEMO_TOKEN"]\n'
+        'note = "a Demo API token"\n'
+    ) in toml_text
+    markdown = (built_snapshot / "template.md").read_text()
+    assert (
+        "- requires_secret: data/.secrets/demo.env with DEMO_TOKEN (a Demo API token)"
+        in markdown
+    )
+    assert "DEMO_TOKEN='x'" not in markdown
+    assert not (built_snapshot / "data/.secrets/demo.env").exists()
 
 
 @_needs_scanners
@@ -237,17 +277,6 @@ def test_the_readme_is_regenerated_to_describe_this_template(
     # The repo does not exist yet, so the call-to-action carries a placeholder
     # the lead substitutes before the push; §8 blocks a push that still has it.
     assert "MINDS_TEMPLATE_REPO_URL" in readme
-
-
-@_needs_scanners
-def test_the_generated_welcome_replaces_the_base_one(built_snapshot: Path) -> None:
-    # A mind created from a template must open by naming THAT template, not
-    # with the generic greeting the base workspace ships.
-    welcome = (built_snapshot / ".agents/skills/welcome/SKILL.md").read_text()
-
-    assert "base welcome" not in welcome
-    assert "Demo" in welcome
-    assert "template.md" in welcome
 
 
 @_needs_scanners

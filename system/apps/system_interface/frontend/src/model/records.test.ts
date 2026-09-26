@@ -30,7 +30,6 @@ const DESKTOP_WIRE = {
       path: "/?doc=1",
       title: "Plan",
       opened_at: "2026-09-19T14:11:02.824Z",
-      is_settling: false,
     },
   ],
 };
@@ -149,10 +148,34 @@ describe("parseAppRecord", () => {
     expect(app.display_name).toBe("docs");
     expect(app.icon).toBe("");
     expect(app.launch_paths[0].params).toEqual(["message"]);
+    // A launch path without a method, presets, or text params is a GET taking no text.
+    expect(app.launch_paths[0].method).toBe("GET");
+    expect(app.launch_paths[0].presets).toEqual({});
+    expect(app.launch_paths[0].text_param).toBeNull();
+    expect(app.launch_paths[0].draft_param).toBeNull();
     expect(app.default_shortcut).toEqual({ launch: "new", mode: "new" });
     expect(app.launcher_rank).toBe(10);
     expect(app.critical).toBe(false);
     expect(app.pin).toBeNull();
+  });
+
+  it("reads a POST launch path with its presets and draft param, and refuses a method or a preset off the wire's shape", () => {
+    const wire = { name: "docs", url: "http://127.0.0.1:1" };
+    const drafting = {
+      id: "draft",
+      label: "Draft into docs",
+      path: "/api/intake",
+      method: "POST",
+      params: ["message"],
+      presets: { target: "current_chat", is_draft: "true" },
+      draft_param: "message",
+    };
+    const app = parseAppRecord({ ...wire, launch_paths: [drafting] });
+    expect(app.launch_paths[0]).toEqual({ ...drafting, text_param: null });
+    expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, method: "PUT" }] })).toThrow(WireShapeError);
+    expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, presets: { is_draft: true } }] })).toThrow(
+      WireShapeError,
+    );
   });
 
   it("reads an app's pin and refuses one outside the vocabularies", () => {

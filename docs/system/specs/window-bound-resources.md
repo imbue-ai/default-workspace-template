@@ -26,13 +26,13 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 - The **browser** (`system/apps/browser`) runs one headful Chromium per browser, each on its own `--user-data-dir` profile and its own Xvfb display, filmed per viewer by pixelflux; a browser accepts up to eight viewers.
   `BROWSER_MAX_SESSIONS` caps the fleet at 2.
   `stop_browser` ends Chromium and its display while keeping the profile and the tab list; `close_and_forget` (`DELETE /browsers/<name>`, the fleet CLI's `close`) also deletes the profile.
-  `/new[?url=]` creates a browser and redirects to `/?session=<name>`.
+  `POST /new` (the `new` launch path, body `{"url"?}`) creates a browser and answers `{"path": "/?session=<name>"}`, the page the shell opens.
   Chromium refuses two processes on one profile directory, so concurrent browsers cannot share a profile.
 - The **fleet CLI** (`agentic-browser-fleet new`) creates a browser and already opens a viewer window through `layout.py open browser --path /?session=<name>`, falling back to a printed hint when the shell cannot place it.
   The **lease** (`acquire`, `release`, `handoff`) says who is driving; it is not a lifetime.
 - The **op route**'s `open` writes the requesting client's placement on top, shown, and refuses with 412 when no client can be resolved (contracts section 8).
-- In the staging workspace before the cleanup fixes, every terminal window sat at `/new` (the wrapper could not load the contract module) and four tmux sessions backed two windows: reloads of a settling window re-ran the launch path.
-  The contract fix ends the accumulation; this spec ends the leak.
+- In the staging workspace before the cleanup fixes, every terminal window sat at `/new` (the wrapper could not load the contract module) and four tmux sessions backed two windows: reloads of a window still at its launch path re-ran it.
+  The contract fix ended the accumulation, this spec ends the leak, and the post-launch-paths plan later made `/new` a POST the shell makes once, so no window sits at it any more.
 
 ## 2. Decisions
 
@@ -41,13 +41,13 @@ Recorded here so the implementation need not re-argue them.
 1. Every seeded shortcut is in `new` mode: a shortcut is "a new window of this app".
    A shortcut is labelled with its app's display name whatever its mode; launch path labels appear only on the launcher's rows.
 2. A new chat window is the chat list at `/`.
-   The chat app creates chats only from its own page (the New chat button, the launcher's free-text row and the Getting Started app's seeded prompts through `/new`) and the workspace's seeding; the desktop shortcut and `layout.py open chat` never create one.
+   The chat app creates chats only from its own page (the New chat button) and through its intake route (the launcher's free-text rows and the Getting Started app's seeded prompts, posted by the shell as the `new` launch path; the post-launch-paths plan); the desktop shortcut and `layout.py open chat` never create one.
 3. A terminal and a browser are **window-bound**: the app destroys the resource once no window on any desktop shows it.
    The files app and the chat have no window-bound resource.
 4. Collection is the **app's**, by a sweep over the shell's windows: run when the shell says a window of the app closed, and every 90 seconds as the safety net.
    The shell's close hint is a manifest-declared path the shell posts to; it carries no obligation, and a missed post costs at most one interval.
 5. A resource is collected only after the app has **seen a window for it** and then sees none.
-   A resource that never had a window (an agent's browser with nobody connected, a hand-made tmux session, a window still settling at `/new`) is never collected.
+   A resource that never had a window (an agent's browser with nobody connected, a hand-made tmux session) is never collected.
 6. The fleet holds **one browser**.
    Closing its last window **stops** it (profile and tabs kept); `/new` brings the same browser back.
    Its profile is never deleted by the desktop; only the fleet CLI's explicit `close` deletes it.
@@ -115,7 +115,7 @@ Sweeps are serialised: a hint during a sweep queues one more sweep rather than r
 Resources that exist before this release (the staging workspace's four terminal sessions with two windows) are never window-seen and are never collected; they are cleaned up by hand once, and the changelog entry says so.
 
 The sweep looks at every desktop, the owner's and every visitor's alike: a window anywhere keeps the resource.
-A window at a path the app cannot parse (a settling `/new?workdir=...`, an unknown query) names no resource.
+A window at a path the app cannot parse (an unknown query) names no resource.
 
 **Note:** a `desktops.json` that is reset or restored from an older backup drops every window at once, and every window-seen resource is then collected on the next sweep.
 For terminals that is a lost shell; for the browser it is a stop, which keeps the profile (section 4.4).
@@ -154,11 +154,11 @@ The cap counts launched browsers (`init`, `running`); a stopped browser holds no
 Restore honours the cap: the first saved browser by name relaunches and every further saved browser is registered stopped, never refused.
 
 **`/new` means "the browser".**
-`GET /new[?url=]`:
+`POST /new` with `{"url"?}` (the `new` launch path; the post-launch-paths plan section 4.8), answering `{"path"}`, the browser's page:
 
-- a browser exists and runs: redirect to its page; with `url`, first open the URL as a new tab in it (the daemon's CDP client already opens tabs for restore);
-- a browser exists and is stopped or crashed: `start_browser` it (with `url` as an extra tab once it is up), then redirect;
-- no browser exists: create as today, then redirect.
+- a browser exists and runs: answer its page; with `url`, first open the URL as a new tab in it (the daemon's CDP client already opens tabs for restore);
+- a browser exists and is stopped or crashed: `start_browser` it (with `url` as an extra tab once it is up), then answer its page;
+- no browser exists: create as today, then answer its page.
 
 With several saved browsers (a workspace upgraded from a cap of 2), "the browser" is the running one, else the first by name.
 `POST /browsers` with no `name` answers the same browser the same way, so the fleet CLI's `new` needs no change beyond section 6; a `POST /browsers` with a `name` keeps its create-or-409 semantics for a named second browser an operator insists on.
@@ -214,7 +214,7 @@ And one relaxation of the targeting rule, for `open` only:
 
 ### 5.2 The fleet CLI and skill
 
-`_open_viewer_window` passes `--minimized`, so the browser appears in the taskbar rather than over what the user is doing, and the fall-back hint goes away (an open with no client now succeeds).
+`_open_viewer_window` passes `--minimized` for `new`, `acquire`, and an agent's first command, so the browser appears in the taskbar rather than over what the user is doing, and the fall-back hint goes away (an open with no client now succeeds). `handoff` opens it without `--minimized`, which restores and raises the window, since the user has to act in it.
 The skill's opening section says: the fleet has one browser; `new` gives it to you (starting it if it was stopped) and opens its window for the user; the browser lives as long as a window shows it, so do not close the user's window and do not expect a browser nobody has a window on to outlive a sweep; `close` deletes the profile and is rarely what you want.
 The `2/2 browsers open` prose goes.
 

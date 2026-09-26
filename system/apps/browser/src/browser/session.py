@@ -105,6 +105,9 @@ _FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 # env.d unit. Each subdirectory holding a manifest.json is passed via --load-extension.
 _EXTENSIONS_DIR = "/opt/fortress/extensions"
 
+# The fleet's own unpacked extensions, shipped in this package.
+_BUNDLED_EXTENSIONS_DIR = Path(__file__).parent / "extensions"
+
 # The fleet's CDP proxy: ONE websocket server for every browser, addressed by
 # ``/<browser-name>/<token>``. Deliberately its own loopback port and deliberately NOT
 # mounted on the Flask app -- that app's port is registered with ``forward_port.py`` and
@@ -609,8 +612,8 @@ class LiveBrowser(MutableModel):
     _lifecycle: Lifecycle = PrivateAttr(default="init")
     # Whether a desktop window has shown this browser. Only a browser some window showed is
     # stopped once none does (the window sweep); one nobody ever looked at -- an agent's with
-    # nobody connected, a window still settling at ``/new`` -- outlives every sweep. Rides the
-    # manifest (``window_seen``) so a daemon restart neither forgets nor invents it.
+    # nobody connected -- outlives every sweep. Rides the manifest (``window_seen``) so a
+    # daemon restart neither forgets nor invents it.
     _is_window_seen: bool = PrivateAttr(default=False)
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
     # crash so a browser that died is dropped from the manifest promptly (not only on
@@ -657,14 +660,19 @@ class LiveBrowser(MutableModel):
         return self._audio_source or None
 
     def _extension_paths(self) -> "tuple[str, ...]":
-        """Vendored, version-pinned unpacked extensions to load, if the env.d unit put
-        them there. browser-use used to download these from the Chrome Web Store at
-        runtime, unpinned, into the browser holding the human's real logins; they are now
-        pinned alongside Fortress (see the env.d unit) and simply passed as a flag."""
-        root = Path(os.environ.get("BROWSER_EXTENSIONS_DIR", _EXTENSIONS_DIR))
-        if not root.is_dir():
-            return ()
-        return tuple(str(d) for d in sorted(root.iterdir()) if (d / "manifest.json").is_file())
+        """Unpacked extensions to load: the fleet's own (shipped in this package), then the
+        vendored, version-pinned ones, if the env.d unit put them there. browser-use used to
+        download those from the Chrome Web Store at runtime, unpinned, into the browser
+        holding the human's real logins; they are now pinned alongside Fortress (see the
+        env.d unit) and simply passed as a flag."""
+        roots = [_BUNDLED_EXTENSIONS_DIR, Path(os.environ.get("BROWSER_EXTENSIONS_DIR", _EXTENSIONS_DIR))]
+        return tuple(
+            str(d)
+            for root in roots
+            if root.is_dir()
+            for d in sorted(root.iterdir())
+            if (d / "manifest.json").is_file()
+        )
 
     async def start(self, restore_tabs: list[str] | None = None, active_tab: int = 0) -> None:
         """Launch the headful Chromium and bring up the fleet's own CDP channel.
@@ -1811,8 +1819,8 @@ class LiveBrowser(MutableModel):
 def closed_window_browser(hint_body: object) -> str | None:
     """The browser a closed window showed, from the ``path`` of the shell's close hint.
 
-    None for a window at a launch path (``/new?...`` names no browser) or a body of another shape than the
-    shell posts.
+    None for a path with no browser (the root, or one naming something that is not a browser name), or a body of
+    another shape than the shell posts.
     """
     if not isinstance(hint_body, dict):
         return None
@@ -2130,9 +2138,9 @@ class BrowserSessionManager(MutableModel):
     async def sweep_windows(self, window_paths: Sequence[str]) -> list[str]:
         """Mark every browser a window shows, and stop the ones a window showed once and none shows now.
 
-        ``window_paths`` is what the shell reports for this app; a path naming no browser (a window still
-        settling at ``/new``) shows nothing. Answers the names stopped. A browser still launching waits for a
-        later sweep, a stopped one is stopped already, and a crashed one is left to its own cleanup.
+        ``window_paths`` is what the shell reports for this app; a path naming no browser shows nothing.
+        Answers the names stopped. A browser still launching waits for a later sweep, a stopped one is
+        stopped already, and a crashed one is left to its own cleanup.
         """
         shown = {name for path in window_paths if (name := window_query_value(path, SESSION_QUERY_KEY)) is not None}
         stopped: list[str] = []

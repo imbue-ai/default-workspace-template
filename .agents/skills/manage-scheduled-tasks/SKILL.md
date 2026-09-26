@@ -41,7 +41,8 @@ it will be skipped when the machine is off.
 ## Timezone: confirm it before scheduling anything
 
 The container's clock is set to the **user's local timezone at each boot** (the
-bootstrap fetches it from the minds app on the user's machine). But the user may
+bootstrap fetches it from the minds app on the user's machine, and re-applies the
+last zone it set, from `data/.state/user_timezone`, when that fetch fails). But the user may
 have moved since boot, so **when the user asks to schedule something, re-check
 their current timezone first**:
 
@@ -51,13 +52,14 @@ latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/timezone
 cat /etc/timezone                          # what the container currently uses
 ```
 
-If the boot-time fetch failed, the container is still on UTC -- replace it
-with the user's real zone. If they differ, update the container before writing
-the schedule entry:
+If the container is on UTC (no boot has fetched the zone yet) or on a zone that
+differs from the user's, update it before writing the schedule entry -- and
+record it for later boots whose fetch fails:
 
 ```bash
 ln -sf "/usr/share/zoneinfo/<Area/City>" /etc/localtime
 echo "<Area/City>" > /etc/timezone
+echo "<Area/City>" > /home/user/workspace/data/.state/user_timezone
 ```
 
 Runner jobs pick the change up immediately -- `run_job.sh` reads the clock on
@@ -79,6 +81,12 @@ the repo root:
 
 Also redirect output to a log file (cron would otherwise try to mail it):
 `>> /var/log/supervisor/<job-name>.log 2>&1`.
+
+A job that needs a credential the user supplied through the
+`connect-external-service` skill's secret card runs its command under
+`python3 /home/user/workspace/system/scripts/with_secrets.py /home/user/workspace/data/.secrets/<name>.env -- <command...>`
+(after the env wrapper), which puts the file's variables in that process's
+environment; never source or read the file in the cron line itself.
 
 The one exception is the built-in `update-apply-recover` guard, which carries
 its own `PATH` line and `cd` (see the map below). Every job you write goes

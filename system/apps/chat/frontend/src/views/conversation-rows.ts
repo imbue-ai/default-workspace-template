@@ -21,6 +21,8 @@ import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
+  renderAssistantRunRow,
+  isChipOnlyEvent,
   renderPermissionItem,
   buildToolResultsWithSkillExpansions,
   computeAuthErrorHiddenEventIds,
@@ -36,6 +38,10 @@ import { renderHandoffNode } from "./handoff-node";
 export const ESTIMATED_USER_HEIGHT_PX = 90;
 export const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
 export const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
+// A merged chip row is one line of chips plus the message gap below it -- an
+// order of magnitude shorter than the prose message the assistant estimate is
+// sized for.
+export const ESTIMATED_CHIP_ROW_HEIGHT_PX = 48;
 
 // Layout for the centered message column. Shared by the live transcript views
 // and the offscreen measurer, whose rows must lay out identically to measure
@@ -136,12 +142,42 @@ function buildRows(
     // blocks inline, the same as assistant messages outside a progress section.
     for (const item of section.items) {
       if (item.kind === "ungrouped") {
-        for (const event of item.events) {
+        // A row is a RUN: one head event plus every chip-only event that
+        // follows it, so a turn the harness split across several events lays
+        // out as the one message it is (see renderAssistantRunRow).
+        let i = 0;
+        while (i < item.events.length) {
+          const start = i;
+          // The head joins unconditionally; only chip-only events accrete onto
+          // it, since anything else is a message in its own right.
+          i++;
+          while (i < item.events.length && isChipOnlyEvent(item.events[i], toolResults)) {
+            i++;
+          }
+          const run = item.events.slice(start, i);
+          const head = run[0];
+          // A lone event that is not a chip run keeps the memoized single-message
+          // renderer -- nothing was merged, so there is nothing to gain by
+          // giving up the memo.
+          if (run.length === 1 && !isChipOnlyEvent(head, toolResults)) {
+            rows.push({
+              key: head.event_id,
+              estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+              anchorEventId: head.event_id,
+              render: () => renderAssistantMessage(head, toolResults, chatId),
+            });
+            continue;
+          }
+          // Keyed and anchored on the run's head: the row stands where that
+          // event does in the transcript, which is what scroll persistence and
+          // the fill planner resolve a row by.
           rows.push({
-            key: event.event_id,
-            estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
-            anchorEventId: event.event_id,
-            render: () => renderAssistantMessage(event, toolResults, chatId),
+            key: head.event_id,
+            estimate: isChipOnlyEvent(head, toolResults)
+              ? ESTIMATED_CHIP_ROW_HEIGHT_PX
+              : ESTIMATED_ASSISTANT_HEIGHT_PX,
+            anchorEventId: head.event_id,
+            render: () => renderAssistantRunRow(run, toolResults, chatId),
           });
         }
       } else if (item.kind === "permission") {
@@ -149,6 +185,7 @@ function buildRows(
         // always-visible card so the user can act on it without expanding a step.
         const permissionEvent = item.event;
         const resolutionsByRequestId = item.resolutionsByRequestId;
+        const secretNotesByRequestId = item.secretNotesByRequestId;
         const permKey = `perm-${permissionEvent.event_id}`;
         rows.push({
           key: permKey,
@@ -156,7 +193,15 @@ function buildRows(
           anchorEventId: permissionEvent.event_id,
           // Pass the row key as the DOM id so the measured height is cached under
           // the same key the window math looks up (see renderPermissionItem).
-          render: () => renderPermissionItem(permissionEvent, toolResults, chatId, resolutionsByRequestId, permKey),
+          render: () =>
+            renderPermissionItem(
+              permissionEvent,
+              toolResults,
+              chatId,
+              resolutionsByRequestId,
+              permKey,
+              secretNotesByRequestId,
+            ),
         });
       } else if (item.kind === "chip") {
         const chipEvent = item.event;

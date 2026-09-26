@@ -46,7 +46,7 @@ provision_drop_inherited_pins
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
 : "${NODE_VERSION:=22.23.2}"
-: "${CLAUDE_CODE_VERSION:=2.1.269}"
+: "${CLAUDE_CODE_VERSION:=2.1.280}"
 : "${CODEX_VERSION:=0.154.0}"
 : "${PI_VERSION:=0.83.0}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
@@ -56,6 +56,7 @@ provision_drop_inherited_pins
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
 : "${LATCHKEY_VERSION:=3.9.0}"
+: "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Shared curl flags for the pinned-binary downloads below. --retry-all-errors
@@ -84,9 +85,9 @@ install_downloaded_binary() {
 
 # System packages (tini for signal handling; supervisor runs our background
 # services; cron runs the recurring jobs, driven from supervisord rather than an
-# init system; earlyoom is the OOM-prevention daemon that sheds memory under
-# pressure before the kernel kills an arbitrary victim; the rest are
-# agent/runtime deps). supervisor provides the system supervisord + supervisorctl
+# init system; the rest are agent/runtime deps). earlyoom, the OOM-prevention
+# daemon, is not among them: it is the imbue-ai fork, installed below by
+# install_earlyoom.sh. supervisor provides the system supervisord + supervisorctl
 # that `uv run bootstrap` execs into the foreground.
 # xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
 # are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
@@ -95,7 +96,7 @@ install_downloaded_binary() {
 # Fortress/Chromium stack stays deferred.
 apt-get update
 apt-get install -y --no-install-recommends \
-    bash build-essential ca-certificates cron curl earlyoom fd-find git git-lfs jq less nano \
+    bash build-essential ca-certificates cron curl fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
     xclip xvfb xxd xmlstarlet
 # Runtime libraries the pixelflux/pcmflux wheels (the browser fleet's H.264 + Opus
@@ -119,6 +120,11 @@ if command -v systemctl >/dev/null 2>&1; then
     # packaged systemd unit would double-run every job on systemd hosts.
     systemctl disable --now cron.service 2>/dev/null || true
     systemctl mask cron.service 2>/dev/null || true
+    # And for earlyoom: a host provisioned before the fork has the apt package,
+    # whose unit runs a second, unconfigured earlyoom (no --avoid, no -N hook)
+    # beside ours. The package itself is purged after install_earlyoom.sh below.
+    systemctl disable --now earlyoom.service 2>/dev/null || true
+    systemctl mask earlyoom.service 2>/dev/null || true
 fi
 
 # Point supervisor's default config search path at the workspace config so a
@@ -403,6 +409,17 @@ chmod 600 /root/.ssh/known_hosts
 
 # latchkey (gateway CLI) and modal (python tool).
 npm install -g "latchkey@${LATCHKEY_VERSION}"
+# mcpc: the one MCP client every harness, app, and scheduled job shares, so a
+# connected MCP server is reachable from all of them without per-harness config.
+npm install -g "@apify/mcpc@${MCPC_VERSION}"
+command -v mcpc >/dev/null
+# Remove mcpc's native keyring binding so it keeps sign-ins and stored headers
+# in its credentials file in ~/.mcpc (linked to data/.secrets/mcpc) on every
+# provider. With the binding present, a VM with a real kernel (lima) stores
+# them in the kernel keyring instead: in memory only, so a reboot loses them,
+# and outside the secrets guard and the backup. mcpc has no setting that picks
+# the file, and --omit=optional does not skip the binding on a global install.
+rm -rf "$(npm root -g)/@apify/mcpc/node_modules/@napi-rs/"keyring-*
 uv tool install "modal==${MODAL_VERSION}"
 
 # Secret-scanner binaries (betterleaks + kingfisher) for the publish-template
@@ -422,8 +439,10 @@ else
     bash "$setup_dir/default-workspace-template-install-secret-scanners"
 fi
 
-# owner-exec (the in-container exec daemon) and dufs (the file-viewer server),
-# each a pinned, sha256-verified static binary with its own idempotent installer.
+# owner-exec (the in-container exec daemon), dufs (the file-viewer server) and
+# earlyoom (the OOM-prevention daemon; see install_earlyoom.sh for why it is a
+# fork), each a pinned, sha256-verified static binary with its own idempotent
+# installer.
 # Invoked from here rather than as their own Dockerfile layers so that a live
 # re-provision (the update apply) and a non-Docker provider get them too: this
 # script is the only provisioning path every provider shares.
@@ -436,6 +455,18 @@ if [ -f "$setup_dir/install_dufs.sh" ]; then
     bash "$setup_dir/install_dufs.sh"
 else
     bash "$setup_dir/default-workspace-template-install-dufs"
+fi
+if [ -f "$setup_dir/install_earlyoom.sh" ]; then
+    bash "$setup_dir/install_earlyoom.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-earlyoom"
+fi
+# A host provisioned before the fork still has the apt earlyoom. Purging it
+# only touches /usr/bin/earlyoom: the fork lives at /usr/local/bin, which is
+# ahead of /usr/bin in PATH, so a rollback that reinstalls the package keeps
+# running the fork.
+if dpkg -s earlyoom >/dev/null 2>&1; then
+    apt-get purge -y earlyoom
 fi
 
 # Playwright + Chromium is deliberately NOT installed here; the deferred-install

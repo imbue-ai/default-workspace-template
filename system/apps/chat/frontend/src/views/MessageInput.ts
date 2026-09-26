@@ -13,6 +13,7 @@ import {
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
+import { stageElementReferences } from "../models/elementReferences";
 import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
@@ -20,7 +21,8 @@ import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { getSelectedAccount, openProviderChooser } from "../models/Providers";
+import { accountForAgent, getSelectedAccount, openProviderChooser } from "../models/Providers";
+import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
   findComposerPopup,
@@ -164,13 +166,19 @@ function restoreToComposer(chatId: string, text: string, attachments: readonly C
   ]);
 }
 
-/** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view. */
+/** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
+ *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
+ *  text (``stageElementReferences``). */
 export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
   }
+  const text = stageElementReferences(chatId, block);
+  if (!text) {
+    return;
+  }
   const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
-  const merged = existingDraft.trim().length === 0 ? block : `${block}\n\n${existingDraft}`;
+  const merged = existingDraft.trim().length === 0 ? text : `${text}\n\n${existingDraft}`;
   localStorage.setItem(messageTextKey(chatId), merged);
   pendingComposerPrepends.set(chatId, merged);
   m.redraw();
@@ -259,6 +267,9 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
   // addEventListener and then torn down by whichever overlay closed first.
   function renderComposerAttachment(chatId: string, attachment: ComposerAttachment): m.Vnode {
     const isReadyImage = attachment.status === "ready" && attachment.isImage && attachment.uploaded !== undefined;
+    // A file the chat made for the user (an element reference) wears the pointer and says what it points at
+    // where a user's own file says its size.
+    const isDescribed = attachment.summary !== undefined;
     const thumbnail = isReadyImage
       ? m("img", {
           class: "composer-attachment-thumb h-9 w-9 shrink-0 rounded-md object-cover",
@@ -272,7 +283,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           },
           attachment.status === "uploading"
             ? m("span", { class: "spinner" })
-            : m.trust(icon("file", { size: 18, strokeWidth: 1.8 })),
+            : m.trust(icon(isDescribed ? "pointer" : "file", { size: 18, strokeWidth: 1.8 })),
         );
     return m(
       "div",
@@ -292,15 +303,15 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
             "span",
             {
               class: "composer-attachment-name truncate text-(length:--font-size-body) text-primary",
-              ...hoverTooltipAttrs(attachment.fileName, "above"),
+              ...hoverTooltipAttrs(attachment.summary ?? attachment.fileName, "above"),
             },
             attachment.fileName,
           ),
           attachment.status === "ready" && attachment.uploaded !== undefined
             ? m(
                 "span",
-                { class: `${ATTACHMENT_DETAIL_BASE} text-secondary` },
-                formatFileSize(attachment.uploaded.size),
+                { class: `${ATTACHMENT_DETAIL_BASE} composer-attachment-summary truncate text-secondary` },
+                attachment.summary ?? formatFileSize(attachment.uploaded.size),
               )
             : null,
           attachment.status === "uploading"
@@ -502,11 +513,13 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         m.redraw();
 
         try {
-          // A seeded chat awaiting its first send has no agent yet, and this send is what
-          // launches one: on the signed-in account, else on the one the chooser produces. The
-          // message rides the launch as the agent's first, so nothing is sent after it lands.
-          if (getProvisionalChat(chatId)?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
-            const accountId = await chooseAccountForFirstSend();
+          // A chat awaiting its first send (a seeded one, or one an intake minted) has no agent
+          // yet, and this send is what launches one: on the account it was minted for, else the
+          // signed-in one, else the one the chooser produces. The message rides the launch as
+          // the agent's first, so nothing is sent after it lands.
+          const awaiting = getProvisionalChat(chatId);
+          if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
+            const accountId = await chooseAccountForFirstSend(awaiting);
             if (accountId === null) {
               // The chooser closed with no sign-in: nothing was launched, and the message is
               // the user's to keep.
@@ -566,11 +579,12 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       }
 
       /**
-       * The account a seeded chat's first send launches it on: the signed-in one when there is
-       * one, else whatever the provider chooser produces, or null when it is dismissed instead.
+       * The account a chat's first send launches it on: the one the chat was minted for when it
+       * names one (an intake's), else the signed-in one when there is one, else whatever the
+       * provider chooser produces, or null when it is dismissed instead.
        */
-      function chooseAccountForFirstSend(): Promise<string | null> {
-        const account = getSelectedAccount();
+      function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
+        const account = accountForAgent(provisional.account_id) ?? getSelectedAccount();
         if (account !== null) {
           return Promise.resolve(account.id);
         }
