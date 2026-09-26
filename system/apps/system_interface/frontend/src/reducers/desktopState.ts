@@ -433,7 +433,7 @@ export interface DetachedWindowReport {
 export function detachedWindowsOf(state: DesktopState): DetachedWindowReport[] {
   const desktop = activeDesktop(state);
   if (desktop === null) return [];
-  const placements = effectivePlacements(state.layout, desktop);
+  const placements = activePlacements(state);
   return desktop.windows
     .filter((window) => isWindowDetached(placements, window.id))
     .map((window) => ({
