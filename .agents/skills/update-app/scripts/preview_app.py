@@ -81,6 +81,12 @@ SHELL_APP_NAME = "system_interface"
 # rather than the live tool's.
 LAUNCHER = ("uv", "run")
 
+# An app that declares ``[[secrets]]`` runs under the wrapper, which is the only reader
+# of its secret files; the preview does the same. The worktree has no ``data/``, so the
+# wrapper reads the live repo's files.
+WITH_SECRETS_SCRIPT = Path("system") / "scripts" / "with_secrets.py"
+SECRETS_DIRECTORY = Path("data") / ".secrets"
+
 _SHARED_SERVE_SCRIPT = (
     Path(__file__).resolve().parents[3]
     / "shared"
@@ -245,6 +251,22 @@ def resolve_open_path(manifest: AppManifest, instance_key: str | None) -> str:
     return manifest.preview.open_path
 
 
+def _under_declared_secrets(
+    manifest: AppManifest, repo_root: Path, launch: list[str]
+) -> list[str]:
+    """``launch`` run under ``with_secrets.py`` once per declared secret file, first declared outermost."""
+    for secret in reversed(manifest.secrets):
+        env_file = repo_root / SECRETS_DIRECTORY / f"{secret.file}.env"
+        launch = [
+            "python3",
+            str(repo_root / WITH_SECRETS_SCRIPT),
+            str(env_file),
+            "--",
+            *launch,
+        ]
+    return launch
+
+
 def build_up_argv(
     manifest: AppManifest,
     worktree: Path,
@@ -288,7 +310,7 @@ def build_up_argv(
     for key, source in preview.copies.items():
         argv.extend(["--copy", f"{key}={source}"])
     command = list(preview.command) if preview.command else [str(manifest.program)]
-    launch = [*command, *preview.args]
+    launch = _under_declared_secrets(manifest, repo_root, [*command, *preview.args])
     argv.append("--")
     argv.extend(
         [

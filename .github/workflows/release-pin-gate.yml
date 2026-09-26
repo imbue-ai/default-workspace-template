@@ -1,0 +1,27 @@
+# A minds-v* tag must pin mngr from the public mirror: the shipped app clones the
+# tag on every user's machine, where no credential for the private mngr-internal
+# repo exists. The release procedure in the mngr repo rewrites a private pin to
+# public before tagging (apps/minds/docs/deploy/ops/app-release.md); this fires
+# if a tag slipped past that. Tags are never moved, so a failure here means the
+# next version number, not a fix to this one.
+name: Release pin gate
+
+on:
+  push:
+    tags: ["minds-v*"]
+
+jobs:
+  public-pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: The tagged tree pins mngr from the public mirror
+        run: |
+          set -euo pipefail
+          if ! python3 system/scripts/set_mngr_pin.py --require-public; then
+            echo "::error::${GITHUB_REF_NAME} pins mngr from mngr-internal, which no user's machine can fetch (or its BuildKit lines disagree with its pin; see above); cut the next version from a public pin (just dwt-mngr-pin in the mngr repo)"
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} pins mngr from the public mirror"

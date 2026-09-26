@@ -22,6 +22,7 @@
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
+  SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
@@ -122,6 +123,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_FOCUSED, (frame) => this.takeFocused(frame));
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
+    setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     this.store.setPageDriver(this);
   }
 
@@ -399,6 +401,7 @@ export class LivePagesLayer implements PageDriver {
       clientId: state.clientId,
       windowId: page.windowId,
       desktopId,
+      app: page.app,
       path,
     });
     page.greetedDesktopId = desktopId;
@@ -449,13 +452,27 @@ export class LivePagesLayer implements PageDriver {
   /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
    *  desktop (a page can only be pressed there); the frame has to be one the shell created. */
   private takeStartWithText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    if (this.pageOfFrame(frame) === undefined) return;
+    const text = this.textFromPage(frame, payload, SHELL_START_WITH_TEXT);
+    if (text !== null) void this.store.startWithText(text);
+  }
+
+  /** ``shell:draft-text {text}`` from a page (element-reference-menu plan section 5): the text is drafted into the
+   *  chat the pinned draft launch path names; the frame has to be one the shell created. */
+  private takeDraftText(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const text = this.textFromPage(frame, payload, SHELL_DRAFT_TEXT);
+    if (text !== null) void this.store.draftText(text);
+  }
+
+  /** The text a page's text-carrying message holds: null when the frame is not one the shell created, or when
+   *  the payload carries no string text (warned, with the message's type). */
+  private textFromPage(frame: HTMLIFrameElement, payload: Record<string, unknown>, type: string): string | null {
+    if (this.pageOfFrame(frame) === undefined) return null;
     const text = payload.text;
     if (typeof text !== "string") {
-      console.warn(`[si] shell:start-with-text ignored: it carried no text (${JSON.stringify(payload)})`);
-      return;
+      console.warn(`[si] ${type} ignored: it carried no text (${JSON.stringify(payload)})`);
+      return null;
     }
-    void this.store.startWithText(text);
+    return text;
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

@@ -41,7 +41,9 @@ observe`, its own supervised service) writes, and serves:
   the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
-  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`.
+  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
+  `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
+  the transcript's secret card submits, declines, and re-reads it).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
@@ -222,6 +224,21 @@ or a draft into a new chat, mints an unseeded provisional chat in the
 restart of this app drops it); its page shows an empty conversation over the
 composer, and its first send launches it as a seeded chat's does.
 
+An element reference (the right-click menu's description of an element,
+`docs/system/blueprint/element-reference-menu/`) enters a composer as an
+attachment: the reference travels as a fenced `json` block in a draft's text
+until it reaches a chat, and `models/elementReferences.ts` takes each block out
+wherever a draft enters a composer (`prependToComposer`: the root applying a
+pending intake or drafting from its rail, a chat page drafting from its own menu)
+and uploads it as a `REF-<id>.json` file through the ordinary `/api/uploads`
+path, so the composer shows a chip and the sent message names the file on its
+"See attachment here:" line. Ready attachments are persisted to localStorage
+beside the draft text, so a chip survives a reload and a page finds what the
+root staged for it before it loaded. Every chat page and the root draw the
+element context menu; a chat page drafts into its own composer, the root into
+the selected chat's (else through the shell), and a sub-agent view through the
+shell, its `shell:draft-text` relayed by the root.
+
 The create route is likewise how a chat is made from outside the chat page:
 `message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
@@ -350,9 +367,10 @@ agent the live chat tracks, but reconciles no accounts, writes no memory scores,
 runs no automatic compaction, resumes no unfinished switch, opens no windows,
 reports no client activity to the shell, and registers nothing. Sends from it are
 real, but a switch to another account is refused, since it would write the chat's
-record into the scratch copy only. Point `CHAT_DATA_DIR` at a scratch copy of
-`data/.apps/chat/` so its writes (the message stamps, settings, and chat records)
-never land in the live chat's data.
+record into the scratch copy only, and so is an answer to a secret card, since the
+answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
+`data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
+secret requests) never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

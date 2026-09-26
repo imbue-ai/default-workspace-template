@@ -15,6 +15,13 @@ from pathlib import Path
 from typing import Final
 
 _RESTIC_TIMEOUT_SECONDS: Final[float] = 3600.0
+# Caps restic to one core and one file read at a time so a backup cannot starve
+# the workspace's agents and UI. `nice`/`ionice` cannot do this: gVisor, which
+# remote workspaces run under, ignores `nice` and rejects `ionice` outright.
+_RESOURCE_LIMIT_ENV: Final[Mapping[str, str]] = {
+    "GOMAXPROCS": "1",
+    "RESTIC_READ_CONCURRENCY": "1",
+}
 # Tags the minds backup restore stamps on its safety + restored-state snapshots
 # (kept in sync with the desktop client's restore script). The retention forget
 # preserves any snapshot carrying either so a recent "Restored from ..." timeline
@@ -39,10 +46,10 @@ def is_repo_missing_error(stderr: str) -> bool:
 def is_repo_locked_error(stderr: str) -> bool:
     """Return True if `stderr` looks like a restic 'repository is locked' error.
 
-    A dead container incarnation can leave an exclusive lock behind whose owning
-    PID no longer exists; every subsequent tick then fails to acquire a lock.
-    Detecting this lets the runner clear the stale lock and retry rather than
-    wedging indefinitely.
+    A restic process killed with its container leaves its lock behind. An
+    exclusive one (forget, prune) blocks every later operation; a non-exclusive
+    one (backup) blocks only the exclusive ones. Detecting this lets the runner
+    clear the stale lock and retry rather than failing every tick indefinitely.
     """
     return any(p.search(stderr) for p in _REPO_LOCKED_PATTERNS)
 
@@ -52,9 +59,11 @@ def run_restic(
     *,
     env_overrides: Mapping[str, str],
     timeout_seconds: float = _RESTIC_TIMEOUT_SECONDS,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run `restic <args...>` with `env_overrides` merged onto `os.environ`."""
+    """Run `restic <args...>` under the resource limits, with `env_overrides` merged on top."""
     env = dict(os.environ)
+    env.update(_RESOURCE_LIMIT_ENV)
     env.update(env_overrides)
     return subprocess.run(
         ["restic", *args],
@@ -63,6 +72,7 @@ def run_restic(
         check=False,
         env=env,
         timeout=timeout_seconds,
+        cwd=cwd,
     )
 
 
@@ -98,11 +108,32 @@ def backup(
     tag: str,
     env_overrides: Mapping[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    """`restic backup --json <source> --tag <tag> [--exclude=<glob>...]`."""
-    args: list[str] = ["backup", "--json", str(source_path), "--tag", tag]
+    """`restic backup --json .` run inside `source_path`, so the snapshot holds its tree at the root.
+
+    restic skips re-reading a file only when the parent snapshot has a file at
+    the same path *inside the snapshot*, and an absolute source records every
+    component of it. outer_trigger reads each tick from a new
+    `<mount>/snapshots/<timestamp>/home`, so an absolute source never matches
+    the parent and every tick re-reads and re-hashes the whole tree.
+
+    The recorded path still changes every tick, so `--group-by ''` picks the
+    newest snapshot as the parent instead of looking for one with the same
+    path. `--ignore-inode` judges files by size and mtime alone, since a fresh
+    snapshot is not guaranteed to keep the inode numbers of the last one.
+    """
+    args: list[str] = [
+        "backup",
+        "--json",
+        ".",
+        "--group-by",
+        "",
+        "--ignore-inode",
+        "--tag",
+        tag,
+    ]
     for pattern in excludes:
         args.append(f"--exclude={pattern}")
-    return run_restic(tuple(args), env_overrides=env_overrides)
+    return run_restic(tuple(args), env_overrides=env_overrides, cwd=source_path)
 
 
 def forget(
@@ -177,11 +208,10 @@ def prune(env_overrides: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
     return run_restic(("prune",), env_overrides=env_overrides)
 
 
-def extract_snapshot_id_from_backup_output(stdout: str) -> str:
-    """Pluck the snapshot_id from `restic backup --json` stdout (best-effort).
+def find_backup_summary(stdout: str) -> dict[str, object] | None:
+    """The final `summary` document of `restic backup --json` stdout, or None if there is none.
 
-    Restic emits one JSON document per line; the final `summary` document
-    carries the snapshot id. Returns "" when we can't find one.
+    Restic emits one JSON document per line; lines that are not JSON are skipped.
     """
     for line in reversed(stdout.splitlines()):
         line = line.strip()
@@ -192,7 +222,18 @@ def extract_snapshot_id_from_backup_output(stdout: str) -> str:
         except ValueError:
             continue
         if isinstance(payload, dict) and payload.get("message_type") == "summary":
-            sid = payload.get("snapshot_id")
-            if isinstance(sid, str):
-                return sid
-    return ""
+            return payload
+    return None
+
+
+def extract_snapshot_id_from_backup_output(stdout: str) -> str:
+    """Pluck the snapshot_id from `restic backup --json` stdout (best-effort).
+
+    The final `summary` document carries the snapshot id. Returns "" when we
+    can't find one.
+    """
+    summary = find_backup_summary(stdout)
+    if summary is None:
+        return ""
+    sid = summary.get("snapshot_id")
+    return sid if isinstance(sid, str) else ""
