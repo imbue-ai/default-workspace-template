@@ -44,6 +44,8 @@ def _run(command: str) -> int:
         "LC_ALL=C sort -u /tmp/names.txt | head -20",
         "cat f | head -5 | tail -2",
         "cat f | grep x | head",
+        # With no program to run, env only prints the environment.
+        "env | grep MNGR | head",
         # A reserved word opening the stage is not the program that runs.
         "for f in *.md; do cat $f | head -5; done",
         "if true; then git log --oneline | head -3; fi",

@@ -220,6 +220,8 @@ def _is_plain_read(stage: CommandSegment) -> bool:
         return args[:1] == ["status"]
     if name == "crontab":
         return args == ["-l"]
+    if name == "env":
+        return not args
     return "--help" in args or "--version" in args
 
 
