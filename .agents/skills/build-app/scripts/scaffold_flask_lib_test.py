@@ -320,6 +320,46 @@ def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
     assert "minds-location" not in source
 
 
+def test_a_secrets_file_that_is_not_a_slug_is_refused_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    """The name is spliced into the program's `bash -c` string, so the scaffold holds
+    it to the slug every other reader of data/.secrets/ enforces, up front."""
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
+    refused = _scaffold(root, "news", "--secrets-file", "My Secret")
+    assert refused.returncode != 0
+    assert "--secrets-file" in refused.stderr
+    assert not (root / "system/supervisord.conf.d/news.conf").exists()
+    assert not (root / "system/apps/news").exists()
+
+    ok = _scaffold(root, "news", "--secrets-file", "news-api")
+    assert ok.returncode == 0, ok.stderr
+    assert (
+        "data/.secrets/news-api.env -- news"
+        in (root / "system/supervisord.conf.d/news.conf").read_text()
+    )
+
+
+def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
+    tmp_path: Path,
+) -> None:
+    """The app must read its key through the wrapper and nothing else: the program command
+    carries the wrapper in front of the entry point, and only when a file was named."""
+    plain = tmp_path / "plain.conf"
+    scaffold_flask_lib._write_supervisord_program(
+        plain, "widget-app", "widget_app", 8090, None
+    )
+    assert '&& widget-app"' in plain.read_text()
+    wrapped = tmp_path / "wrapped.conf"
+    scaffold_flask_lib._write_supervisord_program(
+        wrapped, "widget-app", "widget_app", 8090, "widget"
+    )
+    assert (
+        '&& python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
+        in wrapped.read_text()
+    )
+
+
 def test_the_runner_does_not_use_reloader() -> None:
     source = scaffold_flask_lib._lib_runner(
         "inbox-status", "inbox_status", "inbox status dashboard", 8081
