@@ -354,6 +354,32 @@ def test_a_refused_command_is_left_as_written(tmp_path: Path) -> None:
     assert command == "git rebase -i HEAD~2"
 
 
+# CLEANUP: remove with the `mngrOriginalCommand` fallback in policy_guards.ts.
+def test_a_command_the_pinned_mngr_already_prefixed_is_judged_as_the_agent_wrote_it(
+    tmp_path: Path,
+) -> None:
+    """The mngr this repo pins prefixes `input.command` in its own `tool_call` handler,
+    which pi may run first, and records the agent's command as `mngrOriginalCommand`."""
+    agent_command = "tk start wor-1"
+    prefixed = (
+        "test -w /proc/self/oom_score_adj && echo 900 > /proc/self/oom_score_adj"
+        " 2>/dev/null; " + agent_command
+    )
+    blocked, _ = _guard_call(tmp_path, prefixed)
+    assert blocked is not None and blocked["block"] is True
+    _, expected = _guard_call(tmp_path, agent_command)
+    payload = {
+        "toolName": "bash",
+        "input": {"command": prefixed},
+        "mngrOriginalCommand": agent_command,
+    }
+    out = _event_output(
+        _run_event(tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT)
+    )
+    assert out["result"] is None
+    assert out["payload"]["input"]["command"] == expected
+
+
 def test_a_broken_guard_or_rewrite_fails_open_and_is_logged(tmp_path: Path) -> None:
     """Only exit 2 refuses. A guard that crashes, and a rewrite script that is missing,
     let the command run as written, and each leaves a line in the state dir's log."""
