@@ -497,15 +497,39 @@ def test_a_resolution_tag_in_a_flushed_reports_output_does_not_claim_the_users_t
     assert decision.display_body == "fix the header too"
 
 
-def test_a_secret_notice_flushed_with_a_report_carries_the_notice_without_the_report() -> None:
+def _flush_with_reports(notice: str, is_between_reports: bool) -> str:
+    """``notice`` flushed into one message with reports: ahead of one, or between two (where the report detector's
+    anchored match spans the whole message)."""
+    if is_between_reports:
+        return "\n".join([_compose_report("Build"), notice, _compose_report("Test")])
+    return "\n".join([notice, _compose_report("Build")])
+
+
+_NOTICE_PLACEMENTS = pytest.mark.parametrize("is_between_reports", [False, True], ids=["before", "between"])
+
+
+@_NOTICE_PLACEMENTS
+def test_a_secret_notice_flushed_with_reports_carries_the_notice_without_them(is_between_reports: bool) -> None:
     notice = format_secret_resolution_notice(
         SecretResolutionVerdict.DECLINED, "secret-1", "data/.secrets/svc.env", ("A",), "not now"
     )
 
-    decision = classify_user_message("\n".join([notice, _compose_report("Build")]))
+    decision = classify_user_message(_flush_with_reports(notice, is_between_reports))
 
     assert decision is not None
     assert decision.display is DisplayKind.SECRET_RESOLUTION
     assert decision.resolution == SecretResolutionVerdict.DECLINED
     assert decision.request_id == "secret-1"
     assert decision.display_body == notice
+
+
+@_NOTICE_PLACEMENTS
+def test_a_permission_notice_flushed_with_reports_still_resolves_its_card(is_between_reports: bool) -> None:
+    notice = "Your request was denied (resolution: denied, request_id: r1)"
+
+    decision = classify_user_message(_flush_with_reports(notice, is_between_reports))
+
+    assert decision is not None
+    assert decision.display is DisplayKind.PERMISSION_RESOLUTION
+    assert decision.resolution == "denied"
+    assert decision.request_id == "r1"
