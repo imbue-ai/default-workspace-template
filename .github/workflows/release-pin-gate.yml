@@ -21,7 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! python3 system/scripts/set_mngr_pin.py --require-public; then
-            echo "::error::${GITHUB_REF_NAME} pins mngr from mngr-internal, which no user's machine can fetch; cut the next version from a public pin (just dwt-mngr-pin in the mngr repo)"
+            echo "::error::${GITHUB_REF_NAME} pins mngr from mngr-internal, which no user's machine can fetch (or its BuildKit lines disagree with its pin; see above); cut the next version from a public pin (just dwt-mngr-pin in the mngr repo)"
             exit 1
           fi
           echo "${GITHUB_REF_NAME} pins mngr from the public mirror"
