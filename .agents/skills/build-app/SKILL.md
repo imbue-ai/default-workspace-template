@@ -221,13 +221,25 @@ What gets generated:
   `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
   are what let a future edit boot a throwaway instance on a spare port
   against a data copy (see `update-app`). The scaffolded index page also
-  carries the **location beacon** one-liner -- a script that posts
-  `{type: "shell:location", path: location.pathname + location.search}`
-  to `window.parent` on page load. Keep that line on every page the app
-  serves: it is what lets the workspace shell reopen the app's window at
-  the place it was showing (the shell validates the sender's origin and
-  stores the path on the window's record). An app that drops it simply
-  always reopens at its origin.
+  carries the **shell page script** (`SHELL_PAGE_SCRIPT` in the runner) -- a
+  module script that connects the page to the workspace shell framing it,
+  reports where the page is on the handshake (so the shell reopens this
+  app's window at the place it was showing), and installs the **element
+  context menu**: the right-click menu whose last rows ("Copy reference",
+  "Explain...", "Modify...") hand the clicked element to a chat as a
+  `REF-<id>.json` attachment an agent can resolve
+  (`.agents/shared/references/element-references.md`,
+  `docs/system/blueprint/element-reference-menu/`). Keep the script on
+  every page the app serves. An app that drops it always reopens at its
+  origin and gets the browser's own menu. The runner serves the two modules
+  the script imports from its own origin at `/_static/app_contract.js` and
+  `/_static/context_menu.js` (a module import is a fetch without cookies,
+  which the forwarder refuses across origins); keep that route too.
+  A reference names an element by what its markup carries -- its `id`, its
+  `data-*` attributes, its classes, a selector -- so give a list
+  row the `id` or a `data-*` attribute of the record it shows, and an
+  interactive control a stable `id` or a first class that names it, and a
+  reference resolves to one thing.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
@@ -265,6 +277,30 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   root-closure-scoped `uv sync` prunes the member (a scaffolded app is not a
   root dependency), deletes that script, and the next restart is a spawn error
   with nothing to recover it.
+
+  An app that needs a credential (an API key the user supplied through the
+  `connect-external-service` skill's secret card) declares it in `app.toml` and
+  runs under the wrapper. `--secrets-file <name>` makes the scaffold write the
+  wrapped program command; the `[[secrets]]` block you add to the manifest by
+  hand either way, since only you know the variables. The block names the file,
+  its variables, and a one-line note (`publish-template` reads it, and refuses
+  to assemble a program that runs under a file no block declares), and the
+  program command wraps the entry point so the file's variables reach the
+  process and nothing else does:
+
+  ```toml
+  [[secrets]]
+  file = "example"
+  variables = ["EXAMPLE_API_KEY"]
+  note = "An Example API key from the account's settings page"
+  ```
+
+  ```ini
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
+  ```
+
+  A preview (`update-app`'s `preview_app.py`) runs the app under the same
+  wrapper, once per `[[secrets]]` block, reading the live `data/.secrets/`.
 
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets

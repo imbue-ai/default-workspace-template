@@ -80,6 +80,19 @@ an encrypted restic repo on cheaper object storage.
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
   credentials, rustup's `settings.toml`) ride the backup.
+- Restic runs from inside the directory it reads and backs up `.`, so each
+  snapshot stores that tree at its root. restic only skips re-reading an
+  unchanged file when the previous snapshot holds it at the same path inside
+  the snapshot, and `outer_trigger` reads every tick from a new timestamped
+  path, so an absolute source would never match and every tick would re-read
+  the whole home tree. `--group-by ''` makes the newest snapshot the parent
+  (the recorded path still changes every tick), and `--ignore-inode` compares
+  files by size and mtime only. A restore reads the tree from `<snapshot>:/`;
+  older snapshots hold it under their recorded absolute path instead.
+- Every restic command runs with `GOMAXPROCS=1` and
+  `RESTIC_READ_CONCURRENCY=1`, so a backup or prune uses one core and reads
+  one file at a time. This is the only lever that works everywhere: gVisor
+  (remote workspaces) ignores `nice`, and rejects `ionice` outright.
 - After every successful backup, `restic forget --group-by '' --keep-within 1h
   --keep-hourly N --keep-daily M --keep-weekly W --keep-monthly O` runs
   (cheap, index-only). `--keep-within 1h` keeps every snapshot taken within an
@@ -101,11 +114,14 @@ an encrypted restic repo on cheaper object storage.
 - A hard `minimum_backup_gap_seconds` (default 60) gap is enforced between
   successive backup attempts, so a config that's being mutated constantly
   cannot spam restic / the error log.
-- Stale-lock recovery: a `restic backup` blocked by an existing repository
-  lock (e.g. an exclusive lock left by a dead PID from a prior container
-  incarnation) triggers `restic unlock` -- which removes only *stale* locks,
-  never one a live process holds -- and one retry. Without this, a single
-  stale lock would fail every tick indefinitely.
+- Stale-lock recovery: a `restic backup`, `forget` (retention or restore-marker
+  age-out) or `prune` blocked by an existing repository lock triggers
+  `restic unlock` -- which removes only *stale* locks, never one a live process
+  holds -- and one retry. `forget` and `prune` need an exclusive lock, which
+  restic refuses while any other lock exists, so the non-exclusive lock a
+  backup killed with its container leaves behind blocks them while new backups
+  still succeed. Without this, a single stale lock would fail the blocked step
+  on every tick indefinitely.
 - Repeated-failure escalation: consecutive failed ticks are counted (reset on
   any success). Once the count reaches a threshold (3), each failing tick also
   emits a `backup_repeatedly_failing` event and logs at error level, so a
