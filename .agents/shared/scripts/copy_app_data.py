@@ -13,8 +13,8 @@ through here:
 Neither belongs in ``/tmp``. A workspace container's ``/tmp`` is a tmpfs, so a
 file there is held in memory and counts against the container's memory limit,
 and earlyoom cannot free it by killing a process. An app's data can be larger
-than the container's memory: copying one such store there got the whole
-workspace killed. Both locations above are on disk and excluded from the
+than the container's memory, and copying such a store there takes the whole
+workspace down. Both locations above are on disk and excluded from the
 host-backup snapshot, so a multi-GB copy does not ride every backup either.
 
 The disk is finite too, and the live workspace shares it: a copy that would
