@@ -7,6 +7,7 @@ import signal
 import threading
 import time
 import tomllib
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -2140,23 +2141,49 @@ def _events_status_detail(manager: AgentManager) -> str:
     return manager.get_agent_events_status().detail
 
 
-def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
-    """Only running chats are autocompacted: workers, primary, and dead chats are excluded."""
+def test_autocompact_sweep_runs_mngr_only_for_running_chats_on_a_compacting_harness(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """Workers, the primary, dead chats, and chats on a harness mngr cannot compact never reach mngr."""
     manager = AgentManager.build(broadcaster)
     try:
         with manager._lock:
-            for agent_id, state, labels in (
-                ("chat-running", "RUNNING", {"user_created": "true"}),
-                ("chat-waiting", "WAITING", {"user_created": "true"}),
-                ("chat-dead", "DEAD", {"user_created": "true"}),
-                ("chat-stopped", "STOPPED", {"user_created": "true"}),
-                ("worker-running", "RUNNING", {"agent_created": "true"}),
-                ("primary-running", "RUNNING", {"is_primary": "true"}),
+            for agent_id, state, labels, harness in (
+                ("chat-running", "RUNNING", {"user_created": "true"}, HarnessType.CLAUDE),
+                ("chat-waiting", "WAITING", {"user_created": "true"}, HarnessType.CLAUDE),
+                ("chat-opencode", "RUNNING", {"user_created": "true"}, HarnessType.OPENCODE),
+                ("chat-antigravity", "RUNNING", {"user_created": "true"}, HarnessType.ANTIGRAVITY),
+                ("chat-dead", "DEAD", {"user_created": "true"}, HarnessType.CLAUDE),
+                ("chat-stopped", "STOPPED", {"user_created": "true"}, HarnessType.CLAUDE),
+                ("worker-running", "RUNNING", {"agent_created": "true"}, HarnessType.CLAUDE),
+                ("primary-running", "RUNNING", {"is_primary": "true"}, HarnessType.CLAUDE),
             ):
                 manager._agents[agent_id] = AgentStateItem(
-                    id=agent_id, name=f"{agent_id}-name", state=state, labels=labels, work_dir=None
+                    id=agent_id, name=f"{agent_id}-name", state=state, labels=labels, work_dir=None, harness=harness
                 )
-        assert manager.get_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+        invoked: list[tuple[str, ...]] = []
+
+        def recording_runner(command: Sequence[str], **_kwargs: object) -> FinishedProcess:
+            invoked.append(tuple(command))
+            return FinishedProcess(
+                command=tuple(command),
+                returncode=0,
+                stdout="",
+                stderr="",
+                is_timed_out=False,
+                is_output_already_logged=False,
+            )
+
+        compactor = ChatAutoCompactor.build(
+            list_compactable_chat_agent_names=manager.get_compactable_chat_agent_names,
+            runner=recording_runner,
+            mngr_binary="mngr",
+        )
+        compactor.sweep()
+        assert sorted(invoked) == [
+            ("mngr", "autocompact", "run", "chat-running-name"),
+            ("mngr", "autocompact", "run", "chat-waiting-name"),
+        ]
     finally:
         manager.stop()
 
@@ -2165,7 +2192,7 @@ def test_agent_manager_autocompactor_custom_injection_and_lifecycle(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
     custom_compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: [],
+        list_compactable_chat_agent_names=lambda: [],
         runner=lambda *args, **kwargs: FinishedProcess(
             command=(), returncode=0, stdout="", stderr="", is_timed_out=False, is_output_already_logged=False
         ),
