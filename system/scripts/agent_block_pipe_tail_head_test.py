@@ -94,7 +94,7 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         # can judge, so it is refused.
         "bash -c 'pytest | tail -20'",
         'echo "$(pytest | tail -5)"',
-        # A command the lexer cannot read is blocked, as before.
+        # A command the lexer cannot read is blocked.
         "pytest | tail -20 'unbalanced",
     ],
 )
