@@ -331,3 +331,37 @@ def test_the_sweep_re_tags_as_time_passes_and_stops_cleanly() -> None:
     # Stopped means stopped: no further writes land after ``stop`` returns.
     settled = len(h.writes)
     assert not poll_until(lambda: len(h.writes) != settled, timeout=0.2)
+
+
+def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_process() -> None:
+    # A secondary chat keeps one of these: its reports arrive through the same routes
+    # as the live chat's, but they describe its own windows, so none may reach a process.
+    consulted: list[ChatId] = []
+    chat_id = ChatId("a")
+
+    def resolve_pid(cid: ChatId) -> int:
+        consulted.append(cid)
+        return 10
+
+    def resolve_process_started_at(cid: ChatId) -> float:
+        consulted.append(cid)
+        return 1_700_000_000.0
+
+    prioritizer = ChatOomPrioritizer(
+        list_chat_ids=lambda: [chat_id],
+        resolve_pid=resolve_pid,
+        set_adj=None,
+        resolve_process_started_at=resolve_process_started_at,
+        sweep_interval_seconds=0.01,
+    )
+    prioritizer.seed_last_message_times({chat_id: 1_700_000_000.0})
+    prioritizer.record_presence(chat_id, "client-1", PresenceState.VISIBLE)
+    prioritizer.record_message(chat_id)
+    prioritizer.record_running_chats([chat_id])
+    prioritizer.reapply()
+    try:
+        prioritizer.start()
+        assert not poll_until(lambda: bool(consulted), timeout=0.2)
+    finally:
+        prioritizer.stop()
+    assert consulted == []

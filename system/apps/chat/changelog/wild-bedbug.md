@@ -1,0 +1,1 @@
+A secondary (preview) chat's OOM prioritizer now has no writer and is inert: it accepts every presence, message and lifecycle report but resolves no pids, computes no bands, and runs no staleness sweep. Previously it did all of that work every time and then dropped each write through a stub that always failed.

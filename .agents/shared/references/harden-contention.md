@@ -61,10 +61,11 @@ or a provisional milestone merge:
 
 1. **Wait out the foreground lease (apps and services only).** If the creation is
    an app or service and another agent holds its editing lease (an open/in-progress
-   `editing service <name>` ticket in `tk ready` -- see `update-app`'s
-   "One editor at a time"), do not merge or refresh mid-edit. Re-check about
-   once a minute until the lease is released, then continue -- their edit
-   will usually make your pass stale anyway, which the next check catches.
+   `editing service <name>` ticket in `tk ready`, or `editing critical app <name>`
+   for a critical app -- see `update-app`'s "One editor at a time"), do not merge
+   or refresh mid-edit. Re-check about once a minute until the lease is
+   released, then continue -- their edit will usually make your pass stale
+   anyway, which the next check catches.
 
 2. **Freshness check.** The pass is mergeable only if the creation has not
    changed since the worker branched. The paths to diff are the creation's
@@ -97,9 +98,9 @@ or a provisional milestone merge:
    under `system/services/<package>/` (plus `system/supervisord.conf.d/<name>.conf`), a shared
    script or reference at its path. A critical app's merge lives in
    `update-app/references/critical-app.md` step 4, which applies this same
-   check over its `system/apps/<package>/` together with
-   `system/libs/workspace_ui/`, `system/package.json`, and
-   `system/package-lock.json`. Empty output means fresh: merge normally. Any output means the base moved under
+   check over each leased app's `system/apps/<package>/` together with
+   `system/libs/workspace_ui/`, `system/package.json`,
+   `system/package-lock.json`, and every file the pass branch changes. Empty output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; supersede it (below).
 
    No shared *authored* file remains in that footprint -- a creation's
