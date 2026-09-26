@@ -206,9 +206,9 @@ they decline every option, record `run-status verdict REFUSED --detail "..."`.
 **Then bridge an old workspace to the target's history.** The template's
 history was rewritten once, so a workspace created before that shares no commit
 with `$REF` and the worker's merge would have no base. This grafts the
-workspace's fork point onto its rewritten twin in `$REF` until the update lands;
-the workspace's own history is not touched, and for every other workspace it
-changes nothing. Fetch the tags again first, forced: an older copy of Step 2
+workspace's fork point onto its rewritten twin in `$REF` for the rest of this
+pass; the workspace's own history is not touched, and for every other workspace
+it changes nothing. Fetch the tags again first, forced: an older copy of Step 2
 cannot move a tag this workspace already holds, and the bridge must be built
 against the commit the worker will merge:
 
