@@ -71,10 +71,8 @@ Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `prio
 # Important commands and conventions:
 
 - Never run `uv sync`, always run `uv sync --all-packages` instead
-- Browser automation splits two ways, and picking the wrong one is the common mistake:
-  - **Something the user should SEE, or that needs their real logins or their help** (a CAPTCHA, a 2FA code, "log into my account and..."): use the **browser fleet**. `uv run agentic-browser-fleet new` starts a browser streamed to a pane the user can watch and take over, and prints a `playwright-cli attach --cdp=...` line; drive it with `playwright-cli` (`playwright-cli --help` is the command reference). See the `agentic-browser-fleet` skill. This is the collaborative path -- ownership is arbitrated, and the human always wins.
-  - **Headless scripting with no human in the loop** (testing an app you just built, scraping a page into a file, a one-off check): use **Playwright's Python API** in the root venv (`from playwright.sync_api import sync_playwright`, run via `uv run python`). No pane, no fleet, no ownership -- just a browser you drive from a script.
-- Both use the same engine: Fortress (a stealth-patched Chromium fork), not Playwright's own managed Chromium. For the Python API, pass `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly to `chromium.launch(...)`, since Playwright's browser-cache lookup only auto-discovers builds it downloaded itself. (The fleet does this for you.) Fortress installs asynchronously on first container boot (the one-shot `env-converge` program's env.d units), so in a fresh workspace confirm it finished -- `supervisorctl status env-converge` or `test -x /opt/fortress/tilion-fortress/tilion` -- before launching, or the launch fails with a clear error. It runs as-is under the docker provider's gVisor runtime; if you hit a "No usable sandbox!" error on a runtime without unprivileged user namespaces, pass `args=["--no-sandbox"]`. See `system/libs/bootstrap/README.md` for the full deferral contract.
+- To test an app you built in this workspace, or to script a check of a public page that needs no account, use **Playwright's Python API** in the root venv (`from playwright.sync_api import sync_playwright`, run via `uv run python`). Anything else in a browser -- the user's logins, something the user should watch or help with, "log into my account and..." -- goes through the `connect-external-service` skill (see Communication below).
+- Playwright here drives Fortress (a stealth-patched Chromium fork), not Playwright's own managed Chromium: pass `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly to `chromium.launch(...)`, since Playwright's browser-cache lookup only auto-discovers builds it downloaded itself. Fortress installs asynchronously on first container boot (the one-shot `env-converge` program's env.d units), so in a fresh workspace confirm it finished -- `supervisorctl status env-converge` or `test -x /opt/fortress/tilion-fortress/tilion` -- before launching, or the launch fails with a clear error. It runs as-is under the docker provider's gVisor runtime; if you hit a "No usable sandbox!" error on a runtime without unprivileged user namespaces, pass `args=["--no-sandbox"]`. See `system/libs/bootstrap/README.md` for the full deferral contract.
 
 # Always remember these guidelines:
 
@@ -104,7 +102,7 @@ If the user talks to you about files or directories on disk, assume (unless cont
 
 When a chat reply mentions a workspace file, write its path in code formatting (`data/reports/q4.md`), not as a markdown link. The chat renders only web links and absolute-path download links (the `show-files-in-chat` skill); any other path link shows as plain text. If the user should look at a file under `data/`, suggest they open it in the File Viewer (it shows only `data/`).
 
-If the user asks you to read or act on something in a third-party tool they have an account with -- including a link they paste, such as a Notion page, Google Doc, or Slack thread -- run `latchkey services list --viable` before anything else, and use the `latchkey` skill for anything it lists (its names may differ from the product's, e.g. Notion is `notion-mcp`). That is how you reach the accounts the user connected in Minds; use the web tools or the browser only for tools latchkey does not cover.
+If the user asks you to read or act on anything outside this workspace on their behalf -- a third-party tool they have an account with, a link they paste (a Notion page, Google Doc, or Slack thread), a site to sign in to, or a browser they want to watch -- load the `connect-external-service` skill before running any command against it. The skill decides how to reach the service and what to ask the user for; do not pick a method yourself first. The one exception is reading a public page that needs no account, which your web tools can do directly.
 
 ## Telling the user you finished
 
@@ -121,13 +119,6 @@ Skip it for the turns that carry nothing: chitchat, a single-line acknowledgemen
 Nothing reminds you of this at the end of a turn; decide it yourself as you finish, and do not narrate the decision -- the user never asked, so a sentence about it is a non-sequitur, the same way naming your `tk` calls is.
 
 **This is for chats only.** If you were launched by another agent -- a `launch-task` worker, or any other sub-agent -- never send one: your result reaches the user through the chat that launched you, and only chats appear in the app's feed.
-
-# Browser is available as a tool
-
-A stealth build of Chromium designed to look like an ordinary human browser is installed in this workspace and can be used to complete browser-related tasks. 
-
-1. When the user requests any browser-related tasks to be complete or a browser to be opened, use the `agentic-browser-fleet` skill, which allows you to drive many Chromium browsers. These are collaborative browsers which all agents and human users can use, though there is a mutually-exclusive control handoff and queuing system so only one is using a browser at a time. The skill has more information. Remember to hand off control to user when help is needed in the browser, such as anti-bot detection tests, and also release control when you are finished with a task so other agents and the user can use it.
-2. If you'd like to do integration testing/small-scale web app scripting, use Playwright instead of spinning up an entire browser through the agentic-browser-fleet skill. This uses the same Chromium, just more lightweight. The user and other agents won't be able to collaborate on this; this is for quicker rendering and interaction tasks on the web.
 
 # Work delegation
 

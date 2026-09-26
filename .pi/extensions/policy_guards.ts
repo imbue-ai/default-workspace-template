@@ -26,14 +26,23 @@ const LOG_PATH = join(process.env.MNGR_AGENT_STATE_DIR || "/tmp", "pi_policy_gua
 interface Guard {
   script: string;
   match: RegExp;
+  // Whether the guard also polices pi's non-shell tools (read, edit, ...). Its `match`
+  // then runs against the serialized payload rather than the command.
+  allTools?: boolean;
 }
 
 // claude's PreToolUse order. `match` is a loose superset of what each script can
-// refuse, so a command no guard has anything to say about spawns no guard process.
+// refuse, so a call no guard has anything to say about spawns no guard process.
 const GUARDS: Guard[] = [
   { script: join(SCRIPTS, "agent_prevent_commit_rewrite.sh"), match: /\bgit\b/ },
   { script: join(SCRIPTS, "agent_block_pipe_tail_head.sh"), match: /\b(tail|head)\b/ },
-  { script: join(SCRIPTS, "agent_latchkey_request_standalone.sh"), match: /permission-requests/ },
+  {
+    script: join(SCRIPTS, "agent_latchkey_request_standalone.sh"),
+    match: /permission-requests|request_secret\.py/,
+  },
+  // A `read` of a secret file defeats P9 as surely as a `cat`, so this one runs on
+  // every tool call.
+  { script: join(SCRIPTS, "agent_secrets_guard.sh"), match: /\.secrets|\.mcpc/, allTools: true },
   // `ticket` does not contain `tk`, so a substring test would miss the spelling the
   // checker accepts.
   { script: join(SCRIPTS, "agent_tk_standalone.sh"), match: /\b(tk|ticket)\b/ },
@@ -63,15 +72,20 @@ function describeFailure(result: SpawnSyncReturns<string>): string {
   return `exited ${result.status ?? result.signal}${stderr ? `: ${stderr}` : ""}`;
 }
 
-/** The reason to refuse `command`, from the first guard that refuses it, else null.
+/** The reason to refuse the call, from the first guard that refuses it, else null.
  *
- * Only exit 2 refuses, as on claude. Anything else -- a missing script (bash exits
- * 127), a crash -- lets the command through and is noted in LOG_PATH: a broken guard
- * must not block every command. Never throws. */
-function refusalReason(command: string): string | null {
-  const payload = JSON.stringify({ tool_name: "Bash", tool_input: { command } });
+ * `command` is the agent's shell command for a bash call and null for any other tool,
+ * which only the `allTools` guards see. Only exit 2 refuses, as on claude. Anything
+ * else -- a missing script (bash exits 127), a crash -- lets the call through and is
+ * noted in LOG_PATH: a broken guard must not block every call. Never throws. */
+function refusalReason(toolName: string, command: string | null, toolInput: unknown): string | null {
+  const payload =
+    command === null
+      ? JSON.stringify({ tool_name: toolName, tool_input: toolInput ?? {} })
+      : JSON.stringify({ tool_name: "Bash", tool_input: { command } });
   for (const guard of GUARDS) {
-    if (!guard.match.test(command)) continue;
+    if (command === null && !guard.allTools) continue;
+    if (!guard.match.test(guard.allTools ? payload : (command ?? ""))) continue;
     try {
       const result = spawnSync("bash", [guard.script], { input: payload, encoding: "utf-8", env: scriptEnv() });
       if (result.status === 2) {
@@ -103,11 +117,17 @@ function rewritePrefix(): string {
 
 export default function policyGuards(pi: any): void {
   pi.on("tool_call", (event: any) => {
-    if (event?.toolName !== "bash") return;
+    const toolName = event?.toolName;
+    if (typeof toolName !== "string") return;
     const input = event.input;
+    if (toolName !== "bash") {
+      const reason = refusalReason(toolName, null, input);
+      if (reason !== null) return { block: true, reason };
+      return;
+    }
     const command = input?.command;
     if (typeof command !== "string" || !command) return;
-    const reason = refusalReason(command);
+    const reason = refusalReason(toolName, command, input);
     if (reason !== null) return { block: true, reason };
     input.command = rewritePrefix() + command;
   });
