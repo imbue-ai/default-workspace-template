@@ -40,11 +40,16 @@ function pressEscape(): void {
   m.redraw.sync();
 }
 
-beforeEach(async () => {
+/** A fresh fake shell whose home desktop holds win-1 (pulled out when ``isDetached``), a store started over it
+ *  (opened to show ``soloWindowId`` alone when given), and the App mounted over the store. */
+async function mountApp(options: { isDetached?: boolean; soloWindowId?: string } = {}): Promise<void> {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-  api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
+  api.writeLayout("home", CLIENT, {
+    updated_at: null,
+    placements: [placementRecord("win-1", { is_detached: options.isDetached === true })],
+  });
   store = new DesktopStore({
     clientId: CLIENT,
     api,
@@ -54,10 +59,15 @@ beforeEach(async () => {
     redraw: () => m.redraw(),
     notify: () => undefined,
     reloadInterface: () => undefined,
+    soloWindowId: options.soloWindowId ?? null,
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
   mountView(() => m(App, { store, gestures, host: "127.0.0.1:8000", protocol: "http:" }));
+}
+
+beforeEach(async () => {
+  await mountApp();
 });
 
 afterEach(() => {
@@ -439,27 +449,7 @@ describe("a solo shell", () => {
   /** Mount the App over a fresh store opened to show win-1 alone, the window pulled out in the stored layout. */
   async function mountSolo(): Promise<void> {
     unmountViews();
-    api = new FakeDesktopApi();
-    socket = new FakeDesktopSocket();
-    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-    api.writeLayout("home", CLIENT, {
-      updated_at: null,
-      placements: [placementRecord("win-1", { is_detached: true })],
-    });
-    store = new DesktopStore({
-      clientId: CLIENT,
-      api,
-      socket,
-      metrics: themeMetricsRecord(),
-      modes: { isCompact: false, isTouch: false },
-      redraw: () => m.redraw(),
-      notify: () => undefined,
-      reloadInterface: () => undefined,
-      soloWindowId: "win-1",
-    });
-    await store.start(NO_LINK);
-    socket.deliver().onAppsUpdated([appRecord("docs")]);
-    mountView(() => m(App, { store, gestures, host: "127.0.0.1:8000", protocol: "http:" }));
+    await mountApp({ isDetached: true, soloWindowId: "win-1" });
   }
 
   /** Give the host a size and fire the App's observation of it, as a resize of the desktop window does. */
