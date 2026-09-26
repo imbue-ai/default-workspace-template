@@ -84,6 +84,7 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         'cat "$(pytest)" | head',
         "cat <(pytest) | head",
         "cat `pytest` | head",
+        "echo `pytest | tail`",
         "(pytest) | head",
         # The lexer returns `)|` as one token; it still pipes the group into head.
         "(pytest)|head",

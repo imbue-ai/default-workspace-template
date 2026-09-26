@@ -241,7 +241,8 @@ def _command_words(stage: CommandSegment) -> list[str]:
 
 def _command_name(stage: CommandSegment) -> str | None:
     words = _command_words(stage)
-    return os.path.basename(words[0]) if words else None
+    # The lexer leaves a closing backtick on the word before it (`pytest | tail`).
+    return os.path.basename(words[0]).rstrip("`") if words else None
 
 
 def main(argv: list[str] | None = None) -> int:
