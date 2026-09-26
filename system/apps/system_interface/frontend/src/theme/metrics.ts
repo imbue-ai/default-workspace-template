@@ -28,6 +28,8 @@ export interface ThemeMetrics {
   readonly snapThreshold: number;
   readonly unsnapDistance: number;
   readonly dragThreshold: number;
+  /** How far past the viewport a dragged window's pointer travels before the window is pulled out. */
+  readonly tearOutDistance: number;
   readonly touchTarget: number;
   readonly floatingEntrySize: number;
   readonly floatingEntryInsetX: number;
@@ -46,6 +48,7 @@ const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
   snapThreshold: "--desk-snap-threshold",
   unsnapDistance: "--desk-unsnap-distance",
   dragThreshold: "--desk-drag-threshold",
+  tearOutDistance: "--desk-tear-out-distance",
   touchTarget: "--desk-touch-target",
   floatingEntrySize: "--desk-floating-entry-size",
   floatingEntryInsetX: "--desk-floating-entry-inset-x",

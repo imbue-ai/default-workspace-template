@@ -6,7 +6,7 @@
 import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
@@ -40,11 +40,16 @@ function pressEscape(): void {
   m.redraw.sync();
 }
 
-beforeEach(async () => {
+/** A fresh fake shell whose home desktop holds win-1 (pulled out when ``isDetached``), a store started over it
+ *  (opened to show ``soloWindowId`` alone when given), and the App mounted over the store. */
+async function mountApp(options: { isDetached?: boolean; soloWindowId?: string } = {}): Promise<void> {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-  api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
+  api.writeLayout("home", CLIENT, {
+    updated_at: null,
+    placements: [placementRecord("win-1", { is_detached: options.isDetached === true })],
+  });
   store = new DesktopStore({
     clientId: CLIENT,
     api,
@@ -54,10 +59,15 @@ beforeEach(async () => {
     redraw: () => m.redraw(),
     notify: () => undefined,
     reloadInterface: () => undefined,
+    soloWindowId: options.soloWindowId ?? null,
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
   mountView(() => m(App, { store, gestures, host: "127.0.0.1:8000", protocol: "http:" }));
+}
+
+beforeEach(async () => {
+  await mountApp();
 });
 
 afterEach(() => {
@@ -162,6 +172,24 @@ describe("a window drag", () => {
     m.redraw.sync();
     expect(element.style.left).toBe("50px");
     expect(preview.style.display).toBe("none");
+  });
+
+  it("is cancelled by Escape, the window back where the drag began, and the pointer's release then ends nothing", async () => {
+    const { listener, element, preview } = beginDrag();
+    m.redraw.sync();
+    listener.onMove(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    expect(element.style.left).not.toBe("50px");
+    expect(preview.style.display).toBe("");
+    pressEscape();
+    expect(store.getGesture()).toBeNull();
+    expect(element.style.left).toBe("50px");
+    expect(preview.style.display).toBe("none");
+    listener.onEnd(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    m.redraw.sync();
+    expect(element.getAttribute("data-window-state")).toBe("NORMAL");
+    expect(element.style.left).toBe("50px");
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("savePlacements"))).toEqual([]);
   });
 
   it("hides the preview on a snap release, with no redraw in between", () => {
@@ -387,5 +415,108 @@ describe("a press outside what is open", () => {
     pressOn(shield as HTMLElement);
     expect(store.isLauncherOpen()).toBe(false);
     expect(focusedShield()).toBeNull();
+  });
+});
+
+describe("a pulled-out window", () => {
+  it("draws a ghost in place of the window, whose Bring back returns the window to the desktop", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("true");
+    (document.querySelector('[data-ghost-action="bring-back"]') as HTMLElement).click();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("false");
+    expect(api.layoutOf("home", CLIENT).placements.find((p) => p.window_id === "win-1")?.is_detached).toBe(false);
+  });
+
+  it("draws the ghost of a window pulled out while maximized at the window's frame, where Bring back lands it", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true, state: "MAXIMIZED" })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const ghost = document.querySelector('[data-detached-window="win-1"]') as HTMLElement;
+    expect([ghost.style.left, ghost.style.width, ghost.style.height]).toEqual(["50px", "600px", "560px"]);
+  });
+});
+
+describe("a solo shell", () => {
+  /** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
+   *  empty and the real observer never fires. */
+  const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
+
+  beforeEach(() => {
+    observed.length = 0;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(element: Element): void {
+          observed.push({ element, callback: this.callback });
+        }
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** Mount the App over a fresh store opened to show win-1 alone, the window pulled out in the stored layout. */
+  async function mountSolo(): Promise<void> {
+    unmountViews();
+    await mountApp({ isDetached: true, soloWindowId: "win-1" });
+  }
+
+  /** Give the host a size and fire the App's observation of it, as a resize of the desktop window does. */
+  function resizeHost(host: HTMLElement, width: number, height: number): void {
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
+    const watch = observed.find((candidate) => candidate.element === host);
+    if (watch === undefined) throw new Error("the solo host is not observed");
+    watch.callback([], {} as ResizeObserver);
+    m.redraw.sync();
+  }
+
+  it("lays its one page over the whole host, live, and re-lays it as the host's size changes", async () => {
+    await mountSolo();
+    expect(document.querySelector("[data-backdrop-area]")).toBeNull();
+    expect(document.querySelector("[data-taskbar]")).toBeNull();
+    const host = document.querySelector('[data-solo-window="win-1"] .live-pages') as HTMLElement;
+    resizeHost(host, 1000, 800);
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect(page.style.display).toBe("");
+    expect(page.style.pointerEvents).toBe("auto");
+    expect([page.style.left, page.style.top, page.style.width, page.style.height]).toEqual([
+      "0px",
+      "0px",
+      "1000px",
+      "800px",
+    ]);
+    resizeHost(host, 1200, 900);
+    expect([page.style.width, page.style.height]).toEqual(["1200px", "900px"]);
+  });
+
+  it("shows a note in place of the page once its window is gone from the desktop", async () => {
+    await mountSolo();
+    expect(document.querySelector("[data-solo-window-gone]")).toBeNull();
+    socket.deliver().onDesktopsUpdated([desktopRecord("home")]);
+    m.redraw.sync();
+    expect(document.querySelector("[data-solo-window-gone]")).not.toBeNull();
+    expect(document.querySelector('iframe[data-live-page="win-1"]')).toBeNull();
   });
 });

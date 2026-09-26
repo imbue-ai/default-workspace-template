@@ -65,8 +65,8 @@ It has no status, no listing of what is inside an app, and no verbs on the app's
 
 ### 2.3 Placement and layout
 
-A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, or `MAXIMIZED`), and whether it is **minimized**.
-The frame is kept through every state, so restore always has somewhere to go, and minimized is orthogonal to the state.
+A placement is how one client keeps one window: the **frame** (a rectangle in fractions of the backdrop), the **state** (`NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, or `MAXIMIZED`), whether it is **minimized**, and whether it is **detached** (pulled out into a desktop window of the embedding chrome's own, the desktop keeping a ghost at its frame; contracts section 4.2 and mngr's `specs/pull-out-window/spec.md`).
+The frame is kept through every state, so restore always has somewhere to go, and minimized and detached are orthogonal to the state.
 A layout is one client's placements for one desktop, in stacking order, last on top.
 Raising, minimizing, maximizing, snapping, moving, and resizing are per client and never leave the client.
 
@@ -102,17 +102,17 @@ A page that ends up somewhere else reports its real path, and the window follows
 Left to right: the app icon, the title, the window menu (three dots, directly after the title), then at the right edge minimize, maximize (restore when maximized), close.
 No status indicator.
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
-The window menu offers Refresh, Share, Stop and Start the app, and Close.
+The window menu offers Refresh, Open in its own window (where the embedding chrome can pull windows out), Share, Stop and Start the app, and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
 A pinned window keeps its close control and its menus' Close, and each minimizes it: it is never closed, only minimized.
 
 ### 2.8 Taskbar, launcher, system tray, tray widgets
 
 The taskbar is the bar along the bottom of the viewport.
-Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized ones marked; then the **system tray**.
+Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized and pulled-out ones marked; then the **system tray**.
 An entry shows the app icon and the title (icon only in compact mode).
 A pinned window's entry is always there, and a client may draw it in the bar in a style (the app's icon, or the workspace's avatar) or floating above the windows (pinned-taskbar-entries plan section 4.2).
-Clicking an entry restores a minimized window and raises it, minimizes the top window, or raises any other window.
+Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window, minimizes the top window, or raises any other window.
 
 The launcher is the text field and the menu it opens above the field: one row per launch path of every app, window rows (every desktop's windows, while typing), and at the foot the free-text rows, which send the typed text to whichever app declares a launch path with a `text_param` (the chat's new chat, and its send to an existing chat).
 One row is always highlighted; Enter runs it, Ctrl+Enter (Cmd+Enter on macOS) runs the secondary free-text row, and typing filters the rows.

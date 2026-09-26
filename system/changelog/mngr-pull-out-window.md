@@ -1,0 +1,1 @@
+The desktop-interface contracts document the `is_detached` placement flag, the tear-out, detach, and reattach rules, and the shell's solo mode (`/?solo=<window-id>`), for windows pulled out of the desktop into a desktop window of the Mind app's own (mngr's `specs/pull-out-window/spec.md`).

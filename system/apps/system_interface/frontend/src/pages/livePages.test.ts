@@ -247,6 +247,30 @@ describe("creating and positioning", () => {
     expect(wrapper.style.left).toBe("250px");
   });
 
+  it("hides a page while its window is being pulled out, and while it is out, and shows it again when back", async () => {
+    const wrapper = wrapperOf("win-1");
+    expect(wrapper.style.display).toBe("");
+    // The drag past the viewport: the chrome draws the window under the cursor, so no page here meanwhile.
+    layer.setTornOutWindow("win-1");
+    expect(wrapper.style.display).toBe("none");
+    layer.setTornOutWindow(null);
+    expect(wrapper.style.display).toBe("");
+    // Pulled out: the page lives in the chrome's own desktop window, and this one keeps its frame for the return.
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    layer.reconcile();
+    expect(wrapper.style.display).toBe("none");
+    await store.reattachWindow("win-1", null);
+    renderChrome();
+    layer.reconcile();
+    expect(wrapperOf("win-1")).toBe(wrapper);
+    expect(wrapper.style.display).toBe("");
+  });
+
   it("makes every page but the focused one inert, and all of them during a gesture", () => {
     store.restoreWindow("win-2");
     layer.reconcile();

@@ -1,10 +1,10 @@
 """The pure editor over the desktop model (desktop-interface plan section 5.3, contracts.md section 10).
 
 Pure functions over the frozen ``Desktop``, ``Window``, ``DesktopLayout``, and ``WindowPlacement`` records that
-both the routes and the agent ops use: open, close, focus, minimize, restore, maximize, snap, place, and
-the shortcut edits, plus the geometry rules (cascade, fit, snap zones, un-snap, the grid, the nearest free
-cell, reading order, and the render-time placement of shortcuts). Every rule the frontend also applies is
-written once here and once in TypeScript against the same constants and the shared vectors in
+both the routes and the agent ops use: open, close, focus, minimize, restore, maximize, snap, place, detach,
+reattach, and the shortcut edits, plus the geometry rules (cascade, fit, snap zones, un-snap, the grid, the
+nearest free cell, reading order, and the render-time placement of shortcuts). Every rule the frontend also
+applies is written once here and once in TypeScript against the same constants and the shared vectors in
 ``docs/system/blueprint/desktop-interface/geometry_vectors.json``, which ``desktop_document_test.py`` runs.
 """
 
@@ -662,9 +662,15 @@ def effective_placements(layout: DesktopLayout, desktop: Desktop) -> tuple[Windo
 
 
 @pure
+def is_placement_shown(placement: WindowPlacement) -> bool:
+    """Whether a placement is on the desktop's screen: neither minimized nor pulled out."""
+    return not placement.is_minimized and not placement.is_detached
+
+
+@pure
 def focused_window_id(placements: Sequence[WindowPlacement]) -> WindowId | None:
-    """The last placement that is not minimized; None when the backdrop has focus."""
-    return next((placement.window_id for placement in reversed(placements) if not placement.is_minimized), None)
+    """The last placement that is shown (neither minimized nor pulled out); None when the backdrop has focus."""
+    return next((placement.window_id for placement in reversed(placements) if is_placement_shown(placement)), None)
 
 
 @pure
@@ -713,21 +719,33 @@ def with_window_placed_on_open(layout: DesktopLayout, window_id: WindowId, is_mi
     return _with_placement_on_top(layout, opened_placement(window_id, len(layout.placements), is_minimized))
 
 
+# Every verb that shows a window on the desktop brings a pulled-out one back: the desktop is where it is
+# being shown.
+
+
 @pure
 def with_window_raised(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
     """Focus: the window restored (un-minimized) and moved to the top of the stack."""
     current = placement_of(layout, window_id)
     return _with_placement_on_top(
-        layout, current.model_copy_update(to_update(current.field_ref().is_minimized, False))
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
+        ),
     )
 
 
 @pure
 def with_window_minimized(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
-    """Minimize: the window out of sight where it stands in the stack."""
+    """Minimize: the window out of sight where it stands in the stack (back from its own window, if it was out)."""
     current = placement_of(layout, window_id)
     return _with_placement_in_place(
-        layout, current.model_copy_update(to_update(current.field_ref().is_minimized, True))
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, True),
+            to_update(current.field_ref().is_detached, False),
+        ),
     )
 
 
@@ -739,6 +757,7 @@ def with_window_restored(layout: DesktopLayout, window_id: WindowId) -> DesktopL
         layout,
         current.model_copy_update(
             to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
             to_update(current.field_ref().state, WindowState.NORMAL),
         ),
     )
@@ -752,6 +771,7 @@ def with_window_state(layout: DesktopLayout, window_id: WindowId, state: WindowS
         layout,
         current.model_copy_update(
             to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
             to_update(current.field_ref().state, state),
         ),
     )
@@ -765,8 +785,40 @@ def with_window_frame(layout: DesktopLayout, window_id: WindowId, frame: Frame) 
         layout,
         current.model_copy_update(
             to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
             to_update(current.field_ref().state, WindowState.NORMAL),
             to_update(current.field_ref().frame, frame),
+        ),
+    )
+
+
+@pure
+def with_window_detached(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
+    """Pull out: the window shown in a desktop window of the chrome's own, where it stands in the stack, its frame
+    kept so the ghost and a later return land where the drag began."""
+    current = placement_of(layout, window_id)
+    return _with_placement_in_place(
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, True),
+        ),
+    )
+
+
+@pure
+def with_window_reattached(layout: DesktopLayout, window_id: WindowId, frame: Frame | None) -> DesktopLayout:
+    """Bring back: the window shown on the desktop again, normal, on top of the stack, at ``frame`` when a drop back
+    onto the desktop named one, else at its kept frame. A ``Frame`` lies inside the unit square by construction;
+    the frontend, which takes the drop as raw fractions, clamps it into the square first."""
+    current = placement_of(layout, window_id)
+    return _with_placement_on_top(
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
+            to_update(current.field_ref().state, WindowState.NORMAL),
+            to_update(current.field_ref().frame, current.frame if frame is None else frame),
         ),
     )
 

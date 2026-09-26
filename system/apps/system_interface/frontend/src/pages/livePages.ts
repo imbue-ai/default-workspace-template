@@ -33,6 +33,7 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
+import { windowPageZIndex } from "../geometry/stacking";
 import { windowPageUrl } from "../model/pageUrl";
 import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
@@ -104,6 +105,9 @@ interface HostRect {
 export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
+  /** The window a tear-out drag has pulled past the viewport: its page is hidden until the drag comes back
+   *  inside or ends (the pull-out-window spec). */
+  private tornOutWindowId: string | null = null;
   private lastFocusedWindowId: string | null = null;
   /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
@@ -137,6 +141,14 @@ export class LivePagesLayer implements PageDriver {
   setGestureActive(isActive: boolean): void {
     if (this.isGestureActive === isActive) return;
     this.isGestureActive = isActive;
+    this.reconcile();
+  }
+
+  /** Hide the page of the window a tear-out drag is pulling out (the chrome shows it elsewhere), or show it
+   *  again: the per-move step of that drag, which redraws nothing. */
+  setTornOutWindow(windowId: string | null): void {
+    if (this.tornOutWindowId === windowId) return;
+    this.tornOutWindowId = windowId;
     this.reconcile();
   }
 
@@ -209,6 +221,12 @@ export class LivePagesLayer implements PageDriver {
       if (!windowsById.has(windowId)) this.destroy(page);
     }
 
+    const soloWindowId = this.store.getSoloWindowId();
+    if (soloWindowId !== null) {
+      this.reconcileSolo(soloWindowId, windowsById);
+      return;
+    }
+
     const desktop = activeDesktop(state);
     const placements = desktop === null ? [] : activePlacements(state);
     const focused = activeFocusedWindowId(state);
@@ -216,20 +234,15 @@ export class LivePagesLayer implements PageDriver {
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
       if (found === undefined || desktop === null || placement.is_minimized) return;
+      // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
+      // is already drawn there under the cursor.
+      if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
       const { window } = found;
       const app = appByName(state, window.app);
       if (app === undefined) return;
       const page = this.pages.get(window.id) ?? this.create(window, app);
       shownIds.add(window.id);
-      if (!app.is_running) {
-        page.isHeldForStop = true;
-        this.hide(page);
-        return;
-      }
-      if (page.isHeldForStop) {
-        page.isHeldForStop = false;
-        this.reloadPage(page);
-      }
+      if (!this.prepareShownPage(page, app)) return;
       const box = this.contentBox(window.id);
       if (box === null) {
         this.hide(page);
@@ -241,26 +254,70 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
+    this.followIfRevised(windowsById);
+    this.focusIfChanged(focused);
+  }
 
-    // Only after the shell's own desktops update or layout load, never on a redraw or a local edit (an open, a
-    // close, a settings answer): between a page's own location report and the broadcast that stores it, the
-    // stored path is still the old one, and nothing must send the page back there.
+  /** Solo mode (the pull-out-window spec, section 7.5): the one window's page over the whole host, live, and no
+   *  other page at all. It follows its window's path like any page. */
+  private reconcileSolo(
+    soloWindowId: string,
+    windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>,
+  ): void {
+    const state = this.store.getState();
+    const found = windowsById.get(soloWindowId);
+    const app = found === undefined ? undefined : appByName(state, found.window.app);
+    for (const page of this.pages.values()) {
+      if (page.windowId !== soloWindowId) this.hide(page);
+    }
+    if (found === undefined || app === undefined) return;
+    const page = this.pages.get(soloWindowId) ?? this.create(found.window, app);
+    if (!this.prepareShownPage(page, app)) return;
+    const hostBox = this.host.getBoundingClientRect();
+    this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true);
+    if (page.greetedDesktopId !== null && page.greetedDesktopId !== found.desktop.id) this.greet(page);
+    this.followIfRevised(windowsById);
+    this.focusIfChanged(soloWindowId);
+  }
+
+  /** Whether a page about to be shown can be: a stopped app's page is hidden and held (false), and a held page
+   *  is reloaded once its app runs again. */
+  private prepareShownPage(page: LivePage, app: AppRecord): boolean {
+    if (!app.is_running) {
+      page.isHeldForStop = true;
+      this.hide(page);
+      return false;
+    }
+    if (page.isHeldForStop) {
+      page.isHeldForStop = false;
+      this.reloadPage(page);
+    }
+    return true;
+  }
+
+  /** Follow the windows' paths only after the shell's own desktops update or layout load, never on a redraw or
+   *  a local edit (an open, a close, a settings answer): between a page's own location report and the broadcast
+   *  that stores it, the stored path is still the old one, and nothing must send the page back there. */
+  private followIfRevised(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
     const desktopsRevision = this.store.getDesktopsRevision();
     const layoutLoadsRevision = this.store.getLayoutLoadsRevision();
     if (
-      desktopsRevision !== this.followedDesktopsRevision ||
-      layoutLoadsRevision !== this.followedLayoutLoadsRevision
+      desktopsRevision === this.followedDesktopsRevision &&
+      layoutLoadsRevision === this.followedLayoutLoadsRevision
     ) {
-      this.followedDesktopsRevision = desktopsRevision;
-      this.followedLayoutLoadsRevision = layoutLoadsRevision;
-      this.follow(windowsById);
+      return;
     }
+    this.followedDesktopsRevision = desktopsRevision;
+    this.followedLayoutLoadsRevision = layoutLoadsRevision;
+    this.follow(windowsById);
+  }
 
-    if (focused !== this.lastFocusedWindowId) {
-      this.lastFocusedWindowId = focused;
-      const page = focused === null ? undefined : this.pages.get(focused);
-      if (page !== undefined) requestFrameFocus(page.wrapper);
-    }
+  /** Give the focused window's page the frame focus once, when the focused window changes. */
+  private focusIfChanged(focused: string | null): void {
+    if (focused === this.lastFocusedWindowId) return;
+    this.lastFocusedWindowId = focused;
+    const page = focused === null ? undefined : this.pages.get(focused);
+    if (page !== undefined) requestFrameFocus(page.wrapper);
   }
 
   private follow(windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>): void {
@@ -377,9 +434,7 @@ export class LivePagesLayer implements PageDriver {
   private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
     this.position(page, box);
     const style = page.wrapper.style;
-    // Interleaved with the window chrome: chrome at 2i+2 sits over its own page at 2i+1 and over
-    // every lower window's page and chrome.
-    style.zIndex = String(2 * stackIndex + 1);
+    style.zIndex = windowPageZIndex(stackIndex);
     style.pointerEvents = isInteractive ? "auto" : "none";
     style.display = "";
     this.syncVisibility(page, true);
