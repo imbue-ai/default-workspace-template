@@ -30,6 +30,7 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "refresh_workspace_view.py",
     "require_create_account.py",
     "seed_welcome_chat.py",
+    "set_mngr_pin.py",
     "tool_env.py",
 )
 

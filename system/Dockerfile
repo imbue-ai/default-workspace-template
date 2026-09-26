@@ -18,7 +18,6 @@ ENV PATH="/root/.local/bin:$PATH"
 # re-run of setup_system.sh (the update apply) would read it over the merged
 # tree's default and silently reinstall the image's version.
 
-# ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
 # toolchain AND invokes the sibling installers (secret scanners, agy,
@@ -35,7 +34,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # Caching tradeoff: a pin bump in any installer rebuilds the whole
 # system-toolchain layer rather than an installer-only layer -- accepted so a
 # single common script covers every provider.
-# ============================================================================
+
 # Pin every apt operation (this build and all runtime installs) to the
 # committed archive snapshot timestamp. Runs before any apt usage so the
 # system-toolchain layer below resolves against the frozen universe; the
@@ -65,13 +64,11 @@ ENV XDG_CACHE_HOME=/var/cache/user
 ENV UV_CACHE_DIR=/var/cache/user/uv
 ENV npm_config_cache=/var/cache/user/npm
 
-# ============================================================================
 # Pre-COPY manifest layer.
 # Copies only the dependency manifests (no application source) so the
 # expensive dependency install below caches against dependency-manifest
 # changes only. Application code edits land on the `COPY . /home/user/workspace/`
 # further down -- they do not invalidate the cache here.
-# ============================================================================
 WORKDIR /home/user/workspace/
 
 # Root + per-workspace-member pyproject.toml + uv.lock.
@@ -93,17 +90,28 @@ COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/cha
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
+# Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).
+#
+# While pyproject.toml pins mngr from the private mngr-internal repo, this RUN
+# and the workspace build below carry a `--mount=type=secret` of the credential
+# the creator hands the build (`mngr_internal_git_token`, see the build_arg in
+# .mngr/settings.toml); system/scripts/set_mngr_pin.py adds the mount with such
+# a pin and removes it with a public one, because a mount needs BuildKit, which
+# a public pin must not require. Never edit those lines by hand. The mount is
+# optional (an unset creator-side env var mounts an empty file, which the auth
+# helper treats as absent), and the secret never lands in a layer.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
+COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
 RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
-# ============================================================================
 # End pre-COPY manifest layer. Source-changing layers begin below.
-# ============================================================================
 
 # copy in all of our code:
 COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.
+# With a private pin, set_mngr_pin.py gives this RUN the same secret mount as
+# the dependency install above: the tool installs fetch mngr from the pin.
 RUN bash /home/user/workspace/system/scripts/build_workspace.sh
 
 # Move the baked workspace off the volume mount path so the shipped

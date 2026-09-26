@@ -13,6 +13,7 @@ browser for the agent. Refusing frames was measured to recover cleanly.
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -70,6 +71,63 @@ def test_losing_the_lease_refuses_the_very_next_frame() -> None:
     # The message has to tell the agent where the authoritative answer lives, because
     # playwright-cli collapses every failure into exit 1 with its own wording.
     assert "ls" in reason
+
+
+class _Upstream:
+    """Stands in for Chromium's socket, recording every frame the proxy forwards."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(raw)
+
+
+class _Client:
+    """Stands in for the agent's socket: yields the given frames, records the proxy's replies."""
+
+    def __init__(self, frames: list[dict[str, Any]]) -> None:
+        self._frames = frames
+        self.replies: list[str] = []
+
+    async def _frames_as_raw(self) -> AsyncIterator[str]:
+        for frame in self._frames:
+            yield json.dumps(frame)
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self._frames_as_raw()
+
+    async def send(self, raw: str) -> None:
+        self.replies.append(raw)
+
+
+@pytest.mark.parametrize(
+    ("allowed", "method", "pane_follows"),
+    [
+        pytest.param(False, "Runtime.runIfWaitingForDebugger", False, id="resume-without-the-lease"),
+        pytest.param(True, "Page.navigate", True, id="leased-command-control"),
+    ],
+)
+def test_a_resume_reaches_chromium_without_moving_the_pane(allowed: bool, method: str, pane_follows: bool) -> None:
+    # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
+    # or popup until that client sends Runtime.runIfWaitingForDebugger. After a handoff the
+    # agent's socket stays open and its resume must still land: refuse it and the new target
+    # stays paused, freezing the opener that shares its renderer. Playwright resumes iframes
+    # and workers too, so a lease-less agent's resume must not pull the human's view onto one.
+    proxy, _ = _proxy(allowed=allowed)
+    proxy._sessions["session-1"] = "target-1"
+    upstream = _Upstream()
+    client = _Client([{"id": 1, "method": method, "sessionId": "session-1"}])
+
+    async def go() -> bool:
+        await proxy._client_to_browser(client, upstream, "good")
+        follow_scheduled = proxy._follow_handle is not None
+        if proxy._follow_handle is not None:
+            proxy._follow_handle.cancel()
+        return follow_scheduled
+
+    assert asyncio.run(go()) is pane_follows
+    assert len(upstream.sent) == 1 and client.replies == []
 
 
 def test_another_agents_token_cannot_drive() -> None:
