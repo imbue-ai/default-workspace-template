@@ -1,0 +1,1 @@
+The pipe-into-`head`/`tail` guard (`system/scripts/agent_block_pipe_tail_head_check.py`) is now a third consumer of the parser, imported under a bare `python3` like the tk and latchkey gates. The README's consumer list and the module docstring now name it, since it is one more reason the package must stay stdlib-only.
