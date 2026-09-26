@@ -63,6 +63,12 @@ def free_bytes(path: Path) -> int:
     return shutil.disk_usage(path).free
 
 
+def _nearest_existing(path: Path) -> Path:
+    while not path.exists():
+        path = path.parent
+    return path
+
+
 def tree_size_bytes(root: Path) -> int:
     """The bytes a copy of ``root`` writes: every regular file's size, symlinks not followed."""
     total = 0
@@ -93,9 +99,8 @@ def copy_tree_checked(
     """
     if destination.exists():
         raise CopyError(f"{destination} already exists; not copying over it")
-    destination.parent.mkdir(parents=True, exist_ok=True)
     size = tree_size_bytes(source)
-    available = free_space(destination.parent)
+    available = free_space(_nearest_existing(destination.parent))
     if size + RESERVE_BYTES > available:
         raise CopyError(
             f"copying {source} ({_format_bytes(size)}) to {destination} would leave "

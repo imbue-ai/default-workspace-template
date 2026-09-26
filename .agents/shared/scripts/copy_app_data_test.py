@@ -67,9 +67,9 @@ def test_a_copy_that_would_not_leave_the_reserve_is_refused_before_writing(
     with pytest.raises(mod.CopyError, match="/tmp is memory"):
         mod.copy_tree_checked(source, destination, free_space=just_short)
 
-    assert not destination.exists()
+    assert not destination.parent.exists()
     # The probe asks about the disk the copy would land on, not the source's.
-    assert probed == [destination.parent]
+    assert probed == [tmp_path]
 
 
 def test_a_copy_that_fails_part_way_is_removed(tmp_path: Path) -> None:
