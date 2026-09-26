@@ -216,15 +216,19 @@ export function secretResolutionRequestIdOf(event: Pick<UserMessageEvent, "displ
   return event.request_id ?? null;
 }
 
-/** The user's note on a declined secret request: whatever follows the machine tag. */
+/** The user's note on a declined secret request: whatever follows the machine tag. Read from the
+ *  notice the backend supplies without any background-task reports a harness flushed with it. */
 const SECRET_TAG_RE = /\(secret:\s*(?:stored|declined|superseded),\s*request_id:\s*[^)\s]+\)\s*/;
 
-export function secretResolutionNoteOf(event: Pick<UserMessageEvent, "display" | "content">): string | null {
+export function secretResolutionNoteOf(
+  event: Pick<UserMessageEvent, "display" | "content" | "display_body">,
+): string | null {
   if (event.display !== "secret_resolution") {
     return null;
   }
-  const match = SECRET_TAG_RE.exec(event.content);
+  const notice = event.display_body ?? event.content;
+  const match = SECRET_TAG_RE.exec(notice);
   if (match === null) return null;
-  const note = event.content.slice(match.index + match[0].length).trim();
+  const note = notice.slice(match.index + match[0].length).trim();
   return note === "" ? null : note;
 }

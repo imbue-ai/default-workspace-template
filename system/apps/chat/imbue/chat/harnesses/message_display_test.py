@@ -479,3 +479,29 @@ def test_secret_resolution_notices_classify_by_their_own_tag_and_carry_the_verdi
 
 def test_a_human_message_mentioning_a_secret_file_is_not_a_resolution() -> None:
     assert classify_user_message("please put it in data/.secrets/svc.env (secret: stored)") is None
+
+
+def test_a_resolution_tag_in_a_flushed_reports_output_does_not_claim_the_users_turn() -> None:
+    """A report's body is the command's raw output, which can print either tag (a test run of this code)."""
+    for printed_tag in ("(secret: stored, request_id: secret-x)", "(resolution: granted, request_id: r1)"):
+        report = _compose_report("Run the tests", output=f"E   assert {printed_tag!r} == ...\n")
+
+        decision = classify_user_message("\n".join(["fix the header too", report]))
+
+        assert decision is not None
+        assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+        assert decision.display_body == "fix the header too"
+
+
+def test_a_secret_notice_flushed_with_a_report_carries_the_notice_without_the_report() -> None:
+    notice = format_secret_resolution_notice(
+        SecretResolutionVerdict.DECLINED, "secret-1", "data/.secrets/svc.env", ("A",), "not now"
+    )
+
+    decision = classify_user_message("\n".join([notice, _compose_report("Build")]))
+
+    assert decision is not None
+    assert decision.display is DisplayKind.SECRET_RESOLUTION
+    assert decision.resolution == SecretResolutionVerdict.DECLINED
+    assert decision.request_id == "secret-1"
+    assert decision.display_body == notice

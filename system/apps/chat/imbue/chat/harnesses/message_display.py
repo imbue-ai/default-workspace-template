@@ -212,7 +212,8 @@ class MessageDisplay(FrozenModel):
     # Chip title (CHIP) or skill name (SKILL_EXPANSION); omitted otherwise.
     display_label: str | None = None
     # The body to display when a wrapper sentinel was stripped (a fleet nudge), or the user's
-    # own words behind a stripped context block (PROMPT_WITH_CONTEXT); omitted when the raw
+    # own words behind a stripped context block (PROMPT_WITH_CONTEXT), or a secret notice without
+    # the background-task reports flushed with it (SECRET_RESOLUTION); omitted when the raw
     # content is already the display body.
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error. SECRET_RESOLUTION only: stored /
@@ -388,31 +389,46 @@ def _match_bash_block(content: str) -> MessageDisplay | None:
 
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
-    """A latchkey permission-request verdict, injected as a plain user message."""
-    tag = _RESOLUTION_TAG_RE.search(content)
+    """A latchkey permission-request verdict, injected as a plain user message.
+
+    A background-task report flushed into the same message is a command's raw output, so its
+    text never counts as the notice.
+    """
+    notice, _ = split_background_task_reports(content)
+    tag = _RESOLUTION_TAG_RE.search(notice)
     if tag is not None:
         return MessageDisplay(
             display=DisplayKind.PERMISSION_RESOLUTION, resolution=tag.group(1), request_id=tag.group(2)
         )
-    if _RESOLUTION_GRANTED_RE.search(content) is not None:
+    if _RESOLUTION_GRANTED_RE.search(notice) is not None:
         resolution = "granted"
-    elif _RESOLUTION_DENIED_RE.search(content) is not None:
+    elif _RESOLUTION_DENIED_RE.search(notice) is not None:
         resolution = "denied"
-    elif _RESOLUTION_ERROR_RE.search(content) is not None:
+    elif _RESOLUTION_ERROR_RE.search(notice) is not None:
         resolution = "error"
     else:
         return None
-    request_id_match = _RESOLUTION_REQUEST_ID_RE.search(content)
+    request_id_match = _RESOLUTION_REQUEST_ID_RE.search(notice)
     request_id = request_id_match.group(1) if request_id_match is not None else None
     return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution, request_id=request_id)
 
 
 def _match_secret_resolution(content: str) -> MessageDisplay | None:
-    """The chat app's notice that a secret card was answered, sent as a plain user message."""
-    tag = _SECRET_RESOLUTION_TAG_RE.search(content)
+    """The chat app's notice that a secret card was answered, sent as a plain user message.
+
+    A background-task report flushed into the same message is a command's raw output, so its
+    text never counts as the notice, and the page reads the notice's note without it.
+    """
+    notice, reports = split_background_task_reports(content)
+    tag = _SECRET_RESOLUTION_TAG_RE.search(notice)
     if tag is None:
         return None
-    return MessageDisplay(display=DisplayKind.SECRET_RESOLUTION, resolution=tag.group(1), request_id=tag.group(2))
+    return MessageDisplay(
+        display=DisplayKind.SECRET_RESOLUTION,
+        display_body=notice if reports else None,
+        resolution=tag.group(1),
+        request_id=tag.group(2),
+    )
 
 
 # Most-specific first; classify_user_message takes the first match.

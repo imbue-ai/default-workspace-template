@@ -224,4 +224,15 @@ describe("secret requests and their resolutions", () => {
     // Still a UserPrompt for the classifier: only the walk suppresses the bubble.
     expect(classifyUserMessage(declined).kind).toBe(UserMessageKind.UserPrompt);
   });
+
+  it("reads a decline note from the notice the backend separated from a report flushed with it", () => {
+    const notice =
+      "Secret declined: data/.secrets/svc.env (A) (secret: declined, request_id: secret-1) use the other account";
+    const flushed = {
+      content: `${notice}\n<background-task-report>\n<summary>Build (finished)</summary>\nbuilt\n</background-task-report>`,
+      display: "secret_resolution" as const,
+      display_body: notice,
+    };
+    expect(secretResolutionNoteOf(flushed)).toBe("use the other account");
+  });
 });
