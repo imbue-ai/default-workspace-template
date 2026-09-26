@@ -72,9 +72,14 @@ WORKSPACE_DIR: Final[Path] = Path("/home/user/workspace")
 # stall the backup cadence.
 ENV_RECORD_CAPTURE_TIMEOUT_SECONDS: Final[float] = 120.0
 
-# The restic-call signatures the backup step depends on, injected so the
-# orchestration can be unit-tested without shelling out to restic.
+# The restic-call signatures the backup and retention steps depend on, injected so
+# the orchestration can be unit-tested without shelling out to restic.
 BackupFn = Callable[..., subprocess.CompletedProcess[str]]
+ForgetFn = Callable[..., subprocess.CompletedProcess[str]]
+ForgetIdsFn = Callable[
+    [tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]
+]
+PruneFn = Callable[[Mapping[str, str]], subprocess.CompletedProcess[str]]
 UnlockFn = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -294,9 +299,7 @@ def _run_one_tick(
     _maybe_run_prune(state=state, config=config, env_overrides=env_overrides)
 
 
-# ---------------------------------------------------------------------------
 # Per-step helpers
-# ---------------------------------------------------------------------------
 
 
 def _check_secrets_present(*, state: _LoopState) -> dict[str, str] | None:
@@ -489,14 +492,19 @@ def _run_restic_backup(
     an outage cannot pass silently. `backup_fn`/`unlock_fn` are injected for tests.
     """
     tag = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    result, duration = _attempt_backup_with_unlock_retry(
-        snapshot=snapshot,
-        excludes=config.excludes,
-        tag=tag,
+    start = time.monotonic()
+    result = _run_with_unlock_retry(
+        operation="backup",
+        run=lambda: backup_fn(
+            source_path=snapshot.read_path,
+            excludes=config.excludes,
+            tag=tag,
+            env_overrides=env_overrides,
+        ),
         env_overrides=env_overrides,
-        backup_fn=backup_fn,
         unlock_fn=unlock_fn,
     )
+    duration = time.monotonic() - start
     if result.returncode != 0:
         state.consecutive_backup_failures += 1
         write_event(
@@ -534,49 +542,39 @@ def _run_restic_backup(
     return True
 
 
-def _attempt_backup_with_unlock_retry(
+def _run_with_unlock_retry(
     *,
-    snapshot: SnapshotResult,
-    excludes: tuple[str, ...],
-    tag: str,
+    operation: str,
+    run: Callable[[], subprocess.CompletedProcess[str]],
     env_overrides: Mapping[str, str],
-    backup_fn: BackupFn,
     unlock_fn: UnlockFn,
-) -> tuple[subprocess.CompletedProcess[str], float]:
-    """Run the backup, clearing a stale lock and retrying once if one blocks it.
+) -> subprocess.CompletedProcess[str]:
+    """Run a restic command, clearing stale locks and retrying once if one blocks it.
 
-    Returns (final restic result, total elapsed seconds). Only a lock error
-    triggers the unlock; any other failure is returned as-is for the caller to
-    record.
+    Only a lock error triggers the unlock; any other failure (and a failed
+    unlock) returns the first result as-is for the caller to record.
+
+    forget and prune need an exclusive lock, which restic refuses while ANY other
+    lock exists, stale or not. A non-exclusive lock a dead container left behind
+    never blocks a backup, so these steps are the ones that meet it.
     """
-    start = time.monotonic()
-    result = backup_fn(
-        source_path=snapshot.read_path,
-        excludes=excludes,
-        tag=tag,
-        env_overrides=env_overrides,
+    result = run()
+    if result.returncode == 0 or not is_repo_locked_error(result.stderr):
+        return result
+    logger.warning(
+        "restic {} blocked by an existing repository lock; running "
+        "`restic unlock` to clear stale locks and retrying once",
+        operation,
     )
-    if result.returncode != 0 and is_repo_locked_error(result.stderr):
+    unlock_result = unlock_fn(env_overrides=env_overrides)
+    if unlock_result.returncode != 0:
         logger.warning(
-            "restic backup blocked by an existing repository lock; running "
-            "`restic unlock` to clear stale locks and retrying once"
+            "restic unlock failed (rc={}): {}",
+            unlock_result.returncode,
+            unlock_result.stderr.strip(),
         )
-        unlock_result = unlock_fn(env_overrides=env_overrides)
-        if unlock_result.returncode != 0:
-            logger.warning(
-                "restic unlock failed (rc={}): {}",
-                unlock_result.returncode,
-                unlock_result.stderr.strip(),
-            )
-        else:
-            result = backup_fn(
-                source_path=snapshot.read_path,
-                excludes=excludes,
-                tag=tag,
-                env_overrides=env_overrides,
-            )
-    duration = time.monotonic() - start
-    return result, duration
+        return result
+    return run()
 
 
 def _maybe_emit_repeated_failure_alarm(state: _LoopState) -> None:
@@ -604,15 +602,22 @@ def _run_forget(
     state: _LoopState,
     config: BackupConfig,
     env_overrides: Mapping[str, str],
+    forget_fn: ForgetFn = restic_forget,
+    unlock_fn: UnlockFn = restic_unlock,
 ) -> None:
     """Run `restic forget` (no prune); always emit FORGET_COMPLETED."""
     start = time.monotonic()
-    result = restic_forget(
-        keep_hourly=config.retention.keep_hourly,
-        keep_daily=config.retention.keep_daily,
-        keep_weekly=config.retention.keep_weekly,
-        keep_monthly=config.retention.keep_monthly,
+    result = _run_with_unlock_retry(
+        operation="forget",
+        run=lambda: forget_fn(
+            keep_hourly=config.retention.keep_hourly,
+            keep_daily=config.retention.keep_daily,
+            keep_weekly=config.retention.keep_weekly,
+            keep_monthly=config.retention.keep_monthly,
+            env_overrides=env_overrides,
+        ),
         env_overrides=env_overrides,
+        unlock_fn=unlock_fn,
     )
     duration = time.monotonic() - start
     write_event(
@@ -663,9 +668,8 @@ def _age_out_restore_markers(
     list_fn: Callable[
         [tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]
     ] = restic_list_snapshots_with_any_tag,
-    forget_ids_fn: Callable[
-        [tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]
-    ] = restic_forget_snapshot_ids,
+    forget_ids_fn: ForgetIdsFn = restic_forget_snapshot_ids,
+    unlock_fn: UnlockFn = restic_unlock,
     now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> None:
     """Forget restore-marker snapshots older than the configured cutoff.
@@ -714,7 +718,12 @@ def _age_out_restore_markers(
         return
 
     start = time.monotonic()
-    result = forget_ids_fn(tuple(expired_ids), env_overrides)
+    result = _run_with_unlock_retry(
+        operation="forget of expired restore markers",
+        run=lambda: forget_ids_fn(tuple(expired_ids), env_overrides),
+        env_overrides=env_overrides,
+        unlock_fn=unlock_fn,
+    )
     duration = time.monotonic() - start
     write_event(
         state.events_dir,
@@ -742,6 +751,8 @@ def _maybe_run_prune(
     state: _LoopState,
     config: BackupConfig,
     env_overrides: Mapping[str, str],
+    prune_fn: PruneFn = restic_prune,
+    unlock_fn: UnlockFn = restic_unlock,
 ) -> None:
     """Run `restic prune` iff the gate file is older than prune_interval_hours."""
     interval_seconds = config.retention.prune_interval_hours * 3600.0
@@ -761,7 +772,12 @@ def _maybe_run_prune(
             )
             return
     start = time.monotonic()
-    result = restic_prune(env_overrides)
+    result = _run_with_unlock_retry(
+        operation="prune",
+        run=lambda: prune_fn(env_overrides),
+        env_overrides=env_overrides,
+        unlock_fn=unlock_fn,
+    )
     duration = time.monotonic() - start
     write_event(
         state.events_dir,
