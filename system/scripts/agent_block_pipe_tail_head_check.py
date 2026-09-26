@@ -10,9 +10,9 @@ A pipe into `head`/`tail` is allowed when every stage feeding it is a plain read
 (`pytest | tee /tmp/out | tail`). The command is split with the shared `tk_command_parsing`
 parser, so each pipeline in `cd x && cat f | head` is judged on its own.
 
-This is a nudge, not a boundary, so it stays simple and fails closed: anything it does not
-recognise as a plain read is blocked, as is any pipe into `head`/`tail` it cannot see as a
-pipeline stage (one inside quoted text, a substitution, or syntax the parser does not follow).
+Anything it does not recognise as a plain read is blocked, as is any pipe into `head`/`tail` it
+cannot see as a pipeline stage (one inside quoted text, a substitution, or syntax the parser
+does not follow).
 
 Runs under a bare `python3` with no virtualenv, like the sibling checkers, so it puts the parser
 lib's source directory on `sys.path` itself.
