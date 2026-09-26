@@ -284,8 +284,7 @@ changed (and no global-dep bump with a user-created dependent) **and** you
 authored no in-branch edits of your own (a mirror edit from 4a is merge work
 even though `classify-merge` cannot see it; Step 1's rollback reverts are not,
 as git made them or with a `both added` file taken at the target's version,
-when `git diff <merge-sha> HEAD` is empty).
-**Otherwise run
+when `git diff <merge-sha> HEAD` is empty). **Otherwise run
 the real gates**,
 scoped to every file whose merged content differs from the target release. The
 full rule, its scope, and the keep/revert disposition for fix commits are in
