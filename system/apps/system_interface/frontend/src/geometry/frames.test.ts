@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { frameForState, frameFromPixels, frameToPixels, isResizeEdge, movedRect, resizedRect } from "./frames";
-import * as frames from "./frames";
+import {
+  frameForState,
+  frameFromPixels,
+  frameToPixels,
+  isResizeEdge,
+  movedRect,
+  overshootPastViewport,
+  resizedRect,
+} from "./frames";
 
 const BACKDROP = { width: 1000, height: 800 };
 const MINIMUM = { windowMinWidth: 320, windowMinHeight: 240 };
@@ -94,7 +101,6 @@ describe("movedRect", () => {
 
 describe("overshootPastViewport", () => {
   it("is how far the pointer is past the nearest edge of the viewport, and nothing inside it", () => {
-    const { overshootPastViewport } = frames;
     const taskbar = 48;
     expect(overshootPastViewport({ x: 500, y: 400 }, BACKDROP, taskbar)).toBe(0);
     expect(overshootPastViewport({ x: -30, y: 400 }, BACKDROP, taskbar)).toBe(30);
