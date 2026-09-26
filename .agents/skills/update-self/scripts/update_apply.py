@@ -265,6 +265,19 @@ _REVERTS_COMMIT = re.compile(
 )
 
 
+def _log_records(
+    runner: Runner, repo_root: Path, args: Sequence[str], fields: int
+) -> list[list[str]]:
+    """Each commit ``git log args`` prints, split into its ``fields`` fields, for a
+    format whose fields are NUL-separated and whose records end in 0x1e (a body spans
+    lines, so a newline cannot end a record)."""
+    return [
+        record.strip("\n").split("\x00", fields - 1)
+        for record in git_out(runner, repo_root, args).split("\x1e")
+        if record.strip()
+    ]
+
+
 def _undid_update_content(
     rollback: str,
     restore_to: str,
@@ -281,7 +294,7 @@ def _undid_update_content(
     a retry of a release already in history: its merge adds no commit, so all it landed
     was the revert that put the release back.
     """
-    undone = git_out(
+    undone = _log_records(
         runner,
         repo_root,
         [
@@ -290,11 +303,9 @@ def _undid_update_content(
             "--format=%s%x00%b%x1e",
             f"{restore_to}..{rollback}^",
         ],
+        fields=2,
     )
-    for record in undone.split("\x1e"):
-        if not record.strip():
-            continue
-        subject, body = record.strip("\n").split("\x00", 1)
+    for subject, body in undone:
         if subject.startswith(_UPDATE_SELF_SUBJECT_PREFIX) or any(
             sha in update_rollbacks for sha in _REVERTS_COMMIT.findall(body)
         ):
@@ -315,16 +326,12 @@ def pending_update_rollbacks(
     release lands only what that release changed since: the old release plus a few
     files, which the apply's probes cannot tell from a good update.
     """
-    log = git_out(
+    newest_first = _log_records(
         runner,
         repo_root,
         ["log", "--topo-order", "--format=%H%x00%s%x00%b%x1e", f"{target_ref}..{tip}"],
+        fields=3,
     )
-    newest_first = [
-        record.strip("\n").split("\x00", 2)
-        for record in log.split("\x1e")
-        if record.strip()
-    ]
     # Oldest first, so an earlier update's rollback is known before a later rollback
     # that undid its revert is classified.
     update_rollbacks: set[str] = set()
