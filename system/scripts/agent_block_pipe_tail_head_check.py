@@ -57,12 +57,19 @@ _READERS = frozenset(
     """
     cat tac nl head tail grep egrep fgrep rg sed awk cut sort uniq tr wc column paste fold rev
     comm diff cmp jq xxd od strings sha256sum md5sum
-    ls tree stat file readlink realpath basename dirname
+    ls tree find du stat file readlink realpath basename dirname
     echo printf pwd printenv which whoami id date uname hostname ps dmesg free uptime df
     """.split()
 )
 # Readers that walk a tree: cheap on a project directory, slow on the whole filesystem.
-_TREE_WALKERS = frozenset({"find", "du"})
+_TREE_WALKERS = frozenset({"find", "du", "rg", "tree"})
+# Readers that walk a tree only when given one of these short-flag letters or long flags.
+_RECURSIVE_FLAGS = {
+    "grep": ("rR", ("--recursive", "--dereference-recursive")),
+    "egrep": ("rR", ("--recursive", "--dereference-recursive")),
+    "fgrep": ("rR", ("--recursive", "--dereference-recursive")),
+    "ls": ("R", ("--recursive",)),
+}
 # find actions that run a program per match or change the tree, so the walk is no longer a read.
 _FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete"})
 
@@ -197,11 +204,11 @@ def _is_plain_read(stage: CommandSegment) -> bool:
     name = os.path.basename(words[0])
     args = words[1:]
     if name in _READERS:
-        return True
-    if name in _TREE_WALKERS:
         # The lexer does not expand globs, so `/*` reaches here as written.
-        walks_root = any(a.startswith("/") and not a.strip("/*") for a in args)
-        return not walks_root and _FIND_ACTIONS.isdisjoint(args)
+        walks_root = _walks_tree(name, args) and any(
+            a.startswith("/") and not a.strip("/*") for a in args
+        )
+        return not walks_root and (name != "find" or _FIND_ACTIONS.isdisjoint(args))
     if name == "git":
         return _is_git_read(args)
     if name == "supervisorctl":
@@ -209,6 +216,23 @@ def _is_plain_read(stage: CommandSegment) -> bool:
     if name == "crontab":
         return args == ["-l"]
     return "--help" in args or "--version" in args
+
+
+def _walks_tree(name: str, args: list[str]) -> bool:
+    if name in _TREE_WALKERS:
+        return True
+    if name not in _RECURSIVE_FLAGS:
+        return False
+    letters, long_flags = _RECURSIVE_FLAGS[name]
+    return any(
+        a in long_flags
+        or (
+            a.startswith("-")
+            and not a.startswith("--")
+            and any(c in a for c in letters)
+        )
+        for a in args
+    )
 
 
 def _is_git_read(args: list[str]) -> bool:

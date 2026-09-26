@@ -34,6 +34,10 @@ def _run(command: str) -> int:
         "git tag -l 'minds-v0.4*' | head",
         "rg --files -g '*README*' docs | head -180",
         "find system/apps -maxdepth 2 -iname '*review*' 2>/dev/null | head",
+        "grep -rn TODO system/scripts | head",
+        # Naming the root is only a whole-filesystem walk for a recursive reader.
+        "ls -la / | head",
+        "df -h / | tail -1",
         "LC_ALL=C sort -u /tmp/names.txt | head -20",
         "cat f | head -5 | tail -2",
         "cat f | grep x | head",
@@ -71,6 +75,9 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         "timeout 300 git log | head",
         "find / -name x.json 2>/dev/null | head -1",
         "du -sh /* 2>/dev/null | sort -h | tail -20",
+        "grep -rl needle / 2>/dev/null | head",
+        "rg needle / | head",
+        "ls -lR / | head",
         # -exec runs a program per match, so its output is that program's.
         "find . -name '*_test.py' -exec pytest {} + | tail -20",
         "git branch -D old | head",
