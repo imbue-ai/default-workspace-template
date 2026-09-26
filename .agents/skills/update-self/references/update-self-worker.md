@@ -54,6 +54,10 @@ ROLLBACKS=$(python3 data/.tasks/update-self/skill-at-target/.agents/skills/updat
 for ROLLBACK in $ROLLBACKS; do git revert --no-edit "$ROLLBACK" || break; done
 ```
 
+The loop stops at the first revert that conflicts. Resolve it, `git revert
+--continue`, and run the block again: `pending-rollbacks` then lists only the
+rollbacks still left.
+
 ## 2. Reason about the diff, then trial-merge
 
 Preview the impacted classes and read the upstream diff for genuine
