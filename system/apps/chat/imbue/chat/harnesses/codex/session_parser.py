@@ -88,6 +88,9 @@ SOURCE = "codex/common_transcript"
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
 
+# ``turn_state`` key, present only while a settings change is newer than the latest ``turn_context``.
+SETTINGS_CHANGED_SINCE_TURN_KEY: Final[str] = "settings_changed_since_turn"
+
 # codex's own `codex_error_info.type` tags, mapped to the shared kind vocabulary. Preferred over
 # reading the prose: the tag is the part that survives codex rewording its messages. Quota
 # exhaustion is deliberately absent -- `usage_limit_exceeded` belongs to the auth family, whose
@@ -447,8 +450,10 @@ def parse_lines(
     ``turn_state`` is a mutable cross-line dict carrying the EFFECTIVE per-turn model/effort read
     from each ``turn_context`` line (§4b): a ``turn_context`` updates it and every following
     assistant message is stamped with it, so the bar can reflect the model the turn actually ran on
-    (a framework fallback, not just the selected setting). ``None`` disables the tracking (the model
-    stays ``_UNKNOWN_MODEL``) -- used by callers that only want the transcript events.
+    (a framework fallback, not just the selected setting). It also records, under
+    ``SETTINGS_CHANGED_SINCE_TURN_KEY``, whether a ``thread_settings_applied`` line came after that
+    ``turn_context``. ``None`` disables the tracking (the model stays ``_UNKNOWN_MODEL``) -- used by
+    callers that only want the transcript events.
     """
     outer = record.get("type")
     payload = record.get("payload")
@@ -468,10 +473,17 @@ def parse_lines(
                 turn_state["model"] = context_model
                 context_effort = payload.get("effort")
                 turn_state["effort"] = context_effort if isinstance(context_effort, str) and context_effort else None
+            turn_state.pop(SETTINGS_CHANGED_SINCE_TURN_KEY, None)
         return []
 
     # event_msg: the clean human prompt + the turn-abort marker
     if outer == "event_msg":
+        # A settings change the user made after the latest turn_context: until the next turn
+        # runs, that turn_context no longer says what the agent is set to.
+        if payload_type == "thread_settings_applied":
+            if turn_state is not None:
+                turn_state[SETTINGS_CHANGED_SINCE_TURN_KEY] = True
+            return []
         # The clean human prompt. Older codex emitted it as ``user_message``; newer
         # codex folds every display echo into ``item_completed`` carrying a typed
         # ``item``, so the human turn is now ``item_completed`` with

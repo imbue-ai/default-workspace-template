@@ -135,6 +135,69 @@ def test_effective_model_matching_the_file_writes_nothing_new(tmp_path: Path) ->
     assert state_path.read_text() == before
 
 
+def _settings_applied_line(model: str, effort: str, timestamp: str) -> dict[str, Any]:
+    return {
+        "timestamp": timestamp,
+        "type": "event_msg",
+        "payload": {
+            "type": "thread_settings_applied",
+            "thread_id": "thread-test",
+            "thread_settings": {"model": model, "reasoning_effort": effort, "service_tier": "priority"},
+        },
+    }
+
+
+def test_an_effort_picked_between_turns_is_not_reverted_to_the_previous_turn(tmp_path: Path) -> None:
+    """Codex logs a settings change to the rollout before any turn runs on it. That append must not
+    make the watcher write the previous turn's effort over the pick the ledger just recorded."""
+    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "high", "fast": True}))
+    rollout = _write_rollout(
+        tmp_path,
+        [
+            _turn_context_line("gpt-5.6-sol", "high", "2026-08-03T00:00:01Z"),
+            _assistant_line("m-done", "done", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    # The user picks a new effort between turns: the ledger records it, and codex appends the
+    # change to the rollout.
+    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "max", "fast": True}))
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_settings_applied_line("gpt-5.6-sol", "max", "2026-08-03T00:00:03Z")) + "\n")
+    watcher.get_all_events()
+
+    identity = read_model_identity(state_path)
+    assert identity is not None
+    assert identity.effort == "max"
+
+
+def test_a_fallback_turn_after_an_effort_change_is_still_reflected(tmp_path: Path) -> None:
+    """A settings change holds off the reflection only until the next turn: a turn that then runs on
+    a fallback still shows in the bar."""
+    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "max", "fast": True}))
+    _write_rollout(
+        tmp_path,
+        [
+            _turn_context_line("gpt-5.6-sol", "high", "2026-08-03T00:00:01Z"),
+            _settings_applied_line("gpt-5.6-sol", "max", "2026-08-03T00:00:02Z"),
+            _turn_context_line("gpt-5.2", "low", "2026-08-03T00:00:03Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    identity = read_model_identity(state_path)
+    assert identity is not None
+    assert identity.model_id == "gpt-5.2"
+    assert identity.effort == "low"
+
+
 def _write_rollout_without_marker(
     agent_state_dir: Path, lines: list[dict[str, Any]], name: str = "rollout-2026-08-03T00-00-00-web.jsonl"
 ) -> Path:
