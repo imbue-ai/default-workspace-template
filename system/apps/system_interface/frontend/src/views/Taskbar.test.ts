@@ -128,7 +128,7 @@ describe("Taskbar", () => {
     (taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement).dispatchEvent(
       new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }),
     );
-    expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40);
+    expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
   it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {

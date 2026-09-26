@@ -76,6 +76,22 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     assert response.headers[FRONTEND_BUILT_HEADER] == "true"
 
 
+@pytest.mark.parametrize("basename", ["app_contract.js", "context_menu.js"])
+def test_the_shell_serves_its_browser_side_modules_for_the_stub_pages(tmp_path: Path, basename: str) -> None:
+    static_dir = tmp_path / "static"
+    (static_dir / "_static").mkdir(parents=True)
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    assert test_client.get(f"/_static/{basename}").status_code == 404
+    (static_dir / "_static" / basename).write_text("export const built = true;\n")
+    response = test_client.get(f"/_static/{basename}")
+    assert response.status_code == 200
+    assert response.mimetype == "text/javascript"
+    assert response.headers["Access-Control-Allow-Origin"] == "*"
+    assert b"built" in response.data
+
+
 def test_a_preview_shells_page_says_so_and_carries_no_staleness_banner(tmp_path: Path) -> None:
     static_dir = tmp_path / "static"
     static_dir.mkdir()

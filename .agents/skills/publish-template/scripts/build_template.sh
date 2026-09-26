@@ -23,8 +23,8 @@
 #     incl. secrets). No upstream fetch/pull -- provenance link only.
 #   - Overlay via `rsync -a "$STAGE/" "$REPO/"` (root-to-root), NEVER
 #     `cp -a "$STAGE/apps" "$REPO/apps"` (nests into apps/apps).
-#   - Secret scan is a hard-failing (exit-non-zero, abort-before-commit) gate
-#     -- the authoritative blocker. It runs the sibling scan_secrets.sh, which
+#   - Secret scan is a hard-failing (exit-non-zero, abort-before-commit) gate,
+#     the authoritative blocker. It runs the sibling scan_secrets.sh, which
 #     requires BOTH scanners (betterleaks with the sibling betterleaks.toml
 #     config, kingfisher with --no-validate) and fails on any finding, any
 #     scanner error, or any missing scanner binary. There is NO fallback
@@ -472,6 +472,11 @@ if [ -n "$PREVIOUS_MANIFEST_TOML" ]; then
     manifest_toml_args+=(--previous-manifest "$PREVIOUS_MANIFEST_TOML")
 fi
 manifest_toml_args+=(--description "$manifest_description")
+# The secrets the included apps and skills declare are aggregated into the TOML
+# and checked against the live workspace's own data/.secrets/ files; the matching
+# requires_secret: lines land in template.md below, so the two agree from the start.
+REQUIRES_SECRET_LINES="$SCAN_TOOLS_DIR/requires-secret-lines.md"
+manifest_toml_args+=(--repo-root "$REPO" --workspace-dir "$data_source" --secret-lines-output "$REQUIRES_SECRET_LINES")
 
 # `uv run --no-project` (no workspace resolution, so none of the cold-base
 # fragility the smoke check warns about) rather than a bare python3: the writer
@@ -483,6 +488,10 @@ if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_template_manifest.py" "${
     echo "build_template.sh: could not generate ${MANIFEST_TOML}" >&2
     exit 6
 fi
+
+# Read after the writer has run: the file holds the requires_secret: lines that
+# match the [[requirements.secret]] entries it just generated.
+requires_secret_lines="$(cat "$REQUIRES_SECRET_LINES")"
 
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
@@ -551,15 +560,22 @@ theirs. Two kinds of entry, handled at different times:
 - **Adaptation** -- what must be DECIDED or REWIRED, in prose. Worked through
   interactively with the user, after activation.
 
+${requires_secret_lines}
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with both kinds of entry.
+with both kinds of entry. Any \`requires_secret:\` lines already above this
+comment were generated from the included apps' and skills' declarations (and
+match the \`[[requirements.secret]]\` entries in ${MANIFEST_TOML}); leave them
+as they are and do not repeat them.
 
 ACTIVATION -- one line each, using exactly these forms (greppable by \`requires_\`):
 
 - requires_permission: <latchkey scope> / <permission schema> (user-approved;
   the adopting agent initiates this via a latchkey permission request during
   setup -- it must not merely mention it)
-- requires_secret: <ENV_VAR or config key> (what it is for and where to put it)
+- requires_secret: data/.secrets/<file>.env with <VAR_A, VAR_B> (what it is for
+  and where to get it) -- normally generated, see above; declare a new one in
+  the app's app.toml [[secrets]] or the skill's SKILL.md secrets: rather than
+  writing it here by hand
 - requires_llm: <how the code reaches Claude, and what an adopter needs>
   (include this line whenever the app calls an LLM: name the method it was
   built for -- keyed litellm via ANTHROPIC_API_KEY, or keyless subscription via

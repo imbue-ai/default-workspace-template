@@ -20,7 +20,7 @@ export interface TaskbarAttrs {
   readonly launcher: LauncherFieldAttrs;
   readonly tray: SystemTrayAttrs;
   readonly onEntryClick: (windowId: string) => void;
-  readonly onEntryContextMenu: (windowId: string, x: number, y: number) => void;
+  readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
 }
 
 export const Taskbar: m.Component<TaskbarAttrs> = {
@@ -50,7 +50,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
               isCompact: attrs.isCompact,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
-              onContextMenu: (x, y) => attrs.onEntryContextMenu(entry.window.id, x, y),
+              onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),
             }),
           ),
         ),

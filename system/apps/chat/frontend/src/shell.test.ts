@@ -29,6 +29,7 @@ const HANDSHAKE = {
   clientId: "client-1",
   windowId: "win-1",
   desktopId: "home",
+  app: "chat",
   path: "/agent-1",
 };
 
@@ -163,6 +164,7 @@ describe("the embed API", () => {
       clientId: "client-2",
       windowId: "",
       desktopId: "",
+      app: "",
       path: "",
     });
     embed.shown();

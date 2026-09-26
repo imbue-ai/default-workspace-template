@@ -18,6 +18,7 @@ from app_manifest.errors import InvalidManifestValueError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.primitives import AppName
 from app_manifest.primitives import DisplayName
+from app_manifest.primitives import EnvVarName
 from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import IconPath
 from app_manifest.primitives import LaunchParamName
@@ -28,6 +29,7 @@ from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
 from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
+from app_manifest.primitives import SecretFileName
 from app_manifest.primitives import is_path_covered_by
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
@@ -206,6 +208,25 @@ class WiringRules(FrozenModel):
     )
 
 
+class SecretDeclaration(FrozenModel):
+    """One data/.secrets/<file>.env the app runs under (through with_secrets.py), so a
+    published template can ask an adopter for exactly those variables."""
+
+    file: SecretFileName = Field(description="The <file> of data/.secrets/<file>.env")
+    variables: tuple[EnvVarName, ...] = Field(description="The variables the file must set; at least one")
+    note: ReferenceNote | None = Field(
+        default=None, description="One line for the adopter: what the value is and where to get it"
+    )
+
+    @model_validator(mode="after")
+    def _check_variables(self) -> Self:
+        if not self.variables:
+            raise InvalidManifestValueError(f"secret {str(self.file)!r} must list at least one variable")
+        if len(set(self.variables)) != len(self.variables):
+            raise InvalidManifestValueError(f"secret {str(self.file)!r} lists a variable twice")
+        return self
+
+
 class DefaultShortcut(FrozenModel):
     """The shortcut a new desktop is seeded with for this app."""
 
@@ -339,6 +360,9 @@ class AppManifest(FrozenModel):
     wiring: WiringRules = Field(
         default_factory=WiringRules, description="The extra supervisord programs the app owns"
     )
+    secrets: tuple[SecretDeclaration, ...] = Field(
+        default=(), description="The secret files the app runs under, for publish-template to aggregate"
+    )
     handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
     preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
 
@@ -385,6 +409,9 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError(
                 f"launch path id {str(OPEN_LAUNCH_PATH_ID)!r} is reserved for the synthesized root launch path"
             )
+        secret_files = [secret.file for secret in self.secrets]
+        if len(set(secret_files)) != len(secret_files):
+            raise InvalidManifestValueError(f"secret files must be unique, got {secret_files}")
         if self.default_shortcut is not None:
             allowed_launch_ids = set(launch_path_ids) if launch_path_ids else {OPEN_LAUNCH_PATH_ID}
             if self.default_shortcut.launch not in allowed_launch_ids:

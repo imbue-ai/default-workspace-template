@@ -20,6 +20,12 @@ which yields git requirements:
 
 The manifest contributes only each plugin's package name and its subdirectory in the
 mngr repo; every plugin's location derives from ``imbue-mngr``'s.
+
+The repo is one of two: the public mirror, which every release pins, or the private
+``mngr-internal`` repo, which a branch iterating on a paired mngr change may pin. A
+build that installs from the private repo needs a credential, which ``_mngr_git_auth.sh``
+supplies when one has been delivered to the build; ``--kind`` reports which case a tree
+is in (``set_mngr_pin.py`` moves the pin between them and is what CI checks).
 """
 
 import argparse
@@ -32,6 +38,10 @@ MANIFEST_PATH = "system/config/mngr_plugins.toml"
 PYPROJECT_PATH = "pyproject.toml"
 MNGR_PACKAGE = "imbue-mngr"
 MNGR_SUBDIRECTORY = "libs/mngr"
+PUBLIC_MNGR_REPO = "https://github.com/imbue-ai/mngr"
+INTERNAL_MNGR_REPO = "https://github.com/imbue-ai/mngr-internal"
+PUBLIC_KIND = "public"
+INTERNAL_KIND = "internal"
 
 
 class MngrPinError(Exception):
@@ -48,6 +58,14 @@ class GitPin:
     def requirement(self, package: str, subdirectory: str) -> str:
         return f"{package} @ git+{self.git_url}@{self.rev}#subdirectory={subdirectory}"
 
+    @property
+    def is_internal(self) -> bool:
+        return self.git_url == INTERNAL_MNGR_REPO
+
+    @property
+    def kind(self) -> str:
+        return INTERNAL_KIND if self.is_internal else PUBLIC_KIND
+
 
 def read_mngr_source(pyproject_text: str) -> GitPin:
     """The pin ``[tool.uv.sources]`` gives ``imbue-mngr``."""
@@ -58,11 +76,16 @@ def read_mngr_source(pyproject_text: str) -> GitPin:
         .get("sources", {})
         .get(MNGR_PACKAGE)
     )
-    if isinstance(source, dict) and "git" in source and "rev" in source:
+    if (
+        isinstance(source, dict)
+        and source.get("git") in (PUBLIC_MNGR_REPO, INTERNAL_MNGR_REPO)
+        and "rev" in source
+    ):
         return GitPin(git_url=str(source["git"]), rev=str(source["rev"]))
     raise MngrPinError(
         f"{PYPROJECT_PATH} must give {MNGR_PACKAGE} in [tool.uv.sources] as "
-        '{ git = "...", rev = "<commit>", subdirectory = "libs/mngr" }'
+        '{ git = "<repo>", rev = "<commit>", subdirectory = "libs/mngr" } where <repo> is '
+        f"{PUBLIC_MNGR_REPO} or {INTERNAL_MNGR_REPO}"
     )
 
 
@@ -101,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
         help="print where mngr comes from: '<git url> <commit>'",
     )
     what.add_argument(
+        "--kind",
+        action="store_true",
+        help=f"print which repo mngr comes from: '{PUBLIC_KIND}' or '{INTERNAL_KIND}'",
+    )
+    what.add_argument(
         "--tool",
         help="print the plugin arguments for this tool: mngr, or an app's manifest name (e.g. chat)",
     )
@@ -114,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     source = read_mngr_source((root / PYPROJECT_PATH).read_text())
     if args.pin:
         lines = [f"{source.git_url} {source.rev}"]
+    elif args.kind:
+        lines = [source.kind]
     elif args.base:
         lines = base_arguments(source)
     else:

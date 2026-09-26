@@ -18,8 +18,10 @@ timeless; everything here is a snapshot.
 | P6 `tk start`/`close` stands alone | live | **partial** | live | live |
 | P7 open steps are reconciled | live | live | live | **live (turn-start only)** |
 | P8 a finished chat turn notifies | prose-only | prose-only | prose-only | prose-only |
+| P9 secret file read only by the wrapper | live | live | live | **partial** |
+| P10 secret request stands alone | live | **partial** | live | **partial** |
 
-No harness is fully `n/a` any more, and three rows are `partial` for reasons that are
+No harness is fully `n/a` any more, and five rows are `partial` for reasons that are
 structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1.
 
 - **agy P5 — partial.** The shim sees only `bash -c`, so agy's own editing tools
@@ -41,6 +43,11 @@ structural rather than unwired. Measured against codex-cli 0.147.0 and pi 0.84.1
 - **codex P5 — partial.** Its read-only skip list is keyed on claude tool names, none of which
   codex ever sends (measured: `Bash`, `apply_patch`, `update_plan`). The command-shaped
   read-only allowlist now covers the shell half; `apply_patch` is correctly nudge-worthy.
+- **agy P9 -- partial.** The shell half is live through the shim; the file-tool half is not,
+  for the same reason as P5: agy's own file tools never reach a shell and no agy hook carries
+  tool identity.
+- **codex and agy P10 -- partial**, exactly as P3: the same checker, the same per-call counting
+  limit under codex code mode, and the same shim path on agy.
 - **P7's stop half is decorative on EVERY harness, claude included.**
   `agent_open_tickets_stop_nudge.sh` says so itself ("mainly for orchestrator log / human
   visibility") and exits 0 unconditionally; on codex a sentinel written at Stop appears in no
@@ -265,9 +272,13 @@ When a rule changes, update every harness that carries it:
 - **Workflow 8** (finish notification): no script on any harness. The rule is in `AGENTS.md`
   and the `notify-user` skill, which every harness reads (see P8 above for why the claude Stop
   hook was removed).
-- **Safety 3** (`agent_latchkey_request_check.py`) and **workflow 6**
+- **Safety 3 and 10** (`agent_latchkey_request_check.py`) and **workflow 6**
   (`agent_tk_standalone_check.py`): one checker file each, reached by claude and codex through
   their `.sh` wrappers and called directly by pi — so the tokenizing rule is single-sourced.
+- **Safety 9** (`agent_secrets_guard_check.py`): one checker reached by claude and codex through
+  `agent_secrets_guard.sh`, by agy through the shim, and by pi as a `payload` checker in
+  `policy_guards.ts` -- the one guard pi runs on every tool call rather than on bash alone,
+  because the rule covers its file tools too.
 - **Safety 4** (`agent_rewrite_bash_command.py`): shared by claude and codex; pi mirrors its
   prefix logic in `rewriteBashCommand()`. Keep it **last** in both hook configs, and keep
   mngr recording `mngrOriginalCommand` for pi — a blocker that inspects the rewritten
