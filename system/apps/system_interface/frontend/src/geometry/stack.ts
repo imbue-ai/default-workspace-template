@@ -2,9 +2,9 @@
  * The stack (desktop-interface plan section 3.4): one client's placements of one desktop, back to
  * front, and the verbs over them, mirroring ``shell/desktop_document.py``. A window the layout
  * has no placement for reads as minimized at the bottom of the stack with a cascaded frame; the
- * focused window is the last placement that is not minimized. A verb that changes nothing answers
- * the same layout object, which is how the store tells a gesture from a no-op. Nothing here reads
- * the DOM.
+ * focused window is the last placement that is shown (neither minimized nor pulled out into a
+ * desktop window of the chrome's own). A verb that changes nothing answers the same layout object,
+ * which is how the store tells a gesture from a no-op. Nothing here reads the DOM.
  */
 
 import type { Desktop, Frame, Layout, Placement, WindowRecord, WindowState } from "../model/records";

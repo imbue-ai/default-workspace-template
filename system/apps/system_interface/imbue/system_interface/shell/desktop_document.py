@@ -1,10 +1,10 @@
 """The pure editor over the desktop model (desktop-interface plan section 5.3, contracts.md section 10).
 
 Pure functions over the frozen ``Desktop``, ``Window``, ``DesktopLayout``, and ``WindowPlacement`` records that
-both the routes and the agent ops use: open, close, focus, minimize, restore, maximize, snap, place, and
-the shortcut edits, plus the geometry rules (cascade, fit, snap zones, un-snap, the grid, the nearest free
-cell, reading order, and the render-time placement of shortcuts). Every rule the frontend also applies is
-written once here and once in TypeScript against the same constants and the shared vectors in
+both the routes and the agent ops use: open, close, focus, minimize, restore, maximize, snap, place, detach,
+reattach, and the shortcut edits, plus the geometry rules (cascade, fit, snap zones, un-snap, the grid, the
+nearest free cell, reading order, and the render-time placement of shortcuts). Every rule the frontend also
+applies is written once here and once in TypeScript against the same constants and the shared vectors in
 ``docs/system/blueprint/desktop-interface/geometry_vectors.json``, which ``desktop_document_test.py`` runs.
 """
 
