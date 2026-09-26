@@ -108,9 +108,10 @@ function styleLabel(style: PinStyle): string {
   }
 }
 
-/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size, then for a pinned entry Float
- *  or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and the
- *  avatar chooser while it shows the avatar, then Close. */
+/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show
+ *  and Bring back to desktop instead of those), then for a pinned entry Float or Move to taskbar (not in compact
+ *  mode, where every entry is in the bar), the style to show it in, and the avatar chooser while it shows the
+ *  avatar, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
   // A pulled-out window's arrangement is the chrome's: the entry shows its window or brings it back.
   const rows: MenuRow[] = actions.isDetached
