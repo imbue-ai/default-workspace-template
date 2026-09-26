@@ -51,7 +51,7 @@ theirs to keep. The apply refuses a merge that leaves one in place.
 ```bash
 ROLLBACKS=$(python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     pending-rollbacks --target "$TARGET_REF")
-for ROLLBACK in $ROLLBACKS; do git revert --no-edit "$ROLLBACK"; done
+for ROLLBACK in $ROLLBACKS; do git revert --no-edit "$ROLLBACK" || break; done
 ```
 
 ## 2. Reason about the diff, then trial-merge
