@@ -32,7 +32,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
         "data-taskbar": "",
         class:
           "taskbar relative flex h-(--desk-taskbar-height) shrink-0 items-center gap-2 border-t border-default " +
-          "bg-(--desk-taskbar-surface) px-2 backdrop-blur",
+          "bg-(--desk-taskbar-surface) px-2 backdrop-blur-(--desk-taskbar-blur)",
       },
       [
         m(LauncherField, attrs.launcher),

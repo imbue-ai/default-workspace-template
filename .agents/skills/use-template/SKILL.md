@@ -36,20 +36,19 @@ anything else.
 
 **A. Template path — this mind was created from a template repo.** The mind
 already has the template's tree at its root (it *is* the template repo), so
-there is nothing to fetch. On this path adaptation starts IMMEDIATELY at boot:
-the published repo ships its own template-specific `/welcome` skill
-(generated into the snapshot by the publish flow, replacing the template's
-generic welcome), so the booting agent's first response is a custom welcome
-naming the template's title and one-line description (instead of the generic
-"Welcome to Mind" message), followed in the same turn — without waiting to be
-asked — by reading the manifest and asking the user how they want to adapt it.
-The manifest's "How to adapt it" section is the script for that conversation.
+there is nothing to fetch; the manifest (`template.md`, with `template.toml`
+beside it in v2) is at the repo root. When the user asks about or wants to set
+up the template this mind came from, read the manifest, tell them in plain
+language what the template is and what it needs from them, and ask how they
+want to adapt it. The manifest's "How to adapt it" section is the script for
+that conversation.
 A v2 repo has exactly one `template.md`, so there is nothing to choose:
 adapt it. (Only an older v1 repo can hold several slug-named
-`inspiration-<slug>.md` files; there, take the latest slug named in the welcome
-skill, treat the others as already-adapted reference material, and ask the user
-if it is ambiguous.) Skip step 1 below (the tree is already
-here) and go straight to reading the manifest.
+`inspiration-<slug>.md` files; there, take the latest slug named in the repo's
+welcome skill (`.agents/skills/welcome/SKILL.md`) when it has one, treat the
+others as already-adapted reference material, and ask the user if it is
+ambiguous.) Skip step 1 below (the tree is already here) and go straight to
+reading the manifest.
 
 **B. Merge path — the user gave you a template's git URL.** Bring the
 template into the *current* mind at the repo root, then adapt it. Do step 1
@@ -180,7 +179,7 @@ presence is what tells you the format:
   `inspiration-<slug>.md` files and no TOML. Read the markdown exactly as
   before -- front matter (`title`, `description`, `thumbnail`, and optionally
   `format`), then the body sections. If several are present, take the latest
-  slug named in the repo's `/welcome` skill, or ask the user which they mean.
+  slug named in the repo's welcome skill, if it ships one, or ask the user which they mean.
   Older manifests may have `Apps included` instead of `How it works`,
   `Permissions it may need` instead of `Prerequisites`, `Holes` instead of
   `Requirements`, and no `How to adapt it`. A v1 template declares no

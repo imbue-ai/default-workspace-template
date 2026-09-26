@@ -82,7 +82,7 @@ class DisplayKind(StrEnum):
     renders -- a hidden message is still a message and still occupies its ``/events`` slot.
     """
 
-    # No DOM at all (the seeded /welcome, a model-bar command, a framework-injected line).
+    # No DOM at all (an older chat's /welcome, a model-bar command, a framework-injected line).
     HIDDEN = "hidden"
     # A collapsed chip inside the current turn; ``display_label`` is its title.
     CHIP = "chip"

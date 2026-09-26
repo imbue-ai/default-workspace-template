@@ -324,17 +324,11 @@ config_overrides.tools = { update_plan = { enabled = false }, experimental_reque
 config_overrides.marketplaces.imbue-code-guardian = { source_type = "git", source = "https://github.com/imbue-ai/code-guardian.git", ref = "main" }
 config_overrides.plugins."imbue-code-guardian@imbue-code-guardian" = { enabled = true }
 # Codex-only instructions, appended to every codex agent's system prompt.
-# The `/welcome` entry is what claude gets from its slash-command expansion: codex does not
-# expand `/welcome` into the skill, so it is told to follow it.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
-
-If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
-
-Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
+Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead."""]
 
 # the "pi-coding" agent type -- Pi coding CLI as a peer harness (short alias `pi`).
 # Registered by the imbue-mngr-pi-coding plugin; the pi binary is baked
@@ -367,13 +361,7 @@ share_home_npm_dir = true
 auto_dismiss_dialogs_at_startup = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
-# The `/welcome` entry is what claude gets from its slash-command expansion: pi does not
-# expand `/welcome` into the skill, so it is told to follow it.
-append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
-
-If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
-
-Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
 
 # the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
 # is its own base type (registered by the imbue-mngr-opencode plugin, installed
@@ -596,11 +584,6 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# `/welcome` is NOT set here: the services agent's window 0 sleeps forever
-# (see `[agent_types.main] command`) and never reaches claude. Chats are
-# separate agents the chat app creates on demand; the ones that start with
-# nothing to say get `/welcome` through `[create_templates.welcome]` below.
-#
 # bootstrap is the only extra_window now. It runs first-boot setup (git config)
 # and then launches
 # supervisord, which runs every background service (system_interface, web,
@@ -1664,16 +1647,6 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 transfer = "none"
 output_style = "Engineering Subordinate"
 env__extend = ["MNGR_AGENT_ROLE=chat"]
-
-# Welcome: the greeting a chat that starts with nothing to say gets. The chat app
-# stacks it (`-t chat -t welcome --type <harness>`) on every chat launched without
-# a first message -- the New Tab page's plain "New Chat", a rail shortcut -- so
-# `/welcome` runs each time, and the skill (.agents/skills/welcome) varies what it
-# says by how many times it has run in this workspace. A chat that starts with a
-# message (a seeded prompt, the onboarding chat's first send) gets its message
-# instead.
-[create_templates.welcome]
-message = "/welcome"
 
 # Fast: launches the fast-capable harnesses in fast mode so a new conversation
 # feels responsive. The chat app stacks it on a chat whose fast mode is on, or

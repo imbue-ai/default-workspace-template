@@ -19,6 +19,16 @@ export const SNAPPED_LEFT_FRAME: Frame = Object.freeze({ x: 0, y: 0, width: 0.5,
 export const SNAPPED_RIGHT_FRAME: Frame = Object.freeze({ x: 0.5, y: 0, width: 0.5, height: 1 });
 export const MAXIMIZED_FRAME: Frame = Object.freeze({ x: 0, y: 0, width: 1, height: 1 });
 
+// The rest of the halves and the quarters the size menu offers. Unlike the two side halves and
+// the maximized frame, no window STATE stands for these -- a window placed in one is normal at
+// that frame, so a drag moves it away as it would any other window.
+export const TOP_HALF_FRAME: Frame = Object.freeze({ x: 0, y: 0, width: 1, height: 0.5 });
+export const BOTTOM_HALF_FRAME: Frame = Object.freeze({ x: 0, y: 0.5, width: 1, height: 0.5 });
+export const TOP_LEFT_QUARTER_FRAME: Frame = Object.freeze({ x: 0, y: 0, width: 0.5, height: 0.5 });
+export const TOP_RIGHT_QUARTER_FRAME: Frame = Object.freeze({ x: 0.5, y: 0, width: 0.5, height: 0.5 });
+export const BOTTOM_LEFT_QUARTER_FRAME: Frame = Object.freeze({ x: 0, y: 0.5, width: 0.5, height: 0.5 });
+export const BOTTOM_RIGHT_QUARTER_FRAME: Frame = Object.freeze({ x: 0.5, y: 0.5, width: 0.5, height: 0.5 });
+
 /** A size in pixels: the backdrop (the viewport less the taskbar), or a page's box. */
 export interface PixelSize {
   readonly width: number;

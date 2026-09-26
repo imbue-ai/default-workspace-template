@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -45,6 +46,15 @@ def _item_line(item_type: str) -> dict:
         "timestamp": "2026-07-19T10:00:00.123Z",
         "type": "event_msg",
         "payload": {"type": "item_completed", "item": {"type": item_type, "content": [{"type": "Text", "text": "x"}]}},
+    }
+
+
+def _code_mode_result_line(output: str) -> dict[str, Any]:
+    """A code-mode script's result line for call ``c1``."""
+    return {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": output},
     }
 
 
@@ -318,13 +328,27 @@ def test_command_result_envelopes_preserve_task_titles_and_raw_detail(wrapped: b
         json.dumps({"chunk_id": str(i), "output": output}) if wrapped else output for i, output in enumerate(outputs)
     )
     raw = "Script completed\nWall time 0.2 seconds\nOutput:\n" + text
-    line = {
-        "timestamp": "t",
-        "type": "response_item",
-        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
-    }
+    line = _code_mode_result_line(raw)
     event = parse_lines(line, {"c1": "exec"})[0]
     assert event["tk_stamp"] == "".join(outputs).rstrip()
+    assert event["output_chars"] == len(raw)
+    assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_command_result_envelopes_preserve_the_filed_permission_request(wrapped: bool) -> None:
+    echoed_request = {
+        "request_id": uuid4().hex,
+        "type": "file-sharing",
+        "payload": {"path": "/Users/someone/.paseo", "access": "read"},
+        "status": "pending",
+    }
+    stdout = "  % Total    % Received % Xferd  Average Speed\n" + json.dumps(echoed_request, indent=2) + "\n"
+    text = json.dumps({"chunk_id": "0", "output": stdout}) if wrapped else stdout
+    raw = "Script completed\nWall time 0.4 seconds\nOutput:\n" + text
+    line = _code_mode_result_line(raw)
+    event = parse_lines(line, {"c1": "exec"})[0]
+    assert event["permission_request"] == echoed_request
     assert event["output_chars"] == len(raw)
     assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
 
@@ -339,11 +363,7 @@ def test_command_result_envelopes_preserve_task_titles_and_raw_detail(wrapped: b
     ],
 )
 def test_unrecognized_output_is_not_unwrapped_into_task_lines(raw: str) -> None:
-    line = {
-        "timestamp": "t",
-        "type": "response_item",
-        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
-    }
+    line = _code_mode_result_line(raw)
     event = parse_lines(line, {"c1": "exec"})[0]
     assert not event.get("tk_stamp", "").startswith("Created ")
 
@@ -431,7 +451,7 @@ def test_turn_context_effective_model_stamps_assistant_messages() -> None:
     assert later[0]["model"] == "gpt-5.2"
 
 
-# --- code mode batches several delegated calls into ONE tool call -------------------------
+# Code mode batches several delegated calls into ONE tool call
 # Measured on codex-cli 0.147.0: one `custom_tool_call` holding three `tools.exec_command`
 # calls produced three PreToolUse events with three unrelated `tool_use_id`s and no field
 # naming the outer call. So "this call is ONLY an X" is unknowable for a batched program, and

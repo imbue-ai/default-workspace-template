@@ -29,6 +29,14 @@ describe("placeMenu", () => {
     expect(placeMenu(anchor, SIZE, VIEWPORT, "below", "end")).toEqual({ left: 340, top: 124 });
   });
 
+  it("lines the middles up for `center`, on either axis", () => {
+    const anchor = { left: 500, right: 540, top: 100, bottom: 120, width: 40 };
+    // 500 + (40 - 200) / 2: the menu hangs 80px either side of a 40px anchor.
+    expect(placeMenu(anchor, SIZE, VIEWPORT, "below", "center")).toEqual({ left: 420, top: 124 });
+    // Beside it instead, the same rule runs vertically: 100 + (20 - 100) / 2.
+    expect(placeMenu(anchor, SIZE, VIEWPORT, "right", "center")).toEqual({ left: 544, top: 60 });
+  });
+
   it("sits beside the anchor for `right`, and flips to its left when it would overflow", () => {
     const anchor = { left: 200, right: 240, top: 100, bottom: 120, width: 40 };
     expect(placeMenu(anchor, SIZE, VIEWPORT, "right")).toEqual({ left: 244, top: 100 });

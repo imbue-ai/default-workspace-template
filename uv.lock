@@ -217,7 +217,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -236,7 +236,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "inotify-simple", specifier = ">=2.0.0" },
 ]
 
@@ -681,17 +681,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pexpect", specifier = ">=4.9" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
@@ -755,7 +755,7 @@ wheels = [
 [[package]]
 name = "concurrency-group"
 version = "0.1.20"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
@@ -946,7 +946,7 @@ requires-dist = [
     { name = "env-converge", editable = "system/services/env_converge" },
     { name = "github-sync", editable = "system/libs/github_sync" },
     { name = "host-backup", editable = "system/services/host_backup" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "litellm", specifier = ">=1.88.1" },
     { name = "playwright", specifier = "==1.58.0" },
     { name = "share-gateway", editable = "system/services/share_gateway" },
@@ -956,14 +956,14 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "imbue-common", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", extras = ["testing"], git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-antigravity", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-autocompact", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-claude", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-codex", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-opencode", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-pi-coding", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "inline-snapshot", specifier = ">=0.31" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "pyright", specifier = ">=1.1" },
@@ -1030,7 +1030,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
 
@@ -1253,7 +1253,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
@@ -1551,7 +1551,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
 
@@ -1615,7 +1615,7 @@ wheels = [
 [[package]]
 name = "imbue-common"
 version = "0.1.20"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "boto3" },
@@ -1641,7 +1641,7 @@ testing = [
 [[package]]
 name = "imbue-mngr"
 version = "0.2.17"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "cel-python" },
     { name = "click" },
@@ -1676,7 +1676,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-antigravity"
 version = "0.1.8"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_antigravity&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -1684,7 +1684,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-autocompact"
 version = "0.1.0"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_autocompact&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -1692,7 +1692,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-claude"
 version = "0.2.17"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_claude&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "anthropic" },
     { name = "imbue-mngr" },
@@ -1702,7 +1702,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-codex"
 version = "0.1.4"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_codex&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "imbue-mngr" },
     { name = "websockets" },
@@ -1711,7 +1711,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-opencode"
 version = "0.2.17"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_opencode&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -1719,7 +1719,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-pi-coding"
 version = "0.1.14"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_pi_coding&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -1727,7 +1727,7 @@ dependencies = [
 [[package]]
 name = "imbue-mngr-ttyd"
 version = "0.1.14"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "imbue-mngr" },
 ]
@@ -2064,7 +2064,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
 ]
 
 [[package]]
@@ -2202,7 +2202,7 @@ wheels = [
 [[package]]
 name = "overlay"
 version = "0.1.0"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Foverlay&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Foverlay&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 
 [[package]]
 name = "packaging"
@@ -2772,7 +2772,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
 ]
@@ -3046,7 +3046,7 @@ wheels = [
 [[package]]
 name = "resource-guards"
 version = "0.1.8"
-source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea#fd8cb245574e1869a6576eb52ee0f7119c9e0dea" }
+source = { git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fresource_guards&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546#0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" }
 dependencies = [
     { name = "pluggy" },
     { name = "pytest" },
@@ -3368,12 +3368,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "concurrency-group", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fconcurrency_group&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "defusedxml", specifier = ">=0.7" },
     { name = "flask", specifier = ">=3.1" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "watchdog", specifier = ">=4.0" },
@@ -3384,7 +3384,7 @@ requires-dist = [
 dev = [
     { name = "chat", editable = "system/apps/chat" },
     { name = "coverage" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "inline-snapshot", specifier = ">=0.13" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "playwright", specifier = ">=1.40" },
@@ -3441,8 +3441,8 @@ requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
-    { name = "imbue-mngr-ttyd", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
+    { name = "imbue-mngr-ttyd", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr_ttyd&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
@@ -3451,7 +3451,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=fd8cb245574e1869a6576eb52ee0f7119c9e0dea" },
+    { name = "imbue-mngr", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fmngr&rev=0fb12c056a0f1ab85e13a0c82bdbeed2f87ef546" },
 ]
 
 [[package]]

@@ -45,8 +45,9 @@ export interface MenuPosition {
 export type MenuPlacement = "below" | "above" | "right";
 
 /** For `below`/`above`: which of the anchor's vertical edges the menu's own lines up with.
- *  For `right`: which horizontal edge. `start` is the left (or top) edge. */
-export type MenuAlign = "start" | "end";
+ *  For `right`: which horizontal edge. `start` is the left (or top) edge; `center` lines the two
+ *  boxes' middles up instead, for a menu hanging off something too small to align an edge to. */
+export type MenuAlign = "start" | "end" | "center";
 
 /** Gap kept between a menu and each window edge. */
 export const MENU_MARGIN = 6;
@@ -75,7 +76,12 @@ export function placeMenu(
     const otherSide = anchor.left - MENU_GAP - size.width;
     const overflowsRight = beside + size.width > viewport.width - MENU_MARGIN;
     left = overflowsRight && otherSide >= MENU_MARGIN ? otherSide : beside;
-    top = align === "start" ? anchor.top : anchor.bottom - size.height;
+    top =
+      align === "start"
+        ? anchor.top
+        : align === "center"
+          ? anchor.top + (anchor.bottom - anchor.top - size.height) / 2
+          : anchor.bottom - size.height;
   } else {
     const under = anchor.bottom + MENU_GAP;
     const over = anchor.top - MENU_GAP - size.height;
@@ -86,7 +92,12 @@ export function placeMenu(
     } else {
       top = !fitsOver && fitsUnder ? under : over;
     }
-    left = align === "start" ? anchor.left : anchor.right - size.width;
+    left =
+      align === "start"
+        ? anchor.left
+        : align === "center"
+          ? anchor.left + (anchor.width - size.width) / 2
+          : anchor.right - size.width;
   }
   return {
     left: Math.max(Math.min(MENU_MARGIN, anchor.left), Math.min(left, viewport.width - MENU_MARGIN - size.width)),

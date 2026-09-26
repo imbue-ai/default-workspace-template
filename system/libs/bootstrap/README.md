@@ -18,9 +18,10 @@ service.
    (`core.hooksPath` is deliberately NOT set here: the post-commit auto-push
    hook only becomes active when the opt-in github-sync skill wires it up --
    see `system/libs/github_sync/README.md`.)
-2. **Initial chat agent** - on first boot only (gated by
-   `data/.state/initial_chat_created`), commits the rsynced workspace onto a clean
-   `main` branch and creates the welcome chat agent (`--message /welcome`).
+2. **Workspace main branch** - on first boot only (gated by
+   `data/.state/workspace_main_branch_initialized`), commits the rsynced workspace
+   onto a clean `main` branch. It creates no chat: the chat app creates chats on
+   demand.
 3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.

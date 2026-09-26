@@ -21,6 +21,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isCompact: false,
     isTouch: false,
     isMenuOpen: false,
+    sizeMenuTrigger: {},
     isShielded: false,
     onStartApp: null,
     onRaise: vi.fn(),
@@ -56,7 +57,7 @@ describe("Window", () => {
     expect(element.querySelector('[data-window-control="minimize"]')).not.toBeNull();
   });
 
-  it("keeps the resize handles outside the clipped frame, so they can overhang the border", () => {
+  it("keeps the resize handles outside the clipped frame, so they can overhang its edge", () => {
     const element = render();
     const frame = element.querySelector("[data-window-frame]") as HTMLElement;
     expect(frame.classList.contains("overflow-hidden")).toBe(true);
@@ -93,7 +94,7 @@ describe("Window", () => {
     const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
       control.getAttribute("data-window-control"),
     );
-    expect(controls).toEqual(["menu", "minimize", "maximize", "close"]);
+    expect(controls).toEqual(["refresh", "menu", "minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="close"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
   });

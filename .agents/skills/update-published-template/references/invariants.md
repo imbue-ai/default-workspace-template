@@ -8,7 +8,7 @@ starts from already-published content rather than a clean base.
   full bootable tree; a failed step publishes nothing.
 - **Preserve the user's customizations.** The update re-assembles from the
   PUBLISHED TIP and overlays only the approved delta -- the finished manifest
-  prose, "## Recipe", thumbnail, `/welcome`, and adopters' "Adaptation history"
+  prose, "## Recipe", thumbnail, and adopters' "Adaptation history"
   are never regenerated. `build_template.sh` is never run for an update.
 - **One atomic post-cleanup commit.** The mint is a single `commit-tree` from the
   final, scanned, generalized tree, parented on the published tip -- no pre-scan

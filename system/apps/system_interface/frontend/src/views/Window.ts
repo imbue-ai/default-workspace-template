@@ -49,6 +49,8 @@ export interface WindowAttrs {
   readonly isCompact: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
+  /** Spread onto the maximize control: resting on it opens the window's size menu. */
+  readonly sizeMenuTrigger: m.Attributes;
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
    *  launcher is open. */
   readonly isShielded: boolean;
@@ -105,10 +107,11 @@ export function Window(): m.Component<WindowAttrs> {
             "div",
             {
               "data-window-frame": "",
+              // No border: the shadow is what separates a window from the backdrop, and a line
+              // around it only competes. Focus is the title bar's, which changes colour with it.
               class:
-                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) border " +
-                "shadow-(--desk-window-shadow) " +
-                (isFocused ? "border-default" : "border-subtle"),
+                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) " +
+                "shadow-(--desk-window-shadow)",
             },
             [
               m(TitleBar, {
@@ -118,6 +121,7 @@ export function Window(): m.Component<WindowAttrs> {
                 isFocused,
                 isCompact,
                 isMenuOpen: attrs.isMenuOpen,
+                sizeMenuTrigger: attrs.sizeMenuTrigger,
                 onControl: attrs.onControl,
                 onDoubleClick: attrs.onToggleMaximize,
               }),
