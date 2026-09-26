@@ -37,13 +37,15 @@ Each is stated as an invariant, with the reason it exists. The scripts named are
 source of the logic; a harness that cannot run a script must reproduce its behaviour *and its
 exact wording*, so an agent gets an identical explanation everywhere.
 
-### P1. A command must not pipe into `tail` or `head`
-`agent_block_pipe_tail_head.sh` -- **hard block.**
+### P1. A command must not pipe output it cannot get back into `tail` or `head`
+`agent_block_pipe_tail_head.sh` -> `agent_block_pipe_tail_head_check.py` -- **hard block.**
 
-The pipe truncates output the agent then reasons about as if it were complete. Redirect to a
-file and read that instead, so the full output exists and can be re-read. A command that
-is nothing but `cat FILE... | head` (or `tail`) is exempt: the files already are that full
-output.
+The pipe truncates output the agent then reasons about as if it were complete, and getting
+the rest back means running the command again. Redirect to a file and read that instead, so
+the full output exists and can be re-read. A pipe is allowed when everything feeding it only
+reads files, directories or git history (`cat`, `grep`, `rg`, `sed`, `ls`, `find`,
+`git log/show/diff/status`, ...), or when a `tee FILE` upstream keeps the full output: that
+output can be read again at no cost. Each pipeline in a compound command is judged on its own.
 
 ### P2. A command must not rewrite git history
 `agent_prevent_commit_rewrite.sh` -- **hard block.**

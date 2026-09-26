@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Block commands that pipe through tail or head.
-# Instead, the agent should run the command redirected to a file and then read from it.
+# Block commands that pipe output into tail or head when the rest of that output would be lost.
+# Instead, the agent should run the command redirected to a file and then read from it. The
+# decision lives in the sibling agent_block_pipe_tail_head_check.py.
 
 # Read JSON input from stdin
 input=$(cat)
@@ -27,19 +28,11 @@ if [[ -z "$command" ]]; then
     exit 0
 fi
 
-# A command that is nothing but `cat FILE... | head` is exempt: the files already hold the full
-# output and can be re-read. The whole command must be that one pipeline, so no `cmd | cat` or
-# compound command can hide behind it.
-cat_pipe_re='^[[:blank:]]*cat([[:blank:]]([^|;&()`\\]|>&|&>)*)?\|[[:blank:]]*(tail|head)([[:blank:]]([^|;&()`\\]|>&|&>)*)?$'
-if [[ "$command" != *$'\n'* && "$command" =~ $cat_pipe_re ]]; then
-    exit 0
-fi
+# Cheap guard, matched with bash's own regex so it forks nothing: only a command whose text
+# contains a pipe (`|` or `|&`, not `||`) into tail or head pays for the Python checker, which
+# decides whether what feeds that pipe can be read again (a file read, git history) or not.
+pipe_re='(^|[^|])\|&?[[:space:]]*(tail|head)([[:space:]]|$)'
+[[ "$command" =~ $pipe_re ]] || exit 0
 
-# Check if the command pipes through tail or head (e.g. "| tail -20", "| head -5")
-# Match: pipe followed by optional whitespace, then tail or head, optionally with args
-if echo "$command" | grep -qE '\|\s*(tail|head)(\s|$)'; then
-    echo "Do not pipe commands through tail or head. Instead, redirect output to a temp file (e.g. cmd > /tmp/output.txt) and then read from that file separately using the Read tool or a separate tail/head command on the file." >&2
-    exit 2
-fi
-
-exit 0
+script_dir=$(cd "$(dirname "$0")" && pwd)
+exec python3 "$script_dir/agent_block_pipe_tail_head_check.py" "$command"
