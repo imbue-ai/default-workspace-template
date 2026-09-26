@@ -30,7 +30,6 @@ declare module "@minds/embed-contract" {
   export const DETACHED_WINDOWS: "minds:detached-windows";
   export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities";
   export const REATTACH_WINDOW: "minds:reattach-window";
-  export const WINDOW_ID_PATTERN: RegExp;
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;
