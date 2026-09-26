@@ -298,7 +298,7 @@ const handlers = {
   },
 };
 if (isNavigable) {
-  handlers.capabilities = { navigation: true };
+  handlers.capabilities = { navigation: true, closeChord: false };
   handlers.onNavigate = (path) => {
     history.replaceState(null, "", path);
     show(path);
