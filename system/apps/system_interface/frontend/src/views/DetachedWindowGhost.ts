@@ -8,6 +8,7 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { PixelRect } from "../geometry/frames";
+import { windowChromeZIndex } from "../geometry/stacking";
 import type { AppRecord, WindowRecord } from "../model/records";
 import { appGlyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
@@ -39,7 +40,7 @@ export const DetachedWindowGhost: m.Component<DetachedWindowGhostAttrs> = {
           "detached-window-ghost pointer-events-auto absolute flex flex-col items-center justify-center gap-3 " +
           "rounded-(--desk-window-radius) border-2 border-dashed border-accent bg-surface/60 p-4 text-center " +
           "select-none",
-        style: { ...rectStyle(rect), zIndex: String(2 * stackIndex + 2) },
+        style: { ...rectStyle(rect), zIndex: windowChromeZIndex(stackIndex) },
       },
       [
         m("span", { class: "flex items-center text-secondary" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),

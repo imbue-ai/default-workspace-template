@@ -33,6 +33,7 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
+import { windowPageZIndex } from "../geometry/stacking";
 import { windowPageUrl } from "../model/pageUrl";
 import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
@@ -433,9 +434,7 @@ export class LivePagesLayer implements PageDriver {
   private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
     this.position(page, box);
     const style = page.wrapper.style;
-    // Interleaved with the window chrome: chrome at 2i+2 sits over its own page at 2i+1 and over
-    // every lower window's page and chrome.
-    style.zIndex = String(2 * stackIndex + 1);
+    style.zIndex = windowPageZIndex(stackIndex);
     style.pointerEvents = isInteractive ? "auto" : "none";
     style.display = "";
     this.syncVisibility(page, true);
