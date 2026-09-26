@@ -853,6 +853,11 @@ export function createMenu(options: MenuOptions): Menu {
           handleStackLeave();
           scheduleHoverClose();
         },
+        // A right-click on the card is handled here, like one on the sheet: the page's element menu
+        // yields to it rather than describing one of this menu's own rows, and the browser's own stays away.
+        oncontextmenu: (event: MouseEvent) => {
+          event.preventDefault();
+        },
       },
       rows.map((row) => renderRow(row, false)),
     );
@@ -918,6 +923,9 @@ export function createMenu(options: MenuOptions): Menu {
           handleStackLeave();
           scheduleHoverClose();
         },
+        oncontextmenu: (event: MouseEvent) => {
+          event.preventDefault();
+        },
       },
       content,
     );
@@ -934,6 +942,11 @@ export function createMenu(options: MenuOptions): Menu {
         event.preventDefault();
         event.stopPropagation();
         close();
+      },
+      // A right-click on the sheet is the press that closes the menu, nothing more: the page's element
+      // menu yields to a handled event, and the browser's own stays away.
+      oncontextmenu: (event: MouseEvent) => {
+        event.preventDefault();
       },
     });
   }

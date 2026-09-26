@@ -41,16 +41,20 @@ export const SHELL_OPEN = "shell:open";
 /** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
  *  launcher's primary text action with it, so a page never names the app that takes it. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
+/** App to shell: draft a text into a chat, unsent (element-reference-menu plan section 5): the shell runs the
+ *  pinned app's draft launch path with it, as its own "Design your own..." does, so a page never names the app. */
+export const SHELL_DRAFT_TEXT = "shell:draft-text";
 
 /**
- * What the shell says about the frame it created: the client, the window, its desktop, and the
- * path the window is at (desktop-interface contracts.md section 7). The client id is required;
- * a field the shell does not send, a page reads as "".
+ * What the shell says about the frame it created: the client, the window, its desktop, the app
+ * the window belongs to, and the path the window is at (desktop-interface contracts.md section
+ * 7). The client id is required; a field the shell does not send, a page reads as "".
  */
 export interface ShellHandshake {
   clientId: string;
   windowId: string;
   desktopId: string;
+  app: string;
   path: string;
 }
 
@@ -86,6 +90,8 @@ export interface ShellConnection {
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Ask the shell to start something with ``text``: its launcher's primary text action (a new chat on a stock machine). */
   startWithText(text: string): void;
+  /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
+  draftText(text: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -100,12 +106,13 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, path } = data;
+  const { clientId, windowId, desktopId, app, path } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
     windowId: optionalString(windowId),
     desktopId: optionalString(desktopId),
+    app: optionalString(app),
     path: optionalString(path),
   };
 }
@@ -173,6 +180,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
+    draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
 }
