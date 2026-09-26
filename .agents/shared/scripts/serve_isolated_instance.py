@@ -243,7 +243,9 @@ def tree_size_bytes(root: Path) -> int:
 
 def _format_bytes(count: int) -> str:
     return (
-        f"{count / 1024**3:.1f} GB" if count >= 1024**3 else f"{count / 1024**2:.1f} MB"
+        f"{count / 1024**3:.1f} GiB"
+        if count >= 1024**3
+        else f"{count / 1024**2:.1f} MiB"
     )
 
 
