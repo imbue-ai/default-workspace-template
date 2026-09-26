@@ -1460,6 +1460,31 @@ describe("pulled-out windows", () => {
     expect(reports[reports.length - 1]).toEqual([]);
   });
 
+  it("a solo shell keeps its window's desktop over a reconnect that finds the client recorded elsewhere", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home" })];
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] }),
+      desktopRecord("work", { windows: [windowRecord("win-5", "notes", "/n")] }),
+    ];
+    api.writeLayout("work", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-5", { is_detached: true })],
+    });
+    const { store, reports } = makePopOutStore("win-5");
+    await store.start(NO_LINK);
+    socket.deliver().onConnected();
+    expect(api.calls.filter((call) => call === "fetchPlacements:work")).toHaveLength(1);
+    // The socket comes back with the client still recorded on home: this window's desktop is not the client's,
+    // and adopting the record would report win-5 as back, which closes its own desktop window.
+    socket.deliver().onConnected();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(socket.reports).toEqual([]);
+    expect(api.calls.filter((call) => call === "fetchPlacements:work")).toHaveLength(2);
+    expect(api.calls.filter((call) => call === "fetchPlacements:home")).toHaveLength(0);
+    expect(reports).toEqual([[{ windowId: "win-5", title: "Notes" }]]);
+  });
+
   it("a solo shell whose first layout does not say its window is out takes its own existence as the truth", async () => {
     api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
     api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });

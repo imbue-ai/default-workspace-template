@@ -552,7 +552,10 @@ export class DesktopStore {
     }
     void this.loadAvatarSelection();
     const isRecordedKnown = recorded !== null && this.state.desktops.some((desktop) => desktop.id === recorded);
-    if (recorded !== null && isRecordedKnown && recorded !== this.state.activeDesktopId) {
+    // A solo shell stays on its window's desktop: the recorded one is the main window's, and a report from
+    // any other desktop would omit the solo window, which the chrome reads as its return.
+    const isRecordedAdopted = this.soloWindowId === null && isRecordedKnown && recorded !== this.state.activeDesktopId;
+    if (recorded !== null && isRecordedAdopted) {
       await this.switchDesktop(recorded, { isFollowingPush: true });
       return;
     }
