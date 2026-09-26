@@ -82,7 +82,8 @@ belong in tested code rather than agent prose:
     template's history rewrite: a ``git replace`` graft names the workspace's
     fork point as a parent of its rewritten twin, for as long as the two
     histories share no commit. A no-op for every other workspace, and the call
-    that drops the graft once a merge has landed.
+    that drops the graft once a merge has landed. ``--drop`` removes the
+    recorded graft whatever the histories: the pass's teardown.
 
 ``apply``
     Land a prepared merge and make the live workspace consistent with it, as
