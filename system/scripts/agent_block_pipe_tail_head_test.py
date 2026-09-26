@@ -36,6 +36,10 @@ def _run(command: str) -> int:
         "LC_ALL=C sort -u /tmp/names.txt | head -20",
         "cat f | head -5 | tail -2",
         "cat f | grep x | head",
+        # A reserved word opening the stage is not the program that runs.
+        "for f in *.md; do cat $f | head -5; done",
+        "if true; then git log --oneline | head -3; fi",
+        "time cat f | head",
         # head/tail picking one value inside a command substitution.
         "INIT=$(git rev-list --first-parent HEAD | tail -1)",
         # `||` is not a pipe.
@@ -84,6 +88,7 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         "cat f | head; pytest | tail -5",
         "cat f && pytest | tail -20",
         "cat f & pytest | tail -20",
+        "for f in a b; do pytest $f | tail -5; done",
         # The escaped `>` leaves `&` a background operator, not part of a `>&` redirect.
         "cat x\\>& pytest | tail -20",
         "concatenate f | head",

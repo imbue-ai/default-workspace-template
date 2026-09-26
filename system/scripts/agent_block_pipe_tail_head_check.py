@@ -42,6 +42,11 @@ _REDIRECT_RESIDUE = re.compile(r"^\d+$|^/dev/")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
 _CONTROL_OPERATOR = re.compile(r"\|\||\|&|&&|[|&;()]")
 
+# Reserved words that can open a stage ahead of the program it runs (`do cat f | head`).
+_LEADING_KEYWORDS = frozenset(
+    {"do", "then", "else", "elif", "if", "while", "until", "{", "!", "time"}
+)
+
 _TRUNCATORS = frozenset({"head", "tail"})
 _PIPES = frozenset({"|", "|&"})
 
@@ -210,7 +215,7 @@ def _is_git_read(args: list[str]) -> bool:
 
 def _command_words(stage: CommandSegment) -> list[str]:
     words = list(stage.words)
-    while words and _ENV_ASSIGN.match(words[0]):
+    while words and (_ENV_ASSIGN.match(words[0]) or words[0] in _LEADING_KEYWORDS):
         words.pop(0)
     if stage.has_redirect:
         words = [w for w in words if not _REDIRECT_RESIDUE.match(w)]
