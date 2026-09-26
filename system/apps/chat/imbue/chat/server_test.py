@@ -2329,7 +2329,7 @@ def test_seeding_a_chat_is_refused_until_the_agent_list_is_known() -> None:
 
 def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
     assert client.get("/api/settings").get_json() == {
-        "settings": {"fast_mode_default": "auto", "fast_mode_turn_limit": 5, "is_fast_mode_notice_shown": False}
+        "settings": {"fast_mode_default": "auto", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": False}
     }
 
     response = client.put(
@@ -2346,7 +2346,7 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
 def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(client: FlaskClient) -> None:
     assert client.put("/api/settings", json={"fast_mode_turn_limit": 0}).status_code == 400
     assert client.put("/api/settings", json={"fast_mode_default": "sometimes"}).status_code == 400
-    assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 5
+    assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 2
 
 
 def test_a_chats_fast_mode_defaults_to_the_workspaces_and_is_replaced_whole(tmp_path: Path) -> None:
