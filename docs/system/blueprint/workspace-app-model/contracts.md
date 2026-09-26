@@ -59,7 +59,7 @@ Built-in manifests:
 | `terminal` | true | `terminal` | `{launch = "new", mode = "new"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Terminal" at `/new`, param `workdir` optional) | `terminal-app --no-register` over `copies = {store = "data/.apps/terminal"}`, a `{scratch}` state dir, and `MINDS_APPS_FILE = "{registry}"` (booted `--with terminal-pty`), health `/api/health` |
 | `terminal-pty` | true | `terminal` | none | none; also `internal = true` and `program = "terminal-pty"`: ttyd on its own origin, framed by the terminal's wrapper page | `terminal-pty --no-register` over a `{scratch}` state dir, health `/` |
 | `getting-started` | false | `getting-started` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 5` | none; the shell synthesizes `open` at `/` | `getting-started --no-register --state-dir {scratch}/state` over `GETTING_STARTED_PORT = "{port:main}"` and `GETTING_STARTED_HOST = "{host}"` (unregistered: it neither re-points the live row nor opens the first-visit window), health `/api/health` |
-| `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/`, param `path` optional) | the convention |
+| `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
 
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
