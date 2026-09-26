@@ -117,7 +117,7 @@ Assert on things that are true if and only if the feature worked correctly -- th
   call for the whole app. Report what you built and stop.
 
 - **A change to hardened code carries its tests.** When you change code a harden pass already covered, extend that code's tests in the same commit. Code a change leaves untested is a regression even when it works.
-  (Only where your subtask asks you to touch that code -- see "When coding".)
+  (Only where your subtask asks you to touch that code.)
 
 # Apps and services
 
