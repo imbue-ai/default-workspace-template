@@ -160,6 +160,53 @@ def test_exclude_pattern_actually_skips_files(tmp_path: Path) -> None:
     assert ".venv" not in listing.stdout
 
 
+def test_default_excludes_drop_app_data_copies_but_keep_what_they_copy(
+    tmp_path: Path,
+) -> None:
+    """The default excludes drop copies of app data, never the data or an instance's state."""
+    repo_dir = tmp_path / "repo"
+    home = tmp_path / "home"
+    data = home / "workspace" / "data"
+    kept = [
+        data / ".apps" / "pr-review" / "repos" / "pack.bin",
+        data / ".state" / "isolated-instances" / "pr-review-test" / "instance.json",
+        data / ".state" / "isolated-instances" / "pr-review-test" / "instance.log",
+    ]
+    dropped = [
+        data
+        / ".state"
+        / "isolated-instances"
+        / "pr-review-test"
+        / "copies"
+        / "data"
+        / "repos"
+        / "pack.bin",
+        data / ".state" / "isolated-instances" / "pr-review-test" / "scratch" / "x.db",
+        data / ".state" / "app-data-snapshots" / "pr-review" / "pre-v2" / "pack.bin",
+    ]
+    for path in kept + dropped:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(path.name)
+
+    env = _env_for_local_repo(repo_dir)
+    assert init_repo(env).returncode == 0
+    backup_result = restic_backup(
+        source_path=home,
+        excludes=BackupConfig().excludes,
+        tag="default-excludes",
+        env_overrides=env,
+    )
+    assert backup_result.returncode == 0, backup_result.stderr
+
+    listing = run_restic(("ls", "latest"), env_overrides=env)
+    assert listing.returncode == 0, listing.stderr
+    listed = set(listing.stdout.splitlines())
+    for path in kept:
+        assert str(path) in listed, path
+    for path in dropped:
+        assert str(path) not in listed, path
+
+
 def _snapshot_ids(env: dict[str, str]) -> set[str]:
     """Return the full ids of all snapshots currently in the repo."""
     result = run_restic(("snapshots", "--json"), env_overrides=env)

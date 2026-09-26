@@ -293,27 +293,36 @@ where the data dies. Encode these, cheapest first:
   and the live service is yours only for a `curl` or a health probe.
 
 - **If exercising the change must write, mutate, or delete data, never
-  point it at the live store.** Copy the store to a scratch path *outside*
-  `data/` (so it is neither served by the live service nor backed up), boot a
-  throwaway instance against the copy on a *spare* port, exercise it there,
-  then delete the *copy*. The shared
+  point it at the live store.** Boot a throwaway instance against a *copy* of
+  the store on a *spare* port, exercise it there, then tear it down with its
+  copy. The shared
   [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
-  script owns the boot + teardown -- it picks a free port, injects it (via the
-  `<PACKAGE_UPPER>_PORT` override) plus your data-dir override, waits for the
-  instance to answer, and prints its URL:
+  script owns all of it -- `--copy` copies the store into the instance's own
+  space on disk, it picks a free port, injects it (via the
+  `<PACKAGE_UPPER>_PORT` override) plus your data-dir override pointed at the
+  copy, waits for the instance to answer, and prints its URL; `down` stops it
+  and deletes the copy:
 
   ```bash
-  cp -r data/.apps/<name> /tmp/<name>-scratch
   URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
-      --env <PACKAGE_UPPER>_DATA_DIR=/tmp/<name>-scratch \
+      --copy data=data/.apps/<name> \
+      --env '<PACKAGE_UPPER>_DATA_DIR={copy:data}' \
       --health-path /health \
       -- uv run <name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
   python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
-  rm -rf /tmp/<name>-scratch      # deleting a copy can't harm real data
   ```
+
+  **Never copy app data into `/tmp`.** In the workspace container `/tmp` is
+  memory, not disk: a copy there counts against the container's memory limit,
+  nothing can free it short of deleting it, and an app's store can be bigger
+  than the container's memory: copying one there gets the whole workspace
+  killed mid-copy. `--copy` writes to disk, outside the backup, and
+  refuses a copy that would not leave the disk room to spare. If it refuses,
+  copy only what the test needs (`--copy` a subdirectory, or seed a small store
+  for the test) or verify read-only.
 
   **To pick up a further edit, refresh in place -- don't tear down and re-`up`.**
   A `down`/`up` cycle picks a new port, so a surfaced preview window would point at
@@ -329,7 +338,7 @@ where the data dies. Encode these, cheapest first:
 
   This is the point of the `DATA_DIR` + `<PACKAGE_UPPER>_PORT` overrides: the
   isolation you need is **data isolation, not code isolation**, and it's a
-  copy-plus-one-command setup, not a worktree. The live store is only ever
+  one-command setup, not a worktree. The live store is only ever
   *read* (once, to make the copy); the only delete lands on a disposable path
   where real data never lived.
 
@@ -366,8 +375,15 @@ where the data dies. Encode these, cheapest first:
 
 - **Snapshot before any genuinely in-place change to the real store.** If a
   change truly must rewrite the live store (a data migration you can't run
-  on a copy), `cp -r data/.apps/<name> /tmp/<name>-pre-<change>` first, run the
-  change, confirm the real data survived, and only then remove the snapshot.
+  on a copy), snapshot it first, run the change, confirm the real data
+  survived, and only then drop the snapshot:
+
+  ```bash
+  python3 .agents/shared/scripts/copy_app_data.py snapshot --app <name> --label pre-<change>   # prints where it went
+  # ...run the change, confirm the real data survived...
+  python3 .agents/shared/scripts/copy_app_data.py drop --app <name> --label pre-<change>
+  ```
+
   The snapshot is a *recovery net* -- do **not** turn it into a routine
   "wipe live and restore backup" step: overwriting a running service's store
   tears its state, and any real writes that landed during your test window

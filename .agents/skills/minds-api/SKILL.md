@@ -195,8 +195,9 @@ ssh -i /tmp/mind_key -p "$(echo "$CONN" | jq -r .port)" \
 latchkey curl .../api/v1/workspaces/<id>/backups \
   | jq '{is_backing_up, snapshots: [.snapshots[] | {short_id, time, total_size_bytes}]}'
 
-# Export one snapshot as a zip (binary stream -> save with -o):
-latchkey curl -o /tmp/restore.zip \
+# Export one snapshot as a zip (binary stream -> save with -o). Save it under
+# /var/tmp, which is disk: an export can run to many GB, and /tmp is memory.
+latchkey curl -o /var/tmp/restore.zip \
   -XPOST .../api/v1/workspaces/<id>/backups/<snapshot_id>/export
 ```
 
@@ -240,7 +241,7 @@ Which side you are on decides what you do:
 
 If the old workspace cannot be started at all, the live-session flow does not
 apply. Export its newest snapshot (`GET .../<OLD>/backups`, then
-`POST .../<OLD>/backups/<snapshot_id>/export -o /tmp/old.zip`) and work through
+`POST .../<OLD>/backups/<snapshot_id>/export -o /var/tmp/old.zip`) and work through
 the contents with the user by hand.
 
 Throughout: request only the per-workspace permissions each step needs, with a

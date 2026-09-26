@@ -89,6 +89,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -216,6 +217,20 @@ class InstanceError(Exception):
     def __init__(self, message: str, log_path: Path | None = None) -> None:
         super().__init__(message)
         self.log_path = log_path
+
+
+def _load_copy_app_data_module():
+    """The checked copy ``--copy`` makes: stdlib-only, so it imports from its path."""
+    path = Path(__file__).resolve().parent / "copy_app_data.py"
+    spec = importlib.util.spec_from_file_location("copy_app_data", path)
+    if spec is None or spec.loader is None:
+        raise InstanceError(f"cannot load the copy helper at {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_copy_app_data = _load_copy_app_data_module()
 
 
 def _reap_if_exited_child(pid: int) -> None:
@@ -553,13 +568,17 @@ def parse_copy_assignments(assignments: Sequence[str]) -> dict[str, str]:
 
 
 def _make_copies(
-    repo_root: Path, state_dir: Path, copy_sources: dict[str, str]
+    repo_root: Path,
+    state_dir: Path,
+    copy_sources: dict[str, str],
+    free_space: Callable[[Path], int],
 ) -> dict[str, str]:
     """Copy each source directory into the instance's scratch space; return key -> copy path.
 
     A source that does not exist yet (an app that has never written its store) becomes
     an empty directory rather than an error: the instance creates what it needs there,
-    exactly as the live app would on its first run.
+    exactly as the live app would on its first run. A copy that would not fit on the
+    disk is refused before it is written (see ``copy_app_data.py``).
     """
     copy_by_key: dict[str, str] = {}
     for key, source in copy_sources.items():
@@ -568,7 +587,12 @@ def _make_copies(
             source_path = repo_root / source_path
         destination = state_dir / COPIES_DIRNAME / key
         if source_path.is_dir():
-            shutil.copytree(source_path, destination, symlinks=True)
+            try:
+                _copy_app_data.copy_tree_checked(
+                    source_path, destination, free_space=free_space
+                )
+            except _copy_app_data.CopyError as exc:
+                raise InstanceError(f"--copy {key}={source}: {exc}") from exc
         else:
             sys.stderr.write(
                 f"note: --copy {key}={source}: {source_path} is not a directory; "
@@ -780,6 +804,7 @@ def up(
     http: HttpClient,
     spawner: Spawner,
     sleeper: Callable[[float], None] = time.sleep,
+    free_space: Callable[[Path], int] = _copy_app_data.free_bytes,
 ) -> int:
     """Boot an isolated instance of a service; optionally register + wrap it.
 
@@ -844,7 +869,7 @@ def up(
         #    it with the isolating env overrides.
         port_by_name = {port_name: find_free_port() for port_name in port_env_by_name}
         inner_port = port_by_name[MAIN_PORT_NAME]
-        copy_by_key = _make_copies(repo_root, state_dir, copy_sources or {})
+        copy_by_key = _make_copies(repo_root, state_dir, copy_sources or {}, free_space)
         resolved_command = [
             substitute_placeholders(part, port_by_name, copy_by_key, str(scratch_dir))
             for part in command
@@ -1268,7 +1293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         metavar="NAME=VALUE",
         help="Env override for the instance (repeatable); e.g. point a *_DATA_DIR "
-        "at a scratch copy of the data.",
+        "at a copy of the data made with --copy: --env MYSVC_DATA_DIR={copy:data}.",
     )
     up_parser.add_argument(
         "--unset-env",
@@ -1283,9 +1308,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         metavar="KEY=SOURCE",
         help="Copy a directory (repo-relative or absolute) into the instance's "
-        "scratch space before boot (repeatable); reachable as {copy:KEY} in --env "
-        "values and the launch argv. {scratch} names a fresh directory of the "
-        "instance's own, and {host} the loopback host.",
+        "scratch space on disk before boot (repeatable), refused if it would not fit; "
+        "reachable as {copy:KEY} in --env values and the launch argv, and removed "
+        "by 'down'. {scratch} names a fresh directory of the instance's own, and "
+        "{host} the loopback host.",
     )
     up_parser.add_argument(
         "--health-path",
