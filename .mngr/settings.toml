@@ -490,8 +490,8 @@ host_log_dir = "/var/log/mngr"
 # container's memory limit and no process kill frees it, so a multi-GB write
 # (a copy of a large app's data, say) can take the workspace down. Cloud
 # workspaces avoid this by keeping /tmp on disk and emptying it from the
-# container's entrypoint (mngr_vps); the local docker provider has no such
-# entrypoint hook yet. It says `exec` because Docker mounts a bare `--tmpfs`
+# container's entrypoint (mngr_vps); the local docker provider's entrypoint
+# does not empty /tmp. It says `exec` because Docker mounts a bare `--tmpfs`
 # noexec, and a stub executable a test writes under /tmp and puts on PATH is
 # then skipped, so the real binary it stands in for runs instead.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]

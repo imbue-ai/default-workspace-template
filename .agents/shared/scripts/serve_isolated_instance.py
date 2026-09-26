@@ -118,8 +118,10 @@ WRAPPER_LOG_FILENAME = "wrapper.log"
 # dir so ``down`` removes them with everything else.
 COPIES_DIRNAME = "copies"
 SCRATCH_DIRNAME = "scratch"
-# What a ``--copy`` must leave free on its disk, for the live workspace's own writes.
-COPY_RESERVE_BYTES = 2 * 1024**3
+# What a ``--copy`` must leave free on its disk, as ``statfs`` reports it: room for
+# the live workspace's own writes, above the 4 GiB a cloud workspace's disk quota
+# holds back from the filesystem (``statfs`` does not see the quota).
+COPY_RESERVE_BYTES = 6 * 1024**3
 # The port the health probe reaches and the wrapper frames; every instance has it.
 MAIN_PORT_NAME = "main"
 LOOPBACK_HOST = "127.0.0.1"
