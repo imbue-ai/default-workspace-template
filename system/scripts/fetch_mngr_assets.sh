@@ -40,7 +40,9 @@ git -C "$source_tree" init -q
 git -C "$source_tree" remote add origin "$GIT_URL"
 git -C "$source_tree" sparse-checkout set --no-cone "${ASSET_PATHS[@]}"
 mngr_git_auth_run git -C "$source_tree" fetch -q --depth=1 --filter=blob:none origin "$REV"
-git -C "$source_tree" checkout -q FETCH_HEAD
+# The blob filter leaves the asset files to be fetched lazily at checkout, which
+# needs the same credential the fetch did.
+mngr_git_auth_run git -C "$source_tree" checkout -q FETCH_HEAD
 
 staging="$ASSETS_DIR.tmp"
 rm -rf "$staging"
