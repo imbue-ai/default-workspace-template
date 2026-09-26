@@ -46,10 +46,10 @@ def is_repo_missing_error(stderr: str) -> bool:
 def is_repo_locked_error(stderr: str) -> bool:
     """Return True if `stderr` looks like a restic 'repository is locked' error.
 
-    A dead container incarnation can leave an exclusive lock behind whose owning
-    PID no longer exists; every subsequent tick then fails to acquire a lock.
-    Detecting this lets the runner clear the stale lock and retry rather than
-    wedging indefinitely.
+    A restic process killed with its container leaves its lock behind. An
+    exclusive one (forget, prune) blocks every later operation; a non-exclusive
+    one (backup) blocks only the exclusive ones. Detecting this lets the runner
+    clear the stale lock and retry rather than failing every tick indefinitely.
     """
     return any(p.search(stderr) for p in _REPO_LOCKED_PATTERNS)
 
