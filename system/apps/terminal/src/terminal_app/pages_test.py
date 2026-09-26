@@ -242,12 +242,12 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     assert 'import("/_static/app_contract.js")' in page_html
 
 
-def test_render_page_points_the_pty_frame_only_once_the_page_has_a_box() -> None:
+def test_render_page_nudges_the_pty_frame_after_it_loads_so_ttyd_refits() -> None:
     page = SessionPage(name="terminal-1", title="Terminal 1", pty_path="/?arg=session", pty_label="pty")
 
     page_html = render_page(PageConfig(session="terminal-1", page=page))
 
-    # ttyd fits its grid once at mount, so the frame may only be pointed at a rendered page.
-    assert "new ResizeObserver" in page_html
-    assert "pointFrameAt(originFor(page.pty_label) + page.pty_path)" in page_html
-    assert "if (frame.src !== src) frame.src = src;" in page_html
+    # ttyd fits once at mount with the wrong cell width and refits only on a resize.
+    assert 'frame.addEventListener("load", scheduleRefitNudges);' in page_html
+    assert "const NUDGE_DELAYS_MS = [500, 2000];" in page_html
+    assert 'frame.style.height = "calc(100% - 1px)";' in page_html

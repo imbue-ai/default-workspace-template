@@ -122,28 +122,25 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     empty.hidden = false;
   }
 
-  let sizeWatch = null;
-  function hasBox() {
-    return document.documentElement.clientWidth > 0 && document.documentElement.clientHeight > 0;
+  // ttyd fits its grid once at mount, with the DOM renderer's whole-pixel cell width, then
+  // switches to its WebGL renderer, whose narrower cell leaves that column count short of the
+  // pane; it only refits on a resize, and only listens for one once its socket is open. A
+  // one-pixel nudge of the frame after it loads is such a resize; the second covers a slow
+  // socket.
+  const NUDGE_DELAYS_MS = [500, 2000];
+  let nudgeTimers = [];
+  function nudgeFrameSize() {
+    frame.style.height = "calc(100% - 1px)";
+    requestAnimationFrame(() => { frame.style.height = ""; });
   }
+  function scheduleRefitNudges() {
+    nudgeTimers.forEach(clearTimeout);
+    nudgeTimers = NUDGE_DELAYS_MS.map((delay) => setTimeout(nudgeFrameSize, delay));
+  }
+  frame.addEventListener("load", scheduleRefitNudges);
 
-  // ttyd fits its grid once, when it mounts, and only listens for resizes after its socket
-  // opens; a frame pointed while this page has no box (the shell creates it hidden) keeps
-  // that empty fit until a real resize. So the frame is pointed only once the page has a box.
   function pointFrameAt(src) {
-    sizeWatch?.disconnect();
-    sizeWatch = null;
-    if (hasBox()) {
-      if (frame.src !== src) frame.src = src;
-      return;
-    }
-    sizeWatch = new ResizeObserver(() => {
-      if (!hasBox()) return;
-      sizeWatch.disconnect();
-      sizeWatch = null;
-      if (frame.src !== src) frame.src = src;
-    });
-    sizeWatch.observe(document.documentElement);
+    if (frame.src !== src) frame.src = src;
   }
 
   function show(page) {
