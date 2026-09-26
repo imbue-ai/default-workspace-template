@@ -891,14 +891,17 @@ registerProcessor('pb', PB);`;
     sendPointer(e, buttonMask, 0);
   }, { passive: false });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Ctrl+C/X/V fall through to the native copy/cut/paste DOM events (handled in the
+  // clipboard section) instead of being forwarded as keystrokes -- no key interception,
+  // and it works the same on every OS.
+  function isClipboardChord(e) {
+    return e.ctrlKey && (e.key === "c" || e.key === "x" || e.key === "v");
+  }
   canvas.addEventListener("keydown", (e) => {
     if (driving()) return;
     reconcileModifiers(e);  // release any modifier whose keyup we missed, before this key
     if (e.metaKey) return;  // Cmd-combos stay LOCAL (#30): Mac muscle memory + workspace shortcuts
-    // Let Ctrl+C/X/V fall through to the native copy/cut/paste DOM events (handled in
-    // the clipboard section) instead of forwarding them as keystrokes -- no key
-    // interception, and it works the same on every OS.
-    if (e.ctrlKey && (e.key === "c" || e.key === "x" || e.key === "v")) return;
+    if (isClipboardChord(e)) return;
     const keysym = keysymFor(e);
     if (keysym === null) return;
     e.preventDefault();
@@ -910,7 +913,7 @@ registerProcessor('pb', PB);`;
     reconcileModifiers(e);  // backstop: sync held modifiers to the event's flags
     if (e.metaKey || e.key === "Meta") return;
     // The keydown never went to the remote, so its release must not either.
-    if (e.ctrlKey && (e.key === "c" || e.key === "x" || e.key === "v")) return;
+    if (isClipboardChord(e)) return;
     const keysym = keysymFor(e);
     if (keysym === null) return;
     e.preventDefault();
