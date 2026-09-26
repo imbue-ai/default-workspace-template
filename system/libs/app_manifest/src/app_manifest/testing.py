@@ -1,3 +1,4 @@
+import json
 import subprocess
 import threading
 from collections.abc import Sequence
@@ -109,6 +110,196 @@ def build_news_workspace(repo_root: Path) -> Path:
     write_repo_file(repo_root, "system/scripts/run_news.sh", "#!/bin/sh\nexit 0\n")
     write_supervisord_conf(repo_root, ("program:news", "program:news-fetcher", "program:files"))
     return manifest_path
+
+
+_SELECTION_ROOT_PYPROJECT: Final[str] = """
+[project]
+name = "workspace"
+version = "0.1.0"
+
+[tool.uv.workspace]
+members = ["system/libs/*", "system/apps/*"]
+exclude = ["system/libs/ui"]
+
+[tool.pytest.ini_options]
+addopts = ["--ignore=system/apps/chat"]
+"""
+
+_SELECTION_OVERRIDES: Final[str] = """
+always_run = ["system/scripts/hook_wiring_test.py"]
+
+[[consumer]]
+paths = ["catalog/**"]
+suites = ["system/apps/notes"]
+note = "reads the catalog"
+
+[[integration]]
+test = "system/scripts/test_create_gate.py"
+paths = [".mngr/settings.toml"]
+note = "runs the real mngr create"
+"""
+
+_NOTES_MANIFEST: Final[str] = """
+name = "notes"
+display_name = "Notes"
+icon = "icon.svg"
+
+[[references]]
+path = "system/scripts/run_notes.sh"
+"""
+
+
+def _python_package(repo_root: Path, directory: str, name: str, dependencies: Sequence[str]) -> None:
+    listed = ", ".join(f'"{dependency}"' for dependency in dependencies)
+    module = name.replace("-", "_")
+    write_repo_file(
+        repo_root,
+        f"{directory}/pyproject.toml",
+        f'[project]\nname = "{name}"\ndependencies = [{listed}]\n\n'
+        f'[tool.hatch.build.targets.wheel]\npackages = ["src/{module}"]\n',
+    )
+    write_repo_file(repo_root, f"{directory}/src/{module}/__init__.py", "")
+    write_repo_file(repo_root, f"{directory}/src/{module}/core.py", "VALUE = 1\n")
+    write_repo_file(repo_root, f"{directory}/src/{module}/core_test.py", "def test_value() -> None:\n    pass\n")
+
+
+def build_selection_workspace(repo_root: Path) -> None:
+    """A committed repo shaped like the workspace, for the test selection: a shared library
+    (``corelib``) that another library (``midlib``) and the chat app depend on, an app
+    (``notes``) that depends on ``midlib`` and references a script, the chat app as its own
+    pytest root with a browser test and a frontend, the shared ``ui`` npm library that
+    frontend depends on, flat scripts with paired and unpaired tests, a skill whose script
+    imports ``corelib``, the repo guards, and an override file."""
+    init_git_repository(repo_root)
+    write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
+    write_repo_file(repo_root, "conftest.py", "")
+    write_repo_file(repo_root, "README.md", "# workspace\n")
+    write_repo_file(repo_root, "docs/guide.md", "# guide\n")
+
+    # Python packages
+    _python_package(repo_root, "system/libs/corelib", "corelib", ())
+    _python_package(repo_root, "system/libs/midlib", "midlib", ("corelib>=0.1",))
+    _python_package(repo_root, "system/apps/notes", "notes", ("midlib",))
+    write_app_manifest(repo_root, "notes", _NOTES_MANIFEST, is_icon_written=True)
+    write_repo_file(repo_root, "system/scripts/run_notes.sh", "#!/bin/sh\n")
+
+    # The chat app: its own pytest root, with a browser test and a type-check ratchet
+    write_repo_file(
+        repo_root,
+        "system/apps/chat/pyproject.toml",
+        '[project]\nname = "chat"\ndependencies = ["corelib"]\n\n'
+        '[tool.hatch.build.targets.wheel]\npackages = ["imbue"]\n\n'
+        '[tool.pytest.ini_options]\naddopts = ["--cov=imbue.chat", "-m", "not release"]\n',
+    )
+    write_repo_file(repo_root, "system/apps/chat/imbue/chat/__init__.py", "")
+    write_repo_file(repo_root, "system/apps/chat/imbue/chat/server.py", "PORT = 1\n")
+    write_repo_file(repo_root, "system/apps/chat/imbue/chat/server_test.py", "def test_port() -> None:\n    pass\n")
+    write_repo_file(
+        repo_root,
+        "system/apps/chat/imbue/chat/test_e2e.py",
+        "from playwright.sync_api import Page\n\n\ndef test_page(page: Page) -> None:\n    pass\n",
+    )
+    write_repo_file(repo_root, "system/apps/chat/imbue/chat/test_ratchets.py", "def test_no_type_errors() -> None:\n    pass\n")
+
+    # The npm workspace
+    write_repo_file(
+        repo_root,
+        "system/package.json",
+        json.dumps({"name": "frontends", "workspaces": ["libs/ui", "apps/chat/frontend"]}),
+    )
+    write_repo_file(
+        repo_root,
+        "system/libs/ui/package.json",
+        json.dumps(
+            {
+                "name": "@workspace/ui",
+                "scripts": {"test": "vitest run", "lint": "eslint src/", "format:check": "prettier --check src", "typecheck": "tsc --noEmit"},
+            }
+        ),
+    )
+    write_repo_file(repo_root, "system/libs/ui/src/index.ts", "export const x = 1;\n")
+    write_repo_file(
+        repo_root,
+        "system/apps/chat/frontend/package.json",
+        json.dumps(
+            {
+                "name": "chat-frontend",
+                "dependencies": {"@workspace/ui": "0.1.0"},
+                "scripts": {"build": "tsc --noEmit && vite build", "test": "vitest run", "lint": "eslint src/", "format:check": "prettier --check src", "typecheck": "tsc --noEmit"},
+            }
+        ),
+    )
+    write_repo_file(repo_root, "system/apps/chat/frontend/src/main.ts", "export {};\n")
+
+    # Flat scripts, a skill, and the repo guards
+    write_repo_file(repo_root, "system/scripts/forward_port.py", "PORT = 1\n")
+    write_repo_file(repo_root, "system/scripts/forward_port_test.py", "def test_port() -> None:\n    pass\n")
+    write_repo_file(repo_root, "system/scripts/agy_shim/agy_shim.sh", "#!/bin/sh\n")
+    write_repo_file(repo_root, "system/scripts/agy_shim/agy_shim_test.py", "def test_shim() -> None:\n    pass\n")
+    write_repo_file(repo_root, "system/scripts/create_gate.py", "GATE = 1\n")
+    write_repo_file(repo_root, "system/scripts/test_create_gate.py", "def test_gate() -> None:\n    pass\n")
+    write_repo_file(repo_root, "system/scripts/hook_wiring_test.py", "def test_wiring() -> None:\n    pass\n")
+    write_repo_file(
+        repo_root,
+        "system/scripts/banner_test.py",
+        '# Exercises system/scripts/banner.txt.\ndef test_banner() -> None:\n    pass\n',
+    )
+    write_repo_file(repo_root, "system/scripts/banner.txt", "hello\n")
+    write_repo_file(repo_root, "system/scripts/shape_testing.py", "SHAPE = 1\n")
+    write_repo_file(
+        repo_root,
+        "system/scripts/shape_test.py",
+        "from shape_testing import SHAPE\n\n\ndef test_shape() -> None:\n    assert SHAPE\n",
+    )
+    write_repo_file(repo_root, "system/test_layout.py", "def test_layout() -> None:\n    pass\n")
+    write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
+    write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "from corelib.core import VALUE\n")
+    write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
+    write_repo_file(repo_root, ".mngr/settings.toml", "")
+    write_repo_file(repo_root, "catalog/templates.json", "[]\n")
+    write_repo_file(repo_root, "system/config/test_selection_overrides.toml", _SELECTION_OVERRIDES)
+    commit_everything(repo_root, "workspace")
+
+
+def selection_lock(requests_version: str) -> str:
+    """A uv.lock for the selection workspace in which corelib depends on requests."""
+    return f"""
+version = 1
+
+[[package]]
+name = "workspace"
+version = "0.1.0"
+source = {{ virtual = "." }}
+
+[[package]]
+name = "corelib"
+version = "0.1.0"
+source = {{ editable = "system/libs/corelib" }}
+dependencies = [{{ name = "requests" }}]
+
+[[package]]
+name = "midlib"
+version = "0.1.0"
+source = {{ editable = "system/libs/midlib" }}
+dependencies = [{{ name = "corelib" }}]
+
+[[package]]
+name = "notes"
+version = "0.1.0"
+source = {{ editable = "system/apps/notes" }}
+dependencies = [{{ name = "midlib" }}]
+
+[[package]]
+name = "chat"
+version = "0.1.0"
+source = {{ editable = "system/apps/chat" }}
+dependencies = [{{ name = "corelib" }}]
+
+[[package]]
+name = "requests"
+version = "{requests_version}"
+source = {{ registry = "https://pypi.org/simple" }}
+"""
 
 
 class ShellStub(MutableModel):

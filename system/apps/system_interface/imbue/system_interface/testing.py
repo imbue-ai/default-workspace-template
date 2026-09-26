@@ -246,11 +246,8 @@ def build_test_state(
     )
 
 
-# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the shell's fixed loopback port, the two
-# stand-in apps its registry holds (one declaring launch paths), and the one connected client most of its
-# tests target, on the default desktop.
-PIPELINE_PORT: Final[int] = 18766
-PIPELINE_BASE_URL: Final[str] = f"http://127.0.0.1:{PIPELINE_PORT}"
+# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the two stand-in apps its registry holds
+# (one declaring launch paths), and the one connected client most of its tests target, on the default desktop.
 PIPELINE_SEEDED_APP_NAME: Final[str] = "chat"
 PIPELINE_STUB_APP_NAME: Final[str] = "docs"
 PIPELINE_CLIENT_ID: Final[str] = "client-1"

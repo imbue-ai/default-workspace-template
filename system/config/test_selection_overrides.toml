@@ -1,0 +1,156 @@
+# The hand-kept part of `app-manifest select-tests`' mapping from changed paths to suites.
+#
+# Most of the mapping is derived: a path selects its own package's, skill's, or paired
+# script's tests, every workspace member and npm package that depends on it, the app whose
+# manifest references it or whose supervisord block it holds, and every test file that
+# names it. This file holds only what none of that can see. A path nothing classifies
+# brings in the full root suite, and the selector names it; decide which suites can
+# observe a change to it and record that here, in the same change.
+#
+# `paths` are gitignore-style globs over repo-root-relative paths. A suite is a test file
+# or a directory holding tests (a package, a skill, `system/scripts`, `.pi/extensions`, ...);
+# an empty `suites` list says no suite beyond the always-run set can observe the paths.
+
+# The cross-cutting system/scripts guards, run for every change beside system/*.py.
+always_run = [
+    "system/scripts/agent_hook_wiring_test.py",
+    "system/scripts/agent_guard_tool_scope_test.py",
+    "system/scripts/provision_guard_test.py",
+    "system/scripts/stdlib_only_scripts_test.py",
+    "system/scripts/tool_env_sync_test.py",
+    "system/scripts/claude_memory_settings_test.py",
+]
+
+[[consumer]]
+paths = [".agents/**/*.md"]
+suites = [
+    ".agents/shared/scripts/test_skill_mngr_references.py",
+    ".agents/skills/launch-task/scripts/dispatch_contract_test.py",
+]
+note = "scans every skill and shared prose file"
+
+[[consumer]]
+paths = ["system/libs/app_manifest/src/app_manifest/*.py", "system/libs/app_manifest/pyproject.toml"]
+suites = [".agents/skills/build-app", ".agents/skills/update-self", ".agents/skills/publish-template"]
+note = "runs the app-manifest command as a subprocess"
+
+[[consumer]]
+paths = ["system/vendor/tk/**"]
+suites = [
+    "system/libs/tk_command_parsing",
+    "system/scripts/agent_tk_standalone_check_test.py",
+    ".pi/extensions",
+]
+note = "drives the vendored ticket tracker"
+
+[[consumer]]
+paths = [".pi/**"]
+suites = [".pi/extensions"]
+note = "the pi extensions' own tests"
+
+[[consumer]]
+paths = ["catalog/**"]
+suites = ["system/apps/getting_started"]
+note = "reads the template catalog"
+
+[[consumer]]
+paths = ["system/config/parent.toml"]
+suites = [".agents/skills/update-self", ".agents/skills/migrate-workspace"]
+note = "reads the upstream the workspace updates from"
+
+[[consumer]]
+paths = [
+    ".claude/**",
+    ".codex/**",
+    ".reviewer/**",
+    ".github/**",
+    ".gitignore",
+    ".gitattributes",
+    ".dockerignore",
+    ".pre-commit-config.yaml",
+    "system/Dockerfile",
+    "apps",
+    "skills",
+    "data/**",
+    "docs/**",
+    "dev/**",
+]
+suites = []
+note = "covered by the always-run guards, or read by no test"
+
+[[consumer]]
+paths = ["system/config/test_selection_overrides.toml"]
+suites = ["system/libs/app_manifest/test_repo_test_selection.py"]
+note = "checks every tracked path maps and every suite named here exists"
+
+[[consumer]]
+paths = [
+    "system/scripts/agent_block_pipe_tail_head.sh",
+    "system/scripts/agent_latchkey_request_standalone.sh",
+    "system/scripts/agent_open_tickets_reminder.sh",
+    "system/scripts/agent_prevent_commit_rewrite.sh",
+    "system/scripts/agent_require_steps_pretool.sh",
+    "system/scripts/agent_rewrite_bash_command.py",
+    "system/scripts/agent_tk_standalone.sh",
+]
+suites = ["system/scripts/agy_shim"]
+note = "agent hooks, run by the agy shim's tests; the always-run wiring guard checks each one's wiring"
+
+[[consumer]]
+paths = [
+    "system/scripts/agent_open_tickets_stop_nudge.sh",
+    "system/scripts/imbue_plan_extra/**",
+]
+suites = []
+note = "the stop hook and build-app's plan recorder, which no test runs; the always-run wiring guard checks the hook's wiring"
+
+[[consumer]]
+paths = [".agents/shared/scripts/preview_wrapper_server.py"]
+suites = [".agents/shared/scripts/serve_isolated_instance_test.py"]
+note = "spawned by the isolated-instance server"
+
+[[consumer]]
+paths = ["system/scripts/env.d/**"]
+suites = []
+note = "the boot units and overlay list the env-converge service runs, which no test runs"
+
+[[consumer]]
+paths = [
+    "system/scripts/agy_install-*.sh",
+    "system/scripts/create_reviewer_settings.sh",
+    "system/scripts/default_workspace_template_seed.sh",
+    "system/scripts/install_owner_exec.sh",
+    "system/scripts/minds_lima_autostart.sh",
+    "system/scripts/minds_start_services_agent.sh",
+    "system/scripts/register_vm_exec.sh",
+    "system/scripts/run_owner_exec.sh",
+    "system/scripts/docs_viewer.py",
+    "system/scripts/scroll_verification/**",
+]
+suites = []
+note = "provisioning, launcher and manual-verification scripts no test runs; the always-run guards check their wiring"
+
+[[integration]]
+test = "system/scripts/test_require_create_account.py"
+paths = [".mngr/settings.toml", "system/scripts/require_create_account.py"]
+note = "runs the committed create gate through the real mngr create"
+
+[[integration]]
+test = "system/scripts/test_collect_bug_report_diagnostics_installed_mngr.py"
+paths = [".mngr/settings.toml", "system/scripts/collect_bug_report_diagnostics.py"]
+note = "fetches transcripts through the real installed mngr"
+
+[[integration]]
+test = "system/scripts/test_lead_address_by_id.py"
+paths = [".agents/skills/launch-task/scripts/*.py", ".agents/shared/references/worker-reporting.md"]
+note = "renames a real mngr agent and addresses it by id"
+
+[[integration]]
+test = "system/scripts/test_claude_plugin_first_session.py"
+paths = [".mngr/settings.toml", "system/scripts/claude_update_plugin.sh"]
+note = "provisions the plugin for a real claude session"
+
+[[integration]]
+test = "system/scripts/test_codex_plugin_first_session.py"
+paths = [".mngr/settings.toml", "system/scripts/codex_update_plugin.sh"]
+note = "provisions the plugin for a real codex session"

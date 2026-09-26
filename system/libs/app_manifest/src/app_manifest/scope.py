@@ -232,39 +232,62 @@ def _supervisord_conf_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
     )
 
 
-def find_referencing_manifests(
-    repo_root: Path, target_path: RepoRelativePath
-) -> tuple[ManifestReferenceMatch, ...]:
-    """Every app whose manifest declares ``target_path`` as its own, in manifest path order.
+class LoadedManifest(FrozenModel):
+    """An app manifest that loaded, and where it was read from."""
+
+    manifest_path: Path = Field(description="The absolute path of the app.toml")
+    manifest: AppManifest = Field(description="The validated manifest")
+
+
+def load_app_manifests(repo_root: Path) -> tuple[LoadedManifest, ...]:
+    """Every app manifest under the repo root that loads, in manifest path order.
 
     An app directory with no ``app.toml`` is skipped, and so is a manifest that fails to load:
     the loud check for a broken manifest is ``system/test_app_manifests.py``, and one app's
     stale reference must not block every other creation's footprint and freshness check.
     """
     repo_root = repo_root.resolve()
-    normalized_target = target_path.rstrip("/")
     apps_directory = repo_root.joinpath(*APPS_DIRECTORY_PARTS)
-    matches: list[ManifestReferenceMatch] = []
+    loaded: list[LoadedManifest] = []
     for manifest_path in sorted(apps_directory.glob(f"*/{MANIFEST_FILENAME}")):
         try:
             manifest = load_manifest(manifest_path, repo_root=repo_root)
         except ManifestLoadError as e:
-            logger.warning(
-                "Skipping {} while looking up what owns {}, because it does not load: {}",
-                manifest_path,
-                normalized_target,
-                e,
-            )
+            logger.warning("Skipping {}, because it does not load: {}", manifest_path, e)
             continue
-        for reference in manifest.references:
+        loaded.append(LoadedManifest(manifest_path=manifest_path, manifest=manifest))
+    return tuple(loaded)
+
+
+@pure
+def match_referencing_manifests(
+    manifests: Sequence[LoadedManifest], target_path: RepoRelativePath
+) -> tuple[ManifestReferenceMatch, ...]:
+    """Every one of ``manifests`` that declares ``target_path`` as its own, in the order given."""
+    normalized_target = target_path.rstrip("/")
+    matches: list[ManifestReferenceMatch] = []
+    for loaded in manifests:
+        for reference in loaded.manifest.references:
             if is_path_covered_by(reference.path, normalized_target):
                 matches.append(
                     ManifestReferenceMatch(
-                        manifest_path=manifest_path, manifest=manifest, reference=reference
+                        manifest_path=loaded.manifest_path,
+                        manifest=loaded.manifest,
+                        reference=reference,
                     )
                 )
                 break
     return tuple(matches)
+
+
+def find_referencing_manifests(
+    repo_root: Path, target_path: RepoRelativePath
+) -> tuple[ManifestReferenceMatch, ...]:
+    """Every app whose manifest declares ``target_path`` as its own, in manifest path order.
+
+    Manifests that do not load are skipped, as ``load_app_manifests`` describes.
+    """
+    return match_referencing_manifests(load_app_manifests(repo_root), target_path)
 
 
 def _check_excludes_leave_the_footprint(
@@ -413,6 +436,83 @@ def _run_git(repo_root: Path, arguments: Sequence[str]) -> str:
     return completed.stdout
 
 
+class ChangedFiles(FrozenModel):
+    """The files a ref changed since it forked from a base, and the commits that bound the range."""
+
+    base: NonEmptyStr = Field(description="The full sha of the requested base")
+    ref: NonEmptyStr = Field(description="The full sha of the ref the diff runs to")
+    merge_base: NonEmptyStr = Field(description="The full sha the diff actually runs from")
+    files: tuple[RepoRelativePath, ...] = Field(description="Every file the diff changed")
+
+
+def resolve_commit(repo_root: Path, ref: str) -> NonEmptyStr:
+    """The full sha of the commit ``ref`` names."""
+    return NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{ref}^{{commit}}")).strip())
+
+
+def list_changed_files(repo_root: Path, diff_base: str, diff_ref: str) -> ChangedFiles:
+    """The files ``diff_ref`` changed since its merge base with ``diff_base`` (the three-dot
+    form, so what the base branch did after the fork is not counted as the ref's change)."""
+    base_sha = resolve_commit(repo_root, diff_base)
+    ref_sha = resolve_commit(repo_root, diff_ref)
+    merge_base_sha = NonEmptyStr(_run_git(repo_root, ("merge-base", base_sha, ref_sha)).strip())
+    # A NUL-separated listing with quoting off is the only form every filename survives: git
+    # otherwise renders a non-ASCII name as an escaped, double-quoted string, which is not the
+    # path it changed, and a name with a newline in it would split across lines. With rename
+    # detection a renamed file would list only its new path, though its old path is gone.
+    diff_output = _run_git(
+        repo_root,
+        (
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            f"{base_sha}...{ref_sha}",
+        ),
+    )
+    return ChangedFiles(
+        base=base_sha,
+        ref=ref_sha,
+        merge_base=merge_base_sha,
+        files=tuple(RepoRelativePath(entry) for entry in diff_output.split("\0") if entry),
+    )
+
+
+def list_tracked_files(repo_root: Path) -> tuple[RepoRelativePath, ...]:
+    """Every file git tracks in the repo root's index, in git's order."""
+    output = _run_git(repo_root, ("-c", "core.quotePath=false", "ls-files", "-z"))
+    return tuple(RepoRelativePath(entry) for entry in output.split("\0") if entry)
+
+
+def list_uncommitted_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
+    """Every path the working tree or index holds a change to that HEAD does not, untracked
+    files included (ignored ones are not)."""
+    output = _run_git(
+        repo_root,
+        (
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+        ),
+    )
+    # Each entry is a two-letter status, a space, then the path.
+    return tuple(RepoRelativePath(entry[3:]) for entry in output.split("\0") if entry)
+
+
+def read_file_at_revision(repo_root: Path, revision: str, path: RepoRelativePath) -> str | None:
+    """The text of ``path`` in the tree of ``revision``, or None when that tree has no such file."""
+    listing = _run_git(repo_root, ("ls-tree", "--name-only", revision, "--", path))
+    if not listing.strip():
+        return None
+    return _run_git(repo_root, ("show", f"{revision}:{path}"))
+
+
 def with_diff_against_base(
     scope: CreationScope, repo_root: Path, diff_base: str, diff_ref: str
 ) -> CreationScope:
@@ -421,22 +521,11 @@ def with_diff_against_base(
     A ref other than HEAD lets one tree answer for a range that does not end at it, such as
     what a merge commit's first parent changed since the fork point.
     """
-    base_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_base}^{{commit}}")).strip())
-    ref_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_ref}^{{commit}}")).strip())
-    # A NUL-separated listing with quoting off is the only form every filename survives: git
-    # otherwise renders a non-ASCII name as an escaped, double-quoted string, which is not the
-    # path it changed, and a name with a newline in it would split across lines.
-    diff_output = _run_git(
-        repo_root,
-        ("-c", "core.quotePath=false", "diff", "--name-only", "-z", f"{base_sha}...{ref_sha}"),
-    )
-    changed_files = tuple(
-        RepoRelativePath(entry) for entry in diff_output.split("\0") if entry
-    )
+    changed = list_changed_files(repo_root, diff_base, diff_ref)
     exclude_spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, scope.exclude)
     inside_footprint: list[RepoRelativePath] = []
     outside_footprint: list[RepoRelativePath] = []
-    for changed_file in changed_files:
+    for changed_file in changed.files:
         if exclude_spec.match_file(changed_file):
             continue
         if is_inside_footprint(changed_file, scope):
@@ -444,9 +533,9 @@ def with_diff_against_base(
         else:
             outside_footprint.append(changed_file)
     diff_summary = DiffSummary(
-        base=base_sha,
-        ref=ref_sha,
-        files=changed_files,
+        base=changed.base,
+        ref=changed.ref,
+        files=changed.files,
         inside_footprint=tuple(inside_footprint),
         outside_footprint=tuple(outside_footprint),
     )

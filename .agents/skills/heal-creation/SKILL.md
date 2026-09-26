@@ -64,8 +64,10 @@ fields (per `.agents/shared/references/worker-reporting.md`), `scope_file`
 (where the worker writes the creation's computed footprint at the start of its
 run -- you name the path, the worker creates the file), and `diff_base` (your
 `HEAD` at dispatch: the fix does not exist yet, so the worker's own commits are
-the whole diff). Both are for a skill or an app with an `app.toml`; omit them
-for a service or a pre-manifest app, which have no footprint. The body describes the failure and anchors the worker's search
+the whole diff). `scope_file` is for a skill or an app with an `app.toml`;
+omit it for a service or a pre-manifest app, which have no footprint.
+`diff_base` goes on every task: the worker's test gate selects its suites from
+what changed since it. The body describes the failure and anchors the worker's search
 with verbatim quotes (the user's request, the failing command or error, any tool
 output that exposed the misbehavior). Without anchors the worker scans the wrong
 region of your transcript.

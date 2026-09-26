@@ -80,8 +80,7 @@ supervisord program blocks that run it, in the files that declare them),
 drives it, a script, a doc), `context` (paths to read but never change),
 `conventions`, `exclude` (a hard denylist of globs), and `diff` (the branch's
 changed files, split into those inside the footprint and `outside_footprint`).
-Two consumers read it: the test selection in `type-app.md`, and the freshness
-check the lead runs before merging
+The freshness check the lead runs before merging reads it
 (`.agents/shared/references/harden-contention.md`). Regenerate it whenever the
 footprint moves under you -- when you register a `[[references]]` entry, or
 when you add a supervisord section -- and once more immediately before your
@@ -118,9 +117,9 @@ lead, merge exactly one level with `--no-ff`, destroy a merged sibling and stop
 a stuck one, and await it with `--timeout 60m`.
 
 - Each sibling's task file carries the same `operation` and `type` as yours plus
-  its boundary in prose; when your run carries a scope file, give the sibling its
-  own `scope_file` path beside its task file and your `diff_base`, since Step 1
-  fails loudly without them. Say in the body that it runs only its scope's tests and
+  its boundary in prose, and your `diff_base`; when your run carries a scope
+  file, also give the sibling its own `scope_file` path beside its task file,
+  since Step 1 fails loudly without them. Say in the body that it runs only its scope's tests and
   **skips the "Review gates" section below**, because you run that verification
   once on the merged result, and that a small out-of-scope edit is allowed but
   must be listed in its `done` report.
@@ -244,45 +243,97 @@ evicts is not hardened, no matter how well-tested its happy path is.
 ## Review gates
 
 1. Ensure all in-flight changes have settled and are committed
-2. Run the scoped test set below and fix what it flags with narrowly targeted
+2. Run the test gate below and fix what it flags with narrowly targeted
    changes
 
-### The scoped test set
+### The test gate
 
-Three parts, in order, **each its own `pytest` invocation** -- passing two of
-these path sets to one command makes `conftest` resolve to whichever it reaches
-first and dies during collection. A bare `uv run pytest` from the repo root is
-not one of them: it collects the whole monorepo -- on this workspace about 2,500
-tests and several minutes -- to check a change that usually touches a handful of
-files.
+The gate is whatever the change can reach, and a command prints it. From the
+repo root, after committing everything (the selector reads commits, like the
+scope file, and refuses to run while the working tree holds an uncommitted or
+untracked change, naming it):
 
-1. **The creation's own suite**, as your `type-<TYPE>.md` defines it.
+```bash
+uv run app-manifest select-tests --diff-base "$DIFF_BASE"
+```
 
-2. **The repo guards** -- the cross-cutting checks no creation owns: manifest
-   and registry consistency, template stacking, hook wiring, the meta-ratchets.
-   Run them whatever you touched:
+It prints shell lines, each under a comment naming the changed paths behind
+it. Run every line, in order, each as its own command: they include the
+frontend build the browser tests need, and passing two pytest roots to one
+invocation breaks collection. What it selects, and why, is in
+`system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
+changed packages' and skills' own suites with their ratchets, the suites of
+whatever consumes them, the tests paired with a changed script, the browser
+tests of an app that itself changed, and the frontend checks. Do not drop any
+line of it.
 
-   ```bash
-   uv run pytest system/*.py system/scripts
-   ```
+**A suite the selector left out.** The selector sees declared dependencies,
+imports, and test files that name a path; a coupling none of those shows is
+invisible to it. When you have a concrete reason to think a suite it left out
+can observe your change (it runs your script as a subprocess, calls your
+service over HTTP, reads a file your change writes), run that suite too, and
+add a `[[consumer]]` entry for it to
+`system/config/test_selection_overrides.toml` as part of your change, so the
+next change to that path selects it without anyone having to notice. When the
+path is built-in, name the entry under `Selector gaps:` (below).
 
-   A few hundred tests, well under a minute. This is what catches a change that
-   breaks a contract the rest of the tree depends on, which part 1 by
-   construction cannot see.
+**A regression the gate let through.** When your task fixes something an
+earlier change broke, and a test catches the break (one that already existed,
+or the one you add), check whether the selector picks that test for the
+earlier change:
 
-3. **The full suite, only when the change left the footprint.** Regenerate the
-   scope file, then read `diff.outside_footprint`. Empty means parts 1 and 2
-   cover the change. Non-empty means it reached code outside the creation, and
-   whatever depends on that code is in neither set:
+```bash
+uv run app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
+```
 
-   ```bash
-   jq -e '.diff.outside_footprint | length == 0' "$SCOPE_FILE" >/dev/null \
-       || echo "changed files outside the footprint -- run the full suite"
-   ```
+If the test's suite is not among the lines, add the `[[consumer]]` entry that
+would have selected it, the same way.
 
-A run that carries no scope file -- a pre-manifest app, a standalone service,
-the system interface, per "The scope file" above -- cannot make that check, so
-it runs parts 1 and 2 and then the full suite once.
+**An unclassified path.** When the output ends with an `# unclassified` block,
+each listed path is one the selector could not map, and the full root suite is
+among the lines in its place: run the lines as printed. For a listed path the
+tree still holds, that run fails `test_every_tracked_path_is_classified`, which
+lists every tracked path the mapping misses (these, and any the tree already
+carried), and a mapping for each is the fix. Decide which suites can actually
+observe a change to that path, record it in
+`system/config/test_selection_overrides.toml` (a `[[consumer]]` entry; an empty
+`suites` when no suite beyond the always-run set can observe it) as part of
+your change, commit it, and re-run `select-tests` to confirm the path is
+classified, so the next change to it selects those suites instead of the full
+root suite. When the path is built-in (AGENTS.md, "Updates", has the test),
+name it in your `done` report under `Selector gaps:`, one line each with the
+mapping you added (a consumer entry from the paragraphs above goes there too):
+your lead includes it in its report of built-in issues for the pass.
+
+**A command that dies from a signal.** Exit status 137 or 143, or `Killed`
+with no failure output, is not a test failure until the shed ledger says it is
+not a shed. Note the time before each command (`date -u
++%Y-%m-%dT%H:%M:%S`), and on a signal death look for sheds since then, with
+the time you noted written into the lookup (a shell variable does not survive
+from one command to the next):
+
+```bash
+STARTED_AT=2026-09-24T11:00:00  # the time you noted before the command
+jq -c --arg since "$STARTED_AT" \
+    'select(.type == "process_shed" and .timestamp >= $since)' \
+    /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
+```
+
+A record whose `pid` or `comm` is the command or one of its children (pytest,
+an xdist worker, node, a browser) means the command was shed for memory
+pressure: that is a shed, never a failure to fix in the code. A shed child can
+also surface as ordinary test errors (a browser that vanished mid-test), so
+run the same check when failures look unrelated to your change. Then judge
+whether a rerun would be shed again, from the ledger (are shed records still
+arriving, for processes other than yours?) and from `/proc/meminfo` (is
+`MemAvailable` recovering since the shed, or still falling?). If things are
+settling, rerun the shed command. If they are not, or the rerun is shed too,
+ask your lead with a `question` gate (`worker-reporting.md`) naming the
+command, the ledger records, and the free memory you saw; your lead frees
+memory with the user, and answers when you can rerun.
+
+Memory pressure is never a reason to skip a command of the gate, or to report
+`done` without it.
 
 If your own task file says your lead runs this verification on the merged
 result -- the scoped-sibling case above -- run your own scope's tests and skip

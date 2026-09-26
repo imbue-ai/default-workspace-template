@@ -5,7 +5,8 @@
   "type": "module",
   "description": "The workspace frontends' shared library: the design system, the base helpers, and the browser-side contract modules (source only; each app's build compiles it).",
   "scripts": {
-    "lint": "tsc --noEmit && eslint src/",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
     "format": "prettier --write 'src/**/*.{ts,css}' '*.ts'",
     "format:check": "prettier --check 'src/**/*.{ts,css}' '*.ts'",
     "test": "vitest run"

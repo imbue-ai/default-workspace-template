@@ -121,6 +121,7 @@ report with this body plus an "Approve and save? (yes / no with notes)" prompt:
   exit-code deltas a consumer or surface would need to adapt to>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
+- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
 ```
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
@@ -135,6 +136,7 @@ the two footprint lines from `harden-creation.md`:
 Committed on branch `<branch-name>`. Ready to merge.
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
+- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
 ```
 
 ## If you need to give up

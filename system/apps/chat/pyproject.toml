@@ -83,6 +83,11 @@ addopts = [
   "--durations=20",
   "--timeout=10",
   "--timeout-method=signal",
+  # The `release` tests (the browser tests, and the ones that drive a real claude) are
+  # skipped by default. A later `-m` on the command line replaces this one: `-m ''`
+  # runs everything (as CI does), and `-m release` runs only the release tests. A run of
+  # only some of the tests needs `--no-cov`, or it fails the coverage floor below.
+  "-m", "not release",
 ]
 
 [tool.coverage.run]

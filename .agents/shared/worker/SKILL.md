@@ -26,14 +26,15 @@ eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
 This sets `TASK_FILE`, `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`,
-`OPERATION`, and `TYPE`, plus `SCOPE_FILE` and `DIFF_BASE` for a creation that
-has a footprint.
-Fail loudly if `OPERATION` or `TYPE` is unset -- the lead must supply both. When
-`TYPE` is `skill`, or `app` and the app has an `app.toml`, also fail loudly if
-`SCOPE_FILE` or `DIFF_BASE` is unset: `SCOPE_FILE` is where you write the
-creation's footprint, and `DIFF_BASE` is the commit that footprint's diff is
-taken from (`harden-creation.md` has the command). A pre-manifest app, a
-`service`, or a `system-interface` run carries neither.
+`OPERATION`, `TYPE`, and `DIFF_BASE`, plus `SCOPE_FILE` for a creation that has
+a footprint.
+Fail loudly if `OPERATION`, `TYPE`, or `DIFF_BASE` is unset -- the lead must
+supply all three. `DIFF_BASE` is the commit before the work being hardened: the
+test gate selects its suites from what changed since it, and a footprint's diff
+is taken from it (`harden-creation.md` has both commands). When `TYPE` is
+`skill`, or `app` and the app has an `app.toml`, also fail loudly if
+`SCOPE_FILE` is unset: it is where you write the creation's footprint. A
+pre-manifest app, a `service`, or a `system-interface` run carries none.
 
 - `OPERATION` is one of `crystallize`, `update`, `heal`.
 - `TYPE` is one of `skill`, `app`, `service`, `system-interface`.

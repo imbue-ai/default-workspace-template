@@ -255,6 +255,76 @@ same files. `paths` is the single source of truth for the layout, and -- like
 every module here -- is stdlib-only, so the hooks (which run under a plain
 `python3`, not `uv`) can import it via a `sys.path` insert.
 
+## Memory candidates
+
+`system/services/oom_priority/bin/memory_candidates.py` lists what could be
+stopped to free memory, next to how much memory is free. It only reads: it
+never stops, kills, or re-tags anything.
+
+```bash
+python3 system/services/oom_priority/bin/memory_candidates.py          # a table
+python3 system/services/oom_priority/bin/memory_candidates.py --json   # the same report as JSON
+```
+
+It lists:
+
+- **Free memory**, from `/proc/meminfo`: `MemAvailable`, or `MemFree` when
+  there is no `MemAvailable`. The output names the field it read. Under gVisor
+  the two are equal.
+- **Idle chats and workers**, from `mngr list --provider local`, rendered
+  through a `--format` template (the columns are `MNGR_LIST_FIELDS`). This is
+  how `system/scripts/collect_bug_report_diagnostics.py` lists agents too:
+  inside a workspace container the template path answers from local state
+  where `--format json` has failed, and without `--provider local` mngr probes
+  every cloud provider in the settings, none of which can answer from in there.
+  A candidate:
+  - is a chat (`user_created=true`) or a worker (`agent_created=true`). The
+    primary services agent and any agent with neither label (an automation, for
+    example) are never listed;
+  - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
+    a `STOPPED` or `DONE` agent holds no memory to free;
+  - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
+    activity is the latest of mngr's `user_activity_time`, `agent_activity_time`
+    and `start_time`. mngr's own `idle_seconds` is not used, because it also
+    counts the host's SSH activity.
+
+  Its memory is the summed RSS of its process trees. The trees are rooted at the
+  `pid` mngr reports and at every live pid the agent-pid registry holds for it
+  (codex registers two).
+- **Browsers no window shows**, from the browser service's `GET /browsers`. A
+  candidate is a `running` browser that no window names, according to the
+  shell's `GET /api/desktops`. Its memory is the summed RSS of the Chromium
+  processes on its profile and their children.
+
+The browser service stops a browser on its own once a window has shown it and
+none shows it any more (`system/apps/browser/README.md`). So the browsers this
+lists are ones no window ever showed, such as an agent's browser opened while
+no client was connected.
+
+The sums count shared pages once per process, so they overstate what stopping
+frees. Read them as a ranking.
+
+Each source is read on its own. When `mngr list`, the browser service or the
+shell cannot be read, that section says so, and its candidates are `null` in
+JSON: "unknown", not "none". The other sections are still listed, and the
+command still exits 0.
+
+A lead runs it when one of its agents reports a shed. It shows the user the
+list and the free memory, and stops only what the user approves:
+
+- **A chat**: `mngr stop <name>`, the same command the chat app's own stop
+  runs. The chat restarts on its next message. mngr's send starts a `STOPPED`
+  or `DONE` agent before it delivers: `send_message_to_agents` with
+  `is_start_desired=True`, which the chat app passes from
+  `MngrMessenger.send_to_agent` in `system/apps/chat/imbue/chat/agent_discovery.py`.
+  For codex, which reports "not ready" rather than stopped, `_revive_and_retry_send`
+  in `system/apps/chat/imbue/chat/server.py` starts the agent and retries.
+- **A worker**: `create_worker.py stop --name <name>` (the `launch-task`
+  skill). It archives the worker, so dead-worker recovery does not take it for
+  a crash and restart it. A plain `mngr stop` would look like a crash.
+- **A browser**: `POST /browsers/<name>/stop` on the browser service. This
+  keeps the browser's profile and tabs, and its next window starts it again.
+
 ## Protection is soft
 
 Two things here are best-effort, not hard guarantees:

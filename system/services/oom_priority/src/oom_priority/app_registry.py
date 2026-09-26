@@ -1,12 +1,14 @@
-"""The app registry as the memory backstop reads it: each registered app's
-``priority`` band name, keyed by the supervisord program that runs it.
+"""The app registry as this package reads it: each registered app's
+``priority`` band name, keyed by the supervisord program that runs it (the
+memory backstop), and an app's ``url`` (the memory candidates command, which
+finds the browser service there).
 
 ``data/.state/apps.toml`` is written by ``system/scripts/forward_port.py``,
 which copies ``priority`` and ``program`` from the app's manifest
 (``system/apps/<package>/app.toml``; see ``system/libs/app_manifest``). Only
-those two keys matter here, so this is a deliberately narrow, stdlib-only
+those few keys matter here, so this is a deliberately narrow, stdlib-only
 reader rather than the library's full row model: like every module in this
-package it is imported under a plain ``python3`` (the backstop event listener).
+package it is imported under a plain ``python3``.
 """
 
 import logging
@@ -35,29 +37,44 @@ def registry_path() -> Path:
     return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 
 
-def read_priority_by_program(path: Path) -> dict[str, str]:
-    """The ``priority`` of every registry row that names a ``program``, by that program.
+def _read_app_rows(path: Path) -> list[dict]:
+    """The registry's ``[[apps]]`` rows.
 
     A missing registry is empty (nothing has registered yet). An unreadable or
-    unparseable one is logged as a
-    warning and also reads as empty, so a corrupt file demotes an app to the
-    by-name and user-service fallbacks rather than taking the listener down.
+    unparseable one is logged as a warning and also reads as empty.
     """
     if not path.exists():
-        return {}
+        return []
     try:
         doc = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
         _logger.warning("Skipped the app registry at %s: it cannot be read (%s)", path, error)
-        return {}
+        return []
     apps = doc.get("apps", [])
     if not isinstance(apps, list):
         _logger.warning("Skipped the app registry at %s: it has no [[apps]] array", path)
-        return {}
+        return []
+    return [app for app in apps if isinstance(app, dict)]
+
+
+def read_app_url(path: Path, app_name: str) -> str | None:
+    """The ``url`` the registry row named ``app_name`` serves at, or None when no row has one."""
+    for app in _read_app_rows(path):
+        url = app.get("url")
+        if app.get("name") == app_name and isinstance(url, str) and url:
+            return url.rstrip("/")
+    return None
+
+
+def read_priority_by_program(path: Path) -> dict[str, str]:
+    """The ``priority`` of every registry row that names a ``program``, by that program.
+
+    A missing, unreadable or unparseable registry reads as empty, so a corrupt
+    file demotes an app to the by-name and user-service fallbacks rather than
+    taking the listener down.
+    """
     priority_by_program: dict[str, str] = {}
-    for app in apps:
-        if not isinstance(app, dict):
-            continue
+    for app in _read_app_rows(path):
         program = app.get("program")
         if not isinstance(program, str) or not program:
             continue

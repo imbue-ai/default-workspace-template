@@ -347,8 +347,14 @@ uv run chat-app --no-register
 
 # Tests
 cd system/apps/chat
-uv run pytest
+uv run pytest           # skips the release tests (browser, real claude)
+uv run pytest -m ''     # everything, as CI runs it
+uv run pytest --no-cov -m release imbue/chat/test_e2e.py   # just the browser tests
 ```
+
+The suite fails any run that covers less than 75% of the app, so a run of only
+some of its tests needs `--no-cov`. A browser test file named without `-m ''`
+or `-m release` runs nothing: pytest reports "N deselected".
 
 `--no-register` boots the app without re-pointing the live chat row in the
 registry, for a throwaway boot on another port (`CHAT_PORT`).

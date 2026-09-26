@@ -7,8 +7,11 @@ from click.testing import Result
 from app_manifest.cli import app_manifest_cli
 from app_manifest.testing import APP_ICON_MARKUP
 from app_manifest.testing import build_news_workspace
+from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
 from app_manifest.testing import init_git_repository
+from app_manifest.testing import run_git
+from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 
@@ -60,9 +63,6 @@ def test_validate_manifest_checks_the_references_only_when_given_a_repo_root(
     assert without_root.exit_code == 0, without_root.output
     assert with_root.exit_code != 0
     assert "docs/system/news.md" in with_root.output
-
-
-# --- footprint and references ---------------------------------------------------
 
 
 def test_footprint_writes_the_scope_file_for_an_app_to_stdout(tmp_path: Path) -> None:
@@ -344,3 +344,148 @@ def test_references_still_answers_when_another_apps_manifest_cannot_load(tmp_pat
     assert [json.loads(line)["app"] for line in result.output.splitlines() if line.strip()] == [
         "news"
     ]
+
+
+def _branch_with_changes(repo_root: Path, changes: dict[str, str]) -> None:
+    """Put the selection workspace on a branch off main that changes the given files."""
+    run_git(repo_root, ("checkout", "-q", "-b", "work"))
+    for relative_path, content in changes.items():
+        write_repo_file(repo_root, relative_path, content)
+    commit_everything(repo_root, "work")
+
+
+def test_select_tests_over_explicit_paths_matches_the_same_set_read_from_a_diff(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    base_lock = selection_lock("2.0")
+    write_repo_file(tmp_path, "uv.lock", base_lock)
+    commit_everything(tmp_path, "lock")
+    changes = {
+        "system/libs/midlib/src/midlib/core.py": "VALUE = 2\n",
+        "system/scripts/forward_port.py": "PORT = 2\n",
+        "uv.lock": selection_lock("2.1"),
+        "README.md": "# changed\n",
+    }
+    _branch_with_changes(tmp_path, changes)
+
+    from_diff = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
+    path_arguments = [argument for path in changes for argument in ("--path", path)]
+    from_paths = _run_cli(
+        ["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main", *path_arguments]
+    )
+
+    assert from_diff.exit_code == 0, from_diff.output
+    assert from_paths.exit_code == 0, from_paths.output
+    assert from_paths.output == from_diff.output
+    # The upgraded lock entry reached corelib's dependents through the lockfile, not a guess.
+    assert "uv run pytest system/libs/corelib" in from_diff.output.splitlines()
+
+
+def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    run_git(tmp_path, ("checkout", "-q", "-b", "work"))
+    run_git(
+        tmp_path,
+        ("mv", "system/libs/corelib/src/corelib/core.py", "system/libs/midlib/src/midlib/moved.py"),
+    )
+    commit_everything(tmp_path, "move corelib's core into midlib")
+
+    result = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    # corelib lost the module its consumers import, so it and they run, not only midlib's side.
+    assert "uv run pytest system/libs/corelib" in lines
+    assert "uv run pytest .agents/skills/refresh" in lines
+
+
+def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_changes(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    _branch_with_changes(tmp_path, {"system/scripts/forward_port.py": "PORT = 2\n"})
+    write_repo_file(tmp_path, ".git/info/exclude", "*.log\n")
+    write_repo_file(tmp_path, "system/libs/midlib/run.log", "ignored\n")
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/core.py", "VALUE = 3\n")
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/extra.py", "EXTRA = 1\n")
+
+    dirty = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
+    commit_everything(tmp_path, "the rest of the work")
+    committed = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
+
+    assert dirty.exit_code != 0
+    assert "system/libs/midlib/src/midlib/core.py" in dirty.output
+    assert "system/libs/midlib/src/midlib/extra.py" in dirty.output
+    assert "run.log" not in dirty.output
+    assert committed.exit_code == 0, committed.output
+    assert "uv run pytest system/libs/midlib" in committed.output.splitlines()
+
+
+def test_select_tests_over_a_diff_to_an_earlier_commit_ignores_the_working_tree(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    _branch_with_changes(tmp_path, {"system/scripts/forward_port.py": "PORT = 2\n"})
+    earlier_commit = run_git(tmp_path, ("rev-parse", "HEAD")).strip()
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/core.py", "VALUE = 3\n")
+    commit_everything(tmp_path, "a later change")
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/extra.py", "EXTRA = 1\n")
+
+    result = _run_cli(
+        [
+            "select-tests",
+            "--repo-root",
+            str(tmp_path),
+            "--diff-base",
+            f"{earlier_commit}^",
+            "--diff-ref",
+            earlier_commit,
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "uv run pytest system/scripts/forward_port_test.py" in lines
+    assert "uv run pytest system/libs/midlib" not in lines
+
+
+def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> None:
+    build_selection_workspace(tmp_path)
+
+    result = _run_cli(
+        [
+            "select-tests",
+            "--repo-root",
+            str(tmp_path),
+            "--path",
+            "system/scripts/forward_port.py",
+            "--path",
+            "unknown.bin",
+            "--format",
+            "json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    selection = json.loads(result.output)
+    assert selection["unclassified"] == ["unknown.bin"]
+    assert selection["is_full_root"] is True
+    assert [command["argv"] for command in selection["commands"]] == [["uv", "run", "pytest"]]
+    assert {entry["path"]: entry["classes"] for entry in selection["paths"]} == {
+        "system/scripts/forward_port.py": ["paired_script"],
+        "unknown.bin": ["unclassified"],
+    }
+
+
+def test_select_tests_needs_a_diff_or_paths(tmp_path: Path) -> None:
+    build_selection_workspace(tmp_path)
+
+    neither = _run_cli(["select-tests", "--repo-root", str(tmp_path)])
+    ref_without_base = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-ref", "HEAD"])
+
+    assert neither.exit_code != 0
+    assert "--diff-base" in neither.output
+    assert ref_without_base.exit_code != 0
