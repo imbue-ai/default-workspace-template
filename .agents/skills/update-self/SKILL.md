@@ -411,8 +411,9 @@ review gates rule-driven and the report evidence-bearing. It must show which
 branch of the 4a and 4b rules applied (the footprint evidence, and each
 validation item's condition and whether it held), and either show the
 clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
-user-created code, no worker-authored in-branch edits beyond a retry's
-rollback revert, shown by an empty diff against the landed merge) or carry
+user-created code, no worker-authored in-branch edits beyond Step 1's
+rollback reverts as git made them or with a `both added` file taken at the
+target's version, shown by an empty diff against the landed merge) or carry
 the gate run's own evidence (fix commits kept or reverted, or a clean run,
 plus architecture-gate verdicts); a side-picked conflict must carry the
 discarded-side accounting. A report missing any of this -- including one that
@@ -494,9 +495,9 @@ Exit codes:
   with the kept pre-apply copies under `data/.state/update-apply/snapshots/`.
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
   pass, another apply in flight, this merge already landed and rolled back, or
-  a re-merge of a rolled-back target that does not revert the rollback commit
-  first). Re-dispatch a fresh worker pass off the current `HEAD`; the refusal
-  names the commit to revert.
+  a merge that does not first revert an earlier update's rollback commit).
+  Re-dispatch a fresh worker pass off the current `HEAD`; the refusal names the
+  commits to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it
