@@ -260,7 +260,9 @@ _ROLLBACK_SUBJECT = re.compile(
 )
 
 # The line `git revert` puts in every revert commit's body.
-_REVERTS_COMMIT = re.compile(r"^This reverts commit (?P<sha>[0-9a-f]{40})\b", re.MULTILINE)
+_REVERTS_COMMIT = re.compile(
+    r"^This reverts commit (?P<sha>[0-9a-f]{40})\b", re.MULTILINE
+)
 
 
 def _rolled_back_an_update_self_landing(
@@ -278,7 +280,8 @@ def _rolled_back_an_update_self_landing(
         ["log", "--first-parent", "--format=%s", f"{restore_to}..{rollback}^"],
     )
     return any(
-        subject.startswith(_UPDATE_SELF_SUBJECT_PREFIX) for subject in undone.splitlines()
+        subject.startswith(_UPDATE_SELF_SUBJECT_PREFIX)
+        for subject in undone.splitlines()
     )
 
 
