@@ -9,9 +9,10 @@ The port pre-flight is checked against the same kind of workspace: every program
 declares its port in its own drop-in now, so a pre-flight that read only the main
 config would hand a new app a port another program already holds. Its port
 choice -- the auto pick and the refusal of a requested port -- runs in-process
-with a bind probe that reports nothing bound, because the real probe asks this
-machine, and a live workspace already has apps listening across the auto-pick
-range. One test runs the real script to check the pick reaches the files it
+with a bind probe the test supplies, because the real probe asks this machine,
+and a live workspace already has apps listening across the auto-pick range. The
+supplied probe reports nothing bound, except in the test of the probe itself.
+One test runs the real script to check the pick reaches the files it
 writes, asserting only what holds whatever this machine is listening on.
 """
 
