@@ -2350,6 +2350,10 @@ def test_a_merge_that_reverts_the_rollback_first_is_applied(
 
     assert code == 0
     assert runner.ran("git", "merge")
+    # The worker's revert is on the merge ref, not yet on HEAD.
+    assert [
+        argv[-1] for argv in runner.argvs_starting("git", "log", "--topo-order")
+    ] == [f"minds-v0.4.2..{_MERGE_REF}"]
 
 
 class _UpdateHistory:
