@@ -4,6 +4,7 @@ import queue
 import sys
 import time
 from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,22 @@ def _running_browser(browser_id: str) -> bsession.LiveBrowser:
     browser = bsession.LiveBrowser(browser_id=browser_id)
     browser._lifecycle = "running"
     return browser
+
+
+def _running_browser_with_tabs(
+    urls: Sequence[str], shown_target_id: str | None, active_target_id: str
+) -> tuple[bsession.LiveBrowser, TabClosingCdpClient]:
+    """A running ``browser-1`` on a tab-closing client showing ``urls`` as tabs ``t1``, ``t2``, ...,
+    with ``shown_target_id`` the tab the pages report in front and ``active_target_id`` the
+    fleet's cached active tab."""
+    browser = _running_browser("browser-1")
+    cdp = TabClosingCdpClient(
+        [{"targetId": f"t{index}", "url": url} for index, url in enumerate(urls, start=1)],
+        shown_target_id=shown_target_id,
+    )
+    browser._cdp = cdp
+    browser._active_target_id = active_target_id
+    return browser, cdp
 
 
 def _pop_json(cast_queue: "queue.Queue[str | None]") -> dict[str, Any]:
@@ -2100,13 +2117,9 @@ def test_paste_into_active_tab_goes_to_the_tab_in_front_when_the_human_switched_
 
 
 def test_close_active_tab_closes_the_shown_tab_and_foregrounds_the_last_remaining_one() -> None:
-    browser = _running_browser("browser-1")
-    cdp = TabClosingCdpClient(
-        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}],
-        shown_target_id="t1",
+    browser, cdp = _running_browser_with_tabs(
+        ["https://one.example", "https://two.example"], shown_target_id="t1", active_target_id="t1"
     )
-    browser._cdp = cdp
-    browser._active_target_id = "t1"
 
     asyncio.run(browser.close_active_tab())
 
@@ -2117,17 +2130,11 @@ def test_close_active_tab_closes_the_shown_tab_and_foregrounds_the_last_remainin
 
 
 def test_close_active_tab_closes_the_tab_in_front_rather_than_the_fleets_stale_record_of_it() -> None:
-    browser = _running_browser("browser-1")
-    cdp = TabClosingCdpClient(
-        [
-            {"targetId": "t1", "url": "https://one.example"},
-            {"targetId": "t2", "url": "https://two.example"},
-            {"targetId": "t3", "url": "https://three.example"},
-        ],
+    browser, cdp = _running_browser_with_tabs(
+        ["https://one.example", "https://two.example", "https://three.example"],
         shown_target_id="t2",
+        active_target_id="t1",
     )
-    browser._cdp = cdp
-    browser._active_target_id = "t1"
 
     asyncio.run(browser.close_active_tab())
 
@@ -2136,13 +2143,9 @@ def test_close_active_tab_closes_the_tab_in_front_rather_than_the_fleets_stale_r
 
 
 def test_close_active_tab_falls_back_to_the_recorded_tab_when_no_page_answers() -> None:
-    browser = _running_browser("browser-1")
-    cdp = TabClosingCdpClient(
-        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}],
-        shown_target_id=None,
+    browser, cdp = _running_browser_with_tabs(
+        ["https://one.example", "https://two.example"], shown_target_id=None, active_target_id="t2"
     )
-    browser._cdp = cdp
-    browser._active_target_id = "t2"
 
     asyncio.run(browser.close_active_tab())
 
@@ -2152,10 +2155,7 @@ def test_close_active_tab_falls_back_to_the_recorded_tab_when_no_page_answers() 
 def test_close_active_tab_replaces_the_last_tab_so_the_window_stays_open() -> None:
     # Chromium closes its window with its last tab, and the window-bound sweep would then stop
     # the browser: the last tab is swapped for a fresh home page instead.
-    browser = _running_browser("browser-1")
-    cdp = TabClosingCdpClient([{"targetId": "t1", "url": "https://one.example"}], shown_target_id="t1")
-    browser._cdp = cdp
-    browser._active_target_id = "t1"
+    browser, cdp = _running_browser_with_tabs(["https://one.example"], shown_target_id="t1", active_target_id="t1")
 
     asyncio.run(browser.close_active_tab())
 
