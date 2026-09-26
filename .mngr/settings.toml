@@ -638,6 +638,11 @@ extra_provision_command__extend = [
 provider = "docker"
 target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
+# While pyproject.toml pins mngr from the private mngr-internal repo, every docker
+# build_arg here carries a `--secret=id=mngr_internal_git_token,...` element that
+# hands the build its credential; system/scripts/set_mngr_pin.py adds it with
+# such a pin and removes it with a public one, because the flag needs BuildKit
+# (docker buildx), which a public pin must not require. Never edit it by hand.
 build_arg__extend = ["--file=system/Dockerfile", "--secret=id=mngr_internal_git_token,env=MNGR_INTERNAL_GIT_TOKEN", "."]
 # Security hardening for `docker run`: block privilege escalation via setuid
 # binaries. `--cap-add=SYS_PTRACE` was removed deliberately -- gVisor is the
@@ -718,6 +723,10 @@ extra_provision_command__extend = [
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
+    # The creator uploads a credential for a private mngr pin to this path before
+    # the commands above run; build_workspace.sh is its last reader, so it goes
+    # here, before anything else runs. A no-op for a public pin.
+    "rm -f /run/secrets/mngr_internal_git_token",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
@@ -727,10 +736,6 @@ extra_provision_command__extend = [
     # this runs `mngr start system-services` in the VM (mngr is installed by
     # build_workspace.sh above).
     "bash /home/user/workspace/system/scripts/minds_lima_autostart.sh",
-    # The creator uploads a credential for a private mngr pin to this path before
-    # the commands above run (build_workspace.sh reads it); drop it now that the
-    # build is done so it never outlives provisioning. A no-op for a public pin.
-    "rm -f /run/secrets/mngr_internal_git_token",
 ]
 
 # template for the Modal sandbox provider (the "modal" compute provider).
@@ -774,11 +779,11 @@ extra_provision_command__extend = [
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
+    # Same credential cleanup as the lima template, at the same point.
+    "rm -f /run/secrets/mngr_internal_git_token",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
-    # Same credential cleanup as the lima template.
-    "rm -f /run/secrets/mngr_internal_git_token",
 ]
 
 # Short-timeout overlay for the workspaces an eval run creates. Always stacked on top

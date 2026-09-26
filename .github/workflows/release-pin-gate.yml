@@ -20,8 +20,7 @@ jobs:
       - name: The tagged tree pins mngr from the public mirror
         run: |
           set -euo pipefail
-          kind="$(python3 system/scripts/list_mngr_plugins.py --kind)"
-          if [ "$kind" != "public" ]; then
+          if ! python3 system/scripts/set_mngr_pin.py --require-public; then
             echo "::error::${GITHUB_REF_NAME} pins mngr from mngr-internal, which no user's machine can fetch; cut the next version from a public pin (just dwt-mngr-pin in the mngr repo)"
             exit 1
           fi

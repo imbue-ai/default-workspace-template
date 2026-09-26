@@ -21,8 +21,10 @@ them carry the same commit; `uv` refuses to mix commits across packages from one
 repo), relocks, and commits. A developer with a checkout of both repos can also
 pin a template branch to an unmerged mngr commit on the private mngr-internal repo
 (`just dwt-mngr-pin-internal`) to build the pair before the mngr side lands; that
-needs a credential at build time and never ships, and is not something an agent in
-a workspace does.
+needs a credential at build time, and before the template branch merges the pin
+moves to a public export of the mngr branch (`just dwt-mngr-pin-export`), since
+`main` never carries a private pin. None of that is something an agent in a
+workspace does.
 
 A defect found in mngr is different from a change the template's own work needs:
 it goes in the report POST in `.agents/shared/references/report-built-in-issues.md`,

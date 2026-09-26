@@ -24,10 +24,10 @@ fi
 
 REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 
-# The lockfile's mngr packages may come from the private mngr repo; use the
-# credential delivered to this build, if any (see _mngr_git_auth.sh).
+# The lockfile's mngr packages may come from the private mngr repo; the uv sync
+# below runs with the credential delivered to this build, if any, and nothing
+# else here does (see _mngr_git_auth.sh).
 . "$(dirname "$0")/_mngr_git_auth.sh"
-mngr_git_auth_export
 
 # Python and JavaScript dependency installs are independent and could run in
 # parallel; kept sequential for now (clarity), structured so parallelizing is a
@@ -37,7 +37,7 @@ mngr_git_auth_export
 # lockfile, skipping workspace + local path packages (build_workspace.sh
 # registers those once the full source is present).
 cd "$REPO_ROOT"
-uv sync --all-packages --frozen --no-install-workspace --no-install-local
+mngr_git_auth_run uv sync --all-packages --frozen --no-install-workspace --no-install-local
 
 # Frontend npm dependencies (exact, from the lockfile): one npm workspace for every
 # frontend (system/package.json lists the members) and their shared library.

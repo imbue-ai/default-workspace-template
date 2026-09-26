@@ -18,11 +18,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ASSETS_DIR="$REPO_ROOT/system/vendor/mngr-assets"
 
-# The pin may name the private mngr repo; use the credential delivered to this
-# build, if any (see _mngr_git_auth.sh). Run by hand, git's own credential
-# helper applies as before.
+# The pin may name the private mngr repo; the fetch below runs with the credential
+# delivered to this build, if any (see _mngr_git_auth.sh). Run by hand, git's own
+# credential helper applies as before.
 . "$REPO_ROOT/system/scripts/_mngr_git_auth.sh"
-mngr_git_auth_export
 ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
     style_guide.md
@@ -40,7 +39,7 @@ trap 'rm -rf "$source_tree"' EXIT
 git -C "$source_tree" init -q
 git -C "$source_tree" remote add origin "$GIT_URL"
 git -C "$source_tree" sparse-checkout set --no-cone "${ASSET_PATHS[@]}"
-git -C "$source_tree" fetch -q --depth=1 --filter=blob:none origin "$REV"
+mngr_git_auth_run git -C "$source_tree" fetch -q --depth=1 --filter=blob:none origin "$REV"
 git -C "$source_tree" checkout -q FETCH_HEAD
 
 staging="$ASSETS_DIR.tmp"

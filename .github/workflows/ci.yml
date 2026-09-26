@@ -54,6 +54,20 @@ jobs:
       - name: Check changelog entries
         run: python system/scripts/check_changelog_entries.py
 
+  # The mngr pin must name the public mirror before a branch merges: a private
+  # pin builds only with a credential, which no user's machine and no CI here
+  # holds (docs/system/workspace-internals.md). Its own job so main's branch
+  # protection can require exactly this check; the same script also refuses a
+  # tree whose BuildKit lines disagree with the pin.
+  pin-is-public:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: The mngr pin names the public mirror and the tree agrees with it
+        run: python3 system/scripts/set_mngr_pin.py --require-public
+
   test:
     runs-on: ubuntu-latest
 
@@ -75,14 +89,7 @@ jobs:
       # deliberately holds no credential for it, so every step below that resolves
       # the pin would fail with git's own auth error. Say why up front instead.
       - name: Refuse a private mngr pin (this CI has no credential for it, by design)
-        run: |
-          set -euo pipefail
-          kind="$(python3 system/scripts/list_mngr_plugins.py --kind)"
-          if [ "$kind" = "internal" ]; then
-            echo "::error::the template pins mngr from mngr-internal; this repo's CI has no credential for it by design, so its tests stay red until the pin is rewritten to the public mirror (just dwt-mngr-pin in the mngr repo)"
-            exit 1
-          fi
-          echo "mngr pin kind: $kind"
+        run: python3 system/scripts/set_mngr_pin.py --require-public
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

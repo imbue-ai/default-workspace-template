@@ -91,12 +91,14 @@ COPY system/apps/getting_started/frontend/package.json /home/user/workspace/syst
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 # Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).
 #
-# The mngr packages in the lockfile may come from the private mngr repo, in which
-# case the creator hands the build a token as the BuildKit secret
-# `mngr_internal_git_token` (see .mngr/settings.toml's build_arg). The mount is
-# optional: a public pin builds with no secret at all, and an unset creator-side
-# env var mounts an empty file, which the auth helper treats as absent. The
-# secret never lands in a layer.
+# While pyproject.toml pins mngr from the private mngr-internal repo, this RUN
+# and the workspace build below carry a `--mount=type=secret` of the credential
+# the creator hands the build (`mngr_internal_git_token`, see the build_arg in
+# .mngr/settings.toml); system/scripts/set_mngr_pin.py adds the mount with such
+# a pin and removes it with a public one, because a mount needs BuildKit, which
+# a public pin must not require. Never edit those lines by hand. The mount is
+# optional (an unset creator-side env var mounts an empty file, which the auth
+# helper treats as absent), and the secret never lands in a layer.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
 COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
 RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
@@ -108,8 +110,8 @@ RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
 COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.
-# Same optional secret mount as the dependency install above: the tool installs
-# fetch mngr from the pin.
+# Same private-pin secret mount as the dependency install above: the tool
+# installs fetch mngr from the pin.
 RUN --mount=type=secret,id=mngr_internal_git_token,required=false \
     bash /home/user/workspace/system/scripts/build_workspace.sh
 
