@@ -287,7 +287,7 @@ first one. Fast mode is a per-chat setting with three modes
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
 (fast throughout). A new chat starts in the workspace's default mode
 (`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
-at `data/.apps/chat/settings.json`; auto with a limit of 5 unless changed), and
+at `data/.apps/chat/settings.json`; auto with a limit of 2 unless changed), and
 a chat whose mode calls for it launches through the `fast` create template, a
 handoff's successor included. The model picker's fast row states the chat's
 mode and opens a submenu where the mode, auto's turn limit and the default for

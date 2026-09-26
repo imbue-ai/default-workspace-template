@@ -15,4 +15,4 @@ class UnknownBrowserError(BrowserFleetError):
 
 
 class BrowserNotDrivableError(BrowserFleetError):
-    """The browser cannot be stopped or started: Chromium is still launching, it crashed, or the fleet has no connection to it."""
+    """The browser cannot be driven right now (stopped, started, or its tab closed): Chromium is still launching, it crashed, it is not running, or the fleet has no connection to it."""

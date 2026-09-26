@@ -10,21 +10,24 @@
   html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; }
   #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
 
-  /* Persistent status bar shown whenever the human can drive the browser (resting or
-     explicitly taken). Always-on "You have control"; the hand-back button appears only
-     when an agent is queued for it. This is the ONLY chrome the viewer draws -- the
-     browser's own tab strip and address bar are in the streamed pixels, not rebuilt here. */
-  #returnbar { display: none; align-items: center; gap: 10px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
+  /* Control strip laid OVER the top of the streamed picture (it covers the browser's own
+     tab row rather than pushing the canvas down), and only while an agent is involved:
+     driving, waiting its turn, or asking the human for help. With the human simply in
+     control there is no chrome at all -- the tab strip and address bar are in the streamed
+     pixels, not rebuilt here. Above #overlay (10) so the strip stays readable while an
+     agent drives; below the paused/init/crash covers, which own the whole pane. */
+  #returnbar { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 11; align-items: center; gap: 10px; padding: 6px 10px; background: rgba(42, 42, 42, 0.92); font-size: 12px; color: #4ec9b0; }
   #returnbar.show { display: flex; }
-  #returnbar.handoff { background: #5a3a1a; color: #ffcc66; }
+  #returnbar.handoff { background: rgba(90, 58, 26, 0.94); color: #ffcc66; }
   /* The status text (esp. a long "agents waiting: ..." queue) truncates with an ellipsis so it
-     can't push the buttons off-screen; the warning and buttons keep their size. */
+     can't push the button off-screen; the button keeps its size. */
   #returnqueue { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #memwarn, #returnbtn, #tipsbtn { flex: 0 0 auto; }
-  #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
-  /* "View tips" is pushed to the far right of the bar; margin-left:auto absorbs the free
-     space to its left regardless of what else is shown. */
-  #tipsbtn { padding: 5px 12px; background: #444; border: none; color: #ddd; border-radius: 4px; cursor: pointer; margin-left: auto; }
+  #returnbtn { flex: 0 0 auto; padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+  /* Corner control: the one always-available affordance (tips), with the memory warning
+     beside it when active. Sized to its content so it never intercepts clicks elsewhere. */
+  #corner { position: absolute; right: 10px; bottom: 10px; z-index: 12; display: flex; align-items: center; gap: 6px; }
+  #tipsbtn { width: 26px; height: 26px; padding: 0; border-radius: 50%; background: rgba(40, 40, 40, 0.75); border: 1px solid rgba(255, 255, 255, 0.25); color: #ddd; font-size: 14px; font-weight: 600; cursor: pointer; }
+  #tipsbtn:hover { background: rgba(70, 70, 70, 0.9); }
   .hidden { display: none !important; }
 
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
@@ -32,7 +35,8 @@
      onto this canvas; object-fit keeps it crisp and letterboxed inside the pane. */
   #screen { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; cursor: default; outline: none; }
 
-  /* Tips modal: a centered card over the pane, opened from the bar's "View tips". */
+  /* Tips modal: a centered card over the pane, opened once on a viewer's first visit and
+     from the corner "?" button afterwards. */
   #tipsmodal { display: none; position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center; padding: 24px; }
   #tipsmodal.show { display: flex; }
   #tipscard { background: #252526; border: 1px solid #3a3a3a; border-radius: 8px; max-width: 560px; max-height: 82%; overflow: auto; padding: 20px 22px; color: #ddd; font-size: 13px; line-height: 1.5; }
@@ -81,9 +85,9 @@
   #pausedoverlay .title { font-size: 15px; font-weight: 700; color: #f2f5fa; letter-spacing: 0.2px; }
   #pausedoverlay .body { font-size: 13px; line-height: 1.45; color: #aab8cc; max-width: 36ch; }
 
-  /* Memory-pressure warning: RED text inline at the left of the status bar, before the
-     control text, shown while the box is over its RAM warn threshold, hidden when it recovers. */
-  #memwarn { display: none; align-items: center; gap: 4px; color: #ff6b6b; font-weight: 600; margin-right: 4px; }
+  /* Memory-pressure warning: a red chip beside the corner control, shown while the box is
+     over its RAM warn threshold, hidden when it recovers. */
+  #memwarn { display: none; align-items: center; gap: 4px; padding: 4px 9px; border-radius: 13px; background: rgba(70, 20, 20, 0.88); color: #ff6b6b; font-size: 11px; font-weight: 600; }
   #memwarn.show { display: inline-flex; }
   #memwarn .tri { color: #ff5252; font-size: 13px; }
 
@@ -131,14 +135,16 @@
 </head>
 <body>
 <div id="app">
-  <div id="returnbar">
-    <span id="memwarn"><span class="tri">&#9888;</span><span>Warning: box is over 75% of its RAM. Close some tabs.</span></span>
-    <span id="returnqueue">You have control.</span>
-    <button id="returnbtn">Return control to agents</button>
-    <button id="tipsbtn">View tips</button>
-  </div>
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
+    <div id="returnbar">
+      <span id="returnqueue">You have control.</span>
+      <button id="returnbtn">Return control to agents</button>
+    </div>
+    <div id="corner">
+      <span id="memwarn"><span class="tri">&#9888;</span><span>Warning: box is over 75% of its RAM. Close some tabs.</span></span>
+      <button id="tipsbtn" title="View tips" aria-label="View tips">?</button>
+    </div>
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
       <div class="sub" id="overlaysub"></div>
@@ -170,20 +176,12 @@
     <div id="clipchip"></div>
     <div id="tipsmodal">
       <div id="tipscard">
-        <h2>Using this browser</h2>
+        <h2>This browser is special!</h2>
         <ul>
-          <li><b>Browser works in the background.</b> Even if you close this workspace tab, the browser will run in the background and agents can work on it.</li>
-          <li><b>Copy and paste, both ways.</b> You can copy both images and text out of the browser, and can paste them in too.</li>
-          <li><b>Keyboard shortcuts.</b>
-            <ul>
-              <li>If you're on a Mac, you can use Cmd + C, V, X for cut, copy, and paste with the remote browser. However, no other Cmd keyboard shortcuts will work — use Ctrl instead, such as Ctrl + R for reload.</li>
-              <li>If you're on Windows or Linux, Ctrl keyboard shortcuts won't work in the browser.</li>
-            </ul>
-          </li>
-          <li><b>Use it like a normal browser.</b> Click, type, scroll, manage tabs, and watch videos (with sound) — it all works.</li>
-          <li><b>You share each browser with agents, through a queue.</b> Only one of you drives at a time; whoever else wants it waits in line. Click “Return control to agents” to hand it back when you're done.</li>
-          <li><b>An agent may hand a browser to you</b> for something it can't do itself — a captcha or a login check. Control comes to you and this bar turns amber; finish the step, then return control.</li>
-          <li><b>Logins are saved.</b> Each browser keeps its own cookies and sign-ins, and they persist across restarts — so you stay logged in.</li>
+          <li><b>The agent can control this browser.</b> Agents drive it directly, and only one of you drives at a time. While an agent has it you see a cover with a Take control button; an agent may also hand it to you for something it cannot do itself, like a captcha or a login, and a bar at the top turns amber. Click Return control to agents when you are done.</li>
+          <li><b>This browser stays open even when your computer is off.</b> It runs in your workspace, not on your laptop, so agents keep working in it after you close this window, and its tabs and logins survive restarts.</li>
+          <li><b>Anyone in the workspace can see this browser.</b> Everyone who has this workspace open, including people you share it with, sees the same live picture. Do not use it for anything you would not want them to see.</li>
+          <li><b>There is only one browser.</b> It is shared by the whole workspace, not one per person. If someone else or an agent is driving it, wait your turn or take control.</li>
         </ul>
         <button id="tipsclose">Got it</button>
       </div>
@@ -224,6 +222,18 @@
   const tipsCloseBtn = document.getElementById("tipsclose");
   const multiWinModal = document.getElementById("multiwinmodal");
   document.getElementById("multiwinclose").addEventListener("click", () => multiWinModal.classList.remove("show"));
+
+  const TIPS_SEEN_STORAGE_KEY = "minds-browser-tips-seen";
+  let tipsAutoOpened = false;
+  function readTipsSeen() {
+    // Storage denied means the flag could never be written either, so a viewer there would
+    // get the card on every open; treat that as already seen rather than nag.
+    try { return localStorage.getItem(TIPS_SEEN_STORAGE_KEY) === "true"; } catch (_) { return true; }
+  }
+  function closeTips() {
+    tipsModal.classList.remove("show");
+    try { localStorage.setItem(TIPS_SEEN_STORAGE_KEY, "true"); } catch (_) {}
+  }
 
   const HEADER_LEN = 10;
   const FRAME_TYPE_IDR = 1;
@@ -307,11 +317,11 @@
       releaseSeconds = null;
       waitingList = [];
     }
+    const waiting = Array.isArray(state.waiting) ? state.waiting : [];
     if (!agentDriving) {
-      const waiting = Array.isArray(state.waiting) ? state.waiting : [];
       if (humanPinned && handoffReason) {
         returnQueue.textContent = (handoffAgent || "An agent") + " needs your help: " + handoffReason +
-          ". Do it in this pane, then click “Return to agent” to hand control back.";
+          ". Do it in this pane, then click “Return control to agents” to hand control back.";
         returnBtn.style.display = "";
       } else {
         returnQueue.textContent = waiting.length
@@ -320,8 +330,11 @@
         returnBtn.style.display = waiting.length ? "" : "none";
       }
     }
-    returnBar.classList.add("show");  // the status bar is always on -- text switches with control
-    returnBar.classList.toggle("handoff", !agentDriving && !!handoffReason);
+    const isHandoff = !agentDriving && humanPinned && !!handoffReason;
+    // No strip while the human simply has the browser: it only appears when an agent is
+    // driving, waiting its turn, or asking for help.
+    returnBar.classList.toggle("show", agentDriving || waiting.length > 0 || isHandoff);
+    returnBar.classList.toggle("handoff", isHandoff);
     refreshPausedAgent();  // keep the paused overlay's agent line in sync if control flips
   }
 
@@ -361,6 +374,8 @@
     const fill = document.getElementById("initfill");
     if (fill) fill.style.width = "100%";
     initOverlay.classList.remove("show");
+    // A first-time viewer gets the tips card over the live picture, not over the loading cover.
+    if (!tipsAutoOpened && !readTipsSeen()) { tipsAutoOpened = true; tipsModal.classList.add("show"); }
   }
 
   function showCrashed() {
@@ -876,14 +891,17 @@ registerProcessor('pb', PB);`;
     sendPointer(e, buttonMask, 0);
   }, { passive: false });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Ctrl+C/X/V fall through to the native copy/cut/paste DOM events (handled in the
+  // clipboard section) instead of being forwarded as keystrokes -- no key interception,
+  // and it works the same on every OS.
+  function isClipboardChord(e) {
+    return e.ctrlKey && (e.key === "c" || e.key === "x" || e.key === "v");
+  }
   canvas.addEventListener("keydown", (e) => {
     if (driving()) return;
     reconcileModifiers(e);  // release any modifier whose keyup we missed, before this key
     if (e.metaKey) return;  // Cmd-combos stay LOCAL (#30): Mac muscle memory + workspace shortcuts
-    // Let Ctrl+C/X/V fall through to the native copy/cut/paste DOM events (handled in
-    // the clipboard section) instead of forwarding them as keystrokes -- no key
-    // interception, and it works the same on every OS.
-    if (e.ctrlKey && (e.key === "c" || e.key === "x" || e.key === "v")) return;
+    if (isClipboardChord(e)) return;
     const keysym = keysymFor(e);
     if (keysym === null) return;
     e.preventDefault();
@@ -894,6 +912,8 @@ registerProcessor('pb', PB);`;
     if (driving()) return;
     reconcileModifiers(e);  // backstop: sync held modifiers to the event's flags
     if (e.metaKey || e.key === "Meta") return;
+    // The keydown never went to the remote, so its release must not either.
+    if (isClipboardChord(e)) return;
     const keysym = keysymFor(e);
     if (keysym === null) return;
     e.preventDefault();
@@ -911,7 +931,7 @@ registerProcessor('pb', PB);`;
   // We hook the browser's own copy/cut/paste ClipboardEvents rather than intercepting
   // keys, so it works identically on every OS and for menu/right-click too. Paste reads
   // the event's clipboardData and POSTs it to the remote (the server sets the X selection
-  // and injects Ctrl+V). Copy/cut trigger a remote Ctrl+C/X; the server's XFixes monitor
+  // and presses Ctrl+V in the tab over CDP). Copy/cut trigger a remote Ctrl+C/X; the server's XFixes monitor
   // then pushes the new remote selection back over the stream and we write it locally.
   const CLIP_MAX_BYTES = 10 * 1024 * 1024;
   const clipchip = document.getElementById("clipchip");
@@ -1009,10 +1029,10 @@ registerProcessor('pb', PB);`;
     doWrite();
   }
 
-  // tips (top-bar help card, ported from browser-fixes-v4.1)
+  // tips: closing by any route records the visit, so the card auto-opens once per viewer.
   tipsBtn.onclick = () => tipsModal.classList.add("show");
-  tipsCloseBtn.onclick = () => tipsModal.classList.remove("show");
-  tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) tipsModal.classList.remove("show"); });
+  tipsCloseBtn.onclick = closeTips;
+  tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) closeTips(); });
 
   // controls (ownership only)
   takeControlBtn.onclick = () => {
@@ -1137,7 +1157,24 @@ registerProcessor('pb', PB);`;
   if (window.parent !== window) {
     import("/_static/app_contract.js")
       .then(({ connectToShell }) => {
-        const connection = connectToShell({});
+        // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
+        // the window-bound sweep would otherwise stop the whole browser. The browser is
+        // named by the page's own session parameter; the viewer's state above is closure-local.
+        const closeRemoteTab = () => {
+          if (session === null) return;
+          fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
+            .then(async (response) => {
+              if (response.ok) return;
+              let reason = "";
+              try { reason = (await response.json()).error || ""; } catch (_) {}
+              console.warn("[browser] close-tab refused (" + response.status + ")", reason);
+            })
+            .catch((error) => console.warn("[browser] close-tab request failed", error));
+        };
+        const connection = connectToShell({
+          capabilities: { navigation: false, closeChord: true },
+          onCloseRequest: closeRemoteTab,
+        });
         window.addEventListener("focus", () => connection.focused());
         if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
       })

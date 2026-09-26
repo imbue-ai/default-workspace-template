@@ -353,7 +353,7 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
 
 function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   const shell = connectToShell({
-    capabilities: { navigation: true },
+    capabilities: { navigation: true, closeChord: false },
     onHandshake: (received) => {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });

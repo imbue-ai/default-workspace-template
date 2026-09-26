@@ -39,7 +39,7 @@ vi.mock("../models/ModelSettings", () => ({
 // The workspace's chat settings as the page has them (null before the load), and every write
 // the fast-limit row asked for.
 const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
-  const defaults = { fast_mode_default: "auto", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false };
+  const defaults = { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false };
   return {
     DEFAULT_CHAT_SETTINGS: defaults,
     chatSettingsState: { settings: defaults as typeof defaults | null, loads: 0 },
@@ -748,16 +748,16 @@ describe("the combo card", () => {
     click('[data-menu-row="fast"]');
     const limit = document.querySelector<HTMLInputElement>(".fast-limit-input");
     if (limit === null) throw new Error("no turn-limit field under Auto");
-    expect(limit.value).toBe("5");
+    expect(limit.value).toBe("2");
 
-    limit.value = "2";
+    limit.value = "3";
     limit.dispatchEvent(new Event("input", { bubbles: true }));
     render();
     // The field keeps what is being typed across the redraws every keystroke causes.
-    expect(limit.value).toBe("2");
+    expect(limit.value).toBe("3");
     limit.dispatchEvent(new Event("change", { bubbles: true }));
     expect(settingsWrites).toEqual([
-      { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
+      { fast_mode_default: "auto", fast_mode_turn_limit: 3, is_fast_mode_notice_shown: false },
     ]);
 
     // An emptied field or a zero is not a limit.
@@ -824,7 +824,7 @@ describe("the combo card", () => {
     expect(toggle.disabled).toBe(false);
     click("[data-fast-mode-default]");
     expect(settingsWrites).toEqual([
-      { fast_mode_default: "on", fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false },
+      { fast_mode_default: "on", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
     ]);
 
     // Auto is the settings' default, so its toggle is on and has nothing left to do -- but it is

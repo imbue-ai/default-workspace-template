@@ -720,9 +720,9 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
-    # Paste-in injects Ctrl+V on a short-lived X connection. If it closes before X has handled
-    # the keystrokes, the paste silently never arrives (the viewer still says "Pasted"), or
-    # Ctrl stays held, so the human's scroll zooms and their clicks become Ctrl+clicks.
+    # Paste-in presses Ctrl+V in the shown tab over CDP after setting the X clipboard. The
+    # viewer's own X keyboard connection must be left untouched: no key may stay held after
+    # a paste, or the human's scroll zooms and their clicks become Ctrl+clicks.
     rounds = 20
     pages = _PageServer({"/": (
         "<input id=i style='position:absolute;left:100px;top:100px;width:600px;height:60px'>"
@@ -732,6 +732,7 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
             async with _running_browser(bsession.BrowserSessionManager()) as browser:
                 display = browser._display
                 assert display is not None
+                loop = asyncio.get_running_loop()
                 session_id = await _only_page_session(browser, f"{pages.origin}/")
                 x, y = await _evaluate(browser, session_id, (
                     "(() => { const r = document.getElementById('i').getBoundingClientRect();"
@@ -739,16 +740,19 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                     " return [Math.round(window.screenX + r.left + 20), Math.round(top + r.top + r.height / 2)]; })()"
                 ))
 
+                def run_on_loop(coro: Any) -> Any:
+                    return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
+
                 def paste(text: str) -> int:
                     with runner.application.test_request_context():
-                        returned = mediastream.clipboard_paste(browser.browser_id, browser, text.encode(), "text/plain")
+                        returned = mediastream.clipboard_paste(
+                            browser.browser_id, browser, text.encode(), "text/plain", run_on_loop
+                        )
                         return runner.application.make_response(returned).status_code
 
                 def viewer_sink(_message: str) -> None:
                     """The paste route refuses without a registered viewer; this one ignores copy-outs."""
 
-                # The viewer's own input connection stays open for its whole life; only the
-                # paste's is short-lived.
                 viewer_input = InputRouter(display)
                 mediastream._register_clip_sink(browser.browser_id, display, viewer_sink)
                 try:

@@ -116,10 +116,12 @@ const beforeUnloadHandler = (event) => {
 };
 
 // minds patch: the folder parameter. The shell opens a file viewer at the manifest's launch
-// path ``/`` with an optional ``path`` param, so a window asked to show a folder arrives at
-// ``/?path=/notes/``; dufs ignores the query, so the frame takes itself there. Only a rooted
-// path on this origin is honoured (one leading slash: ``//host`` and ``/\host`` would leave
-// the origin). The beacon below then reports the folder as the window's location.
+// path (the workspace folder) with an optional ``path`` param, so a window asked to show a
+// folder arrives at ``/home/user/workspace/?path=/home/user/workspace/data/notes/``; dufs ignores the query,
+// so the frame takes itself there. dufs serves the filesystem root, so the value is an absolute
+// path. Only a rooted path on this origin is honoured (one leading slash: ``//host`` and
+// ``/\host`` would leave the origin). The beacon below then reports the folder as the window's
+// location.
 function rootedPathParam() {
   const path = PARAMS.path;
   if (typeof path !== "string" || !path.startsWith("/") || /^\/[\/\\]/.test(path)) {

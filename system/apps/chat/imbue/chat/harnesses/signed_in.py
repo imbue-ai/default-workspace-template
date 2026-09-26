@@ -50,7 +50,7 @@ _PROBES: Final[dict[HarnessType, tuple[tuple[str, ...], str | None]]] = {
     # pi's lanes are file writes, so this is not asking "did a browser flow finish" -- it is
     # asking whether pi actually ACCEPTED the file we just wrote.
     #
-    # The string matters: measured against 0.83.0 and 0.84.1, an empty dir, an unknown
+    # The string matters: measured against 0.83.0, 0.84.1 and 0.87.1, an empty dir, an unknown
     # provider id and a malformed auth.json all print "No models available. Use /login ..."
     # and exit 0. Matching anything else -- "No usable API key is configured", which pi
     # prints when asked to take a TURN, not when asked to list -- makes NO unreachable and

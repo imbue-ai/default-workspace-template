@@ -91,7 +91,7 @@ A shortcut's target is a tagged union with one V1 variant, a launch path, so a w
 
 ### 2.6 Launch path
 
-An app declares in its manifest the paths that start something, with optional parameters: a GET launch path is a page the shell opens with the parameters as its query (`File Viewer` at `/` with `path`); a POST launch path is one the shell posts the parameters to, and the app answers the page to open (`Terminal` at `/new`, `New Chat` at `/api/chats/intake`), so a page that creates something is never a page a reload could run again (the post-launch-paths plan).
+An app declares in its manifest the paths that start something, with optional parameters: a GET launch path is a page the shell opens with the parameters as its query (`File Viewer` at `/home/user/workspace/` with `path`); a POST launch path is one the shell posts the parameters to, and the app answers the page to open (`Terminal` at `/new`, `New Chat` at `/api/chats/intake`), so a page that creates something is never a page a reload could run again (the post-launch-paths plan).
 A shortcut, a launcher tile, an agent's open, and a page's own request all run a launch path: a window opens at a GET launch path's page, or at the page a POST launch path answers.
 An app that declares none has one, `Open <display name>` at `/`.
 A launch path may name one of its parameters as its `text_param` or its `draft_param`: the launcher then offers it as a free-text row that sends (or drafts) whatever was typed into the field (launcher-and-getting-started plan section 3.1; the post-launch-paths plan section 3.1).

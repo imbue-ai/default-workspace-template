@@ -27,9 +27,10 @@ Subcommands:
 
 A *desktop* is a named, shared collection of *windows*: each window is one page of an app,
 named by its app and the path under the app's origin it is at (``chat`` at ``/?chat=<id>``,
-``terminal`` at ``/?session=<name>``, ``files`` at ``/notes/``). Windows and desktops are shared
-by everyone; where each window sits on a screen (its frame, whether it is minimized or
-maximized) is one client's own *placement*. Every browser *client* has one active desktop.
+``terminal`` at ``/?session=<name>``, ``files`` at ``/home/user/workspace/data/notes/``). Windows
+and desktops are shared by everyone; where each window sits on a screen (its frame, whether it
+is minimized or maximized) is one client's own *placement*. Every browser *client* has one
+active desktop.
 
 A window is named by its id (``win-<hex>``, from ``desktops`` or the ``open`` that made it), by
 ``self`` (the caller's own chat window), or by an app name (that app's most recently focused
@@ -49,10 +50,11 @@ the params by the shell and answers the page to open (the terminal's and the bro
 the chat's ``new``, ``send``, and ``draft``), so the window opens at the page the app answered.
 A window of the app already at that path is focused rather than duplicated unless
 ``--if-present new`` is passed. The window's id (the new one's, or the focused one's) is
-printed to stdout. To open a folder in the file viewer, ``open files --path /notes/``; the
-``path`` launch parameter (``open files --param path=/notes/``) lands in the same folder but as
-a window at ``/?path=/notes/``, and a window is focused only when its path matches exactly, so
-use one form per folder.
+printed to stdout. To open a folder in the file viewer, ``open files --path
+/home/user/workspace/data/notes/`` (the viewer serves the filesystem root, so the path is
+absolute); the ``path`` launch parameter (``open files --param path=/home/user/workspace/data/notes/``)
+lands in the same folder but as a window at ``/home/user/workspace/?path=...``, and a window is
+focused only when its path matches exactly, so use one form per folder.
 
 Every op POSTs one body ``{op, args, requester}`` to a loopback-only endpoint on the shell:
 ``requester`` is the caller's own chat, ``{"app": "chat", "marker": $MINDS_CHAT_ID}`` (the chat
@@ -842,7 +844,8 @@ def main(argv: list[str] | None = None) -> int:
     p_open.add_argument(
         "--path",
         default=None,
-        help="The page to open, a path under the app's origin: 'open files --path /notes/' opens a folder, "
+        help="The page to open, a path under the app's origin: 'open files --path /home/user/workspace/data/notes/' "
+        "opens a folder, "
         "'open chat --path \"/?chat=<id>\"' a chat. Without it, a launch path is used.",
     )
     p_open.add_argument(
@@ -855,7 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=None,
         metavar="NAME=VALUE",
-        help="A launch path parameter (repeatable), e.g. --param workdir=/data, --param path=/notes/.",
+        help="A launch path parameter (repeatable), e.g. --param workdir=/data, --param path=/home/user/workspace/data/notes/.",
     )
     p_open.add_argument(
         "--if-present",

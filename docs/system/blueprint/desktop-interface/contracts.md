@@ -49,7 +49,7 @@ Built-in manifests:
 | `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
 | `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", POST `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
-| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, params `path` optional) |
+| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
 | `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
@@ -246,15 +246,15 @@ Built once, into the shell's static output, and served by every app at `/_static
 Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), draftText(text), disconnect()}`.
 `openPath` sends `shell:open` below; `startWithText` sends `shell:start-with-text`; `draftText` sends `shell:draft-text`.
 Beside it the shell builds and every app serves `/_static/context_menu.js`, the element context menu of the element-reference-menu plan (section 9 there), which drafts through `draftText`.
-`capabilities` is `{navigation: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect.
+`capabilities` is `{navigation: boolean, closeChord: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect, and so is `closeChord: true` without `onCloseRequest`. A page that declares `closeChord` owns the close chord: the shell sends `shell:close-request` and leaves the window open (the browser closes its current tab that way).
 
 | Direction | Type | Payload |
 |---|---|---|
 | shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "app", "path"}`; after every `load` of the frame and when the window's desktop changes; `app` is the name of the app the window belongs to (element-reference-menu plan section 5) |
 | shell to page | `shell:shown`, `shell:hidden` | `{}` |
-| shell to page | `shell:close-request` | `{}` |
+| shell to page | `shell:close-request` | `{}`; a page that declared `closeChord: true` keeps its window, any other page's window closes right after |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |
-| page to shell | `shell:capabilities` | `{"navigation": bool}`; sent once by `connectToShell`; absent means `false` |
+| page to shell | `shell:capabilities` | `{"navigation": bool, "closeChord": bool}`; sent once by `connectToShell`; absent means `false` |
 | page to shell | `shell:location` | `{"path", "title"}`; the shell remembers the pair as the page's last report and posts it to the window's location route when it differs from the stored one |
 | page to shell | `shell:focused` | `{}`; the shell raises the page's window |
 | page to shell | `shell:open` | `{"path", "ifPresent"}`; opens a window of the posting frame's own app on the posting window's desktop, with `client_id` the hosting client |

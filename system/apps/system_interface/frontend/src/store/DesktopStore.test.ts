@@ -645,6 +645,7 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
+      ownsCloseChord: () => false,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -660,10 +661,26 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
+      ownsCloseChord: () => false,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
     expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+
+  it("the close chord leaves the window of a page that owns the chord open", async () => {
+    const store = await startedStore();
+    const requested: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      requestClose: (id) => void requested.push(id),
+      ownsCloseChord: (id) => id === "win-1",
+    });
+    await store.closeFocusedWindow();
+    expect(requested).toEqual(["win-1"]);
+    expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
+    expect(store.getState().desktops[0].windows.map((window) => window.id)).toContain("win-1");
   });
 
   it("a taskbar click restores, minimizes the focused, or raises", async () => {
@@ -702,6 +719,7 @@ describe("windows", () => {
       reload: (id) => void reloaded.push(`window:${id}`),
       reloadApp: (app) => void reloaded.push(`app:${app}`),
       requestClose: () => undefined,
+      ownsCloseChord: () => false,
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
