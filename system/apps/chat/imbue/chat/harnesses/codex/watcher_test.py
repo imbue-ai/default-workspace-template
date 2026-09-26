@@ -498,7 +498,7 @@ def test_identical_reserialisation_is_dropped(tmp_path: Path) -> None:
     assert len([e for e in watcher.get_all_events() if e["type"] == "assistant_message"]) == 1
 
 
-# --- Readable thinking + on-demand payload detail ---
+# Readable thinking + on-demand payload detail
 
 
 def test_reasoning_summary_marks_the_next_assistant_event_and_serves_its_text(tmp_path: Path) -> None:

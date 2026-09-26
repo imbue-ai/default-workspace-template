@@ -166,7 +166,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
         self._turn_state = {}
         self._pending_thinking_source = None
 
-    # -- base hooks -----------------------------------------------------------------------
+    # base hooks
 
     def _refresh_locked(self) -> None:
         """Bring the store up to date with the live rollout, following rotation."""
@@ -246,7 +246,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
     def _reflect_effective_model(self, model: Any, effort: Any) -> None:
         """Hand the effective per-turn model to the model bar. A loader has no bar to update."""
 
-    # -- codex plumbing -------------------------------------------------------------------
+    # codex plumbing
 
     def _resolve_active_rollout(self) -> Path | None:
         marker = read_marker_rollout_path(self._marker_path)
@@ -301,7 +301,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
             return []
         return parse_lines(record, self._tool_name_by_call_id, self._turn_state)
 
-    # -- on-demand payload detail ---------------------------------------------------------
+    # on-demand payload detail
 
     def _parse_detail(
         self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
@@ -379,7 +379,7 @@ class CodexSessionWatcher(CodexTranscriptLoader, StoreBackedWatcher):
         self._model_state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
         return self
 
-    # -- base hooks -----------------------------------------------------------------------
+    # base hooks
 
     def _watch_paths(self) -> tuple[Path, ...]:
         # CODEX_HOME (the parent of ``sessions/``), recursively, so an append to whichever
