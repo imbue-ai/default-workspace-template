@@ -56,12 +56,12 @@ from imbue.system_interface.shell.desktop_document import with_pinned_windows_pl
 from imbue.system_interface.shell.desktop_document import with_shortcut
 from imbue.system_interface.shell.desktop_document import with_shortcut_moved
 from imbue.system_interface.shell.desktop_document import with_window_detached
-from imbue.system_interface.shell.desktop_document import with_window_reattached
 from imbue.system_interface.shell.desktop_document import with_window_frame
 from imbue.system_interface.shell.desktop_document import with_window_location
 from imbue.system_interface.shell.desktop_document import with_window_minimized
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
+from imbue.system_interface.shell.desktop_document import with_window_reattached
 from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
 from imbue.system_interface.shell.desktop_document import without_pin_marks
@@ -510,9 +510,10 @@ def test_a_pulled_out_window_stays_where_it_is_and_every_showing_verb_brings_it_
     minimized = with_window_minimized(detached, _WIN_2)
     assert minimized.placements[1].is_detached is False and minimized.placements[1].is_minimized is True
     # A placement file without the key reads as attached.
-    assert WindowPlacement.model_validate(
+    stored_without_key = WindowPlacement.model_validate(
         {"window_id": str(_WIN_1), "frame": cascade_frame(0).model_dump(), "state": "NORMAL", "is_minimized": False}
-    ).is_detached is False
+    )
+    assert stored_without_key.is_detached is False
 
 
 def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_windows_as_new_windows() -> None:
