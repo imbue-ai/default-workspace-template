@@ -51,6 +51,13 @@ SNAPSHOT_ROOT = "data/.state/app-data-snapshots"
 # What a copy must leave free on its disk, for the live workspace's own writes.
 RESERVE_BYTES = 2 * 1024**3
 
+# A snapshot is the recovery net for a change to the live store, so there is no
+# smaller copy to fall back to.
+SNAPSHOT_REFUSAL_ADVICE = (
+    "Free space on that disk first, or ask the user before changing the live "
+    "store with no snapshot to fall back on."
+)
+
 _SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -90,12 +97,15 @@ def copy_tree_checked(
     source: Path,
     destination: Path,
     *,
+    refusal_advice: str,
     free_space: Callable[[Path], int] = free_bytes,
 ) -> None:
     """Copy the directory ``source`` to ``destination`` (which must not exist yet).
 
     Refuses, writing nothing, when the copy would leave less than ``RESERVE_BYTES``
-    free on the destination's disk; a copy that fails part way is removed.
+    free on the destination's disk, telling the agent ``refusal_advice`` (what to
+    do instead depends on what the copy was for); a copy that fails part way is
+    removed.
     """
     if destination.exists():
         raise CopyError(f"{destination} already exists; not copying over it")
@@ -106,10 +116,8 @@ def copy_tree_checked(
             f"copying {source} ({_format_bytes(size)}) to {destination} would leave "
             f"{_format_bytes(max(available - size, 0))} free on that disk, under the "
             f"{_format_bytes(RESERVE_BYTES)} the workspace needs for its own writes. "
-            "Copy only what the test needs (a subdirectory, or a small store seeded "
-            "for the test), or verify read-only against the live service. Do not copy "
-            "it into /tmp instead: /tmp is memory, and a copy that size takes the "
-            "whole workspace down."
+            f"{refusal_advice} Do not copy it into /tmp instead: /tmp is memory, and a "
+            "copy that size takes the whole workspace down."
         )
     try:
         shutil.copytree(source, destination, symlinks=True)
@@ -147,7 +155,12 @@ def snapshot(
         raise CopyError(
             f"a snapshot already exists at {destination}; drop it first or pick another --label"
         )
-    copy_tree_checked(source, destination, free_space=free_space)
+    copy_tree_checked(
+        source,
+        destination,
+        refusal_advice=SNAPSHOT_REFUSAL_ADVICE,
+        free_space=free_space,
+    )
     return destination
 
 

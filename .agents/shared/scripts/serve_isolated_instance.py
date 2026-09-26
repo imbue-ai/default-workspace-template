@@ -118,6 +118,12 @@ WRAPPER_LOG_FILENAME = "wrapper.log"
 # dir so ``down`` removes them with everything else.
 COPIES_DIRNAME = "copies"
 SCRATCH_DIRNAME = "scratch"
+# What a refused ``--copy`` tells the agent to do instead: the copy exists only
+# for a test, so a smaller one (or none) serves.
+_COPY_REFUSAL_ADVICE = (
+    "Copy only what the test needs (a subdirectory, or a small store seeded for "
+    "the test), or verify read-only against the live service."
+)
 # The port the health probe reaches and the wrapper frames; every instance has it.
 MAIN_PORT_NAME = "main"
 LOOPBACK_HOST = "127.0.0.1"
@@ -591,7 +597,10 @@ def _make_copies(
         if source_path.is_dir():
             try:
                 _copy_app_data.copy_tree_checked(
-                    source_path, destination, free_space=free_space
+                    source_path,
+                    destination,
+                    refusal_advice=_COPY_REFUSAL_ADVICE,
+                    free_space=free_space,
                 )
             except _copy_app_data.CopyError as exc:
                 raise InstanceError(f"--copy {key}={source}: {exc}") from exc

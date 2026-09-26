@@ -384,6 +384,10 @@ where the data dies. Encode these, cheapest first:
   python3 .agents/shared/scripts/copy_app_data.py drop --app <name> --label pre-<change>
   ```
 
+  If `snapshot` refuses because the copy would not fit, free space on the disk
+  or ask the user before changing the live store without one -- never
+  snapshot into `/tmp` instead.
+
   The snapshot is a *recovery net* -- do **not** turn it into a routine
   "wipe live and restore backup" step: overwriting a running service's store
   tears its state, and any real writes that landed during your test window

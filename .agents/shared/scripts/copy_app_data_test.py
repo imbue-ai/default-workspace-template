@@ -23,6 +23,7 @@ sys.modules[_spec.name] = mod
 _spec.loader.exec_module(mod)
 
 _APP = "pr-review"
+_ADVICE = "Copy less."
 
 
 def _plenty(_path: Path) -> int:
@@ -47,7 +48,9 @@ def test_a_copy_that_fits_is_made_whole_with_symlinks_kept(tmp_path: Path) -> No
     source = _seed_app_data(tmp_path)
     destination = tmp_path / "copies" / "data"
 
-    mod.copy_tree_checked(source, destination, free_space=_plenty)
+    mod.copy_tree_checked(
+        source, destination, refusal_advice=_ADVICE, free_space=_plenty
+    )
 
     assert (destination / "repos" / "one" / "pack.bin").read_bytes() == b"x" * 3000
     assert os.readlink(destination / "latest.json") == "records.json"
@@ -64,8 +67,10 @@ def test_a_copy_that_would_not_leave_the_reserve_is_refused_before_writing(
         probed.append(path)
         return mod.RESERVE_BYTES + mod.tree_size_bytes(source) - 1
 
-    with pytest.raises(mod.CopyError, match="/tmp is memory"):
-        mod.copy_tree_checked(source, destination, free_space=just_short)
+    with pytest.raises(mod.CopyError, match=f"{_ADVICE} Do not copy it into /tmp"):
+        mod.copy_tree_checked(
+            source, destination, refusal_advice=_ADVICE, free_space=just_short
+        )
 
     assert not destination.parent.exists()
     # The probe asks about the disk the copy would land on, not the source's.
@@ -79,7 +84,9 @@ def test_a_copy_that_fails_part_way_is_removed(tmp_path: Path) -> None:
     destination = tmp_path / "copies" / "data"
 
     with pytest.raises(mod.CopyError, match="failed"):
-        mod.copy_tree_checked(source, destination, free_space=_plenty)
+        mod.copy_tree_checked(
+            source, destination, refusal_advice=_ADVICE, free_space=_plenty
+        )
 
     assert not destination.exists()
 
@@ -91,7 +98,9 @@ def test_a_copy_never_lands_on_an_existing_destination(tmp_path: Path) -> None:
     (destination / "kept.json").write_text("{}")
 
     with pytest.raises(mod.CopyError, match="already exists"):
-        mod.copy_tree_checked(source, destination, free_space=_plenty)
+        mod.copy_tree_checked(
+            source, destination, refusal_advice=_ADVICE, free_space=_plenty
+        )
 
     assert (destination / "kept.json").exists()
 
@@ -127,6 +136,21 @@ def test_snapshot_never_overwrites_an_existing_one(tmp_path: Path) -> None:
         mod.snapshot(tmp_path, _APP, "pre-v2", free_space=_plenty)
 
     assert (path / "records.json").read_text() == "[1]"
+
+
+def test_a_snapshot_that_would_not_fit_is_refused_with_no_test_copy_advice(
+    tmp_path: Path,
+) -> None:
+    # A snapshot guards a change to the live store, so trimming it to "what the
+    # test needs" is not an option; the refusal must not suggest it.
+    _seed_app_data(tmp_path)
+
+    with pytest.raises(mod.CopyError) as refused:
+        mod.snapshot(tmp_path, _APP, "pre-v2", free_space=lambda _path: 0)
+
+    assert "ask the user" in str(refused.value)
+    assert "what the test needs" not in str(refused.value)
+    assert not (tmp_path / mod.SNAPSHOT_ROOT).exists()
 
 
 @pytest.mark.parametrize(
