@@ -40,6 +40,8 @@ dev = [
     "mngr-cli-contract",
     # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
+    # Stops a test run on macOS, where these suites cannot run faithfully.
+    "pytest-linux-only",
     # The tests' polling helper (imbue.mngr.utils.polling); the shell's own code imports
     # nothing from mngr (the import ratchet holds that).
     "imbue-mngr",
