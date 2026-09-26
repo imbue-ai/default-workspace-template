@@ -84,8 +84,9 @@ _GIT_LISTING_ARGS = {
     "worktree": frozenset({"list"}),
     "stash": frozenset({"list", "show"}),
     "remote": frozenset({"", "-v", "--verbose", "get-url"}),
-    "reflog": frozenset({"", "show"}),
 }
+# `git reflog` shows the log unless its first argument is one of these subcommands.
+_GIT_REFLOG_WRITES = frozenset({"expire", "delete", "drop"})
 # git global options that take a separate value.
 _GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
 # branch/tag options that put them in list mode (git documents the filters as implying --list).
@@ -246,6 +247,8 @@ def _is_git_read(args: list[str]) -> bool:
         return True
     if subcommand in _GIT_LISTING_ARGS:
         return (rest[0] if rest else "") in _GIT_LISTING_ARGS[subcommand]
+    if subcommand == "reflog":
+        return (rest[0] if rest else "") not in _GIT_REFLOG_WRITES
     if subcommand in ("branch", "tag"):
         # With no name given, branch and tag only list; `-l`/`--list`, or a filter such as
         # `--merged main`, makes a name a pattern or the filter's commit.

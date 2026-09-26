@@ -28,6 +28,9 @@ def _run(command: str) -> int:
         "git show HEAD:system/supervisord.conf | grep -A 20 '^\\[program:' | head -50",
         "git branch -a 2>&1 | head -50",
         "git branch --merged main | head",
+        # reflog shows the log for any log option or ref, not only for `show`.
+        "git reflog -n 20 | head",
+        "git reflog main | head",
         # A `>(` inside a heredoc body is text, not a process substitution.
         "python3 - <<'PY' > /tmp/scan.txt\nre.search(r'<href>(.*?)</href>', x)\nPY\n"
         "sort -rn /tmp/scan.txt | head -30",
@@ -82,6 +85,7 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         "find . -name '*_test.py' -exec pytest {} + | tail -20",
         "git branch -D old | head",
         "git stash | tail -1",
+        "git reflog expire --expire=now --all | tail",
         # Queries the remote unless given -n.
         "git remote show origin | head",
         # The cat is reading pytest's output, not a file.
