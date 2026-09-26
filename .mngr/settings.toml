@@ -290,7 +290,7 @@ model = "gpt-6-sol"
 #   $CODEX_HOME/memories/ -- a per-agent, non-runtime-backed silo that would compete with the
 #   shared runtime/memory/. features.memories is the master switch; false wins regardless of
 #   any [memories] settings.
-# - code_mode_only / code_mode_host / suppress_unstable_features_warning: pin the tool surface
+# - code_mode_only / code_mode_host (plus the top-level flag below): pin the tool surface
 #   to code mode (`tools.<fn>({...})`, the schema our tool labels parse). The surface normally
 #   comes from the model's `tool_mode` in the remote /models catalog (300s TTL); a server-side
 #   change or an unrecognized value deserializes to None and silently drops us to direct tool
