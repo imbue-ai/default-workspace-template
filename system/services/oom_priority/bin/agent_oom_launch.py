@@ -22,6 +22,12 @@ most-expendable band. Because the process tags itself at launch, the band is set
 before any subprocess exists -- the process that needs tagging is known directly,
 with no process tree to inspect.
 
+codex installed from npm is the one harness whose command is not the harness
+process: its ``bin/codex.js`` entry point runs the native binary as a child. So
+for ``codex`` the wrapper execs that native binary directly, with the environment
+the entry point would have given it, keeping the registered pid the one earlyoom
+kills.
+
 Harness-agnostic by construction: the band comes from the agent's label
 (``MNGR_AGENT_NAME`` + the host records), never from which binary is being run.
 
@@ -63,6 +69,7 @@ Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -113,6 +120,31 @@ def _tag_self() -> None:
     )
 
 
+def _npm_codex_native_launch() -> tuple[Path, dict[str, str]] | None:
+    """The native binary behind an npm-installed ``codex``, and the environment
+    its npm entry point would give it; None when ``codex`` is not that install.
+
+    The entry point (``bin/codex.js``) runs the native binary as a child process
+    instead of exec'ing it, so exec'ing the entry point would leave the registered
+    pid on ``node`` while codex runs, and is shed, under a pid nothing registered.
+    npm installs only the platform package matching this machine."""
+    entry_point = shutil.which("codex")
+    if entry_point is None:
+        return None
+    package_root = Path(entry_point).resolve().parents[1]
+    natives = list(package_root.glob("node_modules/@openai/codex-*/vendor/*/bin/codex"))
+    if len(natives) != 1:
+        return None
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("CODEX_MANAGED_BY_")
+    }
+    env["CODEX_MANAGED_BY_NPM"] = "1"
+    env["CODEX_MANAGED_PACKAGE_ROOT"] = str(package_root)
+    return natives[0], env
+
+
 def main() -> None:
     # Tag before exec so the band (and registry entry) are in place the instant
     # the harness -- and any child it spawns -- exists. A tagging failure must never
@@ -127,6 +159,10 @@ def main() -> None:
         _tag_self()
     except Exception as error:
         print(f"agent_oom_launch: tagging skipped: {error}", file=sys.stderr)
+    native_launch = _npm_codex_native_launch() if binary == "codex" else None
+    if native_launch is not None:
+        native, env = native_launch
+        os.execve(native, [binary, *sys.argv[2:]], env)
     os.execvp(binary, [binary, *sys.argv[2:]])
 
 

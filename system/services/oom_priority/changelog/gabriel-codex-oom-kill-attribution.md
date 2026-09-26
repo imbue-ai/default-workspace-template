@@ -1,0 +1,5 @@
+A codex agent shed by earlyoom is now recorded against that agent, so a lead waiting on a codex worker is told the worker was shed instead of waiting on a report that never comes.
+
+Before, codex's npm entry point (`bin/codex.js`) ran the native binary as a child process. The launch wrapper registered the entry point's pid, but earlyoom killed the native child, whose pid nothing had registered. The kill hook wrote the shed with no agent, so the worker report watcher never matched it. The chat app's engagement re-tag had the same problem: it raised or lowered the band of the small `node` entry point, not the codex process holding the memory.
+
+Now the wrapper execs codex's native binary directly, with the same `CODEX_MANAGED_BY_NPM` and `CODEX_MANAGED_PACKAGE_ROOT` environment the entry point sets, so the registered pid is the one earlyoom kills. If `codex` on the PATH is not an npm install with a single native binary in that layout, the wrapper execs `codex` as before.

@@ -278,6 +278,9 @@ command -v node npm >/dev/null
 # own app-server (JSON-RPC) with a visible `codex --remote` TUI, so the fork's
 # `/model <model> [effort]` workaround (openai/codex#32212) is no longer needed
 # and the vendored binary is left exactly as npm ships it.
+# The OOM launch wrapper (system/services/oom_priority/bin/agent_oom_launch.py)
+# execs the native binary at node_modules/@openai/codex-<platform>/vendor/<triple>/bin/codex
+# inside this package, so check that path still exists when bumping the version.
 npm install -g "@openai/codex@${CODEX_VERSION}"
 command -v codex >/dev/null
 codex --version

@@ -1,0 +1,1 @@
+The codex version pin in `setup_system.sh` now notes that the OOM launch wrapper execs the native binary inside the npm package (`node_modules/@openai/codex-<platform>/vendor/<triple>/bin/codex`), so a version bump has to check that path still exists.
