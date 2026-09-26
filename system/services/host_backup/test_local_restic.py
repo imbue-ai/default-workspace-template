@@ -307,20 +307,9 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
 
     # An old restore marker (backdated 30 days via restic --time), a recent
     # restore marker, and an ordinary backup.
-    old_backup = run_restic(
-        (
-            "backup",
-            "--json",
-            "--tag",
-            "restored",
-            "--time",
-            "2000-01-01 00:00:00",
-            str(source_dir),
-        ),
-        env_overrides=env,
+    old_marker_id = _backup_at(
+        source_dir, taken_at="2000-01-01 00:00:00", tag="restored", env=env
     )
-    assert old_backup.returncode == 0, old_backup.stderr
-    old_marker_id = extract_snapshot_id_from_backup_output(old_backup.stdout)
     (source_dir / "f.txt").write_text("data2")
     recent_marker_id = extract_snapshot_id_from_backup_output(
         restic_backup(
