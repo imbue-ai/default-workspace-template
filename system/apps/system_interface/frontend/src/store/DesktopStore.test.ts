@@ -17,6 +17,7 @@ import {
 } from "../testing/records";
 import type { AppRecord } from "../model/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
+import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
 const MODES = { isCompact: false, isTouch: false };
@@ -33,7 +34,10 @@ let socket: FakeDesktopSocket;
 let notices: string[];
 let reloads: number;
 
-function makeStore(redraw: () => void = () => undefined): DesktopStore {
+function makeStore(
+  redraw: () => void = () => undefined,
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId"> = {},
+): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
     api,
@@ -43,6 +47,7 @@ function makeStore(redraw: () => void = () => undefined): DesktopStore {
     redraw,
     notify: (message) => void notices.push(message),
     reloadInterface: () => void (reloads += 1),
+    ...extra,
   });
   store.setBackdropSize({ width: 1000, height: 800 });
   return store;
@@ -1255,46 +1260,22 @@ describe("focus-chat", () => {
 });
 
 describe("pulled-out windows", () => {
-  /** A recorder for the shell's side of the pull-out conversation. */
-  function popOutRecorder(): {
-    bridge: import("./DesktopStore").PopOutBridge;
+  /** A store whose pull-out conversation is recorded: every ask in ``calls``, every detached-set report in
+   *  ``reports``; opened to show ``soloWindowId`` alone when given. */
+  function makePopOutStore(soloWindowId: string | null = null): {
+    store: DesktopStore;
     calls: unknown[];
     reports: unknown[];
   } {
     const calls: unknown[] = [];
     const reports: unknown[] = [];
-    return {
-      calls,
-      reports,
-      bridge: {
-        requestPopOut: (request) => calls.push(["request", request]),
-        cancelPopOut: (windowId) => calls.push(["cancel", windowId]),
-        endPopOut: (windowId) => calls.push(["end", windowId]),
-        reportDetachedWindows: (windows) => reports.push(windows),
-      },
+    const popOut: PopOutBridge = {
+      requestPopOut: (request) => calls.push(["request", request]),
+      cancelPopOut: (windowId) => calls.push(["cancel", windowId]),
+      endPopOut: (windowId) => calls.push(["end", windowId]),
+      reportDetachedWindows: (windows) => reports.push(windows),
     };
-  }
-
-  function makePopOutStore(options: { soloWindowId?: string | null } = {}): {
-    store: DesktopStore;
-    calls: unknown[];
-    reports: unknown[];
-  } {
-    const recorder = popOutRecorder();
-    const store = new DesktopStore({
-      clientId: CLIENT,
-      api,
-      socket,
-      metrics: METRICS,
-      modes: MODES,
-      redraw: () => undefined,
-      notify: (message) => void notices.push(message),
-      reloadInterface: () => void (reloads += 1),
-      popOut: recorder.bridge,
-      soloWindowId: options.soloWindowId ?? null,
-    });
-    store.setBackdropSize({ width: 1000, height: 800 });
-    return { store, calls: recorder.calls, reports: recorder.reports };
+    return { store: makeStore(() => undefined, { popOut, soloWindowId }), calls, reports };
   }
 
   const savedCalls = (): string[] => api.calls.filter((call) => call.startsWith("savePlacements"));
@@ -1416,7 +1397,7 @@ describe("pulled-out windows", () => {
       updated_at: null,
       placements: [placementRecord("win-5", { is_detached: true })],
     });
-    const { store, reports } = makePopOutStore({ soloWindowId: "win-5" });
+    const { store, reports } = makePopOutStore("win-5");
     await store.start(NO_LINK);
     expect(store.getSoloWindowId()).toBe("win-5");
     expect(store.getState().activeDesktopId).toBe("work");
@@ -1444,7 +1425,7 @@ describe("pulled-out windows", () => {
   it("a solo shell whose first layout does not say its window is out takes its own existence as the truth", async () => {
     api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
     api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
-    const { store, reports } = makePopOutStore({ soloWindowId: "win-1" });
+    const { store, reports } = makePopOutStore("win-1");
     await store.start(NO_LINK);
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
     await settle();
