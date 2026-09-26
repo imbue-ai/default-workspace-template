@@ -44,8 +44,8 @@ The pipe truncates output the agent then reasons about as if it were complete, a
 the rest back means running the command again. Redirect to a file and read that instead, so
 the full output exists and can be re-read. A pipe is allowed when everything feeding it only
 reads files, directories or git history (`cat`, `grep`, `rg`, `sed`, `ls`, `find`,
-`git log/show/diff/status`, ...), or when a `tee FILE` upstream keeps the full output: that
-output can be read again at no cost. Each pipeline in a compound command is judged on its own,
+`git log/show/diff/status`, ...) or prints `--help`/`--version`, or when a `tee FILE` upstream
+keeps the full output: that output can be read again at no cost. Each pipeline in a compound command is judged on its own,
 and a pipe into `tail`/`head` the checker cannot place in one (inside quoted text or a
 substitution) is blocked.
 

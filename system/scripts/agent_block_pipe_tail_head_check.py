@@ -6,7 +6,7 @@ this only when the raw text contains a pipe into `head` or `tail`). Exits 0 to a
 with the refusal on stderr to BLOCK.
 
 A pipe into `head`/`tail` is allowed when every stage feeding it is a plain read (`cat f | head`,
-`git log | grep x | head`), or when a `tee FILE` upstream keeps the full output
+`git log | grep x | head`) or prints `--help`/`--version`, or when a `tee FILE` upstream keeps the full output
 (`pytest | tee /tmp/out | tail`). The command is split with the shared `tk_command_parsing`
 parser, so each pipeline in `cd x && cat f | head` is judged on its own.
 
