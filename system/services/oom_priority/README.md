@@ -126,6 +126,15 @@ process, so its band is set before any subprocess exists. A subprocess inherits 
 agent's band by default; the PreToolUse hook raises it the rest of the way so a
 runaway build/test/browser is always shed first.
 
+npm-installed codex needs one exception. Its `codex` command is the npm entry point
+(`bin/codex.js`), which runs the native binary as a child rather than exec'ing it,
+so exec'ing `codex` would leave the registered pid on `node` while earlyoom sheds an
+unregistered child. For `codex` the wrapper therefore execs the native binary from
+the package's platform dependency directly, with the environment the entry point
+would set. `system/scripts/setup_system.sh` fails the build if a codex version bump
+moves that binary, and the wrapper warns on stderr if it finds the npm entry point
+without it before falling back to the entry point.
+
 ## The Chromium exception
 
 Everything above rests on inheritance: tag a process once and its whole subtree

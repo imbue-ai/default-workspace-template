@@ -5,7 +5,10 @@ harness named by its FIRST argument with the args mngr appended. We verify the b
 classification directly, and the tag+exec+arg-forwarding end to end via a subprocess
 with a fake harness binary on PATH (so the real ``execvp`` runs without launching
 the real thing). Parametrized over every harness that uses the wrapper, since the
-whole point of the argv[1] form is that no harness is special.
+argv[1] form treats them all alike; a bare fake ``codex`` is not an npm install, so
+it takes the same plain exec. An npm-installed codex is the exception: a fake npm
+layout checks that the wrapper execs its native binary, so the pid earlyoom sheds
+maps back to the agent.
 """
 
 from __future__ import annotations
@@ -25,7 +28,10 @@ assert _spec is not None and _spec.loader is not None
 wrapper = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(wrapper)
 
+from oom_priority.ledger import has_pending_shed, read_records
 from oom_priority.registry import lookup_agent
+
+_SHED_HOOK = Path(__file__).parent / "earlyoom_record_shed.py"
 
 
 def _write_agent_record(
@@ -190,6 +196,7 @@ def test_wrapper_execs_named_harness_forwarding_args_after_tagging(
 
     assert result.returncode == 0, result.stderr
     assert args_out.read_text().splitlines() == ["--settings", "foo", "--resume", "bar"]
+    assert "expected one native codex binary" not in result.stderr
     # The wrapper recorded its own pid (which became the harness's) as agent u1.
     # OOM_PRIORITY_RUNTIME_DIR is the runtime dir itself (the override is used
     # verbatim), so the registry lives directly under it.
@@ -239,3 +246,133 @@ def test_wrapper_refuses_with_no_harness_argument(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "missing harness binary" in result.stderr
+
+
+_NPM_CODEX_NATIVE = (
+    "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+)
+
+
+def _fake_npm_codex_install(
+    prefix: Path, native_report: Path, native_in_package: str = _NPM_CODEX_NATIVE
+) -> Path:
+    """A global npm install of codex laid out like the real one, returning its
+    package root. ``<prefix>/bin/codex`` links to the package's ``bin/codex.js``,
+    which runs the native binary at ``native_in_package`` as a child process, as
+    the real entry point does. The native binary writes its own pid, the codex
+    install environment it was given, and its args to ``native_report``."""
+    package_root = prefix / "lib" / "node_modules" / "@openai" / "codex"
+    native = package_root / native_in_package
+    native.parent.mkdir(parents=True)
+    native.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$$" "$CODEX_MANAGED_BY_NPM" "$CODEX_MANAGED_PACKAGE_ROOT" "$@"'
+        f" > {native_report}\n"
+    )
+    native.chmod(0o755)
+    entry_point = package_root / "bin" / "codex.js"
+    entry_point.parent.mkdir(parents=True)
+    # The trailing exit keeps the shell from exec'ing its last command in place.
+    entry_point.write_text(f'#!/bin/sh\n"{native}" "$@"\nexit $?\n')
+    entry_point.chmod(0o755)
+    (prefix / "bin").mkdir()
+    (prefix / "bin" / "codex").symlink_to(
+        Path("..") / "lib" / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    )
+    return package_root
+
+
+def _npm_codex_launch_env(prefix: Path, runtime: Path, host: Path) -> dict[str, str]:
+    """The wrapper's environment for agent ``w1``, with the fake npm install from
+    ``prefix`` first on PATH and no inherited codex-install or earlyoom variables."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("CODEX_MANAGED_", "EARLYOOM_"))
+    }
+    env.update(
+        PATH=f"{prefix / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        OOM_PRIORITY_RUNTIME_DIR=str(runtime),
+        MNGR_HOST_DIR=str(host),
+        MNGR_AGENT_NAME="w1",
+    )
+    return env
+
+
+def _launch_codex(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(_SCRIPT), "codex", "app-server", "--listen", "stdio://"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_a_shed_npm_installed_codex_is_attributed_to_its_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pid earlyoom kills when it sheds a codex agent is the pid the wrapper
+    registered, so the kill hook records the shed against that agent and the
+    worker report watcher's ledger check sees it."""
+    runtime = tmp_path / "rt"
+    host = tmp_path / "host"
+    _write_agent_record(host, "w1", is_worker=True)
+    native_report = tmp_path / "native_report.txt"
+    package_root = _fake_npm_codex_install(tmp_path / "npm", native_report)
+    env = _npm_codex_launch_env(tmp_path / "npm", runtime, host)
+
+    launch = _launch_codex(env)
+    assert launch.returncode == 0, launch.stderr
+    harness_pid, managed_by_npm, managed_package_root, *harness_args = (
+        native_report.read_text().splitlines()
+    )
+
+    # Shed the running harness as earlyoom does: its kill hook gets the victim's pid.
+    subprocess.run(
+        [sys.executable, str(_SHED_HOOK)],
+        env={
+            **env,
+            "EARLYOOM_PID": harness_pid,
+            "EARLYOOM_UID": "0",
+            "EARLYOOM_NAME": "codex",
+        },
+        check=True,
+        timeout=30,
+    )
+
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(runtime))
+    (record,) = read_records()
+    assert (record["agent_name"], record["is_worker"]) == ("w1", True)
+    assert has_pending_shed("w1")
+    assert harness_args == ["app-server", "--listen", "stdio://"]
+    assert (managed_by_npm, managed_package_root) == ("1", str(package_root.resolve()))
+
+
+def test_npm_codex_whose_native_binary_moved_still_launches_through_the_entry_point(
+    tmp_path: Path,
+) -> None:
+    """A codex version that moves the native binary out of the layout the wrapper
+    knows must not stop the agent: the wrapper falls back to the npm entry point,
+    which launches codex as its child (under a pid the wrapper did not register)."""
+    runtime = tmp_path / "rt"
+    native_report = tmp_path / "native_report.txt"
+    _fake_npm_codex_install(
+        tmp_path / "npm",
+        native_report,
+        native_in_package="node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex",
+    )
+
+    launch = _launch_codex(
+        _npm_codex_launch_env(tmp_path / "npm", runtime, tmp_path / "host")
+    )
+
+    assert launch.returncode == 0, launch.stderr
+    harness_pid, _, _, *harness_args = native_report.read_text().splitlines()
+    assert harness_args == ["app-server", "--listen", "stdio://"]
+    registered_pids = [
+        int(entry.stem) for entry in (runtime / "agent_pids").glob("*.json")
+    ]
+    assert len(registered_pids) == 1
+    assert int(harness_pid) not in registered_pids
+    assert "expected one native codex binary" in launch.stderr

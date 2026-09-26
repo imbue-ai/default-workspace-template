@@ -282,6 +282,15 @@ command -v node npm >/dev/null
 npm install -g "@openai/codex@${CODEX_VERSION}"
 command -v codex >/dev/null
 codex --version
+# The OOM launch wrapper (system/services/oom_priority/bin/agent_oom_launch.py)
+# execs this native binary itself, because the npm entry point would run it as a
+# child under a pid the wrapper never registered. Fail here if a version bump
+# moved it, rather than let the wrapper fall back to the entry point.
+codex_native_binaries=("$(npm root -g)"/@openai/codex/node_modules/@openai/codex-*/vendor/*/bin/codex)
+if [ "${#codex_native_binaries[@]}" -ne 1 ] || [ ! -x "${codex_native_binaries[0]}" ]; then
+    echo "Expected one native codex binary in the npm package, found: ${codex_native_binaries[*]}" >&2
+    exit 1
+fi
 
 # OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
 # VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
