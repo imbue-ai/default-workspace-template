@@ -260,10 +260,11 @@ command = "sleep infinity"
 # may use varies by tier, and a slug the account cannot use is a hard 400 on every turn ("The
 # 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account") that also
 # leaves the model bar showing a shrug. gpt-6-sol needs codex >= 0.155.0 (CODEX_VERSION) and
-# is listed for every plan GPT-6 Astra is except `promax`, so a promax account's codex agents
-# get that 400, and only `/model` in the agent terminal recovers them: the model bar offers no
-# switch while the current model is missing from the account's list. No effort is pinned, so
-# the model's own default (medium) applies.
+# is listed for every plan GPT-6 Astra is except `promax`. fall_back_to_account_default_model
+# covers that: before mngr starts a new thread it reads the account's model list, and if the
+# pin is not offered it starts the thread on the account's default model instead. A thread
+# that already exists keeps its model. No effort is pinned, so the model's own default
+# (medium) applies.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
@@ -289,6 +290,7 @@ auto_allow_permissions = true
 sandbox_mode = "danger-full-access"
 check_installation = false
 model = "gpt-6-sol"
+fall_back_to_account_default_model = true
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
 # own keys, not mngr fields -- kept here on the agent-type block for one place to read.
 # - memories = false: disable codex's built-in memory system so it never writes to
