@@ -132,7 +132,9 @@ so exec'ing `codex` would leave the registered pid on `node` while earlyoom shed
 unregistered child. For `codex` the wrapper therefore execs the native binary from
 the package's platform dependency directly, with the environment the entry point
 would set. `system/scripts/setup_system.sh` fails the build if a codex version bump
-moves that binary.
+moves that binary, and the wrapper warns on stderr if it finds the npm entry point
+without it (codex can reinstall itself in a live workspace) before falling back to
+the entry point.
 
 ## The Chromium exception
 

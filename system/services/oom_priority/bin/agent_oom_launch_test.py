@@ -196,6 +196,7 @@ def test_wrapper_execs_named_harness_forwarding_args_after_tagging(
 
     assert result.returncode == 0, result.stderr
     assert args_out.read_text().splitlines() == ["--settings", "foo", "--resume", "bar"]
+    assert "expected one native codex binary" not in result.stderr
     # The wrapper recorded its own pid (which became the harness's) as agent u1.
     # OOM_PRIORITY_RUNTIME_DIR is the runtime dir itself (the override is used
     # verbatim), so the registry lives directly under it.
@@ -374,3 +375,4 @@ def test_npm_codex_whose_native_binary_moved_still_launches_through_the_entry_po
     ]
     assert len(registered_pids) == 1
     assert int(harness_pid) not in registered_pids
+    assert "expected one native codex binary" in launch.stderr

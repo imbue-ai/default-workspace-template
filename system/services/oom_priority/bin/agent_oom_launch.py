@@ -127,13 +127,26 @@ def _npm_codex_native_launch() -> tuple[Path, dict[str, str]] | None:
     The entry point (``bin/codex.js``) runs the native binary as a child process
     instead of exec'ing it, so exec'ing the entry point would leave the registered
     pid on ``node`` while codex runs, and is shed, under a pid nothing registered.
-    npm installs only the platform package matching this machine."""
+    npm installs only the platform package matching this machine.
+
+    An npm entry point whose native binary is not where expected (codex's own
+    update prompt can reinstall the package in a live workspace) is reported on
+    stderr before returning None, since the fallback leaves codex unattributed."""
     entry_point = shutil.which("codex")
     if entry_point is None:
         return None
-    package_root = Path(entry_point).resolve().parents[1]
+    resolved_entry_point = Path(entry_point).resolve()
+    package_root = resolved_entry_point.parents[1]
     natives = list(package_root.glob("node_modules/@openai/codex-*/vendor/*/bin/codex"))
     if len(natives) != 1:
+        if resolved_entry_point.name == "codex.js":
+            print(
+                "agent_oom_launch: expected one native codex binary in"
+                f" {package_root}, found {[str(native) for native in natives]};"
+                " launching the npm entry point, so an OOM kill of codex will not"
+                " be attributed to this agent",
+                file=sys.stderr,
+            )
         return None
     env = {
         key: value
