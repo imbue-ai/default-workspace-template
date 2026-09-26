@@ -317,6 +317,10 @@ model = "gpt-6-sol"
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
 config_overrides.suppress_unstable_features_warning = true
+# gpt-6-sol's catalog entry defaults to the `priority` (fast) tier, and codex's TUI applies a
+# model's default tier to every turn typed in the agent terminal when no tier is configured. So
+# pin standard speed; the `fast` create template's config_overrides__extend replaces it.
+config_overrides.service_tier = "default"
 config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. Codex refuses to
