@@ -1158,10 +1158,11 @@ registerProcessor('pb', PB);`;
     import("/_static/app_contract.js")
       .then(({ connectToShell }) => {
         // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
-        // the window-bound sweep would otherwise stop the whole browser.
+        // the window-bound sweep would otherwise stop the whole browser. The browser is
+        // named by the page's own session parameter; the viewer's state above is closure-local.
         const closeRemoteTab = () => {
-          if (browserId === null) return;
-          fetch(new URL("browsers/" + browserId + "/close-tab", document.baseURI), { method: "POST" })
+          if (session === null) return;
+          fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
             .then(async (response) => {
               if (response.ok) return;
               let reason = "";

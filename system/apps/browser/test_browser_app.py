@@ -161,3 +161,11 @@ def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_res
     assert still_launching.status_code == 409
     assert "not running" in still_launching.get_json()["error"]
     assert unknown.status_code == 404
+
+
+def test_the_viewer_module_script_reads_no_state_from_the_classic_script() -> None:
+    """The shell-contract block is a module: it cannot see the viewer closure's names."""
+    page = (Path(__file__).parent / "src" / "browser" / "assets" / "index.html").read_text()
+    module_block = page.split('<script type="module">', 1)[1].split("</script>", 1)[0]
+    assert "browserId" not in module_block
+    assert '"browsers/" + session + "/close-tab"' in module_block
