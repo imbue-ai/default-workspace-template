@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import json
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -113,6 +114,12 @@ _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
 _GEOMETRY_TOLERANCE_PX = 4
+# A window travels to a new rectangle over --desk-window-move, so a box read the moment its state
+# flips is a frame of the journey rather than where it is going. Two reads this far apart that agree
+# are the arrival; the ceiling is many times the travel, so only a window that never arrives fails.
+_TRAVEL_POLL_MS = 60
+_TRAVEL_SETTLE_TIMEOUT_SECONDS = 5.0
+_TRAVEL_SETTLE_EPSILON_PX = 0.5
 
 
 class E2EServer(FrozenModel):
@@ -533,6 +540,19 @@ def _box(locator: Locator) -> FloatRect:
     box = locator.bounding_box()
     assert box is not None, "the element has no box"
     return box
+
+
+def _settled_box(locator: Locator) -> FloatRect:
+    """The element's box once it has stopped moving, for a window whose state has just changed."""
+    deadline = time.monotonic() + _TRAVEL_SETTLE_TIMEOUT_SECONDS
+    previous = _box(locator)
+    while time.monotonic() < deadline:
+        locator.page.wait_for_timeout(_TRAVEL_POLL_MS)
+        current = _box(locator)
+        if all(abs(current[key] - previous[key]) < _TRAVEL_SETTLE_EPSILON_PX for key in ("x", "y", "width", "height")):
+            return current
+        previous = current
+    raise AssertionError(f"the element was still moving after {_TRAVEL_SETTLE_TIMEOUT_SECONDS}s: {previous}")
 
 
 def _center(box: FloatRect) -> tuple[float, float]:
@@ -1029,7 +1049,7 @@ def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page)
     expect(page.locator("[data-snap-preview]")).to_be_visible()
     page.mouse.up()
     expect(window).to_have_attribute("data-window-state", "SNAPPED_LEFT")
-    snapped = _box(window)
+    snapped = _settled_box(window)
     _assert_close(snapped["x"], backdrop["x"], "snapped x")
     _assert_close(snapped["width"], backdrop["width"] / 2, "snapped width")
     _assert_close(snapped["height"], backdrop["height"], "snapped height")
@@ -1042,7 +1062,7 @@ def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page)
     start = _center(_box(window.locator("[data-drag-handle]")))
     _drag(page, start, (start[0] + 200, start[1] + 150))
     expect(window).to_have_attribute("data-window-state", "NORMAL")
-    unsnapped = _box(window)
+    unsnapped = _settled_box(window)
     _assert_close(unsnapped["width"], normal["width"], "unsnapped width")
     _assert_close(unsnapped["height"], normal["height"], "unsnapped height")
     assert unsnapped["x"] > snapped["x"] + _SNAP_THRESHOLD
@@ -1053,7 +1073,7 @@ def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page)
     start = _center(_box(window.locator("[data-drag-handle]")))
     _drag(page, start, (start[0], backdrop["y"] + _SNAP_THRESHOLD / 2))
     expect(window).to_have_attribute("data-window-state", "MAXIMIZED")
-    _assert_same_box(_box(window), backdrop, "maximized")
+    _assert_same_box(_settled_box(window), backdrop, "maximized")
     _wait_for_stored_placement(
         e2e_server, client_id, window_id, lambda placement: placement["state"] == "MAXIMIZED", "MAXIMIZED"
     )
@@ -1079,7 +1099,7 @@ def test_title_bar_double_click_and_controls_toggle_maximize_and_minimize(e2e_se
     expect(window.locator('[data-window-control="restore"]')).to_be_visible()
     window.locator("[data-drag-handle]").dblclick()
     expect(window).to_have_attribute("data-window-state", "NORMAL")
-    _assert_same_box(_box(window), normal, "restored")
+    _assert_same_box(_settled_box(window), normal, "restored")
 
     window.locator('[data-window-control="minimize"]').click()
     expect(_shown_windows(page)).to_have_count(0)
