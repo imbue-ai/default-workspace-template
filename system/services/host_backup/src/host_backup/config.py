@@ -312,7 +312,6 @@ def resolve_service_events_dir() -> Path | None:
     return get_events_dir()
 
 
-# ---------------------------------------------------------------------------
 # Backwards-compatibility shims for pre-refactor bootstraps.
 #
 # Old workspaces keep their old `system/libs/bootstrap` forever (the minds backup
@@ -322,7 +321,6 @@ def resolve_service_events_dir() -> Path | None:
 # harmless no-op: templates are no longer written and `[snapshot]` is no
 # longer maintained in backup.toml. Removable once every pre-refactor host
 # has rotated out.
-# ---------------------------------------------------------------------------
 
 # Old bootstraps construct this to describe the detected snapshot mechanism;
 # the capabilities model still carries every field they pass.

@@ -208,7 +208,7 @@ def test_the_self_hint_still_names_where_this_script_actually_lives() -> None:
     assert str(_SCRIPT).endswith(mod._SELF_HINT)
 
 
-# --- bare instance (own testing) --------------------------------------------
+# bare instance (own testing)
 
 
 def test_up_boots_on_a_port_injects_port_env_and_reports_url(
@@ -427,7 +427,7 @@ def test_up_clears_a_stale_instance_before_booting(tmp_path: Path) -> None:
     assert json.loads(_state_path(tmp_path).read_text())["pids"][0] == 4242
 
 
-# --- registered service (surfaced, no wrapper) ------------------------------
+# registered service (surfaced, no wrapper)
 
 
 def test_up_with_service_name_registers_the_instance(tmp_path: Path) -> None:
@@ -445,7 +445,7 @@ def test_up_with_service_name_registers_the_instance(tmp_path: Path) -> None:
     assert state["services"] == ["demo-app"]
 
 
-# --- preview (surfaced, wrapped) --------------------------------------------
+# preview (surfaced, wrapped)
 
 
 def _up_preview(
@@ -580,7 +580,7 @@ def _first_port(url: str, spawner: _FakeSpawner) -> bool:
     return inner_port is not None and f":{inner_port}" in url
 
 
-# --- teardown ---------------------------------------------------------------
+# teardown
 
 
 def test_down_tears_down_servers_and_services(tmp_path: Path) -> None:
@@ -693,7 +693,7 @@ def test_up_refuses_to_boot_over_an_instance_it_could_not_clear(
     assert not spawner.detached_spawns
 
 
-# --- refresh (in-place inner reboot) ----------------------------------------
+# refresh (in-place inner reboot)
 
 
 def _refresh(
@@ -816,7 +816,7 @@ def test_down_reports_unreadable_state(tmp_path: Path) -> None:
     assert code == 1
 
 
-# --- CLI + parsing ----------------------------------------------------------
+# CLI + parsing
 
 
 def test_parse_env_assignments_rejects_a_missing_equals() -> None:
@@ -1110,7 +1110,7 @@ def test_main_routes_down(tmp_path: Path) -> None:
     assert code == 0  # no state -> idempotent no-op
 
 
-# --- wrapper page (moved here with the wrapper server) ----------------------
+# wrapper page
 
 
 def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
