@@ -261,7 +261,8 @@ command = "sleep infinity"
 # 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account") that also
 # leaves the model bar showing a shrug. gpt-6-sol needs codex >= 0.155.0 (CODEX_VERSION) and
 # is listed for every plan GPT-6 Astra is except `promax`, so a promax account's codex agents
-# get that 400 until they are switched to a model the account offers. No effort is pinned, so
+# get that 400, and only `/model` in the agent terminal recovers them: the model bar offers no
+# switch while the current model is missing from the account's list. No effort is pinned, so
 # the model's own default (medium) applies.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
@@ -306,10 +307,9 @@ model = "gpt-6-sol"
 # - unified_exec_tty = false: closes a TOTAL bypass of the PreToolUse guards. `write_stdin`
 #   fires NO PreToolUse event at all, so an agent could start a shell with one guarded call and
 #   then type anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with
-#   every guard skipped (measured on codex-cli 0.147.0: the typed command ran and the hook log
-#   held a single `Bash`/`bash` entry). With tty off, exec_command rejects `tty: true` and runs
-#   every process with its stdin closed, so `write_stdin` can only poll a running command or
-#   send it an interrupt. Long-running commands still yield and can be polled. Do not reach for
+#   every guard skipped. With tty off, exec_command rejects `tty: true` and runs every process
+#   with its stdin closed, so `write_stdin` can only poll a running command or send it an
+#   interrupt. Long-running commands still yield and can be polled. Do not reach for
 #   `unified_exec = false` instead: codex >= 0.154 forces unified exec back on unless a managed
 #   requirements file pins it, so that flag is silently ignored. Nor the tools table below:
 #   `ToolsToml` accepts only web_search / experimental_request_user_input / update_plan.
