@@ -7,6 +7,7 @@
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { entryStyleParts } from "./AvatarImage";
@@ -19,7 +20,7 @@ export interface TaskbarEntryAttrs {
   readonly isCompact: boolean;
   readonly isMenuOpen: boolean;
   readonly onClick: () => void;
-  readonly onContextMenu: (x: number, y: number) => void;
+  readonly onContextMenu: (x: number, y: number, target: Element) => void;
 }
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
@@ -56,7 +57,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         onclick: onClick,
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
-          onContextMenu(event.clientX, event.clientY);
+          onContextMenu(event.clientX, event.clientY, targetElementOf(event));
         },
       },
       [

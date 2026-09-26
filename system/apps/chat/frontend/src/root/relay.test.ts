@@ -28,6 +28,7 @@ describe("isForwardedToShell", () => {
     expect(isForwardedToShell({ type: "minds:ready" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:focused" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:open", path: "/agent-1.agent-2.sess-3", ifPresent: "focus" })).toBe(true);
+    expect(isForwardedToShell({ type: "shell:draft-text", text: "Explain this element:" })).toBe(true);
   });
 
   it("keeps everything else the page posts, and anything that is not a typed message, at the root", () => {

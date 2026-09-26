@@ -13,6 +13,7 @@ new app a port another program already holds.
 from __future__ import annotations
 
 import configparser
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ import pytest
 import scaffold_flask_lib
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import MAX_DISPLAY_NAME_LENGTH
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
@@ -312,11 +314,17 @@ def test_the_display_name_limit_matches_the_library() -> None:
     assert scaffold_flask_lib.MAX_DISPLAY_NAME_LENGTH == MAX_DISPLAY_NAME_LENGTH
 
 
-def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
+def test_the_runner_page_connects_to_the_shell_and_installs_the_element_menu() -> None:
     source = scaffold_flask_lib._lib_runner(
         "inbox-status", "inbox_status", "inbox status dashboard", 8081
     )
-    assert '"shell:location"' in source
+    assert 'from "/_static/app_contract.js"' in source
+    assert 'from "/_static/context_menu.js"' in source
+    assert "connection.location(location.pathname + location.search" in source
+    assert (
+        "installElementContextMenu({ connection, handshake: () => handshake })"
+        in source
+    )
     assert "minds-location" not in source
 
 
@@ -358,6 +366,55 @@ def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
         '&& python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
         in wrapped.read_text()
     )
+
+
+def test_the_shell_module_paths_match_the_library() -> None:
+    # The scaffold runs in its own PEP 723 environment and cannot import the
+    # library, so it carries its own copy of the paths; this keeps the copy honest.
+    assert (
+        Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
+        == SHELL_APP_CONTRACT_PATH.parent
+    )
+    assert (
+        Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
+        == SHELL_CONTEXT_MENU_PATH.parent
+    )
+    assert scaffold_flask_lib.SHELL_STATIC_MODULE_NAMES == (
+        SHELL_APP_CONTRACT_PATH.name,
+        SHELL_CONTEXT_MENU_PATH.name,
+    )
+
+
+def test_the_runner_serves_the_shell_modules_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scaffolded app answers the two shell-built modules from its own origin, and 404s any other name."""
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+    )
+    runner = tmp_path / "runner.py"
+    runner.write_text(source)
+    modules_dir = tmp_path / scaffold_flask_lib.SHELL_STATIC_MODULES_DIR
+    modules_dir.mkdir(parents=True)
+    (modules_dir / "app_contract.js").write_text(
+        "export function connectToShell() {}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    spec = importlib.util.spec_from_file_location("scaffolded_runner", runner)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    client = module.app.test_client()
+    served = client.get("/_static/app_contract.js")
+    assert served.status_code == 200
+    assert served.mimetype == "text/javascript"
+    assert b"connectToShell" in served.data
+    assert client.get("/_static/context_menu.js").status_code == 404
+    assert client.get("/_static/runner.py").status_code == 404
+    assert client.get("/_static/..%2Frunner.py").status_code == 404
+    page = client.get("/")
+    assert page.status_code == 200
+    assert b'from "/_static/context_menu.js"' in page.data
 
 
 def test_the_runner_does_not_use_reloader() -> None:

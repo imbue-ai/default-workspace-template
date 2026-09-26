@@ -224,6 +224,21 @@ or a draft into a new chat, mints an unseeded provisional chat in the
 restart of this app drops it); its page shows an empty conversation over the
 composer, and its first send launches it as a seeded chat's does.
 
+An element reference (the right-click menu's description of an element,
+`docs/system/blueprint/element-reference-menu/`) enters a composer as an
+attachment: the reference travels as a fenced `json` block in a draft's text
+until it reaches a chat, and `models/elementReferences.ts` takes each block out
+wherever a draft enters a composer (`prependToComposer`: the root applying a
+pending intake or drafting from its rail, a chat page drafting from its own menu)
+and uploads it as a `REF-<id>.json` file through the ordinary `/api/uploads`
+path, so the composer shows a chip and the sent message names the file on its
+"See attachment here:" line. Ready attachments are persisted to localStorage
+beside the draft text, so a chip survives a reload and a page finds what the
+root staged for it before it loaded. Every chat page and the root draw the
+element context menu; a chat page drafts into its own composer, the root into
+the selected chat's (else through the shell), and a sub-agent view through the
+shell, its `shell:draft-text` relayed by the root.
+
 The create route is likewise how a chat is made from outside the chat page:
 `message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
