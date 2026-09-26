@@ -1342,8 +1342,17 @@ export class DesktopStore {
       this.popOut.requestPopOut(this.popOutRequestFor(start.windowId, currentRect, grab, "drag"));
     } else if (!isTearingOut && start.isTearingOut) {
       this.popOut.cancelPopOut(start.windowId);
+      this.bringBackIfDetached(start.windowId);
     }
     this.gesture = { ...start, currentRect, zone: isTearingOut ? null : zone, isTearingOut };
+  }
+
+  /** A tear-out that ends without a detach (the pointer back inside, the gesture cancelled) leaves the window on
+   *  the desktop. The layout may say otherwise by then: the popout's solo shell detaches the window on its first
+   *  load when the placement does not yet say so, and its save lands here mid-drag. The window is then brought
+   *  back where the drag raised it, so no ghost stands for a popout the chrome has dropped. */
+  private bringBackIfDetached(windowId: string): void {
+    if (placementOf(this.state.layout, windowId).is_detached) this.dispatch({ type: "window_raised", windowId });
   }
 
   endWindowMove(pointer: PixelPoint): void {
@@ -1495,7 +1504,10 @@ export class DesktopStore {
     const cancelled = this.gesture;
     this.gesture = null;
     // A tear-out cancelled mid-drag (Escape, the browser): the chrome drops the window it was dragging.
-    if (cancelled.kind === "move" && cancelled.isTearingOut) this.popOut.cancelPopOut(cancelled.windowId);
+    if (cancelled.kind === "move" && cancelled.isTearingOut) {
+      this.popOut.cancelPopOut(cancelled.windowId);
+      this.bringBackIfDetached(cancelled.windowId);
+    }
     this.notifyListeners();
   }
 

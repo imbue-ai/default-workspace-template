@@ -1338,6 +1338,36 @@ describe("pulled-out windows", () => {
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
   });
 
+  it("brings a window back when its tear-out is cancelled after the popout's shell detached it meanwhile", async () => {
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    /** The popout's solo shell detaching the window on its first layout load, landing here as a broadcast. */
+    const detachElsewhere = async (): Promise<void> => {
+      api.writeLayout("home", CLIENT, {
+        updated_at: null,
+        placements: [placementRecord("win-1", { is_detached: true })],
+      });
+      socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+      await settle();
+    };
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.updateWindowMove({ x: 1060, y: 300 });
+    await detachElsewhere();
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+    // Back inside: the chrome drops its window, and this one is on the desktop again.
+    store.updateWindowMove({ x: 900, y: 300 });
+    expect(store.getGesture()).toMatchObject({ isTearingOut: false });
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: false, is_minimized: false });
+    // Out again, detached elsewhere again, and cancelled: the same.
+    store.updateWindowMove({ x: 1060, y: 300 });
+    await detachElsewhere();
+    store.cancelGesture();
+    expect(store.getGesture()).toBeNull();
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
+    expect(calls.map((call) => (call as unknown[])[0])).toEqual(["request", "cancel", "request", "cancel"]);
+  });
+
   it("opens a window in its own desktop window from the menu, shows it again, and brings it back", async () => {
     const { store, calls } = makePopOutStore();
     await store.start(NO_LINK);
