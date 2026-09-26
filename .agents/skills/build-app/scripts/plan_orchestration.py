@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Deterministic plumbing for carrying out a build-app-parallel plan.
+"""Deterministic plumbing for carrying out a build-app plan.
 
 The planner writes a plan as three parallel lists inside an ``<output>`` tag:
 ``capability``, ``subtasks`` and ``access list``, one entry per node. The
@@ -10,7 +10,7 @@ orchestrating agent keeps the judgment (reading reports, talking to the user,
 deciding what to do when a node goes wrong); this script owns the parts with a
 single right answer.
 
-Every command works on one run folder, ``data/.tasks/build-app-parallel/<slug>/``:
+Every command works on one run folder, ``data/.tasks/build-app/<slug>/``:
 
     plan.md                         the planner's raw output
     plan.json                       the validated plan (written by ``parse``)
@@ -79,7 +79,7 @@ _OUTPUT_TAG_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 WORKER_RULES_REFERENCE: Final[str] = (
-    ".agents/skills/build-app-parallel/references/worker-node.md"
+    ".agents/skills/build-app/references/worker-node.md"
 )
 PLAN_MARKDOWN_FILE_NAME: Final[str] = "plan.md"
 PLAN_JSON_FILE_NAME: Final[str] = "plan.json"

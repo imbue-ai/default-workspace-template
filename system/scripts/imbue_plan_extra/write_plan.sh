@@ -10,8 +10,8 @@
 # <flow> names the skill being routed, and selects prompts/<flow>.md.
 #
 # Every plan this writes is discarded. A flow whose plan is carried out keeps its
-# own planner with the skill that runs it -- build-app-parallel's is at
-# .agents/skills/build-app-parallel/scripts/run_planner.sh -- so that nothing on
+# own planner with the skill that runs it -- build-app's is at
+# .agents/skills/build-app/scripts/run_planner.sh -- so that nothing on
 # a build's critical path shares a file with this.
 #
 # Returns immediately: the first invocation prints the run directory it created,

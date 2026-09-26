@@ -11,10 +11,10 @@ You have read-only tools and a single turn, so work from what you can read.
 
 ## Step 1: read the work you are routing
 
-Start with `.agents/shared/build-app/README.md`. That is the flow this request
+Start with `.agents/skills/build-app/references/app-building-guidance.md`. That is the flow this request
 will be built through, and your plan is a routing of that work.
 
-Then read `.agents/skills/build-app-parallel/references/worker-node.md`. Every
+Then read `.agents/skills/build-app/references/worker-node.md`. Every
 worker follows it, so it tells you what a node's worker can and cannot do.
 
 Then read enough of the workspace to ground the plan:

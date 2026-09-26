@@ -1748,7 +1748,7 @@ extra_provision_command__extend = ["uv sync --all-packages", "bash system/script
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shared-folder worker: one of several workers an orchestrating agent runs in parallel
-# inside a single folder (first used by build-app-parallel). The orchestrator creates
+# inside a single folder (first used by build-app). The orchestrator creates
 # one git worktree for the whole job and starts every worker inside it with
 # `--from :<folder>`, so transfer is "none": workers see each other's files the
 # moment they are written, and there is one merge at the end instead of one per worker.

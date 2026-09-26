@@ -38,12 +38,12 @@ Pick the flow that fits the ask:
   the result." Route to **`fetch-process-show`**.
 
 - **Build a web view** -- the ask is "build me a page / dashboard / app I can
-  look at." Route to **`build-app-parallel`**. It plans the build, runs the
+  look at." Route to **`build-app`**. It plans the build, runs the
   parts in parallel workers, and owns the interactive mock-confirmation flow for
   web work.
 
 - **A hybrid: a web view over fetched data** -- start with `fetch-process-show`
-  to confirm the data sample, then it hands the surface to `build-app-parallel`
+  to confirm the data sample, then it hands the surface to `build-app`
   (which runs its own UI-mock confirmation on top of the confirmed data). Begin
   with `fetch-process-show`.
 

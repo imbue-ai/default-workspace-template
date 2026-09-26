@@ -13,22 +13,17 @@ flows go through the `update-app` skill.
 
 ## What this file is
 
-Reference, not a flow. It was the `build-app` skill until the parallel build
-replaced it, and it is kept for the three readers that need the mechanics:
+Reference, not a flow. It is `build-app`'s own account of the mechanics, for the
+three readers who need them:
 
-- **A worker** of a `build-app-parallel` build, building the one piece its task
-  names. It follows the mechanics below for that piece only, and skips the plan
-  recorder -- the plan already exists, and the worker is a node in it.
-- **That skill's planner**, reading to learn what a build here involves before
-  it writes the plan.
-- **The orchestrating agent**, to look something up.
+- **A worker**, building the one piece its task names. It follows the mechanics
+  below for that piece only.
+- **The planner**, learning what a build here involves before it writes the plan.
+- **The orchestrating agent**, looking something up.
 
-Nothing routes here. If a user asked you for an app, follow
-`.agents/skills/build-app-parallel/SKILL.md`: it plans the build, runs the pieces
-as workers, and sends you here only for a detail. Building an app straight from
-this file skips the plan, the parallel workers and the reviews the plan
-schedules -- an eval run did exactly that, silently, back when this file was
-still a skill an agent could pick up.
+It describes building an app end to end, so working through it from the top is
+building the app by hand. That is what `SKILL.md` exists to replace: it plans the
+build, runs the pieces as workers, and sends you here only for a detail.
 
 ## This is the web specialization of the interactive-delivery shape
 
@@ -141,7 +136,7 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
 ## Step 1: Run the scaffolder (canonical path)
 
 ```bash
-uv run .agents/shared/build-app/scripts/scaffold_flask_lib.py \
+uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \

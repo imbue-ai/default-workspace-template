@@ -6,7 +6,7 @@ this one build. Your task file names your subtask and gives you the reports of
 the nodes you depend on, and its frontmatter names its own path and where your
 report goes. This document is the rest of your task.
 
-Read `.agents/skills/build-app-parallel/references/worker-workspace-rules.md`
+Read `.agents/skills/build-app/references/worker-workspace-rules.md`
 too. It is the subset of the workspace's `AGENTS.md` that applies to a worker --
 `AGENTS.md` itself is loaded into your context automatically and is written for
 the agent holding the chat with the user, so where the two differ, that file is
@@ -61,7 +61,7 @@ you when two of you touch the same file.
 
 ## How to build
 
-`.agents/shared/build-app/README.md` describes how a whole app is built here, from
+`.agents/skills/build-app/references/app-building-guidance.md` describes how a whole app is built here, from
 the first question to the hardening handoff. Use it only as a reference for *how*
 to do your subtask: the scaffolder, file-path conventions, the `frontend-design`
 skill before any markup, raw-data affordances. It never tells you *what* to do.
