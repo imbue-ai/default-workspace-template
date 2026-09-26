@@ -133,8 +133,7 @@ unregistered child. For `codex` the wrapper therefore execs the native binary fr
 the package's platform dependency directly, with the environment the entry point
 would set. `system/scripts/setup_system.sh` fails the build if a codex version bump
 moves that binary, and the wrapper warns on stderr if it finds the npm entry point
-without it (codex can reinstall itself in a live workspace) before falling back to
-the entry point.
+without it before falling back to the entry point.
 
 ## The Chromium exception
 

@@ -124,13 +124,8 @@ def _npm_codex_native_launch() -> tuple[Path, dict[str, str]] | None:
     """The native binary behind an npm-installed ``codex``, and the environment
     its npm entry point would give it; None when ``codex`` is not that install.
 
-    The entry point (``bin/codex.js``) runs the native binary as a child process
-    instead of exec'ing it, so exec'ing the entry point would leave the registered
-    pid on ``node`` while codex runs, and is shed, under a pid nothing registered.
-    npm installs only the platform package matching this machine.
-
-    An npm entry point whose native binary is not where expected (codex's own
-    update prompt can reinstall the package in a live workspace) is reported on
+    npm installs only the platform package matching this machine, so exactly one
+    native binary is expected. An npm entry point without one is reported on
     stderr before returning None, since the fallback leaves codex unattributed."""
     entry_point = shutil.which("codex")
     if entry_point is None:
