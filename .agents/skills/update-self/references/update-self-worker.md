@@ -7,7 +7,7 @@ never restart a live service or apply anything to the live workspace** -- you
 validate in isolation and report; the lead runs the apply.
 
 The deterministic pieces (target resolution, merged-vs-pulled classification,
-changelog gathering) live in
+changelog gathering, the rollbacks to undo) live in
 `data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py`
 -- call it, don't reimplement. That staged path is the copy of the update-self
 flow shipped with the version being updated to (the lead staged it and it was
@@ -35,25 +35,23 @@ git fetch upstream --tags
 BASE=$(git merge-base HEAD "$TARGET_REF")
 ```
 
-**A pass after a rolled-back apply must revert the rollback first.** The
-apply rolls back as a *forward revert*, so `HEAD` carries
-a `Roll back update apply (restore to ...)` commit whose parent is the landed
-merge: git then counts the target's content as already merged, and a plain
-`git merge "$TARGET_REF"` lands only what the target gained since -- a tree
-that is the old release plus a few files, which the apply's probes cannot tell
-from a good update. Check for one, and put the content back on your branch
-before merging (a `both added` conflict on a file the target changed since is
-resolved by taking the target's version). The newest rollback since the merge
-base is the one to undo, unless a later commit already reverts it: a rollback
-of an earlier release that its own retry undid is not yours to undo again,
-while one nobody undid hides that release's content from a pass to a newer
-target just the same.
+**A pass after a rolled-back update must revert the rollback first.** The
+apply rolls back as a *forward revert*, so `HEAD` carries a `Roll back update
+apply (restore to ...)` commit on top of the landed merge: git then counts that
+release's content as already merged, and a plain `git merge "$TARGET_REF"` --
+of the same release or a newer one -- lands only what the target changed since,
+a tree that is the old release plus a few files, which the apply's probes
+cannot tell from a good update. `pending-rollbacks` lists every rollback of an
+update-self landing that nothing has undone yet, newest first; revert each on
+your branch before merging (a `both added` conflict on a file the target changed
+since is resolved by taking the target's version). It skips a rollback an
+earlier retry already reverted, and a user's rollback of an app change, which is
+theirs to keep. The apply refuses a merge that leaves one in place.
 
 ```bash
-ROLLBACK=$(git log --format=%H --grep='^Roll back update apply' "$BASE"..HEAD | head -1)
-if [ -n "$ROLLBACK" ] && [ -z "$(git log --format=%H --grep="^This reverts commit $ROLLBACK" "$ROLLBACK"..HEAD)" ]; then
-    git revert --no-edit "$ROLLBACK"
-fi
+ROLLBACKS=$(python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    pending-rollbacks --target "$TARGET_REF")
+for ROLLBACK in $ROLLBACKS; do git revert --no-edit "$ROLLBACK"; done
 ```
 
 ## 2. Reason about the diff, then trial-merge

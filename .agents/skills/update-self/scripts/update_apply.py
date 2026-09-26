@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime
 import fcntl
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -250,50 +251,93 @@ def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool
     return any(line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines())
 
 
-def _refuse_a_re_merge_that_drops_a_rolled_back_target(
+# An update-self landing is the worker's merge, committed under this subject prefix
+# (the update-self worker reference); resolve_template_base.py reads the same marker.
+_UPDATE_SELF_SUBJECT_PREFIX = "update-self:"
+
+_ROLLBACK_SUBJECT = re.compile(
+    rf"^{re.escape(_ROLLBACK_SUBJECT_PREFIX)} \(restore to (?P<restore_to>[0-9a-f]+)\)"
+)
+
+# The line `git revert` puts in every revert commit's body.
+_REVERTS_COMMIT = re.compile(r"^This reverts commit (?P<sha>[0-9a-f]{40})\b", re.MULTILINE)
+
+
+def _rolled_back_an_update_self_landing(
+    rollback: str, restore_to: str, repo_root: Path, runner: Runner
+) -> bool:
+    """Whether the history ``rollback`` undid carries an update-self landing.
+
+    Every flow's failed apply and the careful flow's user-requested rollback write the
+    same subject; only an update-self rollback is a later update-self pass's to undo.
+    A user who asked for an app change back must keep it rolled back.
+    """
+    undone = git_out(
+        runner,
+        repo_root,
+        ["log", "--first-parent", "--format=%s", f"{restore_to}..{rollback}^"],
+    )
+    return any(
+        subject.startswith(_UPDATE_SELF_SUBJECT_PREFIX) for subject in undone.splitlines()
+    )
+
+
+def pending_update_rollbacks(
+    target_ref: str, tip: str, repo_root: Path, runner: Runner
+) -> list[str]:
+    """The rollbacks of update-self landings on ``tip`` that nothing has undone yet,
+    newest first -- the order to revert them in.
+
+    Looks at ``target_ref..tip``: everything the workspace committed that the target
+    does not carry. A rollback is undone by a later revert of it that is not itself
+    undone, so reverting a revert puts a rollback back in force. Until each is
+    reverted, git counts the content it removed as merged, and merging any later
+    release lands only what that release changed since: the old release plus a few
+    files, which the apply's probes cannot tell from a good update.
+    """
+    log = git_out(
+        runner,
+        repo_root,
+        ["log", "--topo-order", "--format=%H%x00%s%x00%b%x1e", f"{target_ref}..{tip}"],
+    )
+    undone: set[str] = set()
+    pending: list[str] = []
+    # Newest first, so a commit's own undoing is known before its reverts are counted.
+    for record in log.split("\x1e"):
+        if not record.strip():
+            continue
+        sha, subject, body = record.strip("\n").split("\x00", 2)
+        if sha in undone:
+            continue
+        undone.update(_REVERTS_COMMIT.findall(body))
+        rollback = _ROLLBACK_SUBJECT.match(subject)
+        if rollback is not None and _rolled_back_an_update_self_landing(
+            sha, rollback.group("restore_to"), repo_root, runner
+        ):
+            pending.append(sha)
+    return pending
+
+
+def _refuse_a_merge_that_leaves_an_update_rolled_back(
     target_ref: str, merge_ref: str, repo_root: Path, runner: Runner
 ) -> None:
-    """Refuse to apply ``merge_ref`` when it re-merges a target the tree landed and
-    then rolled back, unless it first reverts that rollback.
+    """Refuse to apply ``merge_ref`` while it still carries a rollback of an update-self
+    landing that it has not reverted, whether it re-merges that release or a newer one.
 
-    The rollback is a forward revert, so git already counts the target's content as
-    merged: a plain re-merge lands only what the target gained since the failed
-    attempt, and the apply would then probe the old release plus a few files, find
-    it healthy (the manifests it probes by are not even in the tree), and record
-    the update as landed. Reverting the rollback commit on the worker's branch is
-    what puts the content back (the update-self worker reference says how); its
-    presence in ``HEAD..merge_ref`` is what lets the apply proceed.
+    Reverting the rollback on the worker's branch is what puts the content back (the
+    update-self worker reference's first step does it).
     """
-    if not _is_merge_landed(target_ref, repo_root, runner):
+    pending = pending_update_rollbacks(target_ref, merge_ref, repo_root, runner)
+    if not pending:
         return
-    since_target = git_out(
-        runner, repo_root, ["log", "--format=%H %s", f"{target_ref}..HEAD"]
-    )
-    rollback = next(
-        (
-            commit
-            for commit, _separator, subject in (
-                line.partition(" ") for line in since_target.splitlines()
-            )
-            if subject.startswith(_ROLLBACK_SUBJECT_PREFIX)
-        ),
-        None,
-    )
-    if rollback is None:
-        return
-    reverts = git_out(runner, repo_root, ["log", "--format=%s", f"HEAD..{merge_ref}"])
-    if any(
-        line.startswith(f'Revert "{_ROLLBACK_SUBJECT_PREFIX}')
-        for line in reverts.splitlines()
-    ):
-        return
+    reverts = "; ".join(f"git revert --no-edit {sha[:12]}" for sha in pending)
     raise ApplyPreconditionError(
-        f"{target_ref} was landed and then rolled back by {rollback[:12]}, so git "
-        f"already counts its content as merged and {merge_ref} would land only what "
-        "the target gained since: the tree would be the previous release plus a few "
-        "files, which the probes cannot tell from a good update. Revert that rollback "
-        f"on the worker's branch first (`git revert --no-edit {rollback[:12]}`, per the "
-        "update-self worker reference), then re-run. Nothing was changed."
+        f"{merge_ref} still carries an earlier update's rollback that it has not "
+        "reverted, so git counts that update's content as merged and this one would "
+        f"land only what {target_ref} changed since: the tree would be the previous "
+        "release plus a few files, which the probes cannot tell from a good update. "
+        f"Revert it on the worker's branch first (`{reverts}`, per the update-self "
+        "worker reference), then re-run. Nothing was changed."
     )
 
 
@@ -883,9 +927,9 @@ def apply_update(
             "pass off the current HEAD instead. Nothing was changed."
         )
     # The fresh worker pass that follows such a rollback has the same trap one step
-    # later: its re-merge of the target lands nothing unless it reverts the rollback.
+    # later: its merge lands the rolled-back content only if it reverts the rollback.
     if target_ref is not None and not is_merge_landed:
-        _refuse_a_re_merge_that_drops_a_rolled_back_target(
+        _refuse_a_merge_that_leaves_an_update_rolled_back(
             target_ref, merge_ref, repo_root, runner
         )
     # A fresh apply replaces whatever rollback point the last one kept: its copies

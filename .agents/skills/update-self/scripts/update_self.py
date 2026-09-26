@@ -55,6 +55,12 @@ belong in tested code rather than agent prose:
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
 
+``pending-rollbacks``
+    List the rollbacks of earlier update-self landings that nothing has undone
+    yet, newest first -- the commits the worker reverts before it merges, since
+    until then git counts the content they removed as merged. ``apply`` refuses a
+    merge ref that still carries one, by the same rule.
+
 ``surface-chat-tab``
     Open this run's own chat window in the workspace UI, so a user sent into the
     workspace by the minds app lands on the conversation performing the update.
@@ -135,7 +141,13 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from update_apply import apply_update, confirm_last, recover, rollback_last
+from update_apply import (
+    apply_update,
+    confirm_last,
+    pending_update_rollbacks,
+    recover,
+    rollback_last,
+)
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
@@ -369,6 +381,14 @@ def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
         capture_output=True,
     )
     return result.returncode == 0
+
+
+def _cmd_pending_rollbacks(args: argparse.Namespace) -> int:
+    for rollback in pending_update_rollbacks(
+        args.target, "HEAD", _repo_root(args), Runner()
+    ):
+        print(rollback)
+    return 0
 
 
 def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
@@ -734,6 +754,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     changelog_parser.add_argument("--target", required=True, help="Target ref.")
     changelog_parser.set_defaults(func=_cmd_changelog_entries)
 
+    pending_parser = sub.add_parser(
+        "pending-rollbacks",
+        help="List the rollbacks of earlier update-self landings that nothing has "
+        "undone yet, newest first: the commits to revert before merging the target.",
+        parents=[common],
+    )
+    pending_parser.add_argument(
+        "--target", required=True, help="The ref this pass merges."
+    )
+    pending_parser.set_defaults(func=_cmd_pending_rollbacks)
+
     surface_parser = sub.add_parser(
         "surface-chat-tab",
         help="Open this run's own chat window once a workspace client can show it.",
@@ -805,8 +836,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="The release this update lands (update-self mode, which requires "
         "--ff-only): enables the VERSION_HISTORY.md ledger entry and the post-success "
-        "`env-converge upgrade`, and refuses a merge ref that re-merges this "
-        "target after a rollback of it without reverting the rollback first.",
+        "`env-converge upgrade`, and refuses a merge ref that still carries a "
+        "rollback of an earlier update-self landing it has not reverted.",
     )
     apply_parser.add_argument(
         "--keep-rollback-point",
