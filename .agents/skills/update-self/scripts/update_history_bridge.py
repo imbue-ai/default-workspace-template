@@ -103,7 +103,7 @@ class _Commit:
 
 
 def _commits(repo: Path, *args: str) -> list[_Commit]:
-    """``git log`` of ``args`` ignoring any graft; ``identity`` is what the rewrite keeps: authorship, dates, subject."""
+    """``git log`` of ``args`` ignoring any graft; ``identity`` is what the rewrite keeps: author, committer, dates, subject."""
     out = _git(
         repo,
         "log",
