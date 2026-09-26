@@ -421,6 +421,34 @@ def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_change
     assert "uv run pytest system/libs/midlib" in committed.output.splitlines()
 
 
+def test_select_tests_over_a_diff_to_an_earlier_commit_ignores_the_working_tree(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    _branch_with_changes(tmp_path, {"system/scripts/forward_port.py": "PORT = 2\n"})
+    earlier_commit = run_git(tmp_path, ("rev-parse", "HEAD")).strip()
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/core.py", "VALUE = 3\n")
+    commit_everything(tmp_path, "a later change")
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/extra.py", "EXTRA = 1\n")
+
+    result = _run_cli(
+        [
+            "select-tests",
+            "--repo-root",
+            str(tmp_path),
+            "--diff-base",
+            f"{earlier_commit}^",
+            "--diff-ref",
+            earlier_commit,
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "uv run pytest system/scripts/forward_port_test.py" in lines
+    assert "uv run pytest system/libs/midlib" not in lines
+
+
 def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> None:
     build_selection_workspace(tmp_path)
 
