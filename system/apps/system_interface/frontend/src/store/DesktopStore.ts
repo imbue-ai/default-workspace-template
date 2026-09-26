@@ -1175,37 +1175,31 @@ export class DesktopStore {
    *  its own window"): the chrome opens it beside its window, at the size the window renders here. The
    *  placement is saved at once, since the chrome's new window reads it as soon as it loads. */
   async detachWindow(windowId: string): Promise<void> {
-    if (!this.canPopOut) return;
-    const found = findWindow(this.state, windowId);
-    if (found === null) return;
-    const rect = this.renderedRect(placementOf(this.state.layout, windowId));
-    this.popOut.requestPopOut({
-      windowId,
-      title: effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app)),
-      width: rect.width,
-      height: rect.height,
-      grabX: 0,
-      grabY: 0,
-      mode: "open",
-    });
+    if (!this.canPopOut || findWindow(this.state, windowId) === null) return;
+    this.showDetachedWindow(windowId);
     this.dispatch({ type: "window_detached", windowId });
     await this.flushPendingSave();
   }
 
-  /** Raise (or reopen) the desktop window a pulled-out window is shown in. */
+  /** Raise (or reopen) the desktop window a pulled-out window is shown in, at the size the window renders here. */
   showDetachedWindow(windowId: string): void {
-    const found = findWindow(this.state, windowId);
-    if (found === null) return;
+    if (findWindow(this.state, windowId) === null) return;
     const rect = this.renderedRect(placementOf(this.state.layout, windowId));
-    this.popOut.requestPopOut({
-      windowId,
-      title: effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app)),
-      width: rect.width,
-      height: rect.height,
-      grabX: 0,
-      grabY: 0,
-      mode: "open",
-    });
+    this.popOut.requestPopOut(this.popOutRequestFor(windowId, rect, { x: 0, y: 0 }, "open"));
+  }
+
+  /** What the chrome is asked for when a window is pulled out: the window's title, the size its desktop window
+   *  is to have, and where inside it the pointer holds it. */
+  private popOutRequestFor(
+    windowId: string,
+    size: PixelSize,
+    grab: PixelPoint,
+    mode: PopOutRequest["mode"],
+  ): PopOutRequest {
+    const found = findWindow(this.state, windowId);
+    const title =
+      found === null ? "" : effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
+    return { windowId, title, width: size.width, height: size.height, grabX: grab.x, grabY: grab.y, mode };
   }
 
   /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
@@ -1333,18 +1327,11 @@ export class DesktopStore {
     const overshoot = overshootPastViewport(pointer, this.backdrop, this.metrics.taskbarHeight);
     const isTearingOut = this.canPopOut && overshoot >= this.metrics.tearOutDistance;
     if (isTearingOut && !start.isTearingOut) {
-      const found = findWindow(this.state, start.windowId);
-      const title =
-        found === null ? "" : effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
-      this.popOut.requestPopOut({
-        windowId: start.windowId,
-        title,
-        width: currentRect.width,
-        height: currentRect.height,
-        grabX: Math.min(Math.max(pointer.x - currentRect.x, 0), currentRect.width),
-        grabY: Math.min(Math.max(pointer.y - currentRect.y, 0), currentRect.height),
-        mode: "drag",
-      });
+      const grab = {
+        x: Math.min(Math.max(pointer.x - currentRect.x, 0), currentRect.width),
+        y: Math.min(Math.max(pointer.y - currentRect.y, 0), currentRect.height),
+      };
+      this.popOut.requestPopOut(this.popOutRequestFor(start.windowId, currentRect, grab, "drag"));
     } else if (!isTearingOut && start.isTearingOut) {
       this.popOut.cancelPopOut(start.windowId);
     }
