@@ -32,6 +32,8 @@ _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
+_DESCRIPTION = "a test app"
+
 # The shipped shape: the main config declares no programs at all, only the
 # daemon's own sections and the [include] that pulls in the drop-ins.
 _MAIN_CONF = """\
@@ -105,7 +107,7 @@ def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess
             "--name",
             name,
             "--description",
-            "a test app",
+            _DESCRIPTION,
             "--icon-file",
             str(icon),
             "--repo-root",
@@ -233,7 +235,7 @@ def test_the_scaffold_writes_the_port_it_picked(tmp_path: Path) -> None:
     }
     runner = (root / "system/apps/news/src/news/runner.py").read_text()
     assert runner == scaffold_flask_lib._lib_runner(
-        "news", "news", "a test app", program_port
+        "news", "news", _DESCRIPTION, program_port
     )
     assert program_port >= scaffold_flask_lib.LOWEST_AUTO_PORT
     assert program_port not in {8080, 8081}
