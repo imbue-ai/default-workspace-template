@@ -1,15 +1,16 @@
 ---
-name: build-app-parallel
+name: build-app
 description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. A planner splits the build into parts, workers build those parts side by side in one shared folder, and you handle every contact with the user (including the throwaway mock and working-site reviews) and take the confirmed app live. For changing or removing an existing app use update-app."
 metadata:
   author: imbue
 ---
 
-# Building an app in parallel
+# Building an app
 
 You orchestrate. You do not build the app yourself:
 
-- **A planner** reads `build-app` and the workspace and writes a plan: a small
+- **A planner** reads `references/app-building-guidance.md` and the workspace,
+  and writes a plan: a small
   graph of nodes, each one piece of the build, with what each depends on. It is
   a headless, read-only Claude run on this flow's own prompt,
   `references/planner-prompt.md`, started by `scripts/run_planner.sh`.
@@ -20,14 +21,12 @@ You orchestrate. You do not build the app yourself:
   dependencies finish, run the interactive nodes (every contact with the user), merge the
   result, and hand the app to hardening.
 
-`.agents/shared/build-app/README.md` is the reference for how an app is built
-here. The planner and the workers read it; you open it to look something up, and
-never to follow. In particular its first step fires a plan recorder that is not
-yours -- Step 2 below runs the planner this build uses. An eval run opened that
-file, followed it from the top, and built the whole app by hand: no plan, no
-workers, no reviews, and nothing to show for the flow it was supposed to be
-running. Its Step 0 (clarify) and Step 5 (hand off to `crystallize-creation`)
-are yours, and are restated below.
+`references/app-building-guidance.md` is how an app is built here -- the
+scaffolder, ports, the manifest, registration, verification, teardown. The
+planner and the workers read it for the piece they are working on; you open it to
+look something up. Do not work through it yourself: it describes building an app
+end to end, and following it from the top is building the app by hand, which is
+what this skill exists to replace. The steps below are yours.
 
 **You speak to the user only when an interactive node says to.** The plan names
 every conversation the build has, and those are the only messages you send: no
@@ -61,9 +60,9 @@ names everything below.
 
 | Thing | Value |
 |---|---|
-| Run folder (plan, tasks, reports) | `data/.tasks/build-app-parallel/$APP/` (call it `$RUN`) |
-| Build folder | `$HOME/worktrees/build-app-parallel-$APP` (call it `$BUILD`) |
-| Build branch | `build-app-parallel/$APP` |
+| Run folder (plan, tasks, reports) | `data/.tasks/build-app/$APP/` (call it `$RUN`) |
+| Build folder | `$HOME/worktrees/build-app-$APP` (call it `$BUILD`) |
+| Build branch | `build-app/$APP` |
 | Worker for node N | `$APP-node-N` |
 | Progress record | `$RUN/progress.txt`, two lines: `done: <indices>` and `running: <indices>` |
 
@@ -125,7 +124,7 @@ any pending changes in the main checkout (commit, never stash; the workers start
 from your last commit), then:
 
 ```bash
-git worktree add -b "build-app-parallel/$APP" "$BUILD" HEAD
+git worktree add -b "build-app/$APP" "$BUILD" HEAD
 (cd "$BUILD" && nohup uv sync --all-packages > "$RUN/sync.log" 2>&1 &)
 ```
 
@@ -134,13 +133,13 @@ give it; waiting it out inside your turn keeps the floor. Send the user nothing
 while it runs:
 
 ```bash
-.agents/skills/build-app-parallel/scripts/run_planner.sh "$RUN"
+.agents/skills/build-app/scripts/run_planner.sh "$RUN"
 ```
 
 When it exits 0, check the plan:
 
 ```bash
-python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py parse --run-dir "$RUN" --reduce-access
+python3 .agents/skills/build-app/scripts/plan_orchestration.py parse --run-dir "$RUN" --reduce-access
 ```
 
 If `parse` exits 2, the message names what is wrong. Move `plan.md` aside to
@@ -176,7 +175,7 @@ version mismatch), its cleanup runs `git worktree remove --force` on the folder
 it was given, which deletes `$BUILD` with every worker's uncommitted work. Until
 that is fixed, commit the build folder whenever no worker is running (Step 4),
 and if `$BUILD` disappears: run `git worktree prune`, recreate it with
-`git worktree add "$BUILD" "build-app-parallel/$APP"`, run the sync again, tell
+`git worktree add "$BUILD" "build-app/$APP"`, run the sync again, tell
 the user the build lost its most recent work, and relaunch the nodes that were
 running.
 
@@ -187,7 +186,7 @@ Repeat until every node is done.
 1. **Find what can start.**
 
    ```bash
-   python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py ready \
+   python3 .agents/skills/build-app/scripts/plan_orchestration.py ready \
        --run-dir "$RUN" --done <done indices> --running <running indices>
    ```
 
@@ -200,7 +199,7 @@ Repeat until every node is done.
    collects. Look up the node's `model` in `$RUN/plan.json`, then:
 
    ```bash
-   python3 .agents/skills/build-app-parallel/scripts/plan_orchestration.py write-task \
+   python3 .agents/skills/build-app/scripts/plan_orchestration.py write-task \
        --run-dir "$RUN" --node N
    uv run .agents/skills/launch-task/scripts/create_worker.py launch \
        --name "$APP-node-N" \
@@ -304,7 +303,7 @@ Repeat until every node is done.
 
    ```bash
    git -C "$BUILD" add -A
-   git -C "$BUILD" commit -m "build-app-parallel $APP: nodes <done indices>"
+   git -C "$BUILD" commit -m "build-app $APP: nodes <done indices>"
    ```
 
    Workers never commit, so this is the only history the build has.
@@ -383,14 +382,14 @@ After the working-site conversation is confirmed and every node is done:
 1. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, then
    commit the build folder (Step 4, item 6).
 2. **Merge into main** from the main checkout:
-   `git merge --no-ff "build-app-parallel/$APP"`. The plan keeps workers out of
+   `git merge --no-ff "build-app/$APP"`. The plan keeps workers out of
    each other's files, so a conflict here means main changed during the build --
    usually another app added to the root `pyproject.toml`. Keep both sides, and
    never hand-resolve by dropping either app's entry.
 3. **Start it for real:**
    `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
    then `supervisorctl status "$APP"`. Verify it with
-   `.agents/shared/build-app/references/verify.md`, and open the tab with
+   `.agents/skills/build-app/references/verify.md`, and open the tab with
    `python3 system/scripts/layout.py open "$APP"`.
 4. **Remove the build folder.** List it first (`git -C "$BUILD" status --porcelain`
    must be empty, since everything was committed and merged), then

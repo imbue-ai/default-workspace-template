@@ -3,7 +3,7 @@
 Every plan it writes is discarded, so what matters is that it never fails its
 caller and that its plan carries the do-not-use header. The planner a build
 actually runs is a separate script with its own tests, at
-``.agents/skills/build-app-parallel/scripts/run_planner_test.py``.
+``.agents/skills/build-app/scripts/run_planner_test.py``.
 
 A fake ``claude`` on ``PATH`` stands in for the planner, so no model is called.
 """

@@ -8,7 +8,7 @@ no chat. Everything here is copied from it, with the parts meant for the other
 kind of agent taken out.
 
 Your brief is your task file and the handoffs quoted inside it. Read those and
-`.agents/skills/build-app-parallel/references/worker-node.md`, then read of the
+`.agents/skills/build-app/references/worker-node.md`, then read of the
 rest of the repo only what your own subtask needs.
 
 You launch no agents of your own.
@@ -149,7 +149,7 @@ They are inherently flaky due to timing and useless in CI, but valuable for agen
 - **Run the creation, don't redo its job.** When a creation already does what's being asked -- an app that ingests this kind of data, a skill that runs this process -- run it, or extend it and run it. Producing the same result by hand beside it leaves the creation untested against the real case and the user with two sources of truth.
 
 - **Live first, ratify at turn-end.** Work is done first and formalized afterwards, through the relevant lifecycle skill, which runs its hardening pass in a background worker (never inline). Route by situation:
-  - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-app-parallel` for a web view).
+  - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-app` for a web view).
   - Just-finished work that's cohesive, likely to recur, and mostly deterministic -> `crystallize-creation` to promote it into a committed, tested skill.
   - A skill errored or gave a wrong result -> work around it live, then `heal-creation` at turn-end. Never patch the skill inline.
   - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-creation` at turn-end so the change is verified and the skill swallows the gap.

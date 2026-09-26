@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# run_planner.sh -- write the build plan for one build-app-parallel run.
+# run_planner.sh -- write the build plan for one build-app run.
 #
-#   .agents/skills/build-app-parallel/scripts/run_planner.sh <run-dir>
+#   .agents/skills/build-app/scripts/run_planner.sh <run-dir>
 #
 # Reads <run-dir>/brief.md, runs a headless planner on this skill's own prompt
 # (../references/planner-prompt.md), and writes the plan to <run-dir>/plan.md.

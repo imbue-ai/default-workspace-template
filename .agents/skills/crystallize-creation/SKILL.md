@@ -20,7 +20,7 @@ Crystallize creates one of:
 
 - **skill** (the default when invoked standalone post-turn): a reusable skill
   reconstructed from the transcript. This is the common case.
-- **app**: a scaffolded app `build-app-parallel` (or `build-app`) already
+- **app**: a scaffolded app `build-app` already
   built and the user confirmed. Both invoke this lead with `type=app`.
 - A **skill from a confirmed data sample**: `fetch-process-show` invokes this
   lead with `type=skill` and a `source_artifacts_dir` of staged scripts +
@@ -157,7 +157,7 @@ BODY_EOF
 ```
 
 Set `type: app` (and adjust the body to point at the already-built lib)
-when invoked by `build-app-parallel` or `build-app`. Fill in the real `## What was done` and
+when invoked by `build-app`. Fill in the real `## What was done` and
 `## Anchors` -- do not leave the placeholders. If frontmatter sets
 `source_artifacts_dir`, Step 4 pushes that directory to the worker too.
 

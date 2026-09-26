@@ -1,4 +1,4 @@
-"""Tests for ``run_planner.sh``, the planner one build-app-parallel run depends on.
+"""Tests for ``run_planner.sh``, the planner one build-app run depends on.
 
 This is the build's critical path: the exit code is what the orchestrator reads
 to decide whether it has a plan, so each of the three outcomes is pinned here --
@@ -7,7 +7,7 @@ not start (2).
 
 A fake ``claude`` on ``PATH`` stands in for the planner, so no model is called.
 
-Run via: ``uv run pytest .agents/skills/build-app-parallel/scripts/run_planner_test.py``
+Run via: ``uv run pytest .agents/skills/build-app/scripts/run_planner_test.py``
 """
 
 from __future__ import annotations

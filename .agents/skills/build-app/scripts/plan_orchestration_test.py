@@ -1,6 +1,6 @@
 """Tests for ``plan_orchestration.py``.
 
-Run via: ``uv run pytest .agents/skills/build-app-parallel/scripts/plan_orchestration_test.py``
+Run via: ``uv run pytest .agents/skills/build-app/scripts/plan_orchestration_test.py``
 """
 
 from __future__ import annotations
@@ -220,7 +220,7 @@ def test_find_ready_nodes_rejects_inconsistent_state() -> None:
 
 def test_render_node_task_carries_subtask_handoffs_and_report_path() -> None:
     plan = plan_orchestration.parse_plan(_TODO_PLAN)
-    report_path = Path("data/.tasks/build-app-parallel/todo/nodes/2/reports/report.md")
+    report_path = Path("data/.tasks/build-app/todo/nodes/2/reports/report.md")
 
     text = plan_orchestration.render_node_task(
         plan=plan,
@@ -253,7 +253,7 @@ def test_render_node_task_orients_the_worker_before_it_starts() -> None:
     task on the way.
     """
     plan = plan_orchestration.parse_plan(_TODO_PLAN)
-    report_path = Path("data/.tasks/build-app-parallel/todo/nodes/2/reports/report.md")
+    report_path = Path("data/.tasks/build-app/todo/nodes/2/reports/report.md")
 
     text = plan_orchestration.render_node_task(
         plan=plan,
@@ -263,7 +263,7 @@ def test_render_node_task_orients_the_worker_before_it_starts() -> None:
     )
 
     assert "You are **node 2**." in text
-    assert "data/.tasks/build-app-parallel/todo/nodes/2/task.md" in text
+    assert "data/.tasks/build-app/todo/nodes/2/task.md" in text
     assert "relative to the folder you are already" in text
     assert "not yours to read" in text
 
