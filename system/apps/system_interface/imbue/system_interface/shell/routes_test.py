@@ -1111,14 +1111,14 @@ def test_an_open_asked_for_minimized_places_the_window_out_of_sight_and_leaves_a
     assert [placement["is_minimized"] for placement in _placements(client, "c1")] == [False]
 
 
-def test_an_open_asked_to_sit_beside_a_window_snaps_the_pair_and_keeps_both_frames(
+def test_an_open_asked_to_sit_beside_a_window_with_room_leaves_that_window_alone(
     client: FlaskClient, app: Flask
 ) -> None:
     _register_client(app, "c1", "home")
     requester = _TERMINAL_REQUESTER
     anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
-    # A frame of the anchor's own first, so the pairing can be shown not to spend it.
-    _op(client, "place", {"window": anchor, "frame": "0.1,0.2,0.5,0.6"}, requester)
+    anchor_frame = {"x": 0.05, "y": 0.1, "width": 0.4, "height": 0.7}
+    _op(client, "place", {"window": anchor, "frame": "0.05,0.1,0.4,0.7"}, requester)
 
     opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester)
     assert opened.status_code == 200
@@ -1126,12 +1126,47 @@ def test_an_open_asked_to_sit_beside_a_window_snaps_the_pair_and_keeps_both_fram
 
     placements = _placements(client, "c1")
     by_window = {placement["window_id"]: placement for placement in placements}
-    assert by_window[anchor]["state"] == "SNAPPED_LEFT"
-    assert by_window[window_id]["state"] == "SNAPPED_RIGHT"
+    # The anchor had the room beside it, so nothing about it moved.
+    assert by_window[anchor]["frame"] == anchor_frame
+    assert by_window[anchor]["state"] == "NORMAL"
+    # The opened window sits against it, at its height and its place down the backdrop.
+    assert by_window[window_id]["frame"] == {"x": 0.45, "y": 0.1, "width": 0.5, "height": 0.7}
     assert [by_window[anchor]["is_minimized"], by_window[window_id]["is_minimized"]] == [False, False]
     assert [placement["window_id"] for placement in placements][-1] == window_id
-    # Snapping sets the state and leaves the frame, so a restore returns the anchor where it stood.
-    assert by_window[anchor]["frame"] == {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.6}
+
+
+def test_an_open_beside_a_window_with_no_room_moves_that_window_across_only(client: FlaskClient, app: Flask) -> None:
+    _register_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+    anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
+    # Mid-backdrop, with less than half of it free on either side.
+    _op(client, "place", {"window": anchor, "frame": "0.2,0.15,0.4,0.5"}, requester)
+
+    window_id = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester).get_json()[
+        "window_id"
+    ]
+
+    by_window = {placement["window_id"]: placement for placement in _placements(client, "c1")}
+    # Across to the nearer edge, at the width and the height it already had.
+    assert by_window[anchor]["frame"] == {"x": 0.0, "y": 0.15, "width": 0.4, "height": 0.5}
+    assert by_window[window_id]["frame"] == {"x": 0.4, "y": 0.15, "width": 0.5, "height": 0.5}
+
+
+def test_an_open_beside_a_snapped_window_leaves_the_snap_as_it_is(client: FlaskClient, app: Flask) -> None:
+    """A window already filling the half it would be paired into is where the pairing wants it: it keeps its
+    state, rather than being rewritten as the same rectangle in normal."""
+    _register_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+    anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
+    _op(client, "place", {"window": anchor, "zone": "left"}, requester)
+
+    window_id = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester).get_json()[
+        "window_id"
+    ]
+
+    by_window = {placement["window_id"]: placement for placement in _placements(client, "c1")}
+    assert by_window[anchor]["state"] == "SNAPPED_LEFT"
+    assert by_window[window_id]["frame"] == {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0}
 
 
 @pytest.mark.parametrize("requester", [_TERMINAL_REQUESTER, {"app": "terminal"}, None])

@@ -442,11 +442,12 @@ launcher -- skip the surfacing step only for services with no UI
 python3 system/scripts/layout.py open <name> --beside
 ```
 
-`--beside` lays it beside the chat that asked for it -- their chat on the left
-half, what you built on the right -- instead of on top of the conversation.
-Each keeps its own frame, so either can be put back. Drop the flag only for an
-app the user wanted running rather than shown; with no chat on that desktop it
-is already a no-op.
+`--beside` lays it beside the chat that asked for it instead of on top of the
+conversation, taking half the backdrop at the chat's own height. The chat is
+moved only if there is no room beside it, and resized only if it is over half
+the backdrop wide, so most of the time nothing about it changes. Drop the flag
+only for an app the user wanted running rather than shown; with no chat on that
+desktop it is already a no-op.
 
 With no `--desktop`, the op edits the desktop the target client is looking
 at, which is where the user expects the new window. (Pass `--desktop <name>`

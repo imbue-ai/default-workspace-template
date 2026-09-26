@@ -64,10 +64,12 @@ never applied to every client at once.
   window already there is left as they placed it.
 - **`open --beside` puts what you opened next to what the user is reading** --
   the opposite of `--minimized`, and passing both is refused. Bare it pairs with
-  your own chat, which takes the left half while the new window takes the right
-  and the focus; each keeps its frame, so `restore` puts either back. Name a
-  window to pair with something else. Reach for it whenever you have made
-  something for the user to look at.
+  your own chat; name a window to pair with something else. The new window takes
+  half the backdrop's width beside it, at its height and its place down the
+  screen. The window it pairs with is disturbed as little as the room allows: it
+  is left exactly where it is when either side of it has the space, moved across
+  when neither does, and resized only when it is over half the backdrop wide.
+  Reach for it whenever you have made something for the user to look at.
 
 ## Naming a window
 
@@ -148,7 +150,7 @@ The most common natural request, "put a terminal next to my chat", is one op:
 python3 system/scripts/layout.py open terminal --beside
 ```
 
-Two `place`s do the same for windows that are both already open:
+Two `place`s put two windows that are both already open on the halves:
 
 ```bash
 python3 system/scripts/layout.py place self --zone left

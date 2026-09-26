@@ -1,9 +1,15 @@
 **`open` takes a `beside` argument.** It names a window (a window id, `self`,
 `pinned`, or an app name, resolved the way the window verbs resolve one) that
-the opened window should sit next to: the named window is set `SNAPPED_LEFT`
-and the opened one `SNAPPED_RIGHT` and on top of the stack, for the target
-client alone. Both keep their own frames, so `restore` returns either to where
-it stood. A `beside` that matches no window on the desktop -- a chat the user
+the opened window should sit next to. The opened window takes half the
+backdrop's width against it, at the named window's own height and its place down
+the backdrop, and lands on top of the stack, for the target client alone.
+
+The named window is disturbed as little as the room allows, which is usually not
+at all: it is left exactly as it stands, down to its state, when either side of
+it has half the backdrop free; moved to the nearer edge, keeping its width and
+height, when neither does; and narrowed to half the backdrop only when it is
+wider than that, since no amount of moving opens that much beside it. Nothing
+ever changes its height or where it sits down the screen. A `beside` that matches no window on the desktop -- a chat the user
 closed, a requester that is nobody's chat -- leaves the opened window where it
 would have landed rather than refusing the open: the pairing is the open's
 courtesy, not its point.

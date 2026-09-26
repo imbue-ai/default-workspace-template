@@ -41,9 +41,12 @@ from imbue.system_interface.shell.data_types import desktop_layout_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
+from imbue.system_interface.shell.desktop_document import frame_for_state
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
+from imbue.system_interface.shell.desktop_document import paired_frames
 from imbue.system_interface.shell.desktop_document import path_carries_marker
+from imbue.system_interface.shell.desktop_document import placement_of
 from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import with_window_frame
 from imbue.system_interface.shell.desktop_document import with_window_minimized
@@ -786,19 +789,47 @@ def _beside_anchor(
         return None
 
 
+@pure
+def _with_pair_placed(
+    layout: DesktopLayout,
+    anchor_id: WindowId,
+    anchor_frame: Frame | None,
+    is_anchor_hidden: bool,
+    window_id: WindowId,
+    opened: Frame,
+) -> DesktopLayout:
+    """The layout with a paired window at ``opened`` and on top, and its anchor at ``anchor_frame`` when the rule
+    moved it (None when it did not)."""
+    if anchor_frame is not None:
+        placed = with_window_frame(layout, anchor_id, anchor_frame)
+    elif is_anchor_hidden:
+        # Where it stands is where it belongs, but it is not on screen to stand there.
+        placed = with_window_raised(layout, anchor_id)
+    else:
+        # Not touched at all, so its state survives: a window already snapped stays snapped rather than
+        # being rewritten as the same rectangle in normal.
+        placed = layout
+    return with_window_frame(placed, window_id, opened)
+
+
 def _pair_beside(shell: ShellState, target: _DesktopOpTarget, anchor: Window | None, window_id: WindowId) -> None:
-    """Lay the window an ``open`` landed on beside ``anchor``, for the target client alone: the anchor snapped to the
-    left half, the opened one to the right half and on top of the stack. Both keep their own frames, so ``restore``
-    returns each to where it stood. An ``open`` that answered the anchor itself has nothing to pair it with."""
+    """Lay the window an ``open`` landed on beside ``anchor``, for the target client alone, at the frames
+    ``paired_frames`` gives: the opened one against the anchor and on top of the stack, and the anchor wherever the
+    rule leaves it, which is usually exactly where it was. An ``open`` that answered the anchor itself has nothing
+    to pair it with."""
     if anchor is None or anchor.id == window_id:
         return
     # The desktop as the open left it: an edit reads the layout against the windows its desktop holds, and the
     # snapshot the op started from is one window short.
+    desktop = shell.get_desktop(target.desktop.id)
+    placement = placement_of(shell.read_desktop_layout(desktop, target.client_id), anchor.id)
+    standing = frame_for_state(placement.frame, placement.state)
+    kept, opened = paired_frames(standing)
     shell.edit_desktop_layout(
-        shell.get_desktop(target.desktop.id),
+        desktop,
         target.client_id,
-        lambda current: with_window_state(
-            with_window_state(current, anchor.id, WindowState.SNAPPED_LEFT), window_id, WindowState.SNAPPED_RIGHT
+        lambda current: _with_pair_placed(
+            current, anchor.id, kept if kept != standing else None, placement.is_minimized, window_id, opened
         ),
     )
 
