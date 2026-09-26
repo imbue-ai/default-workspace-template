@@ -112,7 +112,8 @@ def _commits(repo: Path, *args: str) -> list[_Commit]:
         env={"GIT_NO_REPLACE_OBJECTS": "1"},
     )
     commits = []
-    for line in out.splitlines():
+    # Names and subjects can hold characters ``str.splitlines`` also breaks on (U+2028, form feed).
+    for line in out.split("\n") if out else []:
         oid, tree, *identity = line.split("\0")
         commits.append(_Commit(oid, tree, tuple(identity)))
     return commits

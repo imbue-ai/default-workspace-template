@@ -190,6 +190,18 @@ def test_bridge_history_makes_the_old_fork_point_the_merge_base(
     assert _git(workspace, "rev-parse", "HEAD") == old_head
 
 
+def test_bridge_history_reads_a_subject_with_a_unicode_line_separator(
+    tmp_path, template, upstream, capsys
+) -> None:
+    workspace = _workspace(
+        tmp_path, template, upstream, message="Add my notes\u2028pasted from the web"
+    )
+
+    result = _bridge(workspace, capsys)
+
+    assert result["fork_point"] == _git(template, "rev-parse", "minds-v1^{commit}")
+
+
 def test_a_bridged_merge_lands_the_release_and_keeps_local_work(
     workspace, capsys
 ) -> None:
