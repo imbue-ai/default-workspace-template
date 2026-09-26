@@ -125,9 +125,11 @@ export default function policyGuards(pi: any): void {
       if (reason !== null) return { block: true, reason };
       return;
     }
-    // CLEANUP: read only `input.command` once pyproject.toml pins an mngr whose pi extension
-    // no longer rewrites it. Until then that extension may prefix the command before this
-    // handler runs, and records what the agent wrote as `mngrOriginalCommand`.
+    // CLEANUP: read only `input.command` once no running pi agent was created by an mngr
+    // whose lifecycle extension rewrites it. mngr writes that extension into the agent's
+    // state dir at create time, so bumping the mngr pin does not retire it. That extension
+    // may prefix the command before this handler runs, and records what the agent wrote as
+    // `mngrOriginalCommand`.
     const original = event.mngrOriginalCommand;
     const command = typeof original === "string" && original ? original : input?.command;
     if (typeof command !== "string" || !command) return;

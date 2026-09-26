@@ -355,11 +355,12 @@ def test_a_refused_command_is_left_as_written(tmp_path: Path) -> None:
 
 
 # CLEANUP: remove with the `mngrOriginalCommand` fallback in policy_guards.ts.
-def test_a_command_the_pinned_mngr_already_prefixed_is_judged_as_the_agent_wrote_it(
+def test_a_command_an_older_mngr_already_prefixed_is_judged_as_the_agent_wrote_it(
     tmp_path: Path,
 ) -> None:
-    """The mngr this repo pins prefixes `input.command` in its own `tool_call` handler,
-    which pi may run first, and records the agent's command as `mngrOriginalCommand`."""
+    """A pi agent created by an older mngr runs a lifecycle extension that prefixes
+    `input.command` in its own `tool_call` handler, which pi may run first, and records
+    the agent's command as `mngrOriginalCommand`."""
     agent_command = "tk start wor-1"
     prefixed = (
         "test -w /proc/self/oom_score_adj && echo 900 > /proc/self/oom_score_adj"
