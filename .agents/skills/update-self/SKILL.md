@@ -496,7 +496,7 @@ Exit codes:
   pass, another apply in flight, this merge already landed and rolled back, or
   a merge that does not first revert an earlier update's rollback commit).
   Re-dispatch a fresh worker pass off the current `HEAD`; the refusal names the
-  commit to revert.
+  commits to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it

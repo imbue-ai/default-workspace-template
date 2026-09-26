@@ -2298,7 +2298,7 @@ def _merge_ref_carries_an_update_rollback(
     )
     runner.respond(
         ("git", "log", "--first-parent"),
-        _Result(stdout="update-self: merge upstream template (minds-v0.4.1)\n"),
+        _Result(stdout="update-self: merge upstream template (minds-v0.4.1)\x00\x1e\n"),
     )
 
 
@@ -2386,10 +2386,11 @@ class _UpdateHistory:
             ref,
         )
 
-    def roll_back(self) -> str:
-        """Undo the merge at HEAD the way the apply does; return the rollback commit."""
-        restore_to = _git_in(self.repo, "rev-parse", "HEAD^1")
-        _git_in(self.repo, "revert", "--no-commit", "-m", "1", "HEAD")
+    def roll_back(self, restore_to: str | None = None) -> str:
+        """Put the tree back to ``restore_to`` (default: the merge at HEAD's first
+        parent) and commit it the way the apply does; return the rollback commit."""
+        restore_to = restore_to or _git_in(self.repo, "rev-parse", "HEAD^1")
+        _git_in(self.repo, "read-tree", "-u", "--reset", restore_to)
         _git_in(
             self.repo,
             "commit",
@@ -2481,6 +2482,27 @@ def test_a_reverted_revert_puts_the_rollback_back_in_force(
     history.release("minds-v2")
 
     assert history.pending_rollbacks("minds-v2", capsys) == [rollback]
+
+
+def test_a_failed_retry_of_a_release_already_in_history_is_still_an_updates_rollback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Re-merging a release that is already in history adds no commit, so the retry
+    # landed only the revert of the first rollback; its own rollback undid just that.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.land("minds-v1")
+    first = history.roll_back()
+    before_retry = _head_sha(history.repo)
+    history.revert(first)
+    second = history.roll_back(restore_to=before_retry)
+    history.release("minds-v2")
+
+    assert history.pending_rollbacks("minds-v2", capsys) == [second]
+
+    history.revert(second)
+    history.land("minds-v2")
+    assert (history.repo / "minds-v1.txt").exists()
 
 
 def test_a_users_rollback_of_an_app_change_is_not_an_updates_to_undo(

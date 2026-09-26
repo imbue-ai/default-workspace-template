@@ -265,24 +265,41 @@ _REVERTS_COMMIT = re.compile(
 )
 
 
-def _rolled_back_an_update_self_landing(
-    rollback: str, restore_to: str, repo_root: Path, runner: Runner
+def _undid_update_content(
+    rollback: str,
+    restore_to: str,
+    update_rollbacks: Collection[str],
+    repo_root: Path,
+    runner: Runner,
 ) -> bool:
-    """Whether the history ``rollback`` undid carries an update-self landing.
+    """Whether the history ``rollback`` undid carries update content: an update-self
+    landing, or the revert of an earlier update's rollback.
 
     Every flow's failed apply and the careful flow's user-requested rollback write the
-    same subject; only an update-self rollback is a later update-self pass's to undo.
-    A user who asked for an app change back must keep it rolled back.
+    same subject; only an update's rollback is a later update-self pass's to undo. A
+    user who asked for an app change back must keep it rolled back. The second case is
+    a retry of a release already in history: its merge adds no commit, so all it landed
+    was the revert that put the release back.
     """
     undone = git_out(
         runner,
         repo_root,
-        ["log", "--first-parent", "--format=%s", f"{restore_to}..{rollback}^"],
+        [
+            "log",
+            "--first-parent",
+            "--format=%s%x00%b%x1e",
+            f"{restore_to}..{rollback}^",
+        ],
     )
-    return any(
-        subject.startswith(_UPDATE_SELF_SUBJECT_PREFIX)
-        for subject in undone.splitlines()
-    )
+    for record in undone.split("\x1e"):
+        if not record.strip():
+            continue
+        subject, body = record.strip("\n").split("\x00", 1)
+        if subject.startswith(_UPDATE_SELF_SUBJECT_PREFIX) or any(
+            sha in update_rollbacks for sha in _REVERTS_COMMIT.findall(body)
+        ):
+            return True
+    return False
 
 
 def pending_update_rollbacks(
@@ -303,20 +320,28 @@ def pending_update_rollbacks(
         repo_root,
         ["log", "--topo-order", "--format=%H%x00%s%x00%b%x1e", f"{target_ref}..{tip}"],
     )
+    newest_first = [
+        record.strip("\n").split("\x00", 2)
+        for record in log.split("\x1e")
+        if record.strip()
+    ]
+    # Oldest first, so an earlier update's rollback is known before a later rollback
+    # that undid its revert is classified.
+    update_rollbacks: set[str] = set()
+    for sha, subject, _body in reversed(newest_first):
+        rollback = _ROLLBACK_SUBJECT.match(subject)
+        if rollback is not None and _undid_update_content(
+            sha, rollback.group("restore_to"), update_rollbacks, repo_root, runner
+        ):
+            update_rollbacks.add(sha)
+    # Newest first, so a commit's own undoing is known before its reverts are counted.
     undone: set[str] = set()
     pending: list[str] = []
-    # Newest first, so a commit's own undoing is known before its reverts are counted.
-    for record in log.split("\x1e"):
-        if not record.strip():
-            continue
-        sha, subject, body = record.strip("\n").split("\x00", 2)
+    for sha, _subject, body in newest_first:
         if sha in undone:
             continue
         undone.update(_REVERTS_COMMIT.findall(body))
-        rollback = _ROLLBACK_SUBJECT.match(subject)
-        if rollback is not None and _rolled_back_an_update_self_landing(
-            sha, rollback.group("restore_to"), repo_root, runner
-        ):
+        if sha in update_rollbacks:
             pending.append(sha)
     return pending
 

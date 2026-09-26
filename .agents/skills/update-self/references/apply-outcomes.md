@@ -65,7 +65,7 @@ later pass, to this release or a newer one -- must revert the rollback commit
 before it merges (the worker reference says how): git counts the reverted
 content as already merged, so a plain merge lands only what the target changed
 since. The apply refuses a merge ref that leaves the rollback in place (exit 1,
-nothing changed), naming the commit to revert.
+nothing changed), naming the commits to revert.
 
 ## Exit 3 -- emergency
 
