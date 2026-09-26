@@ -103,8 +103,10 @@ _NPM_ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset(
         "system/eslint.config.js",
         "system/tsconfig.base.json",
         "system/.prettierrc",
-        # The npm root's prebuild: every bundle compiles in the assets it fetches.
+        # The npm root's prebuild and what it sources: every bundle compiles in the assets it
+        # fetches.
         "system/scripts/fetch_mngr_assets.sh",
+        "system/scripts/_mngr_git_auth.sh",
     }
 )
 _NPM_CHECK_SCRIPTS: Final[tuple[str, ...]] = ("test", "lint", "format:check")
