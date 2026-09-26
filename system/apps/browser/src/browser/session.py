@@ -939,7 +939,7 @@ class LiveBrowser(MutableModel):
             return False
         try:
             await asyncio.wait_for(self._cdp.press_paste(target), timeout=5.0)
-        except Exception as e:  # noqa: BLE001  (CDP best-effort; the route reports the failure)
+        except (asyncio.TimeoutError, *_BROWSER_ERRORS) as e:
             logger.debug("paste into {} ignored ({})", target, e)
             return False
         return True

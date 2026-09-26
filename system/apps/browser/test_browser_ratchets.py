@@ -82,7 +82,7 @@ def test_prevent_broad_exception_catch() -> None:
     #    drives Chromium over cdp-use, whose errors are NOT a fixed subclass of the
     #    _BROWSER_ERRORS tuple, so a narrow catch could let a CDP hiccup wedge the single
     #    event loop. These are bounded (asyncio.wait_for) and best-effort by design.
-    #  * 4 in xinput.py: XTEST injection is
+    #  * 3 in xinput.py: XTEST injection is
     #    best-effort and must never raise into the /stream request thread.
     #  * 3 in xclipboard.py: the XFixes monitor
     #    runs on its own thread against a python-xlib connection whose errors are an open
@@ -114,7 +114,7 @@ def test_prevent_broad_exception_catch() -> None:
     #    the browser in `init` while it holds its name and a slot against the fleet cap
     #    forever, with Chromium and Xvfb still running and the viewer stuck on "Starting".
     #    It re-raises as BrowserStartupError, which is what actually tears the browser down.
-    rc.check_broad_exception_catch(_DIR, snapshot(31))
+    rc.check_broad_exception_catch(_DIR, snapshot(30))
 
 
 def test_prevent_builtin_exception_raises() -> None:
