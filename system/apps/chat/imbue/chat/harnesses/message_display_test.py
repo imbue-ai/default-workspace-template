@@ -17,7 +17,9 @@ from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
+from imbue.chat.harnesses.message_display import SecretResolutionVerdict
 from imbue.chat.harnesses.message_display import classify_user_message
+from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
 
@@ -445,3 +447,35 @@ def test_reports_flushed_together_show_one_notice_naming_each(separator: str) ->
     assert decision is not None
     assert decision.display is DisplayKind.NOTICE
     assert decision.display_body == "Build (finished); Test (finished)"
+
+
+def test_secret_resolution_notices_classify_by_their_own_tag_and_carry_the_verdict_and_id() -> None:
+    request_id = "secret-0123456789abcdef0123456789abcdef"
+    env_path = "data/.secrets/svc.env"
+    stored = format_secret_resolution_notice(SecretResolutionVerdict.STORED, request_id, env_path, ("A", "B"), None)
+    declined = format_secret_resolution_notice(
+        SecretResolutionVerdict.DECLINED, request_id, env_path, ("A",), "not now"
+    )
+    superseded = format_secret_resolution_notice(
+        SecretResolutionVerdict.SUPERSEDED, request_id, env_path, ("A",), None
+    )
+    for notice, verdict in (
+        (stored, SecretResolutionVerdict.STORED),
+        (declined, SecretResolutionVerdict.DECLINED),
+        (superseded, SecretResolutionVerdict.SUPERSEDED),
+    ):
+        decision = classify_user_message(notice)
+        assert decision is not None, notice
+        assert decision.display is DisplayKind.SECRET_RESOLUTION
+        assert decision.resolution == verdict
+        assert decision.request_id == request_id
+    # The notice names the file and the variables and ends with the note; the latchkey
+    # detector does not claim it.
+    assert stored.startswith("Secret stored: data/.secrets/svc.env (A, B)")
+    assert declined.endswith("not now")
+    latchkey = classify_user_message("Your request was granted (resolution: granted, request_id: r1)")
+    assert latchkey is not None and latchkey.display is DisplayKind.PERMISSION_RESOLUTION
+
+
+def test_a_human_message_mentioning_a_secret_file_is_not_a_resolution() -> None:
+    assert classify_user_message("please put it in data/.secrets/svc.env (secret: stored)") is None

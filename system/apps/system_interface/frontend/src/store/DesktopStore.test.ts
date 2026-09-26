@@ -556,6 +556,34 @@ describe("opening", () => {
     );
   });
 
+  it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
+    const store = await startedStore();
+    expect(await store.draftText("Explain this element:")).toBe(false);
+    expect(last(notices)).toBe("No app on this machine can take a draft");
+    offerApps(api, socket, [
+      appRecord("docs", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+      appRecord("notes", {
+        launch_paths: [
+          launchPathRecord({
+            id: "draft",
+            path: "/api/intake",
+            method: "POST",
+            params: ["message"],
+            presets: { is_draft: "true" },
+            draft_param: "message",
+          }),
+        ],
+      }),
+    ]);
+    api.postLaunchAnswer = "/?note=1";
+    expect(await store.draftText("Explain this element:")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:notes:draft:{"message":"Explain this element:"}:new`,
+    );
+  });
+
   it("tells the user when the shell refuses, and about a launch path that does not exist", async () => {
     const store = await startedStore();
     api.refusal = "No registered app named 'docs'";
@@ -617,6 +645,7 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
+      ownsCloseChord: () => false,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -632,10 +661,26 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
+      ownsCloseChord: () => false,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
     expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+
+  it("the close chord leaves the window of a page that owns the chord open", async () => {
+    const store = await startedStore();
+    const requested: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      requestClose: (id) => void requested.push(id),
+      ownsCloseChord: (id) => id === "win-1",
+    });
+    await store.closeFocusedWindow();
+    expect(requested).toEqual(["win-1"]);
+    expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
+    expect(store.getState().desktops[0].windows.map((window) => window.id)).toContain("win-1");
   });
 
   it("a taskbar click restores, minimizes the focused, or raises", async () => {
@@ -674,6 +719,7 @@ describe("windows", () => {
       reload: (id) => void reloaded.push(`window:${id}`),
       reloadApp: (app) => void reloaded.push(`app:${app}`),
       requestClose: () => undefined,
+      ownsCloseChord: () => false,
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });

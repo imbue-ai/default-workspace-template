@@ -41,26 +41,33 @@ export const SHELL_OPEN = "shell:open";
 /** App to shell: start something with a text (launcher-and-getting-started plan section 3.7): the shell runs its
  *  launcher's primary text action with it, so a page never names the app that takes it. */
 export const SHELL_START_WITH_TEXT = "shell:start-with-text";
+/** App to shell: draft a text into a chat, unsent (element-reference-menu plan section 5): the shell runs the
+ *  pinned app's draft launch path with it, as its own "Design your own..." does, so a page never names the app. */
+export const SHELL_DRAFT_TEXT = "shell:draft-text";
 
 /**
- * What the shell says about the frame it created: the client, the window, its desktop, and the
- * path the window is at (desktop-interface contracts.md section 7). The client id is required;
- * a field the shell does not send, a page reads as "".
+ * What the shell says about the frame it created: the client, the window, its desktop, the app
+ * the window belongs to, and the path the window is at (desktop-interface contracts.md section
+ * 7). The client id is required; a field the shell does not send, a page reads as "".
  */
 export interface ShellHandshake {
   clientId: string;
   windowId: string;
   desktopId: string;
+  app: string;
   path: string;
 }
 
 /**
  * What a page can do beyond the base contract. A page that handles `shell:navigate` in place
  * declares `navigation: true` and gives `onNavigate`; a shell then asks it to move rather than
- * reloading its frame.
+ * reloading its frame. A page that owns the close chord (a browser closing one of its own
+ * tabs) declares `closeChord: true` and gives `onCloseRequest`; a shell then only sends
+ * `shell:close-request` and leaves the window open.
  */
 export interface ShellCapabilities {
   navigation: boolean;
+  closeChord: boolean;
 }
 
 /** What an open does when a page of this app at the same path is already showing. */
@@ -86,6 +93,8 @@ export interface ShellConnection {
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Ask the shell to start something with ``text``: its launcher's primary text action (a new chat on a stock machine). */
   startWithText(text: string): void;
+  /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
+  draftText(text: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -93,19 +102,20 @@ export interface ShellConnection {
 /** Raised when a page's handlers and its declared capabilities disagree. */
 export class ShellContractError extends Error {}
 
-const DEFAULT_CAPABILITIES: ShellCapabilities = { navigation: false };
+const DEFAULT_CAPABILITIES: ShellCapabilities = { navigation: false, closeChord: false };
 
 function optionalString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, path } = data;
+  const { clientId, windowId, desktopId, app, path } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
     windowId: optionalString(windowId),
     desktopId: optionalString(desktopId),
+    app: optionalString(app),
     path: optionalString(path),
   };
 }
@@ -117,6 +127,9 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
     throw new ShellContractError(
       "a page that handles shell:navigate declares capabilities.navigation: true, and one that declares it gives onNavigate",
     );
+  }
+  if (capabilities.closeChord && handlers.onCloseRequest === undefined) {
+    throw new ShellContractError("a page that declares capabilities.closeChord: true gives onCloseRequest");
   }
   return capabilities;
 }
@@ -166,13 +179,14 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   }
 
   boundWindow.addEventListener("message", onMessage);
-  send(SHELL_CAPABILITIES, { navigation: capabilities.navigation });
+  send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
     isFramed,
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
+    draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
 }

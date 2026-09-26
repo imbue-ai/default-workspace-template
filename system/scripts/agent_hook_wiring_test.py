@@ -81,8 +81,8 @@ def test_pi_spawns_checkers_that_exist() -> None:
     check. Asserting the count guards against the regex silently matching nothing if
     the extension stops building its paths with `join(SCRIPTS, ...)`."""
     checkers = _PI_CHECKER_RE.findall(_PI_POLICY_GUARDS.read_text())
-    assert len(checkers) == 2, (
-        f"expected 2 checkers in policy_guards.ts, found {checkers}"
+    assert len(checkers) == 3, (
+        f"expected 3 checkers in policy_guards.ts, found {checkers}"
     )
     for name in checkers:
         assert (_SCRIPTS_DIR / name).is_file(), (

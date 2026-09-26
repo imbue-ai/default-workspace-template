@@ -34,12 +34,12 @@ export interface BackdropAttrs {
   /** Spread onto a window's maximize control: resting on it opens that window's size menu. */
   readonly sizeMenuTrigger: (windowId: string) => m.Attributes;
   readonly onEntryClick: (windowId: string) => void;
-  readonly onEntryContextMenu: (windowId: string, x: number, y: number) => void;
+  readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
   /** Whether a menu or the launcher is open: every window is shielded, so the press that closes it reaches the shell. */
   readonly isOverlayOpen: boolean;
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
-  readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint) => void;
+  readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint, target: Element) => void;
   readonly onWindowControl: (windowId: string, control: WindowControl, event: MouseEvent) => void;
   /** The element the live pages are appended to, created once and never re-rendered. */
   readonly onPagesHostCreated: (host: HTMLElement) => void;
@@ -91,7 +91,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 isRunOnClick: state.modes.isTouch,
                 onSelect: () => attrs.onSelectShortcut(key),
                 onRun: () => attrs.onRunShortcut(shortcut),
-                onContextMenu: (x, y) => attrs.onShortcutContextMenu(shortcut, { x, y }),
+                onContextMenu: (x, y, target) => attrs.onShortcutContextMenu(shortcut, { x, y }, target),
               });
             }),
           ),

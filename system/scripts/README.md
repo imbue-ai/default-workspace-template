@@ -31,10 +31,13 @@ Provisioning and utility scripts:
   the same way, with `mngr create` as the backoff), `run_in_background.py` (run a
   command detached and, when it exits, send its exit code and output to the
   caller's own chat as a message that starts the agent's next turn, on any
-  harness; how a lead waits for a worker's report), `seed_welcome_chat.py`
-  (open the workspace's first chat on the conversation the Mind app had before
-  the workspace existed; run through `mngr exec` by the Mind app),
-  `require_create_account.py` (the
+  harness; how a lead waits for a worker's report), `with_secrets.py` (run a
+  command with one `data/.secrets/<name>.env` file's variables in its
+  environment; the one sanctioned reader of that directory, which
+  `agent_secrets_guard.sh` enforces -- see the `connect-external-service`
+  skill), `seed_welcome_chat.py` (open the workspace's first chat on the
+  conversation the Mind app had before the workspace existed; run through
+  `mngr exec` by the Mind app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.

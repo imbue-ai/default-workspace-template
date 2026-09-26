@@ -38,23 +38,25 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 Ask only what blocks (phase 1). Then a small research pass (phase 2) and a
 proposed plan (phase 3), with these data specifics:
 
-For external services, load the `latchkey` skill first (it documents auth flows,
-permission requests, and credential handling you need before running any
+For external services, load the `connect-external-service` skill first (it routes
+you to the user's connected accounts, a new connection, an MCP server, a key on
+a secret card, or the browser, and documents the permission requests and
+credential handling you need before running any
 `latchkey` command), then run:
 
 ```bash
-latchkey services list --viable
+latchkey services list
 latchkey services info <svc>   # REQUIRED for each obviously-involved service
 ```
 
-Running `info` is essential: `list --viable` only shows services that *could* be
-authenticated (credentials exist *or* a browser auth flow is available); it
+Running `info` is essential: `list` only names the services latchkey knows; it
 doesn't tell you whether the specific service the user needs is already set up.
 Run `info` on each involved service to see its actual credential state and whether
 you'll need to trigger an auth flow next.
 
-For services not covered by latchkey, do 1-2 web/docs searches. Stop as soon as
-you can propose a plausible plan.
+For a service latchkey does not cover, the skill's routing table names the next
+row to try; 1-2 web/docs searches are enough to tell which is workable. Stop as
+soon as you can propose a plausible plan.
 
 Show the plan as two sections (phrase the data choices in business terms per the
 skeleton's principles):
@@ -87,8 +89,8 @@ on downstream components you'd have to discard if auth turns out unavailable. Fo
 multi-service asks, validate each uncontrolled dependency independently, then the
 combined operation.
 
-- Latchkey setup is part of the normal flow, NOT a failure. Follow the `latchkey`
-  skill for auth/permission handling.
+- Latchkey setup is part of the normal flow, NOT a failure. Follow the
+  `connect-external-service` skill for auth/permission handling.
 - A failure is when setup itself fails, or post-setup calls don't work. On
   failure, surface a specific cause AND propose 1-2 concrete alternatives before
   asking the user to choose.

@@ -31,6 +31,7 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "require_create_account.py",
     "run_in_background.py",
     "seed_welcome_chat.py",
+    "set_mngr_pin.py",
     "tool_env.py",
 )
 

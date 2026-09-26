@@ -60,7 +60,8 @@ The models behind a workspace app's two descriptions:
   origin. `SHELL_APP_CONTRACT_PATH` is where the shell's frontend build writes
   the app contract module, which every app serves at `APP_CONTRACT_ROUTE` from
   its own origin (a cross-origin module import carries no cookie, and the
-  forwarder refuses it).
+  forwarder refuses it); `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` are
+  the same for the element context menu module built beside it.
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
