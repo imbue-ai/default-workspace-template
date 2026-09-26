@@ -55,6 +55,7 @@ from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
@@ -3242,6 +3243,34 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     wait_for(lambda: (first, "and this") in messenger.sent, timeout=5.0)
     assert client.post(f"/api/chats/{first}/handoff/cancel").status_code == 400
     assert not log_path.exists()
+
+
+def test_a_secret_request_notice_to_a_converging_chat_is_held_as_a_script_send(tmp_path: Path) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+
+    filed = client.post(
+        "/api/secret-requests",
+        json={"chat_id": first, "file": "svc", "variables": ["SVC_TOKEN"], "rationale": "to call the widget API"},
+    )
+    assert filed.status_code == 201, filed.get_data(as_text=True)
+    request_id = filed.get_json()["request_id"]
+    submitted = client.post(f"/api/secret-requests/{request_id}/submit", json={"values": {"SVC_TOKEN": "v"}})
+    assert submitted.status_code == 200, submitted.get_data(as_text=True)
+    assert submitted.get_json()["is_notice_delivered"] is True
+
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    [trigger, notice] = record.handoff.held_sends
+    assert trigger.message_id == "trigger-1"
+    assert notice.origin is HeldSendOrigin.SCRIPT
+    assert notice.text.startswith("Secret stored: ") and f"request_id: {request_id}" in notice.text
+    # Held for the successor: the agent the chat is leaving receives nothing.
+    messenger = manager._messenger
+    assert isinstance(messenger, RecordingMngrMessenger)
+    assert messenger.sent == []
 
 
 def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat(

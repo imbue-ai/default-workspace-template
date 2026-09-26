@@ -787,6 +787,32 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert "desktops_updated" in types and "active_desktop_changed" in types
 
 
+def test_file_wallpapers_are_served_from_a_relative_configured_directory(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The listing and the serve route read one relative wallpapers directory as the same place.
+
+    The shipped default is relative to the workspace root, which is also where the supervised
+    server is run from -- so the listing finds those files by walking the working directory,
+    while the serve route hands the same path to a sender that resolves it against the package
+    instead. Every file wallpaper on offer must be one the serve route also finds.
+    """
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
+    relative_directory = Path("data/.apps/system_interface/wallpapers")
+    application = shell_application(tmp_path, inventory, broadcaster, wallpaper_files_directory=relative_directory)
+    files_directory = tmp_path / "repo" / relative_directory
+    files_directory.mkdir(parents=True)
+    (files_directory / "dusk.png").write_bytes(b"png-bytes")
+    monkeypatch.chdir(tmp_path / "repo")
+    client = application.test_client()
+
+    assert client.get("/api/wallpapers").get_json() == {
+        "wallpapers": [{"kind": "file", "name": "dusk", "url": "/wallpapers/file/dusk"}]
+    }
+    served = client.get("/wallpapers/file/dusk")
+    assert served.status_code == 200 and served.data == b"png-bytes"
+
+
 def test_windows_open_focus_locate_and_close_across_clients(client: FlaskClient, app: Flask) -> None:
     first_queue = _register_client(app, "c1", "home")
     second_queue = _register_client(app, "c2", "home")

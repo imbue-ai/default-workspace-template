@@ -233,6 +233,40 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     assert _launch(argv) == ["uv", "run", "notes"]
 
 
+def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(
+    tmp_path: Path,
+) -> None:
+    """The live program reads its declared secrets only through with_secrets.py, so the
+    preview must too, from the live repo's data/ (an editing worktree has none)."""
+    worktree = _write_worktree(tmp_path)
+    (worktree / "system" / "apps" / "notes" / "app.toml").write_text(
+        _NOTES_MANIFEST
+        + '\n[[secrets]]\nfile = "notes-api"\nvariables = ["NOTES_API_KEY"]\n'
+        + '\n[[secrets]]\nfile = "notes-mail"\nvariables = ["NOTES_MAIL_TOKEN"]\n'
+    )
+    runner = _RecordingRunner(tmp_path)
+
+    assert (
+        mod.up("notes", worktree, tmp_path, runner=runner, dump_registry=_dump_registry)
+        == 0
+    )
+
+    wrapper = str(tmp_path / "system" / "scripts" / "with_secrets.py")
+    assert _launch(runner.up_argv("notes-preview")) == [
+        "uv",
+        "run",
+        "python3",
+        wrapper,
+        str(tmp_path / "data" / ".secrets" / "notes-api.env"),
+        "--",
+        "python3",
+        wrapper,
+        str(tmp_path / "data" / ".secrets" / "notes-mail.env"),
+        "--",
+        "notes",
+    ]
+
+
 def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_registry_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
