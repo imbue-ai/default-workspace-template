@@ -2,18 +2,18 @@
 
 pi has no shell-hook surface, so the rules claude and codex get from
 ``system/scripts/`` reach a pi agent as the two TypeScript extensions here:
-``policy_guards.ts`` (the checker bridge) and ``tk_workflow.ts`` (the step
-discipline). They run inside pi's Node process, so they are exercised the way
+``policy_guards.ts`` (the command guards and rewrite) and ``tk_workflow.ts``
+(the step discipline). They run inside pi's Node process, so they are exercised the way
 mngr exercises its own pi extension -- drive the real file with a synthetic
 event through Node and assert on what the handler returns -- rather than
 reimplemented in Python. Skipped automatically when Node (with TypeScript
 support) is unavailable; the ``.ts`` files are resources, not Python, so they do
 not count toward coverage.
 
-``policy_guards.ts`` resolves its checkers from ``MNGR_AGENT_WORK_DIR``, and the
-checkers live in this repo, so those tests point it at the repo root and run the
-real ``agent_latchkey_request_check.py`` / ``agent_tk_standalone_check.py`` --
-covering the bridge and its wiring together. ``tk_workflow.ts`` reads step state
+``policy_guards.ts`` resolves its scripts from ``MNGR_AGENT_WORK_DIR``, and the
+scripts live in this repo, so those tests point it at the repo root and run the
+real PreToolUse hook scripts and ``agent_rewrite_bash_command.py`` -- covering
+the extension and its wiring together. ``tk_workflow.ts`` reads step state
 from the vendored ``ticket`` script, so those tests point it at a temp tree with
 a stub ``ticket`` whose output a test can drive.
 
@@ -35,7 +35,7 @@ from typing import Any
 import pytest
 
 # Every test here starts a Node process that type-strips a `.ts` module, and most of
-# them have it spawn a python3 checker or a bash `ticket` in turn. That runs in well
+# them have it spawn a guard script or a bash `ticket` in turn. That runs in well
 # under a second warm, but the suite's global 10s per-test timeout budgets for pure
 # Python; a cold cache or a loaded machine pushes these past it. Give them room.
 _NODE_EVENT_TIMEOUT_SECONDS = 60
@@ -50,7 +50,8 @@ _POLICY_GUARDS = _EXTENSIONS_DIR / "policy_guards.ts"
 _TK_WORKFLOW = _EXTENSIONS_DIR / "tk_workflow.ts"
 
 # Node driver: load one extension by absolute path, register its handlers against a
-# fake `pi`, fire a single event, and report the handler's return value as JSON.
+# fake `pi`, fire a single event, and report the handler's return value and the event
+# payload (which a handler may mutate) as JSON.
 _DRIVER_MJS = """
 import { pathToFileURL } from "node:url";
 const [, , extensionPath, specJson] = process.argv;
@@ -59,8 +60,9 @@ const handlers = {};
 const mod = await import(pathToFileURL(extensionPath).href);
 mod.default({ on: (name, handler) => { (handlers[name] ||= []).push(handler); } });
 let result;
-for (const handler of (handlers[spec.event] || [])) { result = await handler(spec.payload ?? {}, {}); }
-process.stdout.write(JSON.stringify({ result: result ?? null }));
+const payload = spec.payload ?? {};
+for (const handler of (handlers[spec.event] || [])) { result = await handler(payload, {}); }
+process.stdout.write(JSON.stringify({ result: result ?? null, payload }));
 """
 
 # Stub `ticket`: its `steps` output is driven by env so a test can model any step
@@ -87,12 +89,6 @@ exit 0
 _HOST = "http://latchkey-self.invalid/permission-requests"
 # The canonical filing, exactly as the connect-external-service skill's latchkey reference documents it.
 _REQUEST = f"latchkey curl -XPOST {_HOST} -H 'Content-Type: application/json' -d '{{\"agent_id\": \"a1\"}}'"
-# What mngr's lifecycle extension turns a command into when it rewrites `input.command`
-# (see its `rewriteBashCommand`): two commands prepended, `;`-joined.
-_MNGR_REWRITE_PREFIX = (
-    "export GIT_AUTHOR_NAME='ann' GIT_COMMITTER_NAME='ann'; "
-    "test -w /proc/self/oom_score_adj && echo 900 > /proc/self/oom_score_adj 2>/dev/null; "
-)
 
 
 @functools.cache
@@ -129,17 +125,20 @@ def _run_event(
 ) -> subprocess.CompletedProcess[str]:
     """Fire one ``event`` through ``extension``, with ``work_dir`` as the agent's work dir.
 
-    Returns the completed process: parse ``.stdout`` for ``{"result": ...}`` (see
-    ``_event_result``) and read ``.stderr`` for anything a handler wrote there.
+    Returns the completed process: parse ``.stdout`` for ``{"result": ..., "payload": ...}``
+    (see ``_event_output``) and read ``.stderr`` for anything a handler wrote there.
     """
     node = _node_that_imports_typescript()
     if node is None:
         pytest.skip("node with TypeScript module support is not available")
     driver = tmp_path / "driver.mjs"
     driver.write_text(_DRIVER_MJS)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
     full_env = {
         "PATH": os.environ.get("PATH", ""),
         "MNGR_AGENT_WORK_DIR": str(work_dir),
+        "MNGR_AGENT_STATE_DIR": str(state_dir),
     }
     full_env.update(env or {})
     return subprocess.run(
@@ -156,21 +155,33 @@ def _run_event(
     )
 
 
-def _event_result(proc: subprocess.CompletedProcess[str]) -> Any:
+def _event_output(proc: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """The driver's ``{"result": ..., "payload": ...}`` report."""
     assert proc.returncode == 0, f"event driver failed:\n{proc.stdout}\n{proc.stderr}"
-    return json.loads(proc.stdout)["result"]
+    return json.loads(proc.stdout)
 
 
-def _guard_result(tmp_path: Path, command: str, **extra_payload: Any) -> Any:
-    """Fire a bash ``tool_call`` through policy_guards.ts against the real checkers."""
-    payload: dict[str, Any] = {
-        "toolName": "bash",
-        "input": {"command": command},
-        **extra_payload,
-    }
-    return _event_result(
-        _run_event(tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT)
+def _event_result(proc: subprocess.CompletedProcess[str]) -> Any:
+    return _event_output(proc)["result"]
+
+
+def _guard_call(
+    tmp_path: Path, command: str, env: dict[str, str] | None = None
+) -> tuple[Any, str]:
+    """Fire a bash ``tool_call`` through policy_guards.ts against the real scripts.
+
+    Returns the handler's result and the command pi would run afterwards.
+    """
+    payload = {"toolName": "bash", "input": {"command": command}}
+    proc = _run_event(
+        tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT, env=env
     )
+    out = _event_output(proc)
+    return out["result"], out["payload"]["input"]["command"]
+
+
+def _guard_result(tmp_path: Path, command: str) -> Any:
+    return _guard_call(tmp_path, command)[0]
 
 
 def _tk_work_dir(tmp_path: Path) -> Path:
@@ -207,9 +218,6 @@ def _tk_result(
     )
 
 
-# policy_guards.ts
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -217,6 +225,8 @@ def _tk_result(
         pytest.param("tk start wor-1", id="standalone-tk-start"),
         pytest.param("cd /tmp && echo hi", id="chained-command-no-checker-cares-about"),
         pytest.param(f"latchkey curl {_HOST} | jq .", id="reading-the-queue"),
+        pytest.param("cat notes.md | " + "head -120", id="cat-of-files-into-head"),
+        pytest.param("git commit -m 'rebase notes'", id="plain-git-commit"),
         pytest.param(
             "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- svc",
             id="the-wrapper-reading-a-secret-file",
@@ -274,12 +284,27 @@ def test_the_secrets_guard_reaches_pis_file_tools(tmp_path: Path) -> None:
         pytest.param(
             "cd /tmp && tk start wor-1", "runs before it", id="chained-tk-start"
         ),
+        pytest.param(
+            "pytest | " + "tail -20",
+            "Do not pipe commands through tail or head",
+            id="pipe-into-tail",
+        ),
+        pytest.param(
+            "git rebase -i HEAD~2",
+            "git rebase commands are not allowed",
+            id="git-rebase",
+        ),
+        pytest.param(
+            "git commit --amend -m x",
+            "--amend or --fixup is not allowed",
+            id="git-commit-amend",
+        ),
     ],
 )
 def test_guards_block_with_the_checkers_own_reason(
     tmp_path: Path, command: str, expected_in_reason: str
 ) -> None:
-    """The refusal carries the checker's stderr, so the agent reads the same guidance
+    """The refusal carries the script's stderr, so the agent reads the same guidance
     it would get from the PreToolUse hook on claude or codex."""
     result = _guard_result(tmp_path, command)
     assert result is not None and result["block"] is True
@@ -298,19 +323,93 @@ def test_guards_ignore_a_non_bash_tool(tmp_path: Path) -> None:
     )
 
 
-def test_guards_check_the_command_the_agent_wrote_not_the_rewritten_one(
+def test_an_allowed_command_runs_with_the_oom_tag_and_git_identity_prefix(
     tmp_path: Path,
 ) -> None:
-    """mngr's extension rewrites `input.command` in place and pi does not order the two
-    extensions, so the guard prefers the pre-rewrite command mngr records. Without it the
-    prefix reads as a command chained ahead of the request and every filing is refused."""
-    rewritten = _MNGR_REWRITE_PREFIX + _REQUEST
-    blocked = _guard_result(tmp_path, rewritten)
+    """The guards judge the command the agent wrote -- a prefixed `tk start` would read
+    as chained and be refused -- and only then is the prefix put in front of it."""
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+    (host_dir / "data.json").write_text(json.dumps({"host_id": "host-9"}))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "data.json").write_text(json.dumps({"name": "test-agent"}))
+    env = {
+        "MNGR_AGENT_ID": "agent-x",
+        "MNGR_HOST_DIR": str(host_dir),
+        "MNGR_AGENT_STATE_DIR": str(state_dir),
+    }
+    result, command = _guard_call(tmp_path, "tk start wor-1", env=env)
+    assert result is None
+    prefix = command.removesuffix("tk start wor-1")
+    assert prefix != command
+    assert "GIT_AUTHOR_NAME=test-agent" in prefix
+    assert "GIT_AUTHOR_EMAIL=agent-x@host-9" in prefix
+    assert "oom_score_adj" in prefix
+
+
+def test_a_refused_command_is_left_as_written(tmp_path: Path) -> None:
+    result, command = _guard_call(tmp_path, "git rebase -i HEAD~2")
+    assert result is not None and result["block"] is True
+    assert command == "git rebase -i HEAD~2"
+
+
+# CLEANUP: remove with the `mngrOriginalCommand` fallback in policy_guards.ts.
+def test_a_command_an_older_mngr_already_prefixed_is_judged_as_the_agent_wrote_it(
+    tmp_path: Path,
+) -> None:
+    """A pi agent created by an older mngr runs a lifecycle extension that prefixes
+    `input.command` in its own `tool_call` handler, which pi may run first, and records
+    the agent's command as `mngrOriginalCommand`."""
+    agent_command = "tk start wor-1"
+    prefixed = (
+        "test -w /proc/self/oom_score_adj && echo 900 > /proc/self/oom_score_adj"
+        " 2>/dev/null; " + agent_command
+    )
+    blocked, _ = _guard_call(tmp_path, prefixed)
     assert blocked is not None and blocked["block"] is True
-    assert _guard_result(tmp_path, rewritten, mngrOriginalCommand=_REQUEST) is None
+    _, expected = _guard_call(tmp_path, agent_command)
+    payload = {
+        "toolName": "bash",
+        "input": {"command": prefixed},
+        "mngrOriginalCommand": agent_command,
+    }
+    out = _event_output(
+        _run_event(tmp_path, _POLICY_GUARDS, "tool_call", payload, work_dir=_REPO_ROOT)
+    )
+    assert out["result"] is None
+    assert out["payload"]["input"]["command"] == expected
 
 
-# tk_workflow.ts
+def test_a_broken_guard_or_rewrite_fails_open_and_is_logged(tmp_path: Path) -> None:
+    """Only exit 2 refuses. A guard that crashes, and a rewrite script that is missing,
+    let the command run as written, and each leaves a line in the state dir's log."""
+    work_dir = tmp_path / "work"
+    scripts = work_dir / "system" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "agent_prevent_commit_rewrite.sh").write_text(
+        "echo 'guard crashed' >&2\nexit 1\n"
+    )
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    payload = {"toolName": "bash", "input": {"command": "git rebase -i HEAD~2"}}
+    out = _event_output(
+        _run_event(
+            tmp_path,
+            _POLICY_GUARDS,
+            "tool_call",
+            payload,
+            work_dir=work_dir,
+            env={"MNGR_AGENT_STATE_DIR": str(state_dir)},
+        )
+    )
+    assert out["result"] is None
+    assert out["payload"]["input"]["command"] == "git rebase -i HEAD~2"
+    log = (state_dir / "pi_policy_guards.log").read_text()
+    assert (
+        "agent_prevent_commit_rewrite.sh exited 1: guard crashed; failing open" in log
+    )
+    assert "agent_rewrite_bash_command.py exited 2" in log
 
 
 def test_require_steps_reminder_rides_the_tool_result_when_no_step_is_in_progress(
