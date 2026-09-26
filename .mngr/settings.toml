@@ -484,9 +484,9 @@ host_log_dir = "/var/log/mngr"
 # args and the imbue_cloud slice bake's per-box
 # `-S providers.imbue_cloud_slice.default_start_args` overrides mount /run the
 # same way (gen-2 slices run under runsc from the bake).
-# /tmp is tmpfs here so it starts empty on every container start: under
-# --overlay2=none the rootfs, /tmp included, otherwise survives a restart. The
-# cost is that /tmp is memory: whatever is written there counts against the
+# /tmp is tmpfs here so it starts empty on every container start: the
+# container's root filesystem, /tmp included, otherwise survives a restart
+# (under runc, and under runsc with --overlay2=none). The cost is that /tmp is memory: whatever is written there counts against the
 # container's memory limit and no process kill frees it, so a multi-GB write
 # (a copy of a large app's data, say) can take the workspace down. Cloud
 # workspaces avoid this by keeping /tmp on disk and emptying it from the
