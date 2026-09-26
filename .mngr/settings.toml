@@ -255,9 +255,10 @@ command = "sleep infinity"
 # A codex slug is a property of the ACCOUNT, not the workspace: which models a ChatGPT plan
 # may use varies by tier, and a slug the account cannot use is a hard 400 on every turn ("The
 # 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account") that also
-# leaves the model bar showing a shrug. Pin only a slug the whole catalog offers: gpt-6-sol
-# needs codex >= 0.155.0 (CODEX_VERSION) and is listed for every plan GPT-6 Astra is except
-# `promax`. No effort is pinned, so the model's own default (medium) applies.
+# leaves the model bar showing a shrug. gpt-6-sol needs codex >= 0.155.0 (CODEX_VERSION) and
+# is listed for every plan GPT-6 Astra is except `promax`, so a promax account's codex agents
+# get that 400 until they are switched to a model the account offers. No effort is pinned, so
+# the model's own default (medium) applies.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
