@@ -25,7 +25,10 @@ assert _spec is not None and _spec.loader is not None
 wrapper = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(wrapper)
 
+from oom_priority.ledger import has_pending_shed, read_records
 from oom_priority.registry import lookup_agent
+
+_SHED_HOOK = Path(__file__).parent / "earlyoom_record_shed.py"
 
 
 def _write_agent_record(
@@ -239,3 +242,84 @@ def test_wrapper_refuses_with_no_harness_argument(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "missing harness binary" in result.stderr
+
+
+def _fake_npm_codex_install(prefix: Path, native_report: Path) -> Path:
+    """A global npm install of codex laid out like the real one, returning its
+    package root. ``<prefix>/bin/codex`` links to the package's ``bin/codex.js``,
+    which runs the native binary from the platform package as a child process, as
+    the real entry point does. The native binary writes its own pid, the codex
+    install environment it was given, and its args to ``native_report``."""
+    package_root = prefix / "lib" / "node_modules" / "@openai" / "codex"
+    native = (
+        package_root
+        / "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+    )
+    native.parent.mkdir(parents=True)
+    native.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$$" "$CODEX_MANAGED_BY_NPM" "$CODEX_MANAGED_PACKAGE_ROOT" "$@"'
+        f" > {native_report}\n"
+    )
+    native.chmod(0o755)
+    entry_point = package_root / "bin" / "codex.js"
+    entry_point.parent.mkdir(parents=True)
+    # The trailing exit keeps the shell from exec'ing its last command in place.
+    entry_point.write_text(f'#!/bin/sh\n"{native}" "$@"\nexit $?\n')
+    entry_point.chmod(0o755)
+    (prefix / "bin").mkdir()
+    (prefix / "bin" / "codex").symlink_to(
+        Path("..") / "lib" / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    )
+    return package_root
+
+
+def test_a_shed_npm_installed_codex_is_attributed_to_its_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pid earlyoom kills when it sheds a codex agent is the pid the wrapper
+    registered, so the kill hook records the shed against that agent and the
+    worker report watcher's ledger check sees it."""
+    runtime = tmp_path / "rt"
+    host = tmp_path / "host"
+    _write_agent_record(host, "w1", is_worker=True)
+    native_report = tmp_path / "native_report.txt"
+    package_root = _fake_npm_codex_install(tmp_path / "npm", native_report)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("CODEX_MANAGED_", "EARLYOOM_"))
+    }
+    env.update(
+        PATH=f"{tmp_path / 'npm' / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        OOM_PRIORITY_RUNTIME_DIR=str(runtime),
+        MNGR_HOST_DIR=str(host),
+        MNGR_AGENT_NAME="w1",
+    )
+
+    launch = subprocess.run(
+        [sys.executable, str(_SCRIPT), "codex", "app-server", "--listen", "stdio://"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert launch.returncode == 0, launch.stderr
+    harness_pid, managed_by_npm, managed_package_root, *harness_args = (
+        native_report.read_text().splitlines()
+    )
+
+    # Shed the running harness as earlyoom does: its kill hook gets the victim's pid.
+    subprocess.run(
+        [sys.executable, str(_SHED_HOOK)],
+        env={**env, "EARLYOOM_PID": harness_pid, "EARLYOOM_UID": "0", "EARLYOOM_NAME": "codex"},
+        check=True,
+        timeout=30,
+    )
+
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(runtime))
+    (record,) = read_records()
+    assert (record["agent_name"], record["is_worker"]) == ("w1", True)
+    assert has_pending_shed("w1")
+    assert harness_args == ["app-server", "--listen", "stdio://"]
+    assert (managed_by_npm, managed_package_root) == ("1", str(package_root.resolve()))
