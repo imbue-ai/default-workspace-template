@@ -159,7 +159,7 @@ export function withWindowDetached(layout: Layout, windowId: string): Layout {
 }
 
 /** Bring back: the window shown on the desktop again, normal, on top of the stack, at ``frame`` (clamped) when a
- *  re-dock drop named one, else at its kept frame. */
+ *  drop back onto the desktop named one, else at its kept frame. */
 export function withWindowReattached(layout: Layout, windowId: string, frame: Frame | null): Layout {
   const current = placementOf(layout, windowId);
   const landing =

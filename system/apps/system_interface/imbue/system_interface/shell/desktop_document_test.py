@@ -499,7 +499,7 @@ def test_a_pulled_out_window_stays_where_it_is_and_every_showing_verb_brings_it_
     assert returned.placements[-1].window_id == _WIN_2
     assert returned.placements[-1].is_detached is False and returned.placements[-1].state is WindowState.NORMAL
     assert returned.placements[-1].frame == cascade_frame(0)
-    # Back where a re-dock drop named.
+    # Back where a drop back onto the desktop named.
     dropped = with_window_reattached(detached, _WIN_2, Frame(x=0.4, y=0.3, width=0.5, height=0.5))
     assert dropped.placements[-1].frame == Frame(x=0.4, y=0.3, width=0.5, height=0.5)
     # Every verb that shows the window on the desktop brings it back, minimize included.

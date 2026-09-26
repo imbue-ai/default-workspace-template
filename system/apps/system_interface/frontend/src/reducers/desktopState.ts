@@ -125,7 +125,7 @@ export type DesktopEvent =
   | { readonly type: "window_frame_set"; readonly windowId: string; readonly frame: Frame }
   /** The window was pulled out into a desktop window of the chrome's own (the pull-out-window spec). */
   | { readonly type: "window_detached"; readonly windowId: string }
-  /** The window came back to the desktop, at ``frame`` when a re-dock drop named one. */
+  /** The window came back to the desktop, at ``frame`` when a drop back onto the desktop named one. */
   | { readonly type: "window_reattached"; readonly windowId: string; readonly frame: Frame | null }
   | {
       readonly type: "window_opened_here";

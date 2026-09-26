@@ -159,7 +159,7 @@ describe("the verbs", () => {
       state: "NORMAL",
       frame: cascadeFrame(0),
     });
-    // Back where a re-dock drop named, clamped into the square.
+    // Back where a drop back onto the desktop named, clamped into the square.
     const dropped = withWindowReattached(detached, "win-2", { x: 0.8, y: 0.9, width: 0.5, height: 0.5 });
     expect(dropped.placements[2].frame).toEqual({ x: 0.5, y: 0.5, width: 0.5, height: 0.5 });
     // Every verb that shows the window on the desktop brings it back, minimize included.

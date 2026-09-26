@@ -1372,7 +1372,7 @@ describe("pulled-out windows", () => {
     store.toggleTaskbarEntry("win-1");
     expect(calls[1]).toMatchObject(["request", { windowId: "win-1", mode: "open" }]);
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
-    // Back where a re-dock drop named, on top, saved at once.
+    // Back where a drop back onto the desktop named, on top, saved at once.
     await store.reattachWindow("win-1", { x: 0.2, y: 0.2, width: 0.5, height: 0.5 });
     const placement = last(activePlacements(store.getState()));
     expect(placement).toMatchObject({

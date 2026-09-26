@@ -1209,7 +1209,7 @@ export class DesktopStore {
   }
 
   /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
-   *  entry's menu): shown and raised, at ``frame`` when a re-dock drop named one. Saved at once: the chrome's
+   *  entry's menu): shown and raised, at ``frame`` when a drop back onto the desktop named one. Saved at once: the chrome's
    *  window is closing on the answer. */
   async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
     this.dispatch({ type: "window_reattached", windowId, frame });

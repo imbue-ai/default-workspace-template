@@ -809,7 +809,7 @@ def with_window_detached(layout: DesktopLayout, window_id: WindowId) -> DesktopL
 @pure
 def with_window_reattached(layout: DesktopLayout, window_id: WindowId, frame: Frame | None) -> DesktopLayout:
     """Bring back: the window shown on the desktop again, normal, on top of the stack, at ``frame`` (clamped) when a
-    re-dock drop named one, else at its kept frame."""
+    drop back onto the desktop named one, else at its kept frame."""
     current = placement_of(layout, window_id)
     landing = (
         current.frame
