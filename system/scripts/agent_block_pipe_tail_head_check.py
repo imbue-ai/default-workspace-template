@@ -63,6 +63,8 @@ _READERS = frozenset(
 )
 # Readers that walk a tree: cheap on a project directory, slow on the whole filesystem.
 _TREE_WALKERS = frozenset({"find", "du"})
+# find actions that run a program per match or change the tree, so the walk is no longer a read.
+_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete"})
 
 _GIT_READ_SUBCOMMANDS = frozenset(
     """
@@ -197,7 +199,7 @@ def _is_plain_read(stage: CommandSegment) -> bool:
     if name in _READERS:
         return True
     if name in _TREE_WALKERS:
-        return "/" not in args
+        return "/" not in args and _FIND_ACTIONS.isdisjoint(args)
     if name == "git":
         return _is_git_read(args)
     if name == "supervisorctl":
