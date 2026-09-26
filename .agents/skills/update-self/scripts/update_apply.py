@@ -337,8 +337,9 @@ def pending_update_rollbacks(
 
     Looks at ``target_ref..tip``: everything the workspace committed that the target
     does not carry. An update's rollback is one carrying the
-    :data:`_ROLLED_BACK_UPDATE_TRAILER`; a user who asked for an app change back must
-    keep it rolled back. A rollback is undone by a later revert of it that is not
+    :data:`_ROLLED_BACK_UPDATE_TRAILER`, or one made before the apply wrote it whose
+    undone history carries update content (:func:`_undid_update_content`); a user who
+    asked for an app change back must keep it rolled back. A rollback is undone by a later revert of it that is not
     itself undone, so reverting a revert puts a rollback back in force. Until each is
     reverted, git counts the content it removed as merged, and merging any later
     release lands only what that release changed since: the old release plus a few
