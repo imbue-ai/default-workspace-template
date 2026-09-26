@@ -63,7 +63,7 @@ Recorded here so the implementation need not re-argue them.
 |---|---|---|---|
 | `chat` | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`), then `new` ("New Chat", `/new`, params `account_id`, `message`) | Chat |
 | `terminal` | `{launch = "new", mode = "new"}` | `new` ("Terminal", `/new`, param `workdir`) | Terminal |
-| `files` | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, param `path`) | File Viewer |
+| `files` | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, param `path`) | File Viewer |
 | `browser` | `{launch = "new", mode = "focus"}` | `new` ("Browser", `/new`, param `url`) | Browser |
 
 The chat gains a second launch path, `root`, listed first so the launcher's rows show "Chat" before "New Chat".

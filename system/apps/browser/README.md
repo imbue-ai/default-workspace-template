@@ -62,7 +62,13 @@ background agent, which is its own chat -- or the human).
   restored as stopped after a daemon restart (the manifest entry's `stopped` flag),
   refuses the fleet CLI's verbs with status `stopped` and a hint on bringing it back, and
   shows a "stopped" overlay with a Start button in the viewer (which
-  calls `POST /browsers/<name>/start`; `.../stop` is its counterpart).
+  calls `POST /browsers/<name>/start`; `.../stop` is its counterpart). The viewer's
+  close chord (Ctrl+W) calls `POST /browsers/<name>/close-tab`, which closes the tab
+  Chromium has in front (asked of the pages themselves, so a tab the human switched
+  to inside Chrome counts) and keeps the browser up: the last tab is replaced with a
+  fresh home page rather than closed, since Chromium would close its window with it
+  and the window-bound sweep would then stop the browser (409 while the browser is
+  not running).
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
   name of the browser it started); every other command takes that
