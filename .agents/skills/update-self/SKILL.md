@@ -218,8 +218,8 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     bridge-history --ref "$REF" || exit 1
 ```
 
-Either `"bridged"` value needs nothing from the user. If it exits non-zero,
-nothing changed: record `run-status verdict STUCK --detail "<the error line, in
+Either `"bridged"` value needs nothing from the user. If it exits non-zero, it
+built no bridge: record `run-status verdict STUCK --detail "<the error line, in
 plain terms>"`, surface it, and stop. From here on, a pass that ends for any
 reason drops the bridge first (Step 6's opening command); a retry rebuilds it.
 
