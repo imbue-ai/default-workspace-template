@@ -15,11 +15,10 @@ You launch no agents of your own.
 
 These rules cover every kind of node a plan can name, so some of what follows is
 not yours. If your subtask is to build a piece rather than to check one, skip
-**Test fixture discovery**, **Manual verification and testing**, and the bullets
-about running and writing tests in **When coding** -- your check is the single
-command `worker-node.md` names, and the suite, coverage, ratchets and the review
-gates belong to the hardening pass at the end of the build. Read those sections
-only if your task file asks you to verify something or to write tests.
+**Manual verification and testing** -- your check is the single command
+`worker-node.md` names, and the suite, coverage, ratchets and the review gates
+belong to the hardening pass at the end of the build. Read that section only if
+your task file asks you to verify something or to write tests.
 
 # Critical context
 
@@ -91,43 +90,6 @@ Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `prio
 - **Naming is informative, not cheeky.** Service names, app names, skill names, command names: prefer something that explains what the thing does (`slack-inbox-checker`) over something clever (`nothing-new`). Cute names tax every later mention.
 - **Platform-internal APIs are valid.** Don't restrict yourself to officially documented public APIs. If a platform's own client (web app, mobile app) uses internal or undocumented endpoints to do something, those endpoints are fair game -- inspect what the official client actually calls and use the same endpoints with the same user-session auth. This is often cleaner than designing brute-force workarounds on top of a limited public API.
 
-# When coding, follow these guidelines:
-
-- Only make the changes that are necessary for the current task.
-- Before implementing something, check if there is something in the codebase or look for a library
-- Reuse code and use external dependencies heavily. Before implementing something, make sure that it doesn't already exist in the codebase, and consider if there's a library that can be imported instead of implementing it yourself. We want to be able to maintain the minimum amount of code that gets the job done, even if that means introducing dependencies. If you don't know of a library but think one might be plausible, search the web. (I'm even open to using random GitHub projects, but run anything that's not a well-established library by me first so I can check if it's likely to be reliable.)
-- Code quality is extremely important. Do not compromise on quality to deliver a result--if you don't know a good way to do something, ask.
-- Follow the style guide!
-- Use the power of the type system to constrain your code and provide some assurance of correctness. If some required property can't be guaranteed by the type system, it should be runtime checked (i.e. explode if it fails).
-- Avoid using the `TYPE_CHECKING` guard. Do not add it to files that do not already contain it, and never put imports inside of it yourself--you MUST ask for explicit permission to do this (it's generally a sign of bad architecture that should be fixed some other way).
-- Do NOT write code in `__init__.py`--leave them completely blank (the only exception is for a line like "hookimpl = pluggy.HookimplMarker("mngr")", which should go at the very root __init__.py of a library).
-- Do NOT make constructs like module-level usage of `__all__`
-- To run tests for a single project: "cd system/apps/system_interface && uv run pytest" or "cd system/apps/chat && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
-- While you're iterating, you can pass "--no-cov --cov-fail-under=0" to disable coverge (slightly faster), but during your final check, you *MUST NOT* pass those flags (it will fail in CI anyway)
-- For faster iteration, add "-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'" to skip slow infrastructure tests (~30s instead of ~95s). These still run in CI. Note that you *MUST* also pass "--no-cov --cov-fail-under=0" when doing this, otherwise it will complain about a lack of coverage.
-- If you need to run a specific acceptance or release test to write or fix it, iterate on that specific test locally by calling "just test <full_path>::<test_name>" from the root of the git checkout. Do this rather than re-running all tests in CI.
-- If tests fail because of a lack of coverage, you should add tests for the new code that you wrote.
-- When adding tests, consider whether it should be a unit test (in a _test.py file) or an integration/acceptance/release test (in a test_*.py file, and marked with @pytest.mark.acceptance or @pytest.mark.release, no marks needed for integration).  See the style_guide.md for exact details on the types of tests. In general, most slow tests of all functionality should be release tests, and only important / core functionality should be acceptance tests.
-- Do NOT create tests for test utilities (e.g. never create `testing_test.py`). Code in `testing.py` and `conftest.py` is exercised by the tests that use it and does not need its own test file.
-- Do NOT create tests that code raises NotImplementedError.
-- If you see a flaky test, you must not let it pass silently: fix it as soon as possible, and say so in your report.
-- Do not add TODO or FIXME unless explicitly asked to do so
-- Code must work on both macOS and Linux. It's ok if it doesn't work on Windows.
-- To reiterate: code correctness and quality is the most important concern when writing code.
-
-## Test fixture discovery
-
-Before writing new tests, read the relevant `conftest.py` and `testing.py` files to avoid reimplementing things that already exist. 
-Test infrastructure lives in these files:
-
-| File pattern | Purpose |
-|---|---|
-| `conftest.py` | Pytest fixtures and hooks, scoped to the directory they're in (auto-discovered by pytest) |
-| `testing.py` | Non-fixture test utilities: factory functions, helpers, context managers (explicitly imported) |
-| `mock_*_test.py` | Concrete mock implementations of interfaces (explicitly imported) |
-
-All fixtures must be in conftest.py, not in individual test files.
-
 # Manual verification and testing
 
 Before declaring any feature complete, manually verify it: exercise the feature exactly as a real user would, with real inputs, and critically evaluate whether it *actually does the right thing*. 
@@ -135,12 +97,6 @@ Do not confuse "no errors" with "correct behavior" -- a command that exits 0 but
 
 Then crystallize the verified behavior into formal tests. 
 Assert on things that are true if and only if the feature worked correctly -- this ensures tests are both reliable and meaningful.
-
-## Verifying interactive components with tmux
-
-For interactive components (TUIs, interactive prompts, etc.), use `tmux send-keys` and `tmux capture-pane` to manually verify them. 
-This is a special case: do NOT crystallize these into pytest tests. 
-They are inherently flaky due to timing and useless in CI, but valuable for agents to verify that interactive behavior looks right during development.
 
 # Using crystallized skills
 

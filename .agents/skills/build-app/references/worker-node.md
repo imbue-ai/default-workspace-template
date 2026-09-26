@@ -100,10 +100,10 @@ job is to hand over a piece that loads and a report that says what you built.
 verify -- that the app serves and renders, that a behaviour holds, sometimes
 that there are tests for it -- and to diagnose what that turns up. If that is
 your task file, the rules above do not apply to it: do the checking, because it
-is the work. Write and run the tests your subtask asks for and no others, to the
-conventions in `worker-workspace-rules.md` ("When coding" and "Test fixture
-discovery"). The full suite, coverage, ratchets and the review gates stay with
-the hardening pass at the end, whatever your subtask is.
+is the work. Write and run the tests your subtask asks for and no others,
+following the conventions of the tests already sitting beside the code you are
+changing. The full suite, coverage, ratchets and the review gates stay with the
+hardening pass at the end, whatever your subtask is.
 
 A node that drives the app drives it headlessly, the way
 `worker-workspace-rules.md` describes under "Important commands and
