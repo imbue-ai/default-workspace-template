@@ -174,6 +174,24 @@ describe("a window drag", () => {
     expect(preview.style.display).toBe("none");
   });
 
+  it("is cancelled by Escape, the window back where the drag began, and the pointer's release then ends nothing", async () => {
+    const { listener, element, preview } = beginDrag();
+    m.redraw.sync();
+    listener.onMove(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    expect(element.style.left).not.toBe("50px");
+    expect(preview.style.display).toBe("");
+    pressEscape();
+    expect(store.getGesture()).toBeNull();
+    expect(element.style.left).toBe("50px");
+    expect(preview.style.display).toBe("none");
+    listener.onEnd(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    m.redraw.sync();
+    expect(element.getAttribute("data-window-state")).toBe("NORMAL");
+    expect(element.style.left).toBe("50px");
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("savePlacements"))).toEqual([]);
+  });
+
   it("hides the preview on a snap release, with no redraw in between", () => {
     const { listener, preview } = beginDrag();
     m.redraw.sync();
