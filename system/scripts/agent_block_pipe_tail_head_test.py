@@ -48,6 +48,9 @@ def _run(command: str) -> int:
         "for f in *.md; do cat $f | head -5; done",
         "if true; then git log --oneline | head -3; fi",
         "time cat f | head",
+        # A line continuation is not part of the program name.
+        "cat f | \\\n  grep x | head",
+        "git \\\n  log --oneline | head",
         # head/tail picking one value inside a command substitution.
         "INIT=$(git rev-list --first-parent HEAD | tail -1)",
         # `||` is not a pipe.
@@ -96,6 +99,9 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         "pytest |\ncat | tail -20",
         "pytest | \n\ncat | tail -20",
         "cat notes.md\npytest | tail -20",
+        "uv run pytest -q 2>&1 | \\\n  tail -30",
+        # An escaped backslash does not continue the line, so pytest starts a new command.
+        "echo done\\\\\npytest | tail -5",
         "cat $(pytest) | head",
         'cat "$(pytest)" | head',
         "cat <(pytest) | head",

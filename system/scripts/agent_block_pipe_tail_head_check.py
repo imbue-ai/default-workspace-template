@@ -35,7 +35,10 @@ from tk_command_parsing.parser import CommandSegment, parse_command
 
 # The same trigger the wrapper uses: a pipe (`|` or `|&`, not `||`) into head or tail, which
 # may be followed by the quote or paren that closes the text it sits in.
-_PIPE_INTO_TRUNCATOR = re.compile(r"(?<!\|)\|&?\s*(tail|head)(?![\w.-])")
+_PIPE_INTO_TRUNCATOR = re.compile(r"(?<!\|)\|&?[\s\\]*(tail|head)(?![\w.-])")
+# A line continuation, which the shell drops before parsing and shlex would keep as a `\n`
+# word. A backslash that is itself escaped (`\\` then a newline) does not continue the line.
+_LINE_CONTINUATION = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
 # Process substitution starts a word; `<tag>(` inside quoted text or a heredoc body does not.
 _PROCESS_SUBSTITUTION = re.compile(r"(?:^|[\s;&|])[<>]\(")
 # What a redirect leaves among a segment's words: the fd number of `2>&1`/`2>` and the target.
@@ -122,6 +125,7 @@ _REFUSAL = (
 
 def is_blocked(command: str, depth: int = 0) -> bool:
     """True when `command` pipes into head/tail output that would have to be regenerated."""
+    command = _LINE_CONTINUATION.sub(r"\1", command)
     parsed = parse_command(command)
     if parsed is None:
         return True
