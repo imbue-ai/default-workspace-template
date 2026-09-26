@@ -68,6 +68,7 @@ Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 ``sys.path`` insert), since this runs under a plain ``python3``.
 """
 
+import logging
 import os
 import shutil
 import sys
@@ -80,6 +81,8 @@ sys.path.insert(
 from oom_priority import bands
 from oom_priority.agent_identity import is_chat_agent, is_primary_agent, is_worker_agent
 from oom_priority.registry import record_agent_pid
+
+_logger = logging.getLogger(__name__)
 
 
 def _band_for(agent_name: str) -> int:
@@ -135,12 +138,12 @@ def _npm_codex_native_launch() -> tuple[Path, dict[str, str]] | None:
     natives = list(package_root.glob("node_modules/@openai/codex-*/vendor/*/bin/codex"))
     if len(natives) != 1:
         if resolved_entry_point.name == "codex.js":
-            print(
-                "agent_oom_launch: expected one native codex binary in"
-                f" {package_root}, found {[str(native) for native in natives]};"
+            _logger.warning(
+                "agent_oom_launch: expected one native codex binary in %s, found %s;"
                 " launching the npm entry point, so an OOM kill of codex will not"
                 " be attributed to this agent",
-                file=sys.stderr,
+                package_root,
+                [str(native) for native in natives],
             )
         return None
     env = {
@@ -166,7 +169,7 @@ def main() -> None:
     try:
         _tag_self()
     except Exception as error:
-        print(f"agent_oom_launch: tagging skipped: {error}", file=sys.stderr)
+        _logger.warning("agent_oom_launch: tagging skipped: %s", error)
     native_launch = _npm_codex_native_launch() if binary == "codex" else None
     if native_launch is not None:
         native, env = native_launch
