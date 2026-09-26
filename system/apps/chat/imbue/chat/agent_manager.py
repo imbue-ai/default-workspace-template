@@ -216,22 +216,15 @@ DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 
 
-# The create templates a chat's launch stacks on ``chat`` (``.mngr/settings.toml``): ``welcome``
-# delivers ``/welcome`` to a chat that starts with nothing to say, and ``fast`` launches the
-# fast-capable harnesses in fast mode when the chat's fast mode (``chat_fast_mode.py``) calls for it.
-WELCOME_ROLE_TEMPLATE: Final[str] = "welcome"
+# The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
+# fast mode (``chat_fast_mode.py``) calls for it: it launches the fast-capable harnesses in fast mode.
 FAST_ROLE_TEMPLATE: Final[str] = "fast"
 
 
 @pure
-def launch_role_templates(message: str, is_fast: bool) -> tuple[str, ...]:
-    """The templates a chat create stacks beyond the caller's: a greeting for a silent start, fast mode when the chat's mode calls for it."""
-    templates: list[str] = []
-    if message == "":
-        templates.append(WELCOME_ROLE_TEMPLATE)
-    if is_fast:
-        templates.append(FAST_ROLE_TEMPLATE)
-    return tuple(templates)
+def launch_role_templates(is_fast: bool) -> tuple[str, ...]:
+    """The templates a chat create stacks beyond the caller's: fast mode when the chat's mode calls for it."""
+    return (FAST_ROLE_TEMPLATE,) if is_fast else ()
 
 
 @pure
@@ -361,9 +354,8 @@ def _build_chat_create_command(
     for setting in settings:
         cmd.extend(["-S", setting])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
-    # once the harness signals readiness, exactly as the ``welcome`` template's ``/welcome``
-    # does (a CLI ``--message`` takes precedence over a template's). A create that has a model
-    # to apply first withholds its message and sends it afterwards, so it passes none here.
+    # once the harness signals readiness. A create that has a model to apply first withholds
+    # its message and sends it afterwards, so it passes none here.
     if initial_message:
         cmd.extend(["--message", initial_message])
     return cmd
@@ -2230,7 +2222,7 @@ class AgentManager:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
         # The chat's fast mode travels with it: a successor starts fast when the chat would.
-        role_templates = (FAST_ROLE_TEMPLATE,) if self.get_fast_mode_state(spec.chat_id).launches_fast else ()
+        role_templates = launch_role_templates(self.get_fast_mode_state(spec.chat_id).launches_fast)
         return _build_chat_create_command(
             self._mngr_binary,
             spec.name,
@@ -2848,8 +2840,8 @@ class AgentManager:
         provider chooser before it creates).
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
-        create --message`` after the harness signals readiness. A chat that starts with no
-        message gets ``/welcome`` instead, through the ``welcome`` template. A chat minted
+        create --message`` after the harness signals readiness; a chat that starts with no
+        message sends none and waits for the user. A chat minted
         earlier keeps the message it was minted with, so a launch that names one beside
         ``chat_id`` is refused like a name; the exception is a seeded chat awaiting its first send, whose
         message is exactly what the launch brings.
@@ -2976,7 +2968,7 @@ class AgentManager:
         except AccountError as e:
             _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
-        role_templates = (*extra_role_templates, *launch_role_templates(message, fast_mode.launches_fast))
+        role_templates = (*extra_role_templates, *launch_role_templates(fast_mode.launches_fast))
 
         # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
         # this app renders from a file, which no harness transcript holds, so its launch carries
