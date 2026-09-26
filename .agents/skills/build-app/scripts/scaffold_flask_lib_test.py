@@ -11,12 +11,14 @@ config would hand a new app a port another program already holds. Its port
 choice -- the auto pick and the refusal of a requested port -- runs in-process
 with a bind probe that reports nothing bound, because the real probe asks this
 machine, and a live workspace already has apps listening across the auto-pick
-range.
+range. One test runs the real script to check the pick reaches the files it
+writes, asserting only what holds whatever this machine is listening on.
 """
 
 from __future__ import annotations
 
 import configparser
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -196,6 +198,31 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "dashboard": 8080})
 
     assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
+
+
+def test_the_scaffold_writes_the_port_it_picked(tmp_path: Path) -> None:
+    """The program's forward_port URL and the runner's default port are the picked one.
+
+    This runs the real script, so its bind probe asks this machine and the exact
+    port depends on what is listening here. The assertion is what holds on any
+    machine: both files carry the same port, and it is not one the config holds.
+    """
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "dashboard": 8080})
+
+    result = _scaffold(root, "news")
+    assert result.returncode == 0, result.stderr
+
+    program = (root / "system/supervisord.conf.d/news.conf").read_text()
+    (program_port,) = {
+        int(match.group(1))
+        for match in scaffold_flask_lib.LOCALHOST_PORT_RE.finditer(program)
+    }
+    runner = (root / "system/apps/news/src/news/runner.py").read_text()
+    runner_default = re.search(r'os\.environ\.get\("NEWS_PORT", "(\d+)"\)', runner)
+    assert runner_default is not None
+    assert int(runner_default.group(1)) == program_port
+    assert program_port >= scaffold_flask_lib.LOWEST_AUTO_PORT
+    assert program_port not in {8080, 8081}
 
 
 def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
