@@ -175,16 +175,14 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # scroll out of view, so what mngr captures at send time is what is actually holding the
 # input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
 # the workspace terminal panel keeps its scrollback either way.
-# model = "opus[1m]" is the ONE model pin left in this file, and it is claude-only on
-# purpose. Two things make it safe here and unsafe everywhere else: every Anthropic account
-# that can reach Claude Code has Opus, so the slug cannot be rejected the way a codex slug
-# can (see agent_types.codex); and the `first` create template turns fast mode on for the
-# introductory agent, which needs a model that actually supports it -- so the model and the
-# fast-mode default have to be chosen together rather than left to whatever the account
-# happens to default to.
+# model = "opus[1m]" pins claude's model. Two things make it safe: every Anthropic account
+# that can reach Claude Code has Opus, so the slug cannot be rejected by the account; and the
+# `first` create template turns fast mode on for the introductory agent, which needs a model
+# that actually supports it -- so the model and the fast-mode default have to be chosen
+# together rather than left to whatever the account happens to default to.
 #
-# Do NOT copy this to another harness. codex, pi, opencode and antigravity all pin nothing:
-# their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
+# codex is the only other harness with a pin (see agent_types.codex for how its slug is chosen).
+# pi, opencode and antigravity pin nothing: their model sets are per-provider (pi, opencode),
 # so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
 # an empty model bar.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, feedbackSurveyRate = 0, feedbackDrafts = "off", tui = "fullscreen"}
@@ -250,17 +248,16 @@ command = "sleep infinity"
 # (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- do not
 # reinstall/verify at provision.
 #
-# NO model or effort is pinned, deliberately -- and claude is now the only agent type that
-# pins one. A codex slug is not a property of the workspace, it is a property of the ACCOUNT:
-# which models a ChatGPT plan may use varies by tier, so a slug that is one account's default
-# is another account's hard 400 ("The 'gpt-5.6-sol' model is not supported when using Codex
-# with a ChatGPT account"). That failure is doubly bad because it is not just a refused turn:
-# the model bar matches the live model against the account's own list, so an unusable pin
-# also shows as a shrug and hides every model the account CAN use.
+# model = "gpt-6-sol" makes GPT-6 Sol the model every new codex agent starts on; left unset,
+# codex takes the first model of its account's server catalog, which is GPT-6 Astra. A chat
+# can still switch to any model its account offers from the model bar.
 #
-# Leaving it unset lets codex pick its account's default, which the model bar then reads back
-# from model_state.json like every other harness. Claude keeps its pin because its auth is
-# single-account and its slugs do not vary by plan in the same way.
+# A codex slug is a property of the ACCOUNT, not the workspace: which models a ChatGPT plan
+# may use varies by tier, and a slug the account cannot use is a hard 400 on every turn ("The
+# 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account") that also
+# leaves the model bar showing a shrug. Pin only a slug the whole catalog offers: gpt-6-sol
+# needs codex >= 0.155.0 (CODEX_VERSION) and is listed for every plan GPT-6 Astra is except
+# `promax`. No effort is pinned, so the model's own default (medium) applies.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
@@ -285,8 +282,9 @@ auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 sandbox_mode = "danger-full-access"
 check_installation = false
+model = "gpt-6-sol"
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
-# [features] keys, not mngr fields -- kept here on the agent-type block for one place to read.
+# own keys, not mngr fields -- kept here on the agent-type block for one place to read.
 # - memories = false: disable codex's built-in memory system so it never writes to
 #   $CODEX_HOME/memories/ -- a per-agent, non-runtime-backed silo that would compete with the
 #   shared runtime/memory/. features.memories is the master switch; false wins regardless of
@@ -297,19 +295,19 @@ check_installation = false
 #   change or an unrecognized value deserializes to None and silently drops us to direct tool
 #   calls. `effective_tool_mode` falls back to these flags exactly when `tool_mode` is None, so
 #   they close that hole (`code_mode_only` implies `code_mode`; it is Stage::UnderDevelopment,
-#   which only warns -- the suppress flag silences that). `code_mode_host` picks where the JS
-#   runs (standalone host vs embedded V8), unrelated to whether code mode is on.
-# - unified_exec = false: closes a TOTAL bypass of the PreToolUse guards. The unified-exec
-#   surface adds `write_stdin` (and a tty option to the shell tool); `write_stdin` fires NO
-#   PreToolUse event at all, so an agent can start a shell with one guarded call and then type
-#   anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with every guard
-#   skipped. Measured on codex-cli 0.147.0: the typed command ran and the hook log held a single
-#   `Bash`/`bash` entry. It is NOT closable via the tools table below: `ToolsToml` accepts only
-#   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
-#   silently ignored (verified -- the bypass still worked). With this flag the model reports
-#   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
-#   AND still fire their hook. Cost: the interactive-tty affordance, which Mind does not use.
-#   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
+#   which only warns -- the top-level `suppress_unstable_features_warning` silences that; codex
+#   ignores it under [features]). `code_mode_host` picks where the JS runs (standalone host vs
+#   embedded V8), unrelated to whether code mode is on.
+# - unified_exec_tty = false: closes a TOTAL bypass of the PreToolUse guards. `write_stdin`
+#   fires NO PreToolUse event at all, so an agent could start a shell with one guarded call and
+#   then type anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with
+#   every guard skipped (measured on codex-cli 0.147.0: the typed command ran and the hook log
+#   held a single `Bash`/`bash` entry). With tty off, exec_command rejects `tty: true` and runs
+#   every process with its stdin closed, so `write_stdin` can only poll a running command or
+#   send it an interrupt. Long-running commands still yield and can be polled. Do not reach for
+#   `unified_exec = false` instead: codex >= 0.154 forces unified exec back on unless a managed
+#   requirements file pins it, so that flag is silently ignored. Nor the tools table below:
+#   `ToolsToml` accepts only web_search / experimental_request_user_input / update_plan.
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
@@ -317,7 +315,8 @@ check_installation = false
 # - apps = false: disable ChatGPT account app/connector sync -- it's an OAuth side channel
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
-config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false, apps = false }
+config_overrides.suppress_unstable_features_warning = true
+config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. Codex refuses to
 # re-add a cached Git marketplace if its source declaration has disappeared.
@@ -370,7 +369,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
 #
-# No model is pinned -- as with every agent type but claude now. OpenCode is a
+# No model is pinned -- as with pi and antigravity. OpenCode is a
 # many-provider, many-auth harness: its model is a `provider/model` slug that comes
 # from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
 # or the authenticated provider's default -- forcing a slug here could name a

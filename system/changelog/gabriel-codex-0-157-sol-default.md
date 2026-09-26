@@ -1,0 +1,9 @@
+Codex CLI bumped from 0.154.0 to 0.157.0 (`CODEX_VERSION` in `system/scripts/setup_system.sh`). 0.155.0 is the first release that can use GPT-6 Sol (`gpt-6-sol`) and GPT-6 Luna (`gpt-6-luna`); on 0.154.0 an account's model list does not offer them at all.
+
+New codex agents now start on GPT-6 Sol: `[agent_types.codex]` pins `model = "gpt-6-sol"`. Without a pin, codex starts on the first model of the account's server catalog, which is GPT-6 Astra. A chat can still switch to any model its account offers from the model bar. The catalog lists GPT-6 Sol for every ChatGPT plan GPT-6 Astra is listed for except `promax`.
+
+Codex agents can no longer type into a running command. `features.unified_exec = false`, which was meant to remove `write_stdin` (a tool that fires no PreToolUse hook, so typing commands into a shell skipped every command guard), has been silently ignored since codex 0.154: codex forces unified exec back on unless a managed requirements file pins it. `[agent_types.codex]` now sets `features.unified_exec_tty = false` instead, so every command runs with its stdin closed and `write_stdin` can only poll a running command or interrupt it. Long-running commands still yield and can be polled.
+
+`suppress_unstable_features_warning` moved from codex's `[features]` table, where codex ignored it, to the top level of the config, so the "Under-development features enabled" warning for `code_mode_only` is actually suppressed.
+
+The first codex agent in a workspace no longer turns `/tmp` into mode 0700. codex 0.154.0 forced the parent directory of its app-server socket (`/tmp/mngr-codex-<hash>.sock`) to 0700, and since codex runs as root that made `/tmp` unwritable for other users, such as apt's `_apt` sandbox user. codex 0.157.0 keeps its sockets under `/tmp/codex-daemon-<uid>/` and leaves the parent alone.

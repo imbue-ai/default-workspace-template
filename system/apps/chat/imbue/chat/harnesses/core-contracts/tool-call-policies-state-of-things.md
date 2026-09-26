@@ -236,10 +236,12 @@ are the routes around them that are worth knowing; all were measured.
 
 - **codex `write_stdin` (closed).** The unified-exec surface adds `write_stdin` and a tty option,
   and `write_stdin` fires NO PreToolUse event -- so an agent could open a shell with one guarded
-  call and type anything into it. Closed by `features.unified_exec = false` in
-  `.mngr/settings.toml`. It is NOT closable via the `tools` table: `ToolsToml` accepts only
-  `web_search` / `experimental_request_user_input` / `update_plan`, and any other key there is
-  silently ignored.
+  call and type anything into it. Closed by `features.unified_exec_tty = false` in
+  `.mngr/settings.toml`: every exec'd process runs with its stdin closed, so `write_stdin` can
+  only poll a running command or interrupt it. `features.unified_exec = false` does NOT close it:
+  codex >= 0.154 forces unified exec back on unless a managed requirements file pins it. Nor does
+  the `tools` table: `ToolsToml` accepts only `web_search` / `experimental_request_user_input` /
+  `update_plan`, and any other key there is silently ignored.
 - **agy `manage_task` `send_input` (open).** Stdin piped into a task that a guarded
   `run_command` launched is not itself a tool call, so nothing sees it. No event exists to hook.
 - **agy nested shells (open, deliberate).** Only the outermost `bash -c` is guarded; policing the
