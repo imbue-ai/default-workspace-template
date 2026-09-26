@@ -1741,14 +1741,15 @@ append_system_prompt__extend = ["You were launched by another agent. List any qu
 
 # Worktree worker: one of several workers an orchestrating agent runs in parallel
 # for one build (first used by build-app), each in a git worktree of its own. The
-# orchestrator keeps an integration worktree on the build branch and branches every
-# worker off that branch's current tip, so a worker starts from everything merged
-# so far and hands its own work back as a branch to merge.
+# orchestrator keeps an integration worktree on the build branch and branches
+# every worker off that branch's current tip, so a worker starts from everything
+# merged so far and hands its own work back as a branch to merge.
 #
-# Differences from `worker`, each following from being one node of a planned build:
-# - The stop hook is fully off (REVIEWER_STOP_HOOK_ENABLE=0). A node is a fragment
-#   of an app, so the gates it would run belong to the hardening pass the
-#   orchestrator hands off at the end, not to each node.
+# Differences from `worker`, each following from being one node of a planned
+# build:
+# - The stop hook is fully off (REVIEWER_STOP_HOOK_ENABLE=0). A node is a
+#   fragment of an app, so the gates it would run belong to the hardening pass
+#   the orchestrator hands off at the end, not to each node.
 # - The appended prompt limits verification to a quick check of the worker's own
 #   piece, and tells it to commit that piece: its branch is what the orchestrator
 #   merges, so uncommitted work is work that never reaches the build.

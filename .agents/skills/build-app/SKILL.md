@@ -124,9 +124,10 @@ cat > "$RUN/brief.md" <<'BRIEF'
 BRIEF
 ```
 
-The integration folder does not depend on the plan, and its `uv sync` takes about as
-long as the planner does, so start it first and let the two run together --
-otherwise nothing at all happens for the first four minutes of a build. It is
+The integration folder does not depend on the plan, and its `uv sync` takes
+about as long as the planner does, so start it first and let the two run
+together -- otherwise nothing at all happens for the first four minutes of a
+build. It is
 where every node's branch is merged and where the previews are served from, so it
 needs a working checkout of its own. Commit any pending changes in the main
 checkout (commit, never stash; the build branch starts from your last commit),
@@ -230,8 +231,9 @@ Repeat until every node is done.
 
    The one thing that cannot wait is the merge. When a report lands mid-wave,
    merge that node's branch (item 5) *before* you run `ready`, because a node
-   launched off an unmerged build branch cannot see the work it depends on. Merge,
-   launch whatever that unblocked, then record and destroy while the new one runs.
+   launched off an unmerged build branch cannot see the work it depends on.
+   Merge, launch whatever that unblocked, then record and destroy while the new
+   one runs.
 
    What these options are for:
 
@@ -353,8 +355,8 @@ anything. There are two kinds:
 For a review:
 
 1. **Serve a preview from the integration folder.** It holds every node merged
-   so far, which is what the user is being shown; a node whose branch you have not
-   merged is not in it. The app is not live yet, so show a throwaway instance
+   so far, which is what the user is being shown; a node whose branch you have
+   not merged is not in it. The app is not live yet, so show a throwaway instance
    wrapped in a labeled preview window, with its own scratch data folder:
 
    ```bash
@@ -418,11 +420,11 @@ After the working-site conversation is confirmed and every node is done:
    removes its worktree, and check the build branch has everything (Step 4,
    item 6).
 2. **Merge into main** from the main checkout:
-   `git merge --no-ff "build-app/$APP"`. Every node was merged into that branch as
-   it finished, so this brings the whole build over in one commit. A conflict here
-   means main changed during the build -- usually another app added to the root
-   `pyproject.toml`. Keep both sides, and never hand-resolve by dropping either
-   app's entry.
+   `git merge --no-ff "build-app/$APP"`. Every node was merged into that branch
+   as it finished, so this brings the whole build over in one commit. A conflict
+   here means main changed during the build -- usually another app added to the
+   root `pyproject.toml`. Keep both sides, and never hand-resolve by dropping
+   either app's entry.
 3. **Start it for real:**
    `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
    then `supervisorctl status "$APP"`. Verify it with
