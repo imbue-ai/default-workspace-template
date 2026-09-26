@@ -29,10 +29,12 @@ import { freeTextRowsOf, isPathShowingChat } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
+  withWindowDetached,
   withWindowFrame,
   withWindowMinimized,
   withWindowPlacedOnOpen,
   withWindowRaised,
+  withWindowReattached,
   withWindowRestored,
   withWindowState,
   withoutPlacement,
@@ -121,6 +123,10 @@ export type DesktopEvent =
   | { readonly type: "window_restored"; readonly windowId: string }
   | { readonly type: "window_state_set"; readonly windowId: string; readonly state: WindowState }
   | { readonly type: "window_frame_set"; readonly windowId: string; readonly frame: Frame }
+  /** The window was pulled out into a desktop window of the chrome's own (the pull-out-window spec). */
+  | { readonly type: "window_detached"; readonly windowId: string }
+  /** The window came back to the desktop, at ``frame`` when a re-dock drop named one. */
+  | { readonly type: "window_reattached"; readonly windowId: string; readonly frame: Frame | null }
   | {
       readonly type: "window_opened_here";
       readonly desktopId: string;
@@ -262,6 +268,10 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       return withLayoutEdited(state, withWindowState(state.layout, event.windowId, event.state));
     case "window_frame_set":
       return withLayoutEdited(state, withWindowFrame(state.layout, event.windowId, event.frame));
+    case "window_detached":
+      return withLayoutEdited(state, withWindowDetached(state.layout, event.windowId));
+    case "window_reattached":
+      return withLayoutEdited(state, withWindowReattached(state.layout, event.windowId, event.frame));
     case "window_opened_here":
       return withWindowOpenedHere(state, event.desktopId, event.window, event.isNew);
     case "window_closed_here":
@@ -408,6 +418,30 @@ export function isWindowMinimized(placements: readonly Placement[], windowId: st
   return placements.find((placement) => placement.window_id === windowId)?.is_minimized ?? true;
 }
 
+/** Whether a window is pulled out into a desktop window of the chrome's own. */
+export function isWindowDetached(placements: readonly Placement[], windowId: string): boolean {
+  return placements.find((placement) => placement.window_id === windowId)?.is_detached ?? false;
+}
+
+/** One pulled-out window as the shell reports it to the embedder (the pull-out-window spec, section 5.5). */
+export interface DetachedWindowReport {
+  readonly windowId: string;
+  readonly title: string;
+}
+
+/** The pulled-out windows of the active desktop with their titles, in opening order. */
+export function detachedWindowsOf(state: DesktopState): DetachedWindowReport[] {
+  const desktop = activeDesktop(state);
+  if (desktop === null) return [];
+  const placements = effectivePlacements(state.layout, desktop);
+  return desktop.windows
+    .filter((window) => isWindowDetached(placements, window.id))
+    .map((window) => ({
+      windowId: window.id,
+      title: effectiveWindowTitle(state, window, appByName(state, window.app)),
+    }));
+}
+
 /** What a pinned entry looks like for this client: the mode and style it chose, or the pin's defaults. */
 export interface EntryLook {
   readonly mode: EntryMode;
@@ -423,6 +457,8 @@ export interface TaskbarEntry {
   readonly app: AppRecord | undefined;
   readonly title: string;
   readonly isMinimized: boolean;
+  /** Pulled out into a desktop window of the chrome's own; the entry shows that window rather than restoring. */
+  readonly isDetached: boolean;
   readonly isFocused: boolean;
   /** The app's pinned window: its entry is always there, and its Close minimizes it rather than closing it. */
   readonly isPinned: boolean;
@@ -458,6 +494,7 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
       app,
       title: effectiveWindowTitle(state, window, app),
       isMinimized: isWindowMinimized(placements, window.id),
+      isDetached: isWindowDetached(placements, window.id),
       isFocused: window.id === focused,
       isPinned: window.is_pinned,
       look: entryLook(state, window, app),

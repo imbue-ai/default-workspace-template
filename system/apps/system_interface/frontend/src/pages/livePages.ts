@@ -104,6 +104,9 @@ interface HostRect {
 export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
+  /** The window a tear-out drag has pulled past the viewport: its page is hidden until the drag comes back
+   *  inside or ends (the pull-out-window spec). */
+  private tornOutWindowId: string | null = null;
   private lastFocusedWindowId: string | null = null;
   /** The shell's desktops revision the pages last followed: a linked window's stored path changes only with it. */
   private followedDesktopsRevision = 0;
@@ -137,6 +140,14 @@ export class LivePagesLayer implements PageDriver {
   setGestureActive(isActive: boolean): void {
     if (this.isGestureActive === isActive) return;
     this.isGestureActive = isActive;
+    this.reconcile();
+  }
+
+  /** Hide the page of the window a tear-out drag is pulling out (the chrome shows it elsewhere), or show it
+   *  again: the per-move step of that drag, which redraws nothing. */
+  setTornOutWindow(windowId: string | null): void {
+    if (this.tornOutWindowId === windowId) return;
+    this.tornOutWindowId = windowId;
     this.reconcile();
   }
 
@@ -209,6 +220,12 @@ export class LivePagesLayer implements PageDriver {
       if (!windowsById.has(windowId)) this.destroy(page);
     }
 
+    const soloWindowId = this.store.getSoloWindowId();
+    if (soloWindowId !== null) {
+      this.reconcileSolo(soloWindowId, windowsById);
+      return;
+    }
+
     const desktop = activeDesktop(state);
     const placements = desktop === null ? [] : activePlacements(state);
     const focused = activeFocusedWindowId(state);
@@ -216,6 +233,9 @@ export class LivePagesLayer implements PageDriver {
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
       if (found === undefined || desktop === null || placement.is_minimized) return;
+      // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
+      // is already drawn there under the cursor.
+      if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
       const { window } = found;
       const app = appByName(state, window.app);
       if (app === undefined) return;
@@ -260,6 +280,48 @@ export class LivePagesLayer implements PageDriver {
       this.lastFocusedWindowId = focused;
       const page = focused === null ? undefined : this.pages.get(focused);
       if (page !== undefined) requestFrameFocus(page.wrapper);
+    }
+  }
+
+  /** Solo mode (the pull-out-window spec, section 7.5): the one window's page over the whole host, live, and no
+   *  other page at all. It follows its window's path like any page. */
+  private reconcileSolo(
+    soloWindowId: string,
+    windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>,
+  ): void {
+    const state = this.store.getState();
+    const found = windowsById.get(soloWindowId);
+    const app = found === undefined ? undefined : appByName(state, found.window.app);
+    for (const page of this.pages.values()) {
+      if (page.windowId !== soloWindowId) this.hide(page);
+    }
+    if (found === undefined || app === undefined) return;
+    const page = this.pages.get(soloWindowId) ?? this.create(found.window, app);
+    if (!app.is_running) {
+      page.isHeldForStop = true;
+      this.hide(page);
+      return;
+    }
+    if (page.isHeldForStop) {
+      page.isHeldForStop = false;
+      this.reloadPage(page);
+    }
+    const hostBox = this.host.getBoundingClientRect();
+    this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true);
+    if (page.greetedDesktopId !== null && page.greetedDesktopId !== found.desktop.id) this.greet(page);
+    const desktopsRevision = this.store.getDesktopsRevision();
+    const layoutLoadsRevision = this.store.getLayoutLoadsRevision();
+    if (
+      desktopsRevision !== this.followedDesktopsRevision ||
+      layoutLoadsRevision !== this.followedLayoutLoadsRevision
+    ) {
+      this.followedDesktopsRevision = desktopsRevision;
+      this.followedLayoutLoadsRevision = layoutLoadsRevision;
+      this.follow(windowsById);
+    }
+    if (this.lastFocusedWindowId !== soloWindowId) {
+      this.lastFocusedWindowId = soloWindowId;
+      requestFrameFocus(page.wrapper);
     }
   }
 

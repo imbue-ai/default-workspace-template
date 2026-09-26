@@ -19,6 +19,7 @@ function pinnedEntry(overrides: Partial<TaskbarEntry> = {}): TaskbarEntry {
     app: buddy,
     title: "Buddy",
     isMinimized: true,
+    isDetached: false,
     isFocused: false,
     isPinned: true,
     look: { mode: "floating", style: "plain", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },

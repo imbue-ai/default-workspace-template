@@ -66,6 +66,7 @@ import {
   frameFromPixels,
   frameToPixels,
   movedRect,
+  overshootPastViewport,
   resizedRect,
   snapZoneForRelease,
   unsnapFrame,
@@ -80,6 +81,7 @@ import {
   activeFocusedWindowId,
   appByName,
   chatApp,
+  detachedWindowsOf,
   draftTargetOf,
   effectiveWindow,
   effectiveWindowTitle,
@@ -94,7 +96,7 @@ import {
   renderedState,
   windowShowingChat,
 } from "../reducers/desktopState";
-import type { DesktopEvent, DesktopState } from "../reducers/desktopState";
+import type { DesktopEvent, DesktopState, DetachedWindowReport } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
@@ -151,6 +153,49 @@ export interface PageDriver {
   requestClose(windowId: string): void;
 }
 
+/** What the shell asks the embedding chrome for when a window is pulled out (the pull-out-window spec). */
+export interface PopOutRequest {
+  readonly windowId: string;
+  readonly title: string;
+  /** The window's rendered size in CSS px. */
+  readonly width: number;
+  readonly height: number;
+  /** Where inside the window the pointer holds it (0 with mode "open"). */
+  readonly grabX: number;
+  readonly grabY: number;
+  /** "drag": the chrome follows the cursor until the release; "open": placed beside the chrome's window. */
+  readonly mode: "drag" | "open";
+}
+
+/** The shell's side of the pull-out conversation with the embedding chrome, injectable so the store is tested
+ *  against a recorder. Every call is a no-op without an embedder. */
+export interface PopOutBridge {
+  requestPopOut(request: PopOutRequest): void;
+  cancelPopOut(windowId: string): void;
+  endPopOut(windowId: string): void;
+  reportDetachedWindows(windows: readonly DetachedWindowReport[]): void;
+}
+
+const NULL_POP_OUT_BRIDGE: PopOutBridge = {
+  requestPopOut: () => undefined,
+  cancelPopOut: () => undefined,
+  endPopOut: () => undefined,
+  reportDetachedWindows: () => undefined,
+};
+
+// The layout verbs a solo shell (the pull-out-window spec, section 7.5) never applies: it is a view of one
+// window, and the desktop's arrangement belongs to the client's main window. The two exceptions are its own
+// window's detach (the first load's self-heal) and reattach (the way back).
+const SOLO_IGNORED_LAYOUT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
+  "window_raised",
+  "window_minimized",
+  "window_restored",
+  "window_state_set",
+  "window_frame_set",
+  "window_detached",
+  "window_reattached",
+]);
+
 export interface StoreDependencies {
   readonly clientId: string;
   readonly api: DesktopApi;
@@ -163,6 +208,10 @@ export interface StoreDependencies {
   readonly notify: (message: string) => void;
   /** Reload the whole interface (the ``reload_system_interface`` op). */
   readonly reloadInterface: () => void;
+  /** The pull-out conversation with the embedder; absent means no embedder. */
+  readonly popOut?: PopOutBridge;
+  /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
+  readonly soloWindowId?: string | null;
 }
 
 /** A navigation this client asked for on its own page (the chooser's draft), which the live pages honour
@@ -183,6 +232,10 @@ export interface MoveGesture {
   readonly zone: WindowState | null;
   /** Whether a snapped or maximized window has been un-snapped by this drag. */
   readonly isUnsnapped: boolean;
+  /** Whether the pointer has gone far enough past the viewport that the window is being pulled out: the chrome
+   *  is dragging a desktop window of its own under the cursor, and this one is hidden until the drag comes back
+   *  inside or ends (the pull-out-window spec). */
+  readonly isTearingOut: boolean;
 }
 
 export interface ResizeGesture {
@@ -248,13 +301,47 @@ export class DesktopStore {
   // the socket is quicker; a deep link's open or launch waits for it.
   private readonly appsLoaded: Promise<void>;
   private markAppsLoaded: () => void = () => undefined;
+  private readonly popOut: PopOutBridge;
+  private readonly soloWindowId: string | null;
+  /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
+  private canPopOut = false;
+  /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
+  private lastReportedDetached: string | null = null;
+  /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
+  private isSoloFirstLayoutPending: boolean;
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
     this.metrics = deps.metrics;
+    this.popOut = deps.popOut ?? NULL_POP_OUT_BRIDGE;
+    this.soloWindowId = deps.soloWindowId ?? null;
+    this.isSoloFirstLayoutPending = this.soloWindowId !== null;
     this.appsLoaded = new Promise((resolve) => {
       this.markAppsLoaded = resolve;
     });
+  }
+
+  /** The one window this shell shows alone, or null for the whole desktop. */
+  getSoloWindowId(): string | null {
+    return this.soloWindowId;
+  }
+
+  /** Whether the embedder can pull a window out into a desktop window of its own. */
+  getCanPopOut(): boolean {
+    return this.canPopOut;
+  }
+
+  /** The embedder said what it can do (``minds:embedder-capabilities``). */
+  setCanPopOut(canPopOut: boolean): void {
+    if (this.canPopOut === canPopOut) return;
+    this.canPopOut = canPopOut;
+    this.notifyListeners();
+  }
+
+  /** Whether a window move in progress has pulled ``windowId`` past the viewport (it is hidden meanwhile). */
+  isTearingOut(windowId: string): boolean {
+    const gesture = this.gesture;
+    return gesture !== null && gesture.kind === "move" && gesture.windowId === windowId && gesture.isTearingOut;
   }
 
   getState(): DesktopState {
@@ -316,6 +403,13 @@ export class DesktopStore {
   }
 
   dispatch(event: DesktopEvent): void {
+    // A solo shell leaves the desktop's arrangement to the client's main window; only its own window's detach
+    // and reattach are its to write.
+    if (this.soloWindowId !== null && SOLO_IGNORED_LAYOUT_EVENTS.has(event.type)) {
+      const isOwnWindow = "windowId" in event && event.windowId === this.soloWindowId;
+      const isOwnVerb = event.type === "window_detached" || event.type === "window_reattached";
+      if (!isOwnWindow || !isOwnVerb) return;
+    }
     const next = reduceDesktopState(this.state, event);
     if (next === this.state) return;
     // Only an event that changed the layout re-arms the debounce: a broadcast landing while a save
@@ -329,6 +423,19 @@ export class DesktopStore {
   private notifyListeners(): void {
     for (const listener of this.listeners) listener();
     this.deps.redraw();
+    this.reportDetachedWindows();
+  }
+
+  /** Tell the embedder which windows of the active desktop are pulled out, when that changed. Only once the
+   *  layout is known: an empty report before it loads would read, in a pulled-out window's own desktop
+   *  window, as its window having been brought back. */
+  private reportDetachedWindows(): void {
+    if (!this.state.isLayoutLoaded) return;
+    const report = detachedWindowsOf(this.state);
+    const serialized = JSON.stringify(report);
+    if (serialized === this.lastReportedDetached) return;
+    this.lastReportedDetached = serialized;
+    this.popOut.reportDetachedWindows(report);
   }
 
   setBackdropSize(size: PixelSize): void {
@@ -398,8 +505,14 @@ export class DesktopStore {
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     this.takeFetchedEntries(own, entryPushesBefore);
     // The shell's answer says where this client lands; without one (the arrival failed), the recorded desktop.
+    // A solo shell lands on the desktop that holds its window, wherever the client is.
     const landing = arrival?.desktop_id ?? own?.active_desktop ?? null;
-    const chosen = chooseInitialDesktopId(inventory.desktops, deepLink.desktopId, landing);
+    const soloDesktopId =
+      this.soloWindowId === null
+        ? null
+        : (inventory.desktops.find((desktop) => desktop.windows.some((window) => window.id === this.soloWindowId))
+            ?.id ?? null);
+    const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLink.desktopId, landing);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
     if (deepLink.open === null && deepLink.launch === null) return;
@@ -474,6 +587,9 @@ export class DesktopStore {
   }
 
   private reportClientState(previousDesktop: string): void {
+    // A solo shell sits on its window's desktop without moving the client there: the client's active desktop
+    // is its main window's.
+    if (this.soloWindowId !== null) return;
     const active = this.state.activeDesktopId;
     if (active === null) return;
     this.deps.socket.reportClientState(active, previousDesktop);
@@ -500,6 +616,8 @@ export class DesktopStore {
 
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
     if (event.clientId !== this.deps.clientId || event.desktopId === this.state.activeDesktopId) return;
+    // A solo shell stays on its window's desktop whatever the client's main window switches to.
+    if (this.soloWindowId !== null) return;
     void this.switchDesktop(event.desktopId, { isFollowingPush: true });
   }
 
@@ -557,6 +675,8 @@ export class DesktopStore {
    *  with no pinned window to take it, the chat opens in a window of its own. False when nothing
    *  showed it -- this machine has no app that holds chats, or the shell refused the ask. */
   async focusChat(chatId: string): Promise<boolean> {
+    // A solo shell shows one window and cannot show a chat elsewhere.
+    if (this.soloWindowId !== null) return false;
     const shown = windowShowingChat(this.state, chatId);
     if (shown !== null) {
       if (shown.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(shown.desktop.id);
@@ -997,6 +1117,9 @@ export class DesktopStore {
   /** The minds close chord: the focused window is told, then closed for everyone; a pinned window, which is never
    *  closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
+    // In a solo shell the chord belongs to the chrome, which closes the desktop window instead; the focused
+    // window here would be some other window of the desktop.
+    if (this.soloWindowId !== null) return;
     const focused = activeFocusedWindowId(this.state);
     if (focused === null) return;
     if (findWindow(this.state, focused)?.window.is_pinned === true) {
@@ -1048,9 +1171,59 @@ export class DesktopStore {
     else this.dispatch({ type: "window_state_set", windowId, state: "MAXIMIZED" });
   }
 
-  /** A taskbar entry's click: restore and raise when minimized, minimize when focused, raise otherwise. */
+  /** Pull a window out into a desktop window of the embedder's own without a drag (the window menu's "Open in
+   *  its own window"): the chrome opens it beside its window, at the size the window renders here. The
+   *  placement is saved at once, since the chrome's new window reads it as soon as it loads. */
+  async detachWindow(windowId: string): Promise<void> {
+    if (!this.canPopOut) return;
+    const found = findWindow(this.state, windowId);
+    if (found === null) return;
+    const rect = this.renderedRect(placementOf(this.state.layout, windowId));
+    this.popOut.requestPopOut({
+      windowId,
+      title: effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app)),
+      width: rect.width,
+      height: rect.height,
+      grabX: 0,
+      grabY: 0,
+      mode: "open",
+    });
+    this.dispatch({ type: "window_detached", windowId });
+    await this.flushPendingSave();
+  }
+
+  /** Raise (or reopen) the desktop window a pulled-out window is shown in. */
+  showDetachedWindow(windowId: string): void {
+    const found = findWindow(this.state, windowId);
+    if (found === null) return;
+    const rect = this.renderedRect(placementOf(this.state.layout, windowId));
+    this.popOut.requestPopOut({
+      windowId,
+      title: effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app)),
+      width: rect.width,
+      height: rect.height,
+      grabX: 0,
+      grabY: 0,
+      mode: "open",
+    });
+  }
+
+  /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
+   *  entry's menu): shown and raised, at ``frame`` when a re-dock drop named one. Saved at once: the chrome's
+   *  window is closing on the answer. */
+  async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
+    this.dispatch({ type: "window_reattached", windowId, frame });
+    await this.flushPendingSave();
+  }
+
+  /** A taskbar entry's click: show a pulled-out window's own desktop window; else restore and raise when
+   *  minimized, minimize when focused, raise otherwise. */
   toggleTaskbarEntry(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
+    if (placement.is_detached) {
+      this.showDetachedWindow(windowId);
+      return;
+    }
     if (placement.is_minimized) this.restoreWindow(windowId);
     else if (activeFocusedWindowId(this.state) === windowId) this.minimizeWindow(windowId);
     else this.raiseWindow(windowId);
@@ -1118,6 +1291,7 @@ export class DesktopStore {
       currentRect: startRect,
       zone: null,
       isUnsnapped: false,
+      isTearingOut: false,
     };
     this.notifyListeners();
   }
@@ -1149,7 +1323,28 @@ export class DesktopStore {
     const delta = { x: pointer.x - start.startPointer.x, y: pointer.y - start.startPointer.y };
     const currentRect = movedRect(start.startRect, delta, this.backdrop, this.metrics);
     const zone = snapZoneForRelease(pointer, this.backdrop, this.metrics.snapThreshold);
-    this.gesture = { ...start, currentRect, zone };
+    // Past the viewport by the tear-out distance the window is pulled out: the chrome drags a desktop window
+    // of its own under the cursor and this one hides; back inside, the chrome drops that window and this one
+    // shows again where the drag has it. The raw pointer decides, before any clamp.
+    const overshoot = overshootPastViewport(pointer, this.backdrop, this.metrics.taskbarHeight);
+    const isTearingOut = this.canPopOut && overshoot >= this.metrics.tearOutDistance;
+    if (isTearingOut && !start.isTearingOut) {
+      const found = findWindow(this.state, start.windowId);
+      const title =
+        found === null ? "" : effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
+      this.popOut.requestPopOut({
+        windowId: start.windowId,
+        title,
+        width: currentRect.width,
+        height: currentRect.height,
+        grabX: Math.min(Math.max(pointer.x - currentRect.x, 0), currentRect.width),
+        grabY: Math.min(Math.max(pointer.y - currentRect.y, 0), currentRect.height),
+        mode: "drag",
+      });
+    } else if (!isTearingOut && start.isTearingOut) {
+      this.popOut.cancelPopOut(start.windowId);
+    }
+    this.gesture = { ...start, currentRect, zone: isTearingOut ? null : zone, isTearingOut };
   }
 
   endWindowMove(pointer: PixelPoint): void {
@@ -1160,7 +1355,13 @@ export class DesktopStore {
     this.gesture = null;
     if (settled === null || settled.kind !== "move") return;
     const placement = placementOf(this.state.layout, settled.windowId);
-    if (settled.zone !== null) {
+    if (settled.isTearingOut) {
+      // Released outside: the window is out. Its frame is untouched, so the ghost stands where the drag began
+      // and a return lands there. Saved at once: the chrome's window reads the placement as soon as it loads.
+      this.popOut.endPopOut(settled.windowId);
+      this.dispatch({ type: "window_detached", windowId: settled.windowId });
+      void this.flushPendingSave();
+    } else if (settled.zone !== null) {
       // The frame is untouched so restore returns to it (an un-snapped drag kept it too).
       this.dispatch({ type: "window_state_set", windowId: settled.windowId, state: settled.zone });
     } else if (placement.state === "NORMAL" || settled.isUnsnapped) {
@@ -1292,7 +1493,10 @@ export class DesktopStore {
 
   cancelGesture(): void {
     if (this.gesture === null) return;
+    const cancelled = this.gesture;
     this.gesture = null;
+    // A tear-out cancelled mid-drag (Escape, the browser): the chrome drops the window it was dragging.
+    if (cancelled.kind === "move" && cancelled.isTearingOut) this.popOut.cancelPopOut(cancelled.windowId);
     this.notifyListeners();
   }
 
@@ -1371,6 +1575,21 @@ export class DesktopStore {
     }
     this.layoutLoadsRevision += 1;
     this.dispatch({ type: "layout_loaded", desktopId, layout });
+    this.healSoloWindowOnFirstLoad();
+  }
+
+  /** A solo shell exists because its window is pulled out; the first layout it loads may say otherwise (the
+   *  detach's save had not landed, the placement was written elsewhere, a relaunch after a return on another
+   *  device). That first load takes the shell's existence as the truth and detaches the window; a later load
+   *  that says the window is back is the desktop's word, and the chrome closes this window on the report. */
+  private healSoloWindowOnFirstLoad(): void {
+    if (!this.isSoloFirstLayoutPending || this.soloWindowId === null) return;
+    this.isSoloFirstLayoutPending = false;
+    const found = findWindow(this.state, this.soloWindowId);
+    if (found === null || found.desktop.id !== this.state.activeDesktopId) return;
+    if (placementOf(this.state.layout, this.soloWindowId).is_detached) return;
+    this.dispatch({ type: "window_detached", windowId: this.soloWindowId });
+    void this.flushPendingSave();
   }
 
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */

@@ -9,10 +9,12 @@ import {
   focusedWindowId,
   mostRecentlyFocusedWindowOfApp,
   placementOf,
+  withWindowDetached,
   withWindowFrame,
   withWindowMinimized,
   withWindowPlacedOnOpen,
   withWindowRaised,
+  withWindowReattached,
   withWindowRestored,
   withWindowState,
   withoutPlacement,
@@ -37,7 +39,13 @@ describe("effectivePlacements", () => {
   it("reads a missing placement as minimized at the bottom of the stack with the next cascade frame", () => {
     const placements = effectivePlacements(layoutOf("win-2"), desktop);
     expect(placements.map((placement) => placement.window_id)).toEqual(["win-1", "win-3", "win-2"]);
-    expect(placements[0]).toEqual({ window_id: "win-1", frame: cascadeFrame(1), state: "NORMAL", is_minimized: true });
+    expect(placements[0]).toEqual({
+      window_id: "win-1",
+      frame: cascadeFrame(1),
+      state: "NORMAL",
+      is_minimized: true,
+      is_detached: false,
+    });
     expect(placements[2].is_minimized).toBe(false);
   });
 
@@ -132,6 +140,38 @@ describe("the verbs", () => {
       frame: cascadeFrame(2),
       state: "NORMAL",
       is_minimized: false,
+      is_detached: false,
     });
+  });
+
+  it("pulls a window out where it stands, with its frame kept, and every showing verb brings it back", () => {
+    const layout = layoutOf("win-1", "win-2", "win-3");
+    const detached = withWindowDetached(layout, "win-2");
+    expect(detached.placements.map((placement) => placement.window_id)).toEqual(["win-1", "win-2", "win-3"]);
+    expect(detached.placements[1]).toMatchObject({ is_detached: true, is_minimized: false, frame: cascadeFrame(0) });
+    // Focus skips a pulled-out window as it skips a minimized one.
+    expect(focusedWindowId(withWindowDetached(detached, "win-3").placements)).toBe("win-1");
+    // Back at its kept frame, on top, normal.
+    const returned = withWindowReattached(detached, "win-2", null);
+    expect(returned.placements[2]).toMatchObject({
+      window_id: "win-2",
+      is_detached: false,
+      state: "NORMAL",
+      frame: cascadeFrame(0),
+    });
+    // Back where a re-dock drop named, clamped into the square.
+    const dropped = withWindowReattached(detached, "win-2", { x: 0.8, y: 0.9, width: 0.5, height: 0.5 });
+    expect(dropped.placements[2].frame).toEqual({ x: 0.5, y: 0.5, width: 0.5, height: 0.5 });
+    // Every verb that shows the window on the desktop brings it back, minimize included.
+    expect(withWindowRaised(detached, "win-2").placements[2].is_detached).toBe(false);
+    expect(withWindowRestored(detached, "win-2").placements[2].is_detached).toBe(false);
+    expect(withWindowState(detached, "win-2", "MAXIMIZED").placements[2].is_detached).toBe(false);
+    expect(withWindowFrame(detached, "win-2", cascadeFrame(3)).placements[2].is_detached).toBe(false);
+    expect(withWindowMinimized(detached, "win-2").placements[1]).toMatchObject({
+      is_detached: false,
+      is_minimized: true,
+    });
+    // Pulling out a window already out changes nothing (no gesture to save).
+    expect(withWindowDetached(detached, "win-2")).toBe(detached);
   });
 });

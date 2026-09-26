@@ -55,6 +55,8 @@ from imbue.system_interface.shell.desktop_document import with_pinned_windows_en
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_shortcut
 from imbue.system_interface.shell.desktop_document import with_shortcut_moved
+from imbue.system_interface.shell.desktop_document import with_window_detached
+from imbue.system_interface.shell.desktop_document import with_window_reattached
 from imbue.system_interface.shell.desktop_document import with_window_frame
 from imbue.system_interface.shell.desktop_document import with_window_location
 from imbue.system_interface.shell.desktop_document import with_window_minimized
@@ -482,6 +484,35 @@ def test_the_verbs_edit_one_placement_and_the_stack() -> None:
     # A window with no placement yet gets its default before the verb applies.
     absent = with_window_raised(_layout(), _WIN_1)
     assert absent.placements == (placement_record(_WIN_1),)
+
+
+def test_a_pulled_out_window_stays_where_it_is_and_every_showing_verb_brings_it_back() -> None:
+    layout = _layout(placement_record(_WIN_1), placement_record(_WIN_2), placement_record(_WIN_3))
+    detached = with_window_detached(layout, _WIN_2)
+    # Where it stood, its frame kept, shown but out: the ghost stands there and focus skips it.
+    assert [placement.window_id for placement in detached.placements] == [_WIN_1, _WIN_2, _WIN_3]
+    assert detached.placements[1].is_detached is True and detached.placements[1].is_minimized is False
+    assert detached.placements[1].frame == cascade_frame(0)
+    assert focused_window_id(with_window_detached(detached, _WIN_3).placements) == _WIN_1
+    # Back at its kept frame, on top, normal.
+    returned = with_window_reattached(detached, _WIN_2, None)
+    assert returned.placements[-1].window_id == _WIN_2
+    assert returned.placements[-1].is_detached is False and returned.placements[-1].state is WindowState.NORMAL
+    assert returned.placements[-1].frame == cascade_frame(0)
+    # Back where a re-dock drop named.
+    dropped = with_window_reattached(detached, _WIN_2, Frame(x=0.4, y=0.3, width=0.5, height=0.5))
+    assert dropped.placements[-1].frame == Frame(x=0.4, y=0.3, width=0.5, height=0.5)
+    # Every verb that shows the window on the desktop brings it back, minimize included.
+    assert with_window_raised(detached, _WIN_2).placements[-1].is_detached is False
+    assert with_window_restored(detached, _WIN_2).placements[-1].is_detached is False
+    assert with_window_state(detached, _WIN_2, WindowState.MAXIMIZED).placements[-1].is_detached is False
+    assert with_window_frame(detached, _WIN_2, cascade_frame(3)).placements[-1].is_detached is False
+    minimized = with_window_minimized(detached, _WIN_2)
+    assert minimized.placements[1].is_detached is False and minimized.placements[1].is_minimized is True
+    # A placement file without the key reads as attached.
+    assert WindowPlacement.model_validate(
+        {"window_id": str(_WIN_1), "frame": cascade_frame(0).model_dump(), "state": "NORMAL", "is_minimized": False}
+    ).is_detached is False
 
 
 def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_windows_as_new_windows() -> None:

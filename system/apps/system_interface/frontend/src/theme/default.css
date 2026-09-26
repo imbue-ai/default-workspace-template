@@ -20,6 +20,10 @@
   --desk-snap-threshold: 16px;
   --desk-unsnap-distance: 12px;
   --desk-drag-threshold: 4px;
+  /* A window dragged this far past the viewport's edge is pulled out into a desktop window of the
+     embedding chrome's own (the pull-out-window spec). Past the top edge that is past the chrome's
+     own bar, which sits above the viewport. */
+  --desk-tear-out-distance: 48px;
   --desk-touch-target: 32px;
   --desk-window-radius: 12px;
   /* A title bar control stands this far clear of the bar's top and bottom edges, which sets its

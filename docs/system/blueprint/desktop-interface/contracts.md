@@ -109,6 +109,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 - `placements` is back to front; last is on top.
 - `frame` values are floats in `0..1` with `x + width <= 1` and `y + height <= 1`; `state` is `NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, or `MAXIMIZED`.
+- `is_detached` (default `false`) marks a window pulled out into a desktop window of the embedding chrome's own (mngr's `specs/pull-out-window/spec.md`): the desktop draws a ghost at its frame and its page is shown there; a file without the key reads as attached, and a writer without it drops the flag on its next save. Orthogonal to `state` and `is_minimized`; a detached placement is never the focused one.
 - A placement naming a window the desktop no longer holds is dropped on read.
 - A window with no placement reads as `{frame: cascade(n), state: NORMAL, is_minimized: true}` at the start of the list (the bottom of the stack), where `n` is the count of stored placements. A pinned window with no placement is answered by the layout route as `{frame: {x: 0.46, y: 0.05, width: 0.5, height: 0.9}, state: NORMAL, is_minimized: true}` at the start of the list instead (pinned-taskbar-entries plan section 3.2), unwritten until the client saves or an op edits that client's layout.
 - The old `layouts/` directory is never read.
@@ -301,6 +302,8 @@ Exit codes are `0`, `1`, `3`.
 Honoured by the shell on page load for the requesting client, then stripped: `?desktop=<id>` switches to it; `&open=<app>:<path>` opens (or focuses) a window there; `&launch=<app>:<launch_id>` runs a launch path through the launch route (section 5.3) with a `new` target.
 Unknown or stale targets are ignored silently.
 
+`?solo=<window-id>` (stripped the same way) is *solo mode* (the pull-out-window spec, section 7.5): the page shows that one window edge to edge and nothing else, which is what a pulled-out window's desktop window loads. A solo page lands on the desktop that holds the window without reporting `client_state` (the client's active desktop stays its main window's), ignores every layout verb but its own window's detach and reattach, and never follows an `active_desktop_changed`. Its first layout load detaches the window when the layout does not yet say so; a later load that says the window is back is the desktop's word.
+
 ## 10. Geometry rules and constants
 
 The constants below are theme metrics (section 11) unless marked as fixed.
@@ -318,6 +321,8 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 - **Reading order** (fixed): `cell(i) = {column: i mod columns, row: floor(i / columns)}`.
 - **Placement of shortcuts** (render only): shortcuts whose stored cell is inside the grid and unclaimed take it, in shortcut order; every other shortcut takes the nearest free cell to its clamped stored cell, in shortcut order.
 - **Compact override** (render only): every window renders as `MAXIMIZED`.
+- **Tear-out** (the pull-out-window spec): during a title-bar drag, once the raw pointer is past the viewport (the backdrop on the left, top, and right; the backdrop plus the taskbar at the bottom) by the tear-out distance, and the embedder has said it can pull windows out, the window is pulled out: the chrome drags a desktop window of its own under the cursor and this one hides. Back inside by less than the distance, the chrome drops that window and this one shows again where the drag has it. Released outside, `is_detached` is set with the frame untouched, so the ghost stands where the drag began.
+- **Detach and reattach** (fixed): `detach` sets `is_detached` and clears `is_minimized` where the placement stands; `reattach` clears `is_detached` and `is_minimized`, sets the state to `NORMAL`, moves the placement to the top, and takes the frame a re-dock drop names (clamped into the unit square) or keeps the placement's own. Every verb that shows a window on the desktop (focus, restore, maximize, snap, place, and minimize) clears `is_detached`.
 
 ## 11. Theme tokens and metrics
 

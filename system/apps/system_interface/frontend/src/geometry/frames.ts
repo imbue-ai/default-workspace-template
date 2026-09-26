@@ -130,6 +130,20 @@ export function snapZoneForRelease(pointer: PixelPoint, backdrop: PixelSize, thr
   return null;
 }
 
+/** How far the pointer is past the edges of the shell's viewport, in pixels: the backdrop on the left, top,
+ *  and right, and the backdrop plus the taskbar at the bottom; 0 while inside. A captured drag keeps
+ *  reporting the pointer past the viewport, which is where a window is pulled out (the pull-out-window
+ *  spec). */
+export function overshootPastViewport(pointer: PixelPoint, backdrop: PixelSize, taskbarHeight: number): number {
+  return Math.max(
+    0,
+    -pointer.x,
+    pointer.x - backdrop.width,
+    -pointer.y,
+    pointer.y - (backdrop.height + taskbarHeight),
+  );
+}
+
 /** The un-snap rule: the kept frame's size, hung so the pointer (in fractions of the backdrop) sits at
  *  ``grabFraction`` across the title bar and ``grabOffsetY`` below the window's top, then clamped. */
 export function unsnapFrame(keptFrame: Frame, pointer: PixelPoint, grabFraction: number, grabOffsetY: number): Frame {

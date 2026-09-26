@@ -23,6 +23,9 @@ export interface WindowMenuActions {
   readonly share: (() => void) | null;
   /** Null when the workspace cannot stop or start the app. */
   readonly setAppLifecycle: ((action: "stop" | "start") => void) | null;
+  /** Pull the window out into a desktop window of the embedding chrome's own (the pull-out-window spec); null
+   *  where the chrome cannot (a plain browser, an older chrome, compact mode). */
+  readonly popOut: (() => void) | null;
   /** Close the window for everyone; for a pinned window, which is never closed, this minimizes it instead. */
   readonly close: () => void;
 }
@@ -31,6 +34,15 @@ export interface WindowMenuActions {
 export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuActions): MenuRow[] {
   const rows: MenuRow[] = [];
   if (actions.size !== null) rows.push(windowSizeSubmenuRow(actions.size, actions.onSized), { kind: "divider" });
+  if (actions.popOut !== null) {
+    rows.push({
+      kind: "action",
+      key: "pop-out",
+      label: "Open in its own window",
+      icon: "external-link",
+      onSelect: actions.popOut,
+    });
+  }
   if (actions.share !== null && app !== undefined) {
     rows.push({
       kind: "action",
@@ -70,6 +82,12 @@ export interface EntryPresentationActions {
 export interface TaskbarEntryMenuActions {
   readonly isMinimized: boolean;
   readonly isMaximized: boolean;
+  /** Pulled out into a desktop window of the chrome's own: the entry offers to show it and to bring it back. */
+  readonly isDetached: boolean;
+  /** Raise or reopen the window's own desktop window. */
+  readonly show: () => void;
+  /** Bring a pulled-out window back to the desktop. */
+  readonly bringBack: () => void;
   readonly restore: () => void;
   readonly minimize: () => void;
   readonly maximize: () => void;
@@ -94,12 +112,18 @@ function styleLabel(style: PinStyle): string {
  *  or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and the
  *  avatar chooser while it shows the avatar, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
-  const rows: MenuRow[] = [
-    actions.isMinimized
-      ? { kind: "action", key: "restore", label: "Restore", onSelect: actions.restore }
-      : { kind: "action", key: "minimize", label: "Minimize", onSelect: actions.minimize },
-  ];
-  if (!isCompact) {
+  // A pulled-out window's arrangement is the chrome's: the entry shows its window or brings it back.
+  const rows: MenuRow[] = actions.isDetached
+    ? [
+        { kind: "action", key: "show", label: "Show", onSelect: actions.show },
+        { kind: "action", key: "bring-back", label: "Bring back to desktop", onSelect: actions.bringBack },
+      ]
+    : [
+        actions.isMinimized
+          ? { kind: "action", key: "restore", label: "Restore", onSelect: actions.restore }
+          : { kind: "action", key: "minimize", label: "Minimize", onSelect: actions.minimize },
+      ];
+  if (!isCompact && !actions.isDetached) {
     rows.push(
       actions.isMaximized
         ? { kind: "action", key: "unmaximize", label: "Restore size", onSelect: actions.unmaximize }

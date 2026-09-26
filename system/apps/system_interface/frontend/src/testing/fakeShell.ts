@@ -116,6 +116,7 @@ export class FakeDesktopApi implements DesktopApi {
         frame: PINNED_WINDOW_FRAME,
         state: "NORMAL" as const,
         is_minimized: true,
+        is_detached: false,
       }));
     return { ...stored, placements: [...pinned, ...stored.placements], window_paths };
   }

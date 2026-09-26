@@ -56,6 +56,7 @@ import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
+import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
@@ -204,6 +205,15 @@ export function App(): m.Component<AppAttrs> {
 
   const onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
+    // A window drag in progress is cancelled first of all: the window returns to where the drag began, and a
+    // tear-out drops the desktop window the chrome was dragging.
+    const gesture = store?.getGesture() ?? null;
+    if (store !== null && gesture !== null && gesture.kind === "move") {
+      store.cancelGesture();
+      paintWindow(store, gesture.windowId);
+      m.redraw();
+      return;
+    }
     // One layer per Escape: a dialog (the settings dialog, the avatar chooser) takes it through the
     // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
     if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
@@ -239,6 +249,11 @@ export function App(): m.Component<AppAttrs> {
     if (area === null) return;
     const element = area.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
     if (element !== null) applyRectStyle(element, current.windowRect(windowId));
+    // A window pulled past the viewport is drawn by the chrome under the cursor: hidden here, chrome and page,
+    // until the drag comes back inside or ends.
+    const isTornOut = current.isTearingOut(windowId);
+    if (element !== null) element.style.visibility = isTornOut ? "hidden" : "";
+    pages?.setTornOutWindow(isTornOut ? windowId : null);
     pages?.placePage(windowId);
     const preview = area.querySelector<HTMLElement>(`[${SNAP_PREVIEW_ATTRIBUTE}]`);
     if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
@@ -439,6 +454,7 @@ export function App(): m.Component<AppAttrs> {
         app !== undefined && current.canStopApp(app)
           ? (action) => void current.setAppLifecycle(app.name, action)
           : null,
+      popOut: current.getCanPopOut() && !state.modes.isCompact ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });
   }
@@ -453,6 +469,9 @@ export function App(): m.Component<AppAttrs> {
       {
         isMinimized: placement.is_minimized,
         isMaximized: placement.state === "MAXIMIZED",
+        isDetached: placement.is_detached,
+        show: () => current.showDetachedWindow(windowId),
+        bringBack: () => void current.reattachWindow(windowId, null),
         restore: () => current.restoreWindow(windowId),
         minimize: () => current.minimizeWindow(windowId),
         maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
@@ -796,6 +815,26 @@ export function App(): m.Component<AppAttrs> {
       const current = vnode.attrs.store;
       store = current;
       const state = current.getState();
+      const soloWindowId = current.getSoloWindowId();
+      if (soloWindowId !== null) {
+        // A pulled-out window's own desktop window: that one window edge to edge, and the banners above it.
+        return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
+          m(UpdateStalenessBanner),
+          m(UpdateNoticeBanner, { store: current }),
+          m(SoloView, {
+            store: current,
+            windowId: soloWindowId,
+            onPagesHostCreated: (host) => {
+              pages = new LivePagesLayer(host, current, {
+                host: vnode.attrs.host,
+                protocol: vnode.attrs.protocol,
+              });
+              pages.start();
+              pages.reconcile();
+            },
+          }),
+        ]);
+      }
       const desktop: Desktop | null = activeDesktop(state);
       const placements = activePlacements(state);
       const focused = activeFocusedWindowId(state);
@@ -875,6 +914,8 @@ export function App(): m.Component<AppAttrs> {
                       );
                     },
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
+                    onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
+                    onBringBackWindow: (windowId) => void current.reattachWindow(windowId, null),
                     onPagesHostCreated: (host) => {
                       pages = new LivePagesLayer(host, current, {
                         host: vnode.attrs.host,

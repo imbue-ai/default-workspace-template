@@ -23,6 +23,14 @@ declare module "@minds/embed-contract" {
   export const FOCUS_CHAT: "minds:focus-chat";
   // The readiness announcement (contract v5). Probed like the two above.
   export const WORKSPACE_READY: "minds:workspace-ready";
+  // The pull-out window set (contract v6). Probed like the ones above.
+  export const POP_OUT_WINDOW: "minds:pop-out-window";
+  export const POP_OUT_CANCEL: "minds:pop-out-cancel";
+  export const POP_OUT_END: "minds:pop-out-end";
+  export const DETACHED_WINDOWS: "minds:detached-windows";
+  export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities";
+  export const REATTACH_WINDOW: "minds:reattach-window";
+  export const WINDOW_ID_PATTERN: RegExp;
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

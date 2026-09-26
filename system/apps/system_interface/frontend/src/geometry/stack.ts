@@ -9,16 +9,28 @@
 
 import type { Desktop, Frame, Layout, Placement, WindowRecord, WindowState } from "../model/records";
 import { isSamePlacement } from "../model/records";
-import { cascadeFrame } from "./frames";
+import { cascadeFrame, clampFrameIntoUnitSquare } from "./frames";
 
 /** What a window with no placement reads as: the cascade frame at the bottom of the stack, minimized. */
 export function defaultPlacement(windowId: string, storedCount: number): Placement {
-  return { window_id: windowId, frame: cascadeFrame(storedCount), state: "NORMAL", is_minimized: true };
+  return {
+    window_id: windowId,
+    frame: cascadeFrame(storedCount),
+    state: "NORMAL",
+    is_minimized: true,
+    is_detached: false,
+  };
 }
 
 /** The placement an open writes for the requesting client: the cascade frame, normal, shown. */
 export function openedPlacement(windowId: string, storedCount: number): Placement {
-  return { window_id: windowId, frame: cascadeFrame(storedCount), state: "NORMAL", is_minimized: false };
+  return {
+    window_id: windowId,
+    frame: cascadeFrame(storedCount),
+    state: "NORMAL",
+    is_minimized: false,
+    is_detached: false,
+  };
 }
 
 /** The layout without every placement naming a window the desktop no longer holds. */
@@ -39,10 +51,15 @@ export function effectivePlacements(layout: Layout, desktop: Desktop): Placement
   return [...missing, ...stored];
 }
 
-/** The last placement that is not minimized; null when the backdrop has focus. */
+/** Whether a placement is on the desktop's screen: neither minimized nor pulled out. */
+export function isPlacementShown(placement: Placement): boolean {
+  return !placement.is_minimized && !placement.is_detached;
+}
+
+/** The last placement that is shown (neither minimized nor pulled out); null when the backdrop has focus. */
 export function focusedWindowId(placements: readonly Placement[]): string | null {
   for (let index = placements.length - 1; index >= 0; index -= 1) {
-    if (!placements[index].is_minimized) return placements[index].window_id;
+    if (isPlacementShown(placements[index])) return placements[index].window_id;
   }
   return null;
 }
@@ -91,29 +108,69 @@ export function withWindowPlacedOnOpen(layout: Layout, windowId: string): Layout
   return withPlacementOnTop(layout, openedPlacement(windowId, layout.placements.length));
 }
 
+// Every verb that shows a window on the desktop brings a pulled-out one back: the desktop is where
+// it is being shown.
+
 /** Focus: the window restored (un-minimized) and moved to the top of the stack. */
 export function withWindowRaised(layout: Layout, windowId: string): Layout {
-  return withPlacementOnTop(layout, { ...placementOf(layout, windowId), is_minimized: false });
+  return withPlacementOnTop(layout, { ...placementOf(layout, windowId), is_minimized: false, is_detached: false });
 }
 
-/** Minimize: the window out of sight where it stands in the stack. */
+/** Minimize: the window out of sight where it stands in the stack (back from its own window, if it was out). */
 export function withWindowMinimized(layout: Layout, windowId: string): Layout {
-  return withPlacementInPlace(layout, { ...placementOf(layout, windowId), is_minimized: true });
+  return withPlacementInPlace(layout, { ...placementOf(layout, windowId), is_minimized: true, is_detached: false });
 }
 
 /** Restore: the window shown at its own frame, normal, on top of the stack. */
 export function withWindowRestored(layout: Layout, windowId: string): Layout {
-  return withPlacementOnTop(layout, { ...placementOf(layout, windowId), is_minimized: false, state: "NORMAL" });
+  return withPlacementOnTop(layout, {
+    ...placementOf(layout, windowId),
+    is_minimized: false,
+    is_detached: false,
+    state: "NORMAL",
+  });
 }
 
 /** Maximize or snap: the state set with the frame untouched, the window shown and raised. */
 export function withWindowState(layout: Layout, windowId: string, state: WindowState): Layout {
-  return withPlacementOnTop(layout, { ...placementOf(layout, windowId), is_minimized: false, state });
+  return withPlacementOnTop(layout, {
+    ...placementOf(layout, windowId),
+    is_minimized: false,
+    is_detached: false,
+    state,
+  });
 }
 
 /** Place at a frame: the frame set with the state normal, the window shown and raised. */
 export function withWindowFrame(layout: Layout, windowId: string, frame: Frame): Layout {
-  return withPlacementOnTop(layout, { ...placementOf(layout, windowId), is_minimized: false, state: "NORMAL", frame });
+  return withPlacementOnTop(layout, {
+    ...placementOf(layout, windowId),
+    is_minimized: false,
+    is_detached: false,
+    state: "NORMAL",
+    frame,
+  });
+}
+
+/** Pull out: the window shown in a desktop window of the chrome's own, where it stands in the stack, its frame
+ *  kept so the ghost and a later return land where the drag began. */
+export function withWindowDetached(layout: Layout, windowId: string): Layout {
+  return withPlacementInPlace(layout, { ...placementOf(layout, windowId), is_minimized: false, is_detached: true });
+}
+
+/** Bring back: the window shown on the desktop again, normal, on top of the stack, at ``frame`` (clamped) when a
+ *  re-dock drop named one, else at its kept frame. */
+export function withWindowReattached(layout: Layout, windowId: string, frame: Frame | null): Layout {
+  const current = placementOf(layout, windowId);
+  const landing =
+    frame === null ? current.frame : clampFrameIntoUnitSquare(frame.x, frame.y, frame.width, frame.height);
+  return withPlacementOnTop(layout, {
+    ...current,
+    is_minimized: false,
+    is_detached: false,
+    state: "NORMAL",
+    frame: landing,
+  });
 }
 
 /** The layout without the window's placement. */

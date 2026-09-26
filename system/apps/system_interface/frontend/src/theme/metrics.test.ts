@@ -42,6 +42,7 @@ const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-snap-threshold": "16px",
   "--desk-unsnap-distance": "12px",
   "--desk-drag-threshold": "4px",
+  "--desk-tear-out-distance": "48px",
   "--desk-touch-target": "32px",
   "--desk-floating-entry-size": "56px",
   "--desk-floating-entry-inset-x": "16px",

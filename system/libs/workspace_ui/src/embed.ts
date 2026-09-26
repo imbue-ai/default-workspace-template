@@ -43,6 +43,27 @@ export const FOCUS_CHAT: "minds:focus-chat" =
 // a freshly-mounted frame's page is live.
 export const WORKSPACE_READY: "minds:workspace-ready" =
   "WORKSPACE_READY" in embedContract ? embedContract.WORKSPACE_READY : "minds:workspace-ready";
+// The pull-out window set (contract v6, the pull-out-window spec), probed the same way.
+// Workspace -> embedder: pull one window out into a desktop window of the chrome's own.
+// Payload: { windowId, title, width, height, grabX, grabY, mode: "drag" | "open" }.
+export const POP_OUT_WINDOW: "minds:pop-out-window" =
+  "POP_OUT_WINDOW" in embedContract ? embedContract.POP_OUT_WINDOW : "minds:pop-out-window";
+// Workspace -> embedder: the tear-out drag came back inside or was cancelled. Payload: { windowId }.
+export const POP_OUT_CANCEL: "minds:pop-out-cancel" =
+  "POP_OUT_CANCEL" in embedContract ? embedContract.POP_OUT_CANCEL : "minds:pop-out-cancel";
+// Workspace -> embedder: the tear-out drag was released. Payload: { windowId }.
+export const POP_OUT_END: "minds:pop-out-end" =
+  "POP_OUT_END" in embedContract ? embedContract.POP_OUT_END : "minds:pop-out-end";
+// Workspace -> embedder: the pulled-out windows of this shell's active desktop, with their titles.
+// Payload: { windows: [{ windowId, title }] }.
+export const DETACHED_WINDOWS: "minds:detached-windows" =
+  "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
+// Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut }.
+export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
+  "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
+// Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
+export const REATTACH_WINDOW: "minds:reattach-window" =
+  "REATTACH_WINDOW" in embedContract ? embedContract.REATTACH_WINDOW : "minds:reattach-window";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -70,6 +91,8 @@ function getEndpoint(): ContractEndpoint {
         [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
         [PERMISSION_RESOLUTIONS]: (message) => handlerByType[PERMISSION_RESOLUTIONS]?.(message),
         [FOCUS_CHAT]: (message) => handlerByType[FOCUS_CHAT]?.(message),
+        [EMBEDDER_CAPABILITIES]: (message) => handlerByType[EMBEDDER_CAPABILITIES]?.(message),
+        [REATTACH_WINDOW]: (message) => handlerByType[REATTACH_WINDOW]?.(message),
       },
     });
   }

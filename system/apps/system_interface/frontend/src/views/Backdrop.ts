@@ -14,6 +14,7 @@ import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
+import { DetachedWindowGhost } from "./DetachedWindowGhost";
 import { FloatingEntries } from "./FloatingEntries";
 import { rectStyle } from "./pixelStyle";
 import { ShortcutIcon, shortcutContent } from "./ShortcutIcon";
@@ -41,6 +42,9 @@ export interface BackdropAttrs {
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint, target: Element) => void;
   readonly onWindowControl: (windowId: string, control: WindowControl, event: MouseEvent) => void;
+  /** A pulled-out window's ghost was asked to show its own desktop window, or to bring the window back. */
+  readonly onShowDetachedWindow: (windowId: string) => void;
+  readonly onBringBackWindow: (windowId: string) => void;
   /** The element the live pages are appended to, created once and never re-rendered. */
   readonly onPagesHostCreated: (host: HTMLElement) => void;
 }
@@ -108,10 +112,25 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             // window's chrome sits over its own page in the stacking order, and the page must get the rest.
             { class: "windows absolute inset-0 pointer-events-none" },
             // A keyed list tolerates no holes: a minimized or unknown window contributes nothing.
-            placements.flatMap((placement, index) => {
+            placements.flatMap((placement, index): m.Children[] => {
               const window = windowsById.get(placement.window_id);
               if (placement.is_minimized || window === undefined) return [];
               const app = appByName(state, window.app);
+              // A pulled-out window leaves its ghost at its frame; its page is in the chrome's own window.
+              if (placement.is_detached) {
+                return [
+                  m(DetachedWindowGhost, {
+                    key: window.id,
+                    window,
+                    app,
+                    title: effectiveWindowTitle(state, window, app),
+                    rect: store.windowRect(window.id),
+                    stackIndex: index,
+                    onShow: () => attrs.onShowDetachedWindow(window.id),
+                    onBringBack: () => attrs.onBringBackWindow(window.id),
+                  }),
+                ];
+              }
               return [
                 m(Window, {
                   key: window.id,

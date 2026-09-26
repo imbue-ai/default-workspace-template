@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { frameForState, frameFromPixels, frameToPixels, isResizeEdge, movedRect, resizedRect } from "./frames";
+import * as frames from "./frames";
 
 const BACKDROP = { width: 1000, height: 800 };
 const MINIMUM = { windowMinWidth: 320, windowMinHeight: 240 };
@@ -88,5 +89,21 @@ describe("movedRect", () => {
       width: 400,
       height: 300,
     });
+  });
+});
+
+describe("overshootPastViewport", () => {
+  it("is how far the pointer is past the nearest edge of the viewport, and nothing inside it", () => {
+    const { overshootPastViewport } = frames;
+    const taskbar = 48;
+    expect(overshootPastViewport({ x: 500, y: 400 }, BACKDROP, taskbar)).toBe(0);
+    expect(overshootPastViewport({ x: -30, y: 400 }, BACKDROP, taskbar)).toBe(30);
+    expect(overshootPastViewport({ x: 1025, y: 400 }, BACKDROP, taskbar)).toBe(25);
+    expect(overshootPastViewport({ x: 500, y: -12 }, BACKDROP, taskbar)).toBe(12);
+    // The taskbar sits under the backdrop; only past it is past the viewport.
+    expect(overshootPastViewport({ x: 500, y: 820 }, BACKDROP, taskbar)).toBe(0);
+    expect(overshootPastViewport({ x: 500, y: 900 }, BACKDROP, taskbar)).toBe(52);
+    // A corner answers the larger overshoot.
+    expect(overshootPastViewport({ x: -40, y: -10 }, BACKDROP, taskbar)).toBe(40);
   });
 });
