@@ -227,7 +227,6 @@ export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): Theme
     snapThreshold: 16,
     unsnapDistance: 12,
     dragThreshold: 4,
-    tearOutDistance: 48,
     touchTarget: 32,
     floatingEntrySize: 56,
     floatingEntryInsetX: 16,

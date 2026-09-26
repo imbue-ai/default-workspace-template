@@ -66,7 +66,6 @@ import {
   frameFromPixels,
   frameToPixels,
   movedRect,
-  overshootPastViewport,
   resizedRect,
   snapZoneForRelease,
   unsnapFrame,
@@ -160,26 +159,34 @@ export interface PopOutRequest {
   /** The window's rendered size in CSS px. */
   readonly width: number;
   readonly height: number;
-  /** Where inside the window the pointer holds it (0 with mode "open"). */
+}
+
+/** A title-bar drag announced to the chrome, which watches the cursor from there (the pull-out-window spec,
+ *  section 5.1): the window's rendered size and where inside it the pointer holds it, so the desktop window the
+ *  chrome opens once the cursor leaves its window is sized and held the same way. */
+export interface WindowDragRequest extends PopOutRequest {
   readonly grabX: number;
   readonly grabY: number;
-  /** "drag": the chrome follows the cursor until the release; "open": placed beside the chrome's window. */
-  readonly mode: "drag" | "open";
 }
+
+/** A step of a watched drag as the chrome reports it (``minds:tear-out``): the cursor left the chrome's window
+ *  by the tear-out distance and a desktop window of the chrome's follows it, came back inside, or the button was
+ *  released while out. */
+export type TearOutPhase = "out" | "in" | "released";
 
 /** The shell's side of the pull-out conversation with the embedding chrome, injectable so the store is tested
  *  against a recorder. Every call is a no-op without an embedder. */
 export interface PopOutBridge {
   requestPopOut(request: PopOutRequest): void;
-  cancelPopOut(windowId: string): void;
-  endPopOut(windowId: string): void;
+  beginWindowDrag(request: WindowDragRequest): void;
+  endWindowDrag(windowId: string, isDetached: boolean): void;
   reportDetachedWindows(windows: readonly DetachedWindowReport[]): void;
 }
 
 const NULL_POP_OUT_BRIDGE: PopOutBridge = {
   requestPopOut: () => undefined,
-  cancelPopOut: () => undefined,
-  endPopOut: () => undefined,
+  beginWindowDrag: () => undefined,
+  endWindowDrag: () => undefined,
   reportDetachedWindows: () => undefined,
 };
 
@@ -232,9 +239,12 @@ export interface MoveGesture {
   readonly zone: WindowState | null;
   /** Whether a snapped or maximized window has been un-snapped by this drag. */
   readonly isUnsnapped: boolean;
-  /** Whether the pointer has gone far enough past the viewport that the window is being pulled out: the chrome
-   *  is dragging a desktop window of its own under the cursor, and this one is hidden until the drag comes back
-   *  inside or ends (the pull-out-window spec). */
+  /** Whether the chrome watches this drag (``minds:window-drag-started`` went out): it opens a desktop window of
+   *  its own once the cursor leaves its window, and hears when the gesture ends here. */
+  readonly isWatched: boolean;
+  /** Whether the chrome reported the cursor past its window by the tear-out distance: it is dragging a desktop
+   *  window of its own under the cursor, and this one is hidden until the drag comes back inside or ends (the
+   *  pull-out-window spec). */
   readonly isTearingOut: boolean;
 }
 
@@ -338,10 +348,44 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** Whether a window move in progress has pulled ``windowId`` past the viewport (it is hidden meanwhile). */
+  /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
   isTearingOut(windowId: string): boolean {
+    return this.moveGestureOf(windowId)?.isTearingOut === true;
+  }
+
+  private moveGestureOf(windowId: string): MoveGesture | null {
     const gesture = this.gesture;
-    return gesture !== null && gesture.kind === "move" && gesture.windowId === windowId && gesture.isTearingOut;
+    return gesture !== null && gesture.kind === "move" && gesture.windowId === windowId ? gesture : null;
+  }
+
+  /** The chrome reported a step of the drag it watches. "out": the window is hidden here, the chrome's own
+   *  desktop window standing in for it under the cursor. "in": shown again where the drag has it, and brought
+   *  back should the popout's own shell have detached it meanwhile. "released": the window is detached where it
+   *  stood, its frame untouched, saved at once (the chrome's window reads the placement as soon as it loads),
+   *  and the gesture is over; a release this shell saw itself first has already done that, and this is a no-op. */
+  setTearOut(windowId: string, phase: TearOutPhase): void {
+    const gesture = this.moveGestureOf(windowId);
+    if (gesture === null || !gesture.isWatched) return;
+    if (phase === "released") {
+      if (!gesture.isTearingOut) return;
+      this.gesture = null;
+      this.detachDraggedWindow(windowId);
+      this.notifyListeners();
+      return;
+    }
+    const isTearingOut = phase === "out";
+    if (gesture.isTearingOut === isTearingOut) return;
+    this.gesture = { ...gesture, isTearingOut, zone: isTearingOut ? null : gesture.zone };
+    if (!isTearingOut) this.bringBackIfDetached(windowId);
+    this.notifyListeners();
+  }
+
+  /** Released while out: the window is detached where it stood, its frame untouched, so the ghost stands where
+   *  the drag began and a return lands there. Saved at once, since the chrome's window reads the placement as
+   *  soon as it loads. */
+  private detachDraggedWindow(windowId: string): void {
+    this.dispatch({ type: "window_detached", windowId });
+    void this.flushPendingSave();
   }
 
   getState(): DesktopState {
@@ -1189,21 +1233,26 @@ export class DesktopStore {
   showDetachedWindow(windowId: string): void {
     if (findWindow(this.state, windowId) === null) return;
     const rect = this.renderedRect(placementOf(this.state.layout, windowId));
-    this.popOut.requestPopOut(this.popOutRequestFor(windowId, rect, { x: 0, y: 0 }, "open"));
+    this.popOut.requestPopOut(this.popOutRequestFor(windowId, rect));
   }
 
-  /** What the chrome is asked for when a window is pulled out: the window's title, the size its desktop window
-   *  is to have, and where inside it the pointer holds it. */
-  private popOutRequestFor(
-    windowId: string,
-    size: PixelSize,
-    grab: PixelPoint,
-    mode: PopOutRequest["mode"],
-  ): PopOutRequest {
+  /** What the chrome is asked for when a window is pulled out: the window's title and the size its desktop
+   *  window is to have. */
+  private popOutRequestFor(windowId: string, size: PixelSize): PopOutRequest {
     const found = findWindow(this.state, windowId);
     const title =
       found === null ? "" : effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
-    return { windowId, title, width: size.width, height: size.height, grabX: grab.x, grabY: grab.y, mode };
+    return { windowId, title, width: size.width, height: size.height };
+  }
+
+  /** Tell the chrome about a title-bar drag it is to watch: the window as it renders at ``rect``, held at
+   *  ``pointer``. Sent again when the dragged window changes size (a snapped window un-snapping). */
+  private announceWindowDrag(windowId: string, rect: PixelRect, pointer: PixelPoint): void {
+    const grab = {
+      x: Math.min(Math.max(pointer.x - rect.x, 0), rect.width),
+      y: Math.min(Math.max(pointer.y - rect.y, 0), rect.height),
+    };
+    this.popOut.beginWindowDrag({ ...this.popOutRequestFor(windowId, rect), grabX: grab.x, grabY: grab.y });
   }
 
   /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
@@ -1293,6 +1342,8 @@ export class DesktopStore {
     const placement = placementOf(this.state.layout, windowId);
     const startRect = this.renderedRect(placement);
     this.raiseWindow(windowId);
+    // A solo shell shows one window edge to edge; there is no desktop to pull a window out of.
+    const isWatched = this.canPopOut && this.soloWindowId === null;
     this.gesture = {
       kind: "move",
       windowId,
@@ -1301,8 +1352,10 @@ export class DesktopStore {
       currentRect: startRect,
       zone: null,
       isUnsnapped: false,
+      isWatched,
       isTearingOut: false,
     };
+    if (isWatched) this.announceWindowDrag(windowId, startRect, pointer);
     this.notifyListeners();
   }
 
@@ -1329,26 +1382,15 @@ export class DesktopStore {
       const frame = unsnapFrame(placement.frame, pointerFraction, grabFraction, grabOffsetY);
       const unsnappedRect = fitFrameToBackdrop(frame, this.backdrop, this.metrics);
       start = { ...gesture, startRect: unsnappedRect, startPointer: pointer, isUnsnapped: true };
+      // The window the chrome would pull out is a different size now, held elsewhere.
+      if (start.isWatched) this.announceWindowDrag(start.windowId, unsnappedRect, pointer);
     }
     const delta = { x: pointer.x - start.startPointer.x, y: pointer.y - start.startPointer.y };
     const currentRect = movedRect(start.startRect, delta, this.backdrop, this.metrics);
-    const zone = snapZoneForRelease(pointer, this.backdrop, this.metrics.snapThreshold);
-    // Past the viewport by the tear-out distance the window is pulled out: the chrome drags a desktop window
-    // of its own under the cursor and this one hides; back inside, the chrome drops that window and this one
-    // shows again where the drag has it. The raw pointer decides, before any clamp.
-    const overshoot = overshootPastViewport(pointer, this.backdrop, this.metrics.taskbarHeight);
-    const isTearingOut = this.canPopOut && overshoot >= this.metrics.tearOutDistance;
-    if (isTearingOut && !start.isTearingOut) {
-      const grab = {
-        x: Math.min(Math.max(pointer.x - currentRect.x, 0), currentRect.width),
-        y: Math.min(Math.max(pointer.y - currentRect.y, 0), currentRect.height),
-      };
-      this.popOut.requestPopOut(this.popOutRequestFor(start.windowId, currentRect, grab, "drag"));
-    } else if (!isTearingOut && start.isTearingOut) {
-      this.popOut.cancelPopOut(start.windowId);
-      this.bringBackIfDetached(start.windowId);
-    }
-    this.gesture = { ...start, currentRect, zone: isTearingOut ? null : zone, isTearingOut };
+    // While the chrome has the window out, no zone is offered; whether it is out is the chrome's word
+    // (``setTearOut``), since the pointer events here stop at the chrome window's edge on some platforms.
+    const zone = start.isTearingOut ? null : snapZoneForRelease(pointer, this.backdrop, this.metrics.snapThreshold);
+    this.gesture = { ...start, currentRect, zone };
   }
 
   /** A tear-out that ends without a detach (the pointer back inside, the gesture cancelled) leaves the window on
@@ -1367,12 +1409,10 @@ export class DesktopStore {
     this.gesture = null;
     if (settled === null || settled.kind !== "move") return;
     const placement = placementOf(this.state.layout, settled.windowId);
+    if (settled.isWatched) this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut);
     if (settled.isTearingOut) {
-      // Released outside: the window is out. Its frame is untouched, so the ghost stands where the drag began
-      // and a return lands there. Saved at once: the chrome's window reads the placement as soon as it loads.
-      this.popOut.endPopOut(settled.windowId);
-      this.dispatch({ type: "window_detached", windowId: settled.windowId });
-      void this.flushPendingSave();
+      // Released outside, and this shell saw the release itself (a pointer that does leave the chrome's window).
+      this.detachDraggedWindow(settled.windowId);
     } else if (settled.zone !== null) {
       // The frame is untouched so restore returns to it (an un-snapped drag kept it too).
       this.dispatch({ type: "window_state_set", windowId: settled.windowId, state: settled.zone });
@@ -1507,10 +1547,10 @@ export class DesktopStore {
     if (this.gesture === null) return;
     const cancelled = this.gesture;
     this.gesture = null;
-    // A tear-out cancelled mid-drag (Escape, the browser): the chrome drops the window it was dragging.
-    if (cancelled.kind === "move" && cancelled.isTearingOut) {
-      this.popOut.cancelPopOut(cancelled.windowId);
-      this.bringBackIfDetached(cancelled.windowId);
+    // A watched drag cancelled mid-way (Escape, the browser): the chrome drops any window it was dragging.
+    if (cancelled.kind === "move" && cancelled.isWatched) {
+      this.popOut.endWindowDrag(cancelled.windowId, false);
+      if (cancelled.isTearingOut) this.bringBackIfDetached(cancelled.windowId);
     }
     this.notifyListeners();
   }

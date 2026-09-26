@@ -821,6 +821,10 @@ export function App(): m.Component<AppAttrs> {
       });
     },
     onupdate() {
+      // The chrome's word on a tear-out arrives between pointer moves (its window has the cursor by then), so
+      // the dragged window is painted here too, hidden or shown as the store now has it.
+      const gesture = store?.getGesture() ?? null;
+      if (store !== null && gesture !== null && gesture.kind === "move") paintWindow(store, gesture.windowId);
       pages?.reconcile();
     },
     onremove() {

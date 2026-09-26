@@ -1271,8 +1271,8 @@ describe("pulled-out windows", () => {
     const reports: unknown[] = [];
     const popOut: PopOutBridge = {
       requestPopOut: (request) => calls.push(["request", request]),
-      cancelPopOut: (windowId) => calls.push(["cancel", windowId]),
-      endPopOut: (windowId) => calls.push(["end", windowId]),
+      beginWindowDrag: (request) => calls.push(["drag", request]),
+      endWindowDrag: (windowId, isDetached) => calls.push(["ended", windowId, isDetached]),
       reportDetachedWindows: (windows) => reports.push(windows),
     };
     return { store: makeStore(() => undefined, { popOut, soloWindowId }), calls, reports };
@@ -1280,35 +1280,36 @@ describe("pulled-out windows", () => {
 
   const savedCalls = (): string[] => api.calls.filter((call) => call.startsWith("savePlacements"));
 
-  it("pulls a dragged window out past the viewport, drops it again inside, and detaches it on release", async () => {
+  it("announces a title-bar drag to the chrome, hides the window on its word, and detaches it on its release", async () => {
     const { store, calls } = makePopOutStore();
     await store.start(NO_LINK);
     store.setCanPopOut(true);
     store.beginWindowMove("win-1", { x: 100, y: 60 });
-    // Past the right edge, but not yet by the tear-out distance: still an ordinary drag with a snap zone.
+    // The chrome is told the window's rendered size and where the pointer holds it, and watches from there.
+    expect(store.getGesture()).toMatchObject({ isWatched: true, isTearingOut: false });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject(["drag", { windowId: "win-1", title: "Docs", width: 600, height: 560 }]);
+    const request = (calls[0] as [string, { grabX: number; grabY: number }])[1];
+    expect(request.grabX).toBeLessThanOrEqual(600);
+    expect(request.grabY).toBeLessThanOrEqual(560);
+    // The pointer events here end at the chrome window's edge: a move past it is an ordinary move with a zone.
     store.updateWindowMove({ x: 1010, y: 300 });
     expect(store.getGesture()).toMatchObject({ isTearingOut: false, zone: "SNAPPED_RIGHT" });
-    expect(calls).toEqual([]);
-    // Past the edge by the distance: the chrome is asked for a window the size this one renders, held where
-    // the pointer holds it, and no zone is offered meanwhile.
-    store.updateWindowMove({ x: 1060, y: 300 });
+    // The chrome's word: the cursor is out and its own window follows it, so this one hides and offers no zone.
+    store.setTearOut("win-1", "out");
     expect(store.getGesture()).toMatchObject({ isTearingOut: true, zone: null });
     expect(store.isTearingOut("win-1")).toBe(true);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject(["request", { windowId: "win-1", mode: "drag", title: "Docs" }]);
-    const request = (calls[0] as [string, { width: number; height: number; grabX: number; grabY: number }])[1];
-    expect(request.width).toBe(600);
-    expect(request.height).toBe(560);
-    expect(request.grabX).toBeLessThanOrEqual(request.width);
-    expect(request.grabY).toBeLessThanOrEqual(request.height);
-    // Back inside: the chrome drops its window and this one shows again.
-    store.updateWindowMove({ x: 900, y: 300 });
+    store.updateWindowMove({ x: 1020, y: 300 });
+    expect(store.getGesture()).toMatchObject({ isTearingOut: true, zone: null });
+    // Back inside: the chrome dropped its window and this one shows again.
+    store.setTearOut("win-1", "in");
     expect(store.getGesture()).toMatchObject({ isTearingOut: false });
-    expect(calls[1]).toEqual(["cancel", "win-1"]);
-    // Out again and released: the window is detached where it stood, its frame untouched, and saved at once.
-    store.updateWindowMove({ x: 1060, y: 300 });
-    store.endWindowMove({ x: 1060, y: 300 });
-    expect(calls[3]).toEqual(["end", "win-1"]);
+    // Out again and released where this shell never sees the release: the window is detached where it stood,
+    // its frame untouched, and saved at once; the gesture is over.
+    store.setTearOut("win-1", "out");
+    store.setTearOut("win-1", "released");
+    expect(store.getGesture()).toBeNull();
+    expect(calls).toHaveLength(1);
     const placement = placementOf(store.getState().layout, "win-1");
     expect(placement).toMatchObject({ is_detached: true, is_minimized: false, frame: cascadeFrame(0) });
     // Focus skips the pulled-out window (and the other one, which the client never placed, is minimized).
@@ -1316,26 +1317,58 @@ describe("pulled-out windows", () => {
     await settle();
     expect(savedCalls()).toHaveLength(1);
     expect(api.layoutOf("home", CLIENT).placements.find((p) => p.window_id === "win-1")?.is_detached).toBe(true);
+    // A late release from the pointer itself finds no gesture and changes nothing.
+    store.endWindowMove({ x: 1060, y: 300 });
+    expect(calls).toHaveLength(1);
   });
 
-  it("never pulls out until the chrome says it can, and cancels a tear-out with the gesture", async () => {
+  it("tells the chrome how its own release ended a watched drag, and ignores its word on a drag it does not watch", async () => {
     const { store, calls } = makePopOutStore();
     await store.start(NO_LINK);
+    // Never announced until the chrome says it can; its word on an unwatched drag is ignored.
     store.beginWindowMove("win-1", { x: 100, y: 60 });
-    store.updateWindowMove({ x: 1060, y: 300 });
-    expect(store.getGesture()).toMatchObject({ isTearingOut: false, zone: "SNAPPED_RIGHT" });
+    store.setTearOut("win-1", "out");
+    expect(store.getGesture()).toMatchObject({ isWatched: false, isTearingOut: false });
+    store.endWindowMove({ x: 300, y: 200 });
     expect(calls).toEqual([]);
-    store.endWindowMove({ x: 1060, y: 300 });
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
     store.setCanPopOut(true);
+    // Released inside: the chrome hears the drag ended without a detach.
     store.beginWindowMove("win-1", { x: 100, y: 60 });
-    // Above the top edge counts too: past the chrome's own bar.
-    store.updateWindowMove({ x: 300, y: -50 });
-    expect(store.getGesture()).toMatchObject({ isTearingOut: true });
+    store.endWindowMove({ x: 300, y: 200 });
+    expect(calls.map((call) => (call as unknown[]).slice(0, 1).concat((call as unknown[]).slice(2)))).toEqual([
+      ["drag"],
+      ["ended", false],
+    ]);
+    // Released while out, by a pointer this shell does see: detached here, and the chrome hears that too.
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.setTearOut("win-1", "out");
+    store.endWindowMove({ x: 1060, y: 300 });
+    expect(calls[3]).toEqual(["ended", "win-1", true]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+    expect(store.getGesture()).toBeNull();
+    // A cancel (Escape) while out: the chrome drops its window, and the window stays on the desktop.
+    await store.reattachWindow("win-1", null);
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.setTearOut("win-1", "out");
     store.cancelGesture();
-    expect(calls.map((call) => (call as unknown[])[0])).toEqual(["request", "cancel"]);
+    expect(calls[5]).toEqual(["ended", "win-1", false]);
     expect(store.getGesture()).toBeNull();
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
+  });
+
+  it("announces the dragged window again at its new size when a snapped window un-snaps", async () => {
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    store.setWindowState("win-1", "MAXIMIZED");
+    store.beginWindowMove("win-1", { x: 500, y: 20 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject(["drag", { width: 1000 }]);
+    store.updateWindowMove({ x: 500, y: 200 });
+    expect(store.getGesture()).toMatchObject({ isUnsnapped: true });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject(["drag", { windowId: "win-1", width: 600, height: 560 }]);
   });
 
   it("brings a window back when its tear-out is cancelled after the popout's shell detached it meanwhile", async () => {
@@ -1352,20 +1385,20 @@ describe("pulled-out windows", () => {
       await settle();
     };
     store.beginWindowMove("win-1", { x: 100, y: 60 });
-    store.updateWindowMove({ x: 1060, y: 300 });
+    store.setTearOut("win-1", "out");
     await detachElsewhere();
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
-    // Back inside: the chrome drops its window, and this one is on the desktop again.
-    store.updateWindowMove({ x: 900, y: 300 });
+    // Back inside: the chrome dropped its window, and this one is on the desktop again.
+    store.setTearOut("win-1", "in");
     expect(store.getGesture()).toMatchObject({ isTearingOut: false });
     expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: false, is_minimized: false });
     // Out again, detached elsewhere again, and cancelled: the same.
-    store.updateWindowMove({ x: 1060, y: 300 });
+    store.setTearOut("win-1", "out");
     await detachElsewhere();
     store.cancelGesture();
     expect(store.getGesture()).toBeNull();
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
-    expect(calls.map((call) => (call as unknown[])[0])).toEqual(["request", "cancel", "request", "cancel"]);
+    expect(calls.map((call) => (call as unknown[])[0])).toEqual(["drag", "ended"]);
   });
 
   it("opens a window in its own desktop window from the menu, shows it again, and brings it back", async () => {
@@ -1376,12 +1409,12 @@ describe("pulled-out windows", () => {
     expect(calls).toEqual([]);
     store.setCanPopOut(true);
     await store.detachWindow("win-1");
-    expect(calls[0]).toMatchObject(["request", { windowId: "win-1", mode: "open", grabX: 0, grabY: 0 }]);
+    expect(calls[0]).toEqual(["request", { windowId: "win-1", title: "Docs", width: 600, height: 560 }]);
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
     expect(savedCalls()).toHaveLength(1);
     // The taskbar entry of a pulled-out window shows its own window rather than restoring it here.
     store.toggleTaskbarEntry("win-1");
-    expect(calls[1]).toMatchObject(["request", { windowId: "win-1", mode: "open" }]);
+    expect(calls[1]).toMatchObject(["request", { windowId: "win-1" }]);
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
     // Back where a drop back onto the desktop named, on top, saved at once.
     await store.reattachWindow("win-1", { x: 0.2, y: 0.2, width: 0.5, height: 0.5 });

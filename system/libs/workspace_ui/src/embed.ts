@@ -49,11 +49,11 @@ export const WORKSPACE_READY: "minds:workspace-ready" =
 export const POP_OUT_WINDOW: "minds:pop-out-window" =
   "POP_OUT_WINDOW" in embedContract ? embedContract.POP_OUT_WINDOW : "minds:pop-out-window";
 // Workspace -> embedder: the tear-out drag came back inside or was cancelled. Payload: { windowId }.
-export const POP_OUT_CANCEL: "minds:pop-out-cancel" =
-  "POP_OUT_CANCEL" in embedContract ? embedContract.POP_OUT_CANCEL : "minds:pop-out-cancel";
+export const WINDOW_DRAG_STARTED: "minds:window-drag-started" =
+  "WINDOW_DRAG_STARTED" in embedContract ? embedContract.WINDOW_DRAG_STARTED : "minds:window-drag-started";
 // Workspace -> embedder: the tear-out drag was released. Payload: { windowId }.
-export const POP_OUT_END: "minds:pop-out-end" =
-  "POP_OUT_END" in embedContract ? embedContract.POP_OUT_END : "minds:pop-out-end";
+export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
+  "WINDOW_DRAG_ENDED" in embedContract ? embedContract.WINDOW_DRAG_ENDED : "minds:window-drag-ended";
 // Workspace -> embedder: the pulled-out windows of this shell's active desktop, with their titles.
 // Payload: { windows: [{ windowId, title }] }.
 export const DETACHED_WINDOWS: "minds:detached-windows" =
@@ -64,6 +64,7 @@ export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
 export const REATTACH_WINDOW: "minds:reattach-window" =
   "REATTACH_WINDOW" in embedContract ? embedContract.REATTACH_WINDOW : "minds:reattach-window";
+export const TEAR_OUT: "minds:tear-out" = "TEAR_OUT" in embedContract ? embedContract.TEAR_OUT : "minds:tear-out";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -93,6 +94,7 @@ function getEndpoint(): ContractEndpoint {
         [FOCUS_CHAT]: (message) => handlerByType[FOCUS_CHAT]?.(message),
         [EMBEDDER_CAPABILITIES]: (message) => handlerByType[EMBEDDER_CAPABILITIES]?.(message),
         [REATTACH_WINDOW]: (message) => handlerByType[REATTACH_WINDOW]?.(message),
+        [TEAR_OUT]: (message) => handlerByType[TEAR_OUT]?.(message),
       },
     });
   }

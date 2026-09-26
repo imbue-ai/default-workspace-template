@@ -5,10 +5,11 @@ import {
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
   FOCUS_CHAT,
-  POP_OUT_CANCEL,
-  POP_OUT_END,
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
+  TEAR_OUT,
+  WINDOW_DRAG_ENDED,
+  WINDOW_DRAG_STARTED,
   announceReadyToEmbedder,
   sendToEmbedder,
   setEmbedderMessageHandler,
@@ -64,8 +65,8 @@ function frameFromMessage(value: unknown): Frame | null {
 /** The shell's side of the pull-out conversation: every ask goes to the embedding chrome. */
 const popOutBridge: PopOutBridge = {
   requestPopOut: (request) => sendToEmbedder(POP_OUT_WINDOW, { ...request }),
-  cancelPopOut: (windowId) => sendToEmbedder(POP_OUT_CANCEL, { windowId }),
-  endPopOut: (windowId) => sendToEmbedder(POP_OUT_END, { windowId }),
+  beginWindowDrag: (request) => sendToEmbedder(WINDOW_DRAG_STARTED, { ...request }),
+  endWindowDrag: (windowId, isDetached) => sendToEmbedder(WINDOW_DRAG_ENDED, { windowId, isDetached }),
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
@@ -119,6 +120,13 @@ function bootstrap(): void {
     const windowId = message.windowId;
     if (typeof windowId !== "string" || windowId === "") return;
     void desktopStore.reattachWindow(windowId, frameFromMessage(message.frame));
+  });
+  setEmbedderMessageHandler(TEAR_OUT, (message) => {
+    const windowId = message.windowId;
+    const phase = message.phase;
+    if (typeof windowId !== "string" || windowId === "") return;
+    if (phase !== "out" && phase !== "in" && phase !== "released") return;
+    desktopStore.setTearOut(windowId, phase);
   });
   const rootElement = document.getElementById("app");
   if (rootElement) {
