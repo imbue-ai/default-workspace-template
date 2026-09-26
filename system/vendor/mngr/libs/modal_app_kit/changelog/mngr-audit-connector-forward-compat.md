@@ -1,1 +1,0 @@
-The request access log now records the canonical `X-Imbue-Client` client-identification header (as `imbue_client`, quoted like the user agent). This is the fleet-version signal behind client support-window and deprecation decisions for the connector's shipped clients.

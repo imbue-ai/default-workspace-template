@@ -26,14 +26,11 @@ sys.modules[_spec.name] = claude_p
 _spec.loader.exec_module(claude_p)
 
 
-def test_build_argv_completion_disables_tools_and_sets_system() -> None:
-    argv = claude_p._build_argv(
+def test_completion_argv_disables_tools_and_sets_system() -> None:
+    argv = claude_p._completion_argv(
         "classify this",
         model="claude-haiku-4-5",
         system="You are a classifier.",
-        append_system=None,
-        tools="",
-        permission_mode=None,
     )
     assert argv[:3] == ["claude", "-p", "classify this"]
     assert (
@@ -46,13 +43,19 @@ def test_build_argv_completion_disables_tools_and_sets_system() -> None:
     assert "--permission-mode" not in argv
 
 
-def test_build_argv_task_keeps_tools_and_sets_permission_mode() -> None:
-    argv = claude_p._build_argv(
+def test_completion_argv_does_not_persist_its_session() -> None:
+    argv = claude_p._completion_argv(
+        "classify this", model="claude-haiku-4-5", system="You are a classifier."
+    )
+    assert "--no-session-persistence" in argv
+
+
+def test_task_argv_keeps_tools_and_sets_permission_mode() -> None:
+    argv = claude_p._task_argv(
         "do work",
         model="claude-haiku-4-5",
         system=None,
         append_system="Only touch data/.",
-        tools=None,
         permission_mode="bypassPermissions",
     )
     # tools=None leaves the flag off entirely, inheriting the default tool set.
@@ -60,6 +63,8 @@ def test_build_argv_task_keeps_tools_and_sets_permission_mode() -> None:
     assert argv[argv.index("--append-system-prompt") + 1] == "Only touch data/."
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert "--system-prompt" not in argv
+    # A task runs in the repo and its session is resumable like any other.
+    assert "--no-session-persistence" not in argv
 
 
 def _success_payload(**overrides: object) -> dict[str, object]:
@@ -192,7 +197,9 @@ def test_child_env_strips_mngr_vars_when_requested(
     assert os.environ.get("MNGR_AGENT_NAME") == "lead"
 
 
-def _isolate_credential_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _isolate_credential_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
     """Point every credential source at an empty tmp dir; return a settings path.
 
     chdir isolates the data/.secrets/anthropic.env snapshot (a repo-root
@@ -206,13 +213,19 @@ def _isolate_credential_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     return tmp_path / "settings.json"
 
 
-def test_credentials_prefer_snapshot_over_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_credentials_prefer_snapshot_over_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The setup-time snapshot pins a keyed integration across later auth changes."""
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
-    settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new/"}}')
+    settings.write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new/"}}'
+    )
     snapshot = tmp_path / "data" / ".secrets" / "anthropic.env"
     snapshot.parent.mkdir(parents=True)
-    snapshot.write_text("ANTHROPIC_API_KEY=sk-pinned-key\nANTHROPIC_BASE_URL=https://pinned/\n")
+    snapshot.write_text(
+        "ANTHROPIC_API_KEY=sk-pinned-key\nANTHROPIC_BASE_URL=https://pinned/\n"
+    )
 
     creds = claude_p.read_workspace_ai_credentials()
 
@@ -266,7 +279,9 @@ def test_credentials_never_take_oauth_token_from_snapshot(
     assert claude_p.read_workspace_ai_credentials().oauth_token is None
 
 
-def test_write_snapshot_captures_key_and_base_url_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_snapshot_captures_key_and_base_url_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The snapshot writer records the key + base URL, owner-only, and never the token."""
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
     settings.write_text(
@@ -278,11 +293,15 @@ def test_write_snapshot_captures_key_and_base_url_only(tmp_path: Path, monkeypat
 
     snapshot = tmp_path / written
     content = snapshot.read_text()
-    assert content == "ANTHROPIC_API_KEY=sk-live-key\nANTHROPIC_BASE_URL=https://proxy/\n"
+    assert (
+        content == "ANTHROPIC_API_KEY=sk-live-key\nANTHROPIC_BASE_URL=https://proxy/\n"
+    )
     assert (snapshot.stat().st_mode & 0o777) == 0o600
 
 
-def test_write_snapshot_raises_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_snapshot_raises_without_a_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A keyless workspace has nothing to snapshot; the writer says so instead of writing junk."""
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
     settings.write_text('{"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"}}')

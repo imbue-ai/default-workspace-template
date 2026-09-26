@@ -16,8 +16,9 @@
  *   `sendToChildFrame`.
  *
  * Trust: a child frame's message counts only when `event.source` is the `contentWindow` of an
- * iframe in this document and `event.origin` shares this shell's workspace coordinate (the
- * origin family the minds chrome checks). The chrome's messages count only from
+ * iframe in this document and `event.origin` either shares this shell's workspace coordinate (the
+ * origin family the minds chrome checks) or is the origin the shell itself pointed that frame at
+ * (an app on its own loopback port, outside the family). The chrome's messages count only from
  * `window.parent`, and only when this shell is framed at all.
  */
 
@@ -52,6 +53,15 @@ function frameForSource(source: MessageEventSource | null): HTMLIFrameElement | 
   return childFrames().find((frame) => frame.contentWindow === source) ?? null;
 }
 
+/** The origin the shell itself pointed the frame at (on loopback an app has its own port, outside the family). */
+function framedOrigin(frame: HTMLIFrameElement): string | null {
+  try {
+    return new URL(frame.src, window.location.href).origin;
+  } catch {
+    return null;
+  }
+}
+
 function handleMessage(event: MessageEvent): void {
   const data: unknown = event.data;
   if (data === null || typeof data !== "object") return;
@@ -68,7 +78,8 @@ function handleMessage(event: MessageEvent): void {
   }
 
   const frame = frameForSource(event.source);
-  if (frame === null || !isWorkspaceFamilyOrigin(event.origin)) return;
+  if (frame === null) return;
+  if (!isWorkspaceFamilyOrigin(event.origin) && event.origin !== framedOrigin(frame)) return;
   if (type.startsWith(MINDS_TYPE_PREFIX)) {
     // Upward: unchanged, and only when there is a chrome to forward to.
     if (window.parent !== window) window.parent.postMessage(data, "*");

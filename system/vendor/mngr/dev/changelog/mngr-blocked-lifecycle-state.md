@@ -1,1 +1,0 @@
-Updated the agent-plugin parity spec for the lifecycle change: being blocked on the user is now an input to the lifecycle state (`is_blocked_on_dialog()`) rather than a promotion applied after the fact, and the spec records which provider listings that reaches.

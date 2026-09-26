@@ -1,0 +1,1 @@
+The `manage-desktop` skill's vocabulary explains GET and POST launch paths (a POST launch path is posted its parameters by the shell and answers the page to open), and its `desktops` description drops the retired `is_settling` window field.

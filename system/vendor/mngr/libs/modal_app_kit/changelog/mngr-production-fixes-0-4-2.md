@@ -1,3 +1,0 @@
-Bugsink reporting from Modal apps now ignores the `modal-client` logger. Modal's in-container runtime warnings (e.g. "Detected N background thread(s) still running after container exit") embed variable content in the message, so every variant minted a brand-new Bugsink issue -- they were the majority of production `rsc` events in the first hours after the 0.4.2 deploy, and describe Modal infrastructure we neither own nor act on.
-
-The modal-client-ignore sentry test is now marked flaky alongside its warning-breadcrumb sibling: both hit the same sandbox-load >10s timeout in offload CI while running in ~2.5s locally.

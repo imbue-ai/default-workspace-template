@@ -1,1 +1,0 @@
-The public download link's fallback (`_DEFAULT_TARGET_BY_PLATFORM`, served while the stable manifest cannot be read) moves to the minds 0.6.1 build `260915wjcyd06bp`, matching the stable channel promotion.

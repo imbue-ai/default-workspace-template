@@ -1,1 +1,0 @@
-`just minds-start` and `just minds-start-cloud` take a new optional debug-port argument (`just minds-start-cloud 9223`, `just minds-start "" "" 9223`) that exports MINDS_REMOTE_DEBUGGING_PORT, making the Electron client expose Chromium's DevTools protocol on that 127.0.0.1 port for CDP-driven debugging.

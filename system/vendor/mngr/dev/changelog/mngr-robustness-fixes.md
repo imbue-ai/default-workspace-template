@@ -1,1 +1,0 @@
-Updated `specs/detached-destroy-flow/spec.md` to match the desktop client's new whole-host destroy command (`mngr destroy <host_id> --force` instead of the `mngr list ... | mngr destroy -f -` pipe), with a historical note on the replaced pipe shape.

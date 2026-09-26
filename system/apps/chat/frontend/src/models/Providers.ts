@@ -89,9 +89,6 @@ let mru: string | null = null;
 // pinned and the most recently used one stands in.
 let defaultAccountId: string | null = null;
 let lanesLoaded = false;
-// Whether the account list has been fetched even once. Distinct from "it is empty": both read
-// as zero accounts, and one of them means "ask the user to sign in".
-let accountsLoaded = false;
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -144,20 +141,13 @@ export async function loadAccounts(): Promise<void> {
   accounts = body.accounts;
   mru = body.mru;
   defaultAccountId = body.default;
-  accountsLoaded = true;
-}
-
-/** Whether `getAccounts()` has an answer yet. Anything that treats "no accounts" as "sign in
- *  first" has to ask this too, or it asks for a sign-in on a workspace that has providers. */
-export function areAccountsLoaded(): boolean {
-  return accountsLoaded;
 }
 
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
  *
  * The boot-time caller races the backend coming up: the page can be served before the API
- * answers, and a decision made off one silently failed fetch (the page of a chat awaiting
- * an account foremost) would be wrong for the whole page load. Never rejects.
+ * answers, and a decision made off one silently failed fetch (the provider chooser the chat
+ * root offers foremost) would be wrong for the whole page load. Never rejects.
  */
 export async function loadAccountsWithRetry(): Promise<void> {
   const backoff = new ReconnectBackoff();
@@ -333,8 +323,8 @@ export function clearFlow(): void {
  *
  * The account the user pinned as the default wins; otherwise the one just signed in to;
  * otherwise the most recently used, which the server bumps on every launch -- so "start
- * another one like the last" needs no click. Null means there is nothing to launch on yet: a
- * new chat then waits for an account, and its page offers the chooser. The server's
+ * another one like the last" needs no click. Null means there is nothing to launch on yet: the
+ * chat root then offers the chooser before it creates anything. The server's
  * `resolve_binding` follows the same order, so a launch the page decides and one it leaves to
  * the server land on the same account.
  */
@@ -359,19 +349,28 @@ let chooserOpen = false;
 // reaches the modal through `openProviderChooser`, and threading an argument through a
 // 780-line component for two callers is the worse trade.
 let chooserAccountId: string | null = null;
-// What to do once a sign-in succeeds or a signed-in account is picked. Opening the chooser from
-// the page of a chat that awaits an account means the user was trying to start that chat, so it
-// launches on the account they end up with. Signing in from inside a running chat means they
-// were adding a provider for later and should not be moved. The caller knows which it is;
-// nothing here can tell.
+// What to do once a sign-in succeeds or a signed-in account is picked: launch a chat waiting for
+// an account, move a running one, or (unset) nothing. The caller knows which it is; nothing here
+// can tell.
 let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 // What to do if the chooser closes with the sign-in hook still armed: the caller that was
 // waiting on a sign-in or a pick (a seeded chat's first send) puts its message back.
 let chooserOnDismissed: (() => void) | null = null;
-let chooserBrokenAccountId: string | null = null;
+let chooserUnpickable: UnpickableAccount | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
+}
+
+/** Why the chooser lists a signed-in account it will not pick: the caller is leaving it because
+ *  it failed, or it is the one the chat already runs on. The word beside the row and whether it
+ *  reads as an error both follow from it. */
+export type UnpickableReason = "failing" | "current";
+
+/** A signed-in account the chooser lists but will not pick, and why. */
+export interface UnpickableAccount {
+  accountId: string;
+  reason: UnpickableReason;
 }
 
 export interface ProviderChooserIntent {
@@ -382,8 +381,8 @@ export interface ProviderChooserIntent {
   onSignedIn?: (accountId: string) => void;
   /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
-  /** The account the caller is moving away from because it failed. Listed, but not pickable. */
-  brokenAccountId?: string;
+  /** A signed-in account to list but refuse, and the reason its row reads. */
+  unpickable?: UnpickableAccount;
 }
 
 /** Open the chooser, optionally saying why it was opened. */
@@ -393,7 +392,7 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserAccountId = intent.accountId ?? null;
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
-  chooserBrokenAccountId = intent.brokenAccountId ?? null;
+  chooserUnpickable = intent.unpickable ?? null;
   m.redraw();
 }
 
@@ -402,8 +401,8 @@ export function isPickingAccount(): boolean {
   return chooserOnSignedIn !== null;
 }
 
-export function getBrokenAccountId(): string | null {
-  return chooserBrokenAccountId;
+export function getUnpickableAccount(): UnpickableAccount | null {
+  return chooserUnpickable;
 }
 
 /** Use an account that is already signed in: what a finished sign-in does, minus the sign-in. */
@@ -433,7 +432,7 @@ export function closeProviderChooser(): void {
   const dismissed = chooserOnSignedIn !== null ? chooserOnDismissed : null;
   chooserOnSignedIn = null;
   chooserOnDismissed = null;
-  chooserBrokenAccountId = null;
+  chooserUnpickable = null;
   dismissed?.();
   m.redraw();
 }

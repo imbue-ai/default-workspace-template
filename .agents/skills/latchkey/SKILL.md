@@ -21,7 +21,7 @@ Usage:
 - Latchkey comes with a list of builtin supported services.
   - **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
   - **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-  - You can request to register more custom services, although the options for authenticating to custom services are limited. See "Ask for a new connection to a domain latchkey does not know" below.
+  - You can request to register more custom services, although the options for authenticating to custom services are limited. See "Ask for a new connection to a domain Latchkey does not know" below.
 - **Submit a permission request to the user** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` when `latchkey curl` fails with a Latchkey permission error. See "Interpreting Latchkey permission errors" below. One request per tool call, on its own, output untouched.
 - **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
 
@@ -72,9 +72,8 @@ Before you decide to go down this route, note that:
 - You don't need to ask for a new connection to make requests to URLs that don't
   require credentials. Latchkey is not necessary at all.
 
-- The authentication headers and login flows currently supported by Latchkey are
-  limited (see details below ). If the service needs anything else, fall back to
-  either:
+- The authentication headers and login flows currently supported by Latchkey for new (non-builtin) domains
+  are limited (see details below). If the service needs anything else, fall back to either:
 
    - Ask the user to perform some operations manually.
    - If the user really wants automated access, ask the user to type in the
@@ -164,7 +163,7 @@ that you'll continue once they do if that's something you need to wait on.
 ### Git operations on GitHub (clone / fetch / push)
 
 The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
-`git` works through latchkey too: point git at the gateway's proxy URL and
+`git` works through Latchkey too: point git at the gateway's proxy URL and
 pass the gateway's auth headers (their values are already in this
 environment).
 
@@ -201,15 +200,18 @@ Returns auth options, credentials status, and developer notes about the service.
 
 It is possible to associate credentials with a specific account
 (and have credentials for more than a single account per service).
-The user can do that from the Permissions tab of this machine's options in the
-Mind app (the key icon in the tabs along the top): "Add connection" lists the
-services that already have an account here under "Add another account", and the
-ones that do not under "Connect a new service".
 
-Another way is for you to send a permission request with an "account"
+To do that, send a permission request with an "account"
 in the payload as described above - approving the permission request will prompt
 the user to sign in. Just double-check the actual resulting account; it may be
 different than the one requested by you.
+
+Alternatively, the user can also do that from the Permissions tab of this machine's options in the
+Mind app (the key icon in the tabs along the top): "Add connection" lists the
+services that already have an account here under "Add another account", and the
+ones that do not under "Connect a new service". (When applicable, always prefer
+permission request sending over this option.)
+
 
 You can then reference it in curl calls:
 
@@ -238,6 +240,9 @@ Every command above is routed through the Latchkey gateway at
 a transient outage. It usually helps if the user restarts the
 Mind app. Requests to /permissions and /permission-requests are
 routed to the user's computer so they will fail if it's offline.
+If the user appears to be actively using the app or chatting
+with you, but the Latchkey gateway is unreachable, ask them to
+try restarting the Minds app.
 
 
 ## Notes

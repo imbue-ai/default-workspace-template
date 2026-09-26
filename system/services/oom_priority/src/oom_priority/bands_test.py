@@ -46,7 +46,9 @@ def _aged(
 _BUILTIN_SERVICE_ORDER = (
     "owner-exec",
     "terminal",
+    "terminal-pty",
     "system_interface",
+    "agent-observer",
     "chat",
     "share-gateway",
     "github-sync",
@@ -56,6 +58,7 @@ _BUILTIN_SERVICE_ORDER = (
     "xvfb",
     "browser",
     "files",
+    "getting-started",
 )
 
 

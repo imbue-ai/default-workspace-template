@@ -10,10 +10,11 @@ the agent something. Claude is the reference implementation; the logic lives onc
 
 ## What is in scope here, and what is not
 
-In scope: **anything that inspects or alters the command an agent is about to run**, and
-**anything that holds the agent to the `tk` step discipline the chat progress view is built
-from**. Those are the workspace's own rules, they are enforced identically everywhere, and
-they are ours to change without a mngr release.
+In scope: **anything that inspects or alters the command an agent is about to run**, **anything
+that holds the agent to the `tk` step discipline the chat progress view is built from**, and
+**anything a chat agent owes the user at the end of a turn**. Those are the workspace's own
+rules, they are enforced identically everywhere, and they are ours to change without a mngr
+release.
 
 Out of scope, deliberately -- these look adjacent and are not:
 
@@ -109,6 +110,28 @@ continue, replace or close them.
 before the next turn, at stop, or riding a tool result -- because harnesses differ in which of
 those can reach the model at all. The invariant is only that an agent with open steps is told
 about them before it does more work.
+
+### P8. A chat agent tells the user when it is finished
+**Prose-only** (`AGENTS.md` and the `notify-user` skill); no hook on any harness.
+
+The user may have walked away the moment they sent the message, and nothing about a finished
+turn reaches them on its own. At the end of every turn in which it did work a chat agent sends
+one notification (`.agents/skills/notify-user`), so the app's feed -- and its banner, when the
+user is looking elsewhere -- can bring them back to the chat.
+
+**The judgement stays with the agent.** Whether a given turn is worth a notification is not
+decidable from outside: a step record is a decent proxy and still wrong on the turns that
+matter. The agent decides as it finishes, and never narrates the decision.
+
+**Why there is no hook.** A Stop hook reaches the model only by refusing the stop; claude then
+injects the hook's text as a user message and runs a further assistant turn, which the chat
+renders as a "Stop hook feedback" chip followed by a duplicated reply. An unconditional
+per-turn ask therefore doubled every chat turn in the minds-v0.7.0 staging rehearsal
+(2026-09-22) and was removed. pi and agy have no stop channel that reaches the model at all.
+
+**Chats only.** A worker's result reaches the user through the chat that launched it, and only
+chats appear in the feed; `MNGR_AGENT_ROLE=chat` (set by the `chat` create template) is how a
+chat is told apart.
 
 ## The rule that keeps this honest
 

@@ -14,12 +14,12 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import * as cardCss from "./modelCardStyles";
+import * as menuCss from "./modelProviderMenuStyles";
 import * as signInCss from "./providerSignInStyles";
 
 const STYLE_MODULES: Record<string, Record<string, unknown>> = {
   providerSignInStyles: signInCss,
-  modelCardStyles: cardCss,
+  modelProviderMenuStyles: menuCss,
 };
 
 // The tokens are the shared library's: every colour a module names must be defined there.

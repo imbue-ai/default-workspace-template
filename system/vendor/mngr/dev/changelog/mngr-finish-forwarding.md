@@ -1,1 +1,0 @@
-Add `just` recipes for provisioning, deploying, DNS-configuring, listing, and destroying self-hosted sharing relays on OVH Public Cloud (`provision-share-relay`, `deploy-share-relay`, `dns-share-relay`, `list-share-relays`, `destroy-share-relay`).

@@ -11,9 +11,9 @@ verbatim at the end:
    default, which is not expendable enough, so the prefix raises the running
    shell's ``oom_score_adj`` to the most-expendable band; everything the shell
    spawns inherits it. The statement itself, and why it is guarded the way it
-   is, belong to ``oom_priority.bands.oom_tag_shell_prefix``, which the
-   ``update-system-interface`` reveal uses too -- to tag its own hungry children
-   back up after banding itself out of this range.
+   is, belong to ``oom_priority.bands.oom_tag_shell_prefix``, which the update
+   apply (``update_banding.py``) uses too -- to band its own hungry forward
+   steps down out of the protection it keeps for itself.
 
 2. This agent's git commit identity, as ``GIT_AUTHOR_*`` / ``GIT_COMMITTER_*``
    exports. git resolves author/committer from these env vars ahead of any

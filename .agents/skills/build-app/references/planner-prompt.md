@@ -184,7 +184,7 @@ worth putting whatever can run there alongside it.
 
 Much of this work already exists here. build-app names the skills it calls as it
 goes: `frontend-design` before any markup, `use-ai-integration` when the app
-itself calls a model, and `manage-layout` for tab work beyond opening and
+itself calls a model, and `manage-desktop` for window work beyond opening and
 refreshing. It drives the rest through its own scripts. Take the real set from
 what you read in Step 1, since it moves as the product does, and check what
 exists before writing a node that would rebuild one.
@@ -198,7 +198,7 @@ starts from, and the outcome it has to reach.
 
 Route the work build-app does. The brief names the app, and every node uses that
 name. The handoff to `crystallize-creation` with `type=app` is not a node: after
-your last node, the orchestrating agent surfaces the tab and makes that one call
+your last node, the orchestrating agent surfaces the window and makes that one call
 itself, carrying the app's name, lib path, URL segment and a line on what it does.
 
 Everything past the handoff belongs to that skill -- the tracking ticket, the

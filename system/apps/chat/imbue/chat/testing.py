@@ -17,6 +17,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import queue
 import socket
 import sys
 import threading
@@ -24,13 +25,13 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
-from contextlib import nullcontext
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -41,13 +42,6 @@ from unittest.mock import patch
 import httpx
 import pexpect
 import simple_websocket
-from app_instances.blueprint import build_instances_app
-from app_instances.nudge import ShellNudger
-from app_instances.sidecar import serve_in_background
-from app_instances.testing import LOOPBACK_HOST
-from app_instances.testing import StubInstanceSource
-from app_instances.testing import free_port
-from app_manifest.primitives import AppName
 from flask import Flask
 from flask import request
 from pydantic import Field
@@ -72,11 +66,17 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelPick
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatStatus
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -84,14 +84,17 @@ from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.observe import acquire_observe_lock
+from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
 from imbue.system_interface.server import create_application as create_shell_application
-from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
+from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.wsgi import make_threaded_server as make_shell_server
 
 # The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
@@ -122,6 +125,35 @@ def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
+    """Hold the observe lock for the body, standing in for a live ``mngr observe``.
+
+    The chat's follower reads the lock as the observer's liveness, so a test that wants
+    the stream to count as up holds it while writing events with mngr's own writer.
+    """
+    fd = acquire_observe_lock(events_base_dir)
+    try:
+        yield
+    finally:
+        release_observe_lock(fd)
+
+
+def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
+    """An isolated mngr host dir with its own profile, opted into pytest, local provider only.
+
+    A real ``mngr`` spawned from a test inherits ``PYTEST_CURRENT_TEST`` and refuses any
+    config that does not opt in, so the profile written here is the only one it may load.
+    """
+    profile_dir = host_dir / "profiles" / "isolated"
+    profile_dir.mkdir(parents=True)
+    (host_dir / "config.toml").write_text('profile = "isolated"\n')
+    (profile_dir / "settings.toml").write_text(
+        "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
+    )
+    (profile_dir / "tmux_onboarding_shown").write_text("")
+
+
 def is_e2e_browser_installed() -> bool:
     """True when a Chromium the e2e suite can launch is present on this host.
 
@@ -140,6 +172,27 @@ def is_e2e_browser_installed() -> bool:
     else:
         cache_dir = Path.home() / ".cache" / "ms-playwright"
     return cache_dir.exists() and any(cache_dir.iterdir())
+
+
+def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
+    """Every ``is_connecting`` value the ``chats_updated`` pushes queued so far carried for ``chat_id``, in order."""
+    values: list[bool] = []
+    while not client_queue.empty():
+        raw = client_queue.get_nowait()
+        assert raw is not None
+        message = json.loads(raw)
+        if message["type"] == "chats_updated":
+            values.extend(
+                chat["active_agent"]["is_connecting"] for chat in message["chats"] if chat["chat_id"] == chat_id
+            )
+    return values
+
+
+def is_chat_connecting(manager: AgentManager, chat_id: str) -> bool:
+    """The ``is_connecting`` the chat's current snapshot reports; the chat must have one."""
+    snapshot = manager.get_chat_snapshot(chat_id)
+    assert snapshot is not None
+    return snapshot.active_agent.is_connecting
 
 
 def seed_agent_state(
@@ -217,6 +270,7 @@ def make_chat_handoff_record(
     handoff_id: str = "handoff-1",
     held_sends: tuple[HeldSend, ...] | None = None,
     target_account_id: str = "acct-openai",
+    model_pick: ModelPick | None = None,
 ) -> ChatHandoffRecord:
     """The handoff entry of a hand-built record: a claude chat named ``Chat 1`` moving to a codex account."""
     started_at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
@@ -238,6 +292,7 @@ def make_chat_handoff_record(
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
+        model_pick=model_pick,
     )
 
 
@@ -250,6 +305,7 @@ def make_chat_rebind_record(
     target_account_id: str = "acct-anthropic-2",
     previous_account_id: str = "acct-anthropic",
     error: str | None = None,
+    model_pick: ModelPick | None = None,
 ) -> ChatRebindRecord:
     """The rebind entry of a hand-built record: a claude chat's agent moving to a second Anthropic account.
 
@@ -276,6 +332,7 @@ def make_chat_rebind_record(
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
+        model_pick=model_pick,
         error=error,
     )
 
@@ -292,10 +349,15 @@ def make_two_member_chat_record(first_id: str, second_id: str, first_event_count
 
 
 def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
-    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's."""
+    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log; returns its path and the log's.
+
+    One line per invocation, whatever the arguments hold: a newline inside an argument (a
+    ``--message`` carrying a whole conversation) is written as a space, so a reader can still
+    count the calls and split a line into its tokens.
+    """
     log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
-    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
+    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
     script.chmod(0o755)
     return str(script), log_path
 
@@ -520,6 +582,11 @@ class FakePexpectProcess:
         self.close_calls += 1
 
 
+def wait_until_true(predicate: Callable[[], bool], timeout_seconds: float, what: str) -> None:
+    """Poll ``predicate`` every 50ms until it holds; raises naming ``what`` never happened when the timeout passes."""
+    wait_for(predicate, timeout=timeout_seconds, poll_interval=0.05, error_message=f"{what} never happened")
+
+
 def _wait_until_serving(host: str, port: int, timeout: float = 10.0) -> None:
     """Poll a TCP connect until the server accepts, or raise on timeout."""
     deadline = time.monotonic() + timeout
@@ -557,7 +624,7 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
     is shut down on exit.
     """
     host = "127.0.0.1"
-    port = free_port()
+    port = find_free_port()
     server = make_threaded_server(host, port, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -591,22 +658,13 @@ def close_ws(ws: simple_websocket.Client) -> None:
         pass
 
 
-# ---------- the two-process fixture: the shell framing this chat app ----------
+# the two-process fixture: the shell framing this chat app
 
-# The fixture chat's agent id and name, and the project every workspace starts with unless a
-# test asks for none (what a migrated workspace has, and where a fresh browser lands).
-# A real mngr id shape (32 hex), so the send path can type it as an AgentId.
+# The fixture chat's agent id and name. A real mngr id shape (32 hex), so the send path can type
+# it as an AgentId.
 FIXTURE_AGENT_ID: Final[str] = "agent-0e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e"
 FIXTURE_AGENT_NAME: Final[str] = "test-agent"
-FIXTURE_CHAT_ADDRESS: Final[str] = f"app:chat?instance={FIXTURE_AGENT_ID}"
-STARTER_PROJECT_NAME: Final[str] = "Project 1"
-STARTER_PROJECT_ID: Final[str] = "project-1"
 FIXTURE_SESSION_ID: Final[str] = "e2e-session-001"
-
-# The stub app a workspace offers beside the chat when a test asks for one.
-STUB_APP_NAME: Final[str] = "docs"
-STUB_APP_DISPLAY_NAME: Final[str] = "Docs"
-STUB_NEW_ACTION_LABEL: Final[str] = "New docs"
 
 _FIXTURE_SESSION_EVENTS: Final[list[dict[str, Any]]] = [
     {
@@ -681,11 +739,63 @@ class RunningWorkspace(FrozenModel):
     session_file: Path = Field(description="The fixture chat's session file, appended to for streaming tests")
     state_dir: Path = Field(description="The shell's state directory")
     chat_state: ChatAppState = Field(description="The chat app's state, for the manager behind its routes")
+    shell_state: SystemInterfaceState = Field(description="The shell's state, for the broadcaster behind its clients")
     account_ids: tuple[str, ...] = Field(
         description="The signed-in accounts, the fixture chat's own first, then the additional ones in order"
     )
-    stub_source: StubInstanceSource | None = Field(description="The stub app's instances, when offered")
-    stub_url: str | None = Field(description="The stub app's loopback URL, when offered")
+
+
+def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name: str = "Chat-1") -> ChatSnapshot:
+    """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
+    return ChatSnapshot(
+        chat_id=ChatId(chat_id),
+        title=name.replace("-", " "),
+        name=name,
+        project=None,
+        status=ChatStatus.IDLE,
+        labels={},
+        agent_ids=(chat_id,),
+        handoff=None,
+        active_agent=ActiveAgentSnapshot(
+            agent_id=chat_id,
+            name=name,
+            harness=HarnessType.CLAUDE,
+            account_id=None,
+            state="RUNNING",
+            activity_state=ActivityState.IDLE,
+            model_choice=None,
+            queued_messages=(),
+            shoulder_tap_available=False,
+            is_connecting=False,
+        ),
+        last_messaged_at=last_messaged_at,
+    )
+
+
+def seed_failed_chat(
+    agent_manager: AgentManager,
+    chat_id: ChatId,
+    name: str,
+    account_id: str = "acct-1",
+    message: str = "",
+    labels: Mapping[str, str] | None = None,
+    is_installation_check_skipped: bool = False,
+) -> ProvisionalChat:
+    """Plant a provisional chat whose create failed, as the manager holds one after ``mngr create`` exits non-zero:
+    what the page's "Try again" relaunches under its id."""
+    proto = ProvisionalChat(
+        chat_id=chat_id,
+        name=name,
+        account_id=account_id,
+        message=message,
+        labels=dict(labels or {}),
+        is_installation_check_skipped=is_installation_check_skipped,
+        phase=ProvisionalChatPhase.FAILED,
+        error="mngr create exited with code 3",
+    )
+    with agent_manager._lock:
+        agent_manager._provisional_chats[chat_id] = proto
+    return proto
 
 
 def _is_serving_api(base_url: str) -> bool:
@@ -696,15 +806,6 @@ def _is_serving_api(base_url: str) -> bool:
         return True
     except OSError:
         return False
-
-
-def _post_json(url: str, body: Mapping[str, Any]) -> None:
-    request_body = json.dumps(dict(body)).encode()
-    posted = urllib.request.Request(
-        url, data=request_body, headers={"Content-Type": "application/json"}, method="POST"
-    )
-    with urllib.request.urlopen(posted, timeout=5):
-        pass
 
 
 def _write_fake_binaries(tmp_path: Path) -> Path:
@@ -718,9 +819,13 @@ def _write_fake_binaries(tmp_path: Path) -> Path:
     fake_claude.chmod(0o755)
     fake_mngr = fake_bin_dir / "mngr"
     # A create takes a beat, so a page opened on a chat being created is seen in that phase;
-    # ``FAKE_MNGR_CREATE_EXIT_CODE`` in the environment makes it fail with that status.
+    # ``FAKE_MNGR_CREATE_RELEASE_FILE`` in the environment holds it until that file exists, and
+    # ``FAKE_MNGR_CREATE_EXIT_CODE`` makes it fail with that status.
     fake_mngr.write_text(
-        '#!/bin/sh\ncase "$1" in create) sleep 2; echo "create failed on purpose" >&2; '
+        '#!/bin/sh\ncase "$1" in create) sleep 2; '
+        'if [ -n "$FAKE_MNGR_CREATE_RELEASE_FILE" ]; then '
+        'while [ ! -e "$FAKE_MNGR_CREATE_RELEASE_FILE" ]; do sleep 0.1; done; fi; '
+        'echo "create failed on purpose" >&2; '
         'exit "${FAKE_MNGR_CREATE_EXIT_CODE:-0}" ;; esac\nexit 0\n'
     )
     fake_mngr.chmod(0o755)
@@ -734,9 +839,6 @@ def running_workspace(
     chat_port: int,
     session_events: Sequence[Mapping[str, Any]] | None = None,
     additional_agents: Sequence[tuple[str, str]] = (),
-    is_stub_app_offered: bool = False,
-    stub_instances: Sequence[str] = (),
-    project_names: Sequence[str] = (STARTER_PROJECT_NAME,),
     is_account_signed_in: bool = True,
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
@@ -745,15 +847,12 @@ def running_workspace(
 
     The chat app lists the fixture agent (plus any ``additional_agents``, bare state dirs with
     a manager entry) from a patched discovery and a never-started manager, so no ``mngr observe``
-    runs; the shell reads a registry holding the chat row at the chat's own URL and, when
-    ``is_stub_app_offered``, a stub app whose ``stub_instances`` are seeded as records. With
+    runs; the shell reads a registry holding the chat row at the chat's own URL. With
     ``is_account_signed_in`` (the default) a signed-in account exists, which the fixture chat
-    is bound to, so a create starts at once; without one a create mints a chat that waits for
-    an account, and its page offers the provider chooser. ``additional_accounts`` sign further
+    is bound to, so a create starts at once; without one a create is refused, and the chat
+    root offers the provider chooser instead. ``additional_accounts`` sign further
     accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
-    messenger the manager sends through. ``project_names``
-    are created through the shell's API before anything connects, so a client's first view is
-    the first of them (or Everything when there are none).
+    messenger the manager sends through.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -777,36 +876,33 @@ def running_workspace(
     fake_bin_dir = _write_fake_binaries(tmp_path)
 
     registry_path = tmp_path / "registry" / "apps.toml"
-    rows = [
+    # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
+    # the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    write_registry(
+        registry_path,
         registry_row_toml(
             "chat",
             chat_url,
-            is_multi_instance=True,
             is_critical=True,
-            actions=(("new", "New Chat"), ("subagent", "Open subagent")),
-            default_shortcut=("new", "new"),
+            default_shortcut=("root", "new"),
             display_name="Chat",
-        )
-    ]
-    stub_source: StubInstanceSource | None = None
-    stub_url: str | None = None
-    stub_port = free_port()
-    if is_stub_app_offered:
-        stub_source = StubInstanceSource()
-        for key in stub_instances:
-            stub_source.records.append(instance_record(key, title=f"Stub {key.removeprefix('stub-')}"))
-        stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
-        rows.append(
-            registry_row_toml(
-                STUB_APP_NAME,
-                stub_url,
-                is_multi_instance=True,
-                actions=(("new", STUB_NEW_ACTION_LABEL),),
-                default_shortcut=("new", "focus"),
-                display_name=STUB_APP_DISPLAY_NAME,
-            )
-        )
-    write_registry(registry_path, *rows)
+            launch_paths=(
+                ("root", "Chat", "/"),
+                ("new", "New Chat", "/api/chats/intake"),
+                ("send", "Send to chat...", "/api/chats/intake"),
+                ("draft", "Draft into chat", "/api/chats/intake"),
+            ),
+            launch_params={"new": ("account_id", "message"), "send": ("message",), "draft": ("message",)},
+            launch_text_params={"new": "message", "send": "message"},
+            launch_draft_params={"draft": "message"},
+            launch_methods={"new": "POST", "send": "POST", "draft": "POST"},
+            launch_presets={
+                "new": {"target": "new_chat"},
+                "send": {"target": "chat_selector"},
+                "draft": {"target": "current_chat", "is_draft": "true"},
+            },
+        ),
+    )
 
     with (
         patch.dict(
@@ -827,8 +923,8 @@ def running_workspace(
         ),
         patch("imbue.chat.server.discover_agents", return_value=agents),
     ):
-        # A signed-in account is what a new chat launches on at once; without one the chat's
-        # ``new`` mints a chat that waits for an account (its page shows the provider chooser).
+        # A signed-in account is what a new chat launches on; without one a create is refused and
+        # the chat root offers the provider chooser instead of minting a chat.
         account_ids: list[str] = []
         if is_account_signed_in:
             account_id, _ = mint_account_dir()
@@ -858,8 +954,6 @@ def running_workspace(
         for info in agents:
             manager._ensure_activity_tracking(info.id)
         manager.note_agent_list_known()
-        # The chat nudges the shell the way the real process does, so a change lists at once.
-        manager.set_nudger(ShellNudger(app_name=AppName("chat"), shell_url=shell_url))
         chat_state = build_test_state(config=Config(chat_host="127.0.0.1", chat_port=chat_port), agent_manager=manager)
         chat_app = create_application(chat_state)
         chat_server = make_threaded_server("127.0.0.1", chat_port, chat_app)
@@ -875,46 +969,32 @@ def running_workspace(
         shell_server = make_shell_server("127.0.0.1", shell_port, shell_app)
         shell_thread = threading.Thread(target=shell_server.serve_forever, daemon=True)
         shell_thread.start()
-        stub_server = (
-            serve_in_background(
-                LOOPBACK_HOST,
-                stub_port,
-                build_instances_app(stub_source, ShellNudger(app_name=AppName(STUB_APP_NAME), shell_url=shell_url)),
-            )
-            if stub_source is not None
-            else nullcontext()
-        )
-        with stub_server:
+        try:
+            for url in (shell_url, chat_url):
+                wait_for(
+                    lambda url=url: _is_serving_api(url),
+                    timeout=10.0,
+                    poll_interval=0.1,
+                    error_message=f"the server at {url} did not come up",
+                )
+            # Started only once the apps are serving: the first liveness probe must find the chat answering.
+            shell_state.shell.start()
             try:
-                for url in (shell_url, chat_url):
-                    wait_for(
-                        lambda url=url: _is_serving_api(url),
-                        timeout=10.0,
-                        poll_interval=0.1,
-                        error_message=f"the server at {url} did not come up",
-                    )
-                for name in project_names:
-                    _post_json(f"{shell_url}/api/projects", {"name": name, "color": "#3B82F6", "glyph": 1})
-                # Started only once the apps are serving: the first instance fetch must find
-                # the chat app and the stub app answering.
-                shell_state.shell.start()
-                try:
-                    yield RunningWorkspace(
-                        shell_url=shell_url,
-                        chat_url=chat_url,
-                        agent_info=agent_info,
-                        session_file=session_file,
-                        state_dir=state_dir,
-                        chat_state=chat_state,
-                        account_ids=tuple(account_ids),
-                        stub_source=stub_source,
-                        stub_url=stub_url,
-                    )
-                finally:
-                    shell_state.shell.stop()
+                yield RunningWorkspace(
+                    shell_url=shell_url,
+                    chat_url=chat_url,
+                    agent_info=agent_info,
+                    session_file=session_file,
+                    state_dir=state_dir,
+                    chat_state=chat_state,
+                    shell_state=shell_state,
+                    account_ids=tuple(account_ids),
+                )
             finally:
-                shell_server.shutdown()
-                shell_thread.join(timeout=5.0)
-                chat_server.shutdown()
-                chat_thread.join(timeout=5.0)
-                chat_state.shutdown()
+                shell_state.shell.stop()
+        finally:
+            shell_server.shutdown()
+            shell_thread.join(timeout=5.0)
+            chat_server.shutdown()
+            chat_thread.join(timeout=5.0)
+            chat_state.shutdown()

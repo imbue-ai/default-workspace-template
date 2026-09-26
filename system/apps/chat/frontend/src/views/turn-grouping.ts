@@ -82,6 +82,8 @@ import { isFiledPermissionRequest } from "./permission-card";
 import {
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
+  isNoticeUserMessage,
+  isPromptWithContext,
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
@@ -156,7 +158,7 @@ export type TimelineItem =
       event: AssistantMessageEvent;
       resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
     }
-  /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
+  /** A non-boundary user message shown inline: a stop-hook chip, a background-task notice. */
   | { kind: "chip"; event: UserMessageEvent }
   /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
    *  request in the window, at the switch itself, when its prompt reached it). */
@@ -432,13 +434,13 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
 }
 
 /** True for a transcript event that carries the user's own words: a ``user_message`` with no display
- *  decision, or the handoff prompt a successor started with (a chip that holds the message the user
- *  switched with). The backend's rule for whether a handoff has anything to summarize
- *  (``has_user_turn``), read here so the page can tell a fresh chat, whose switch needs no dialog,
- *  from one with context. */
+ *  decision, a seeded chat's first send (whose context block is stripped for display), or the
+ *  handoff prompt a successor started with (a chip that holds the message the user switched with).
+ *  The backend's rule for whether a handoff has anything to summarize (``has_user_turn``), read
+ *  here so the page can tell a fresh chat, whose switch needs no dialog, from one with context. */
 export function isGenuineUserTurn(event: TranscriptEvent): boolean {
   if (event.type !== "user_message") return false;
-  return event.display === undefined || isHandoffPromptChip(event);
+  return event.display === undefined || isPromptWithContext(event) || isHandoffPromptChip(event);
 }
 
 export function hasUserTurn(events: readonly TranscriptEvent[]): boolean {
@@ -596,7 +598,7 @@ export function buildSections(
         // which is which; nothing is re-derived here. A chip goes into the skeleton
         // so it both renders at its chronological spot and marks the turn end that
         // ends a step's stint (see collectEjectedProse).
-        if (isSystemChipUserMessage(e)) {
+        if (isSystemChipUserMessage(e) || isNoticeUserMessage(e)) {
           if (current === null) current = ensureSection(null, "section-pre");
           current.entries.push({ kind: "chip", event: e });
         }

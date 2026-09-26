@@ -20,9 +20,9 @@ from typing import Final
 
 from loguru import logger as _loguru_logger
 
-from imbue.chat.harnesses.account_scope import account_env
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 
@@ -84,7 +84,7 @@ def is_signed_in(
     # folder would commit as signed in, become the most-recently-used, and launch every later
     # chat with no credential. The question is whether THIS FOLDER is authenticated.
     env = {k: v for k, v in os.environ.items() if k not in MANAGED_AUTH_ENV_KEYS}
-    env.update(account_env(harness, account_dir))
+    env.update(build_account_binding(harness).account_env(account_dir))
     try:
         finished = runner(
             command=list(command),

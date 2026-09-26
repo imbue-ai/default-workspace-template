@@ -153,7 +153,7 @@ class ChatOomPrioritizer:
         ignored by ``reapply``, which only iterates the managed chats.
 
         Engagement is stamped on the *transition* into visibility, not for
-        everything currently visible: a tab left visible and untouched is not
+        everything currently visible: a window left visible and untouched is not
         continuing engagement, and re-stamping it every heartbeat would make it
         permanently fresh.
         """

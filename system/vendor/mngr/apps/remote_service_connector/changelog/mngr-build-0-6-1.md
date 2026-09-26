@@ -1,1 +1,0 @@
-The 0.4.0 wire-compat snapshot's support window is extended to 2026-10-14 to cover minds 0.6.1, whose only connector wire change since 0.6.0 is the additive optional `stop_kind` field on the workspace entry (and the `WorkspaceStopKind` enum it carries).

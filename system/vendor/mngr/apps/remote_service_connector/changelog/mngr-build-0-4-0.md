@@ -1,1 +1,0 @@
-Added the minds 0.4.0 wire-compat snapshot (`compat/wire_models_minds_0_4_0.py`) to the golden compat corpus. 0.4.0 is the first release whose connector-response models are tolerant WireModels, so the snapshot pins the new (required-fields-only) strictly-parsed surface; the pre-tolerant 0.3.16/0.3.17 snapshot stays in force until its support window ends.

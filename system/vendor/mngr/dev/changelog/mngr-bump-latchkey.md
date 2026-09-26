@@ -1,1 +1,0 @@
-Add a `bump-latchkey` skill that walks through all four independent latchkey version pins (the version bundled with the minds app, the minimum locally-installed version, the version installed on remote VPS hosts, and the version installed inside workspaces).

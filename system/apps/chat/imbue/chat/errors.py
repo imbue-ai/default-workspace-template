@@ -1,34 +1,6 @@
-from app_instances.errors import AppInstancesError
-from app_instances.errors import InstanceConflictError
+class ChatAppError(Exception):
+    """Base error for the chat app's own errors; the app answers every subclass with a ``{"detail"}`` body."""
 
 
-class ChatInstancesError(AppInstancesError):
-    """Base error of the chat app's instances source; the blueprint answers every subclass with a detail body."""
-
-
-class ChatCreateRefusedError(ChatInstancesError, InstanceConflictError):
-    """The chat app cannot start a chat right now: no provider is signed in, or mngr refused the create (a 409)."""
-
-
-class ChatTitleConflictError(ChatInstancesError, InstanceConflictError):
-    """A rename asked for a title another chat already has (a 409)."""
-
-
-class ChatMovingError(ChatInstancesError, InstanceConflictError):
-    """Stop, start, or rename asked of a chat that is moving to another agent; try again once it has (a 409)."""
-
-
-class ChatDestroyFailedError(ChatInstancesError):
-    """``mngr destroy`` failed for a chat that exists (a 500 with mngr's own words)."""
-
-
-class ChatRenameFailedError(ChatInstancesError):
-    """``mngr rename`` failed for a chat that exists (a 500 with mngr's own words)."""
-
-
-class ChatStopFailedError(ChatInstancesError):
-    """``mngr stop`` refused or failed for a chat (answered 500 with the reason)."""
-
-
-class ChatStartFailedError(ChatInstancesError):
-    """mngr could not start a stopped chat (answered 500 with the reason)."""
+class MalformedRequestError(ChatAppError):
+    """The request body is not JSON, not an object, or not the route's shape (answered 400)."""

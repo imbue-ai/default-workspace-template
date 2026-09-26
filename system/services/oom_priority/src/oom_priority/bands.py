@@ -1,9 +1,13 @@
 """Memory-shedding priority bands and the helper that writes them.
 
 Each process is assigned to one band by writing its ``oom_score_adj`` once at
-startup. earlyoom reads ``/proc/<pid>/oom_score`` (the kernel badness, which
-already folds in ``oom_score_adj``) to pick its victim, so a higher band makes a
-process more likely to be shed first.
+startup. The workspace runs the imbue-ai fork of earlyoom, which picks its
+victim by the kernel's badness computed from each process's ``oom_score_adj``
+and memory -- ``VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal)
+/ 1000`` -- rather than reading ``/proc/<pid>/oom_score``, which gVisor serves
+as 0 for every process. So a higher band makes a process more likely to be shed
+first, under gVisor and runc alike: one band point is worth MemTotal/1000 of
+memory.
 
 Bands are positive-only. A negative ``oom_score_adj`` (true "never kill") would
 require ``CAP_SYS_RESOURCE``, which the container's default capability set does
@@ -68,7 +72,7 @@ CHAT_AGENT_BASE: Final[int] = 560  # idle but fresh; also the chat launch band
 CHAT_AGENT_FLOOR: Final[int] = 300  # fully-engaged chat (most protected)
 CHAT_AGENT_STALE_CEILING: Final[int] = 800  # abandoned chat (shed before a worker)
 
-# --- Chat band tunables. Every knob of the chat policy lives in this block. ---
+# Chat band tunables. Every knob of the chat policy lives in this block.
 #
 # How much each engagement signal protects a *fresh* chat, subtracted from
 # ``CHAT_AGENT_BASE``. The recency bonus starts at its max for the most recently
@@ -136,8 +140,8 @@ def chat_agent_oom_score_adj(
     Lower is more protected. Two forces move a chat within its band, starting
     from ``CHAT_AGENT_BASE``. Engagement pulls it down:
 
-    - ``is_open``: the chat has an open tab in the workspace UI.
-    - ``is_visible``: the chat's tab is currently visible (implies open).
+    - ``is_open``: the chat has an open window in the workspace UI.
+    - ``is_visible``: the chat's window is currently visible (implies open).
     - ``recency_rank``: this chat's position when the chats that have been
       messaged are sorted by last-message time, newest first (0 = most recently
       messaged). The bonus decays with rank, so more-recently-messaged chats are
@@ -202,9 +206,10 @@ def chat_agent_oom_score_adj(
 # and are additionally shielded by earlyoom ``--avoid``.
 #
 # This is a best-effort steer, not a hard guarantee. earlyoom picks the highest
-# ``/proc/*/oom_score``, which folds each process's live memory usage in on top
-# of ``oom_score_adj``, so a large enough memory gap between two services can
-# still reorder adjacent bands. The order only decides which service goes when
+# badness, which adds each process's live memory usage on top of its
+# ``oom_score_adj`` (one band point is worth MemTotal/1000 of memory), so a
+# large enough memory gap between two services can still reorder adjacent
+# bands. The order only decides which service goes when
 # earlyoom is forced to shed inside the protected pool -- i.e. once everything
 # more expendable (browsers, agent subprocesses, agents, user services) is gone.
 USER_SERVICE: Final[int] = 200
@@ -217,10 +222,21 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # too. It is also a small HTTP server, so shedding it frees almost nothing.
     "owner-exec": 5,
     "terminal": 10,
+    # ttyd, on its own origin, framed by the terminal app's wrapper page: a shed pty drops
+    # every terminal pane's connection (the tmux sessions survive), so it sits right beside
+    # the app that frames it.
+    "terminal-pty": 12,
     "system_interface": 20,
-    # The chat app (the agent harness UI): just above the shell it is embedded
-    # in, and below every other service, since a shed chat app costs every open
-    # chat its page until it restarts.
+    # The agent observer ('mngr observe', the writer of the lifecycle event file
+    # every chat instance follows): just below the chat, because shedding it
+    # blinds every chat's agent view at once until supervisord brings it back
+    # while freeing almost nothing (it is a small Python process), whereas a shed
+    # chat app comes back to a stream the observer kept writing.
+    "agent-observer": 24,
+    # The chat app (the agent harness UI): just above the observer it follows,
+    # itself just above the shell the chat is embedded in, and below every other
+    # service, since a shed chat app costs every open chat its page until it
+    # restarts.
     "chat": 25,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.
@@ -252,13 +268,15 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
-    # The file viewer: the files-app sidecar (a small Python HTTP server for
-    # the instances API) and dufs, the tiny static file server it runs as its
-    # child. Together they hold little memory and supervisord restarts them if
-    # shed, so this is the most expendable built-in service of all.
+    # The file viewer: dufs, the tiny static file server the program runs
+    # directly. It holds little memory and supervisord restarts it if shed.
     "files": 75,
+    # The Getting Started page: one static page and a cached catalog. A shed costs
+    # one reload of a window that shows nothing of the user's, so this is the most
+    # expendable built-in service of all.
+    "getting-started": 80,
     "user": USER_SERVICE,
-    # The shell of a workspace terminal tab (and everything run in it), tagged by the
+    # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the
     # tmux server, which sits at the protected default, so without this tag a runaway build
     # in a terminal would outlive every service. It shares the user-service level: a user's
@@ -340,7 +358,9 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
 }
 
 
-def supervisord_program_band(program_name: str, priority_by_program: Mapping[str, str]) -> int:
+def supervisord_program_band(
+    program_name: str, priority_by_program: Mapping[str, str]
+) -> int:
     """The band a supervisord program is expected to occupy.
 
     ``priority_by_program`` is the app registry's view (``app_registry``): the

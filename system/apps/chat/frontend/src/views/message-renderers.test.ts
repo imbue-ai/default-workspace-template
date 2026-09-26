@@ -1,21 +1,47 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
-import type { ToolCall, ToolResultEvent, TranscriptEvent } from "../models/Response";
+import type { ToolCall, TranscriptEvent } from "../models/Response";
 import type { AssistantMessageEvent } from "../models/Response";
 import {
   buildToolResultsWithSkillExpansions,
   renderAssistantMessageChildren,
+  renderAssistantRun,
   renderSubagentCard,
-  renderToolCallBlock,
 } from "./message-renderers";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { setBlockExpanded } from "./expansion-state";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import {
+  closeProviderChooser,
+  getUnpickableAccount,
+  isPickingAccount,
+  isProviderChooserOpen,
+  pickAccount,
+} from "../models/Providers";
+import { startChatOnAccount } from "../shell";
 
 // Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
 // the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
-// needs openSubagentTab, and the card path never calls MarkdownContent.
-vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
+// needs openSubagentView, and the card path never calls MarkdownContent.
+vi.mock("../shell", () => ({ openSubagentView: vi.fn(), startChatOnAccount: vi.fn() }));
 vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
+
+// The auth-error note moves the chat through the switch dialog's entry point and reads the chat
+// from its model; the chooser's open/pick state is the real module's.
+const switching = vi.hoisted(() => {
+  // Opening the chooser redraws, and mithril schedules a redraw on an animation frame.
+  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
+    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
+  return {
+    chat: undefined as unknown,
+    beginSwitchToAccountId: vi.fn(),
+  };
+});
+vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
+vi.mock("../models/Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Chats")>()),
+  getChatById: () => switching.chat,
+}));
 
 // The render paths ask the detail cache for on-demand payloads (and kick off fetches);
 // stub those three so tests control the state machine without mithril's XHR.
@@ -365,43 +391,94 @@ describe("renderSubagentCard", () => {
   });
 });
 
-describe("renderToolCallBlock", () => {
-  // A real codex code-mode call: tool_name is always "exec"; the operation is buried
-  // in the JS input as tools.<fn>(...). The header should surface what it ran.
-  const execCall: ToolCall = {
-    tool_call_id: "c1",
-    tool_name: "exec",
-    input_chars: 72,
-    header_label: "Tool: Bash",
-  };
-
-  it("renders the parser's header label", () => {
-    const text = allText(renderToolCallBlock(execCall, null, "agent-x", "a-1"));
-    // A codex exec is headed by what it actually did, never the bare "Tool: exec".
-    expect(text).toContain("Tool: Bash");
-    expect(text).not.toContain("Tool: exec");
-  });
-
-  it("falls back to 'Tool: <name>' for a call parsed before labels existed", () => {
-    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_chars: 6 };
-    expect(allText(renderToolCallBlock(bash, null, "agent-x", "a-1"))).toContain("Tool: Bash");
-  });
-
-  it("keeps a failed call glanceable via the resident error snippet", () => {
-    const call: ToolCall = { tool_call_id: "c3", tool_name: "Bash", input_chars: 6 };
-    const failed: ToolResultEvent = {
+describe("renderAssistantRun", () => {
+  function assistantEvent(id: string, text: string, calls: ToolCall[]): AssistantMessageEvent {
+    return {
       timestamp: "t",
-      type: "tool_result",
-      event_id: "r-c3",
+      type: "assistant_message",
+      event_id: id,
       source: "test",
-      tool_call_id: "c3",
-      tool_name: "Bash",
-      output_chars: 5000,
-      is_error: true,
-      error_snippet: "FileNotFoundError: no such file",
+      model: "m",
+      text,
+      tool_calls: calls,
+      stop_reason: null,
+      usage: null,
+      is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
     };
-    const text = allText(renderToolCallBlock(call, failed, "agent-x", "a-1"));
-    expect(text).toContain("FileNotFoundError: no such file");
+  }
+
+  function call(id: string, name = "Read"): ToolCall {
+    return { tool_call_id: id, tool_name: name, input_chars: 10 };
+  }
+
+  /** The chips of each ToolChipGroup in a rendered run, in order. */
+  function chipRows(children: unknown[]): string[][] {
+    return children
+      .filter((c): c is m.Vnode<{ chips: { call: ToolCall }[] }> => {
+        const v = c as { attrs?: { chips?: unknown } };
+        return Array.isArray(v?.attrs?.chips);
+      })
+      .map((group) => group.attrs.chips.map((chip) => chip.call.tool_call_id));
+  }
+
+  it("merges consecutive tool calls into one row, across event boundaries", () => {
+    // A harness emits one event per model response, so a run of tool calls is
+    // usually a run of EVENTS -- the case that matters most and the one that
+    // grouping within a single event would miss entirely.
+    const children = renderAssistantRun(
+      [
+        assistantEvent("a1", "", [call("t1")]),
+        assistantEvent("a2", "", [call("t2", "Bash")]),
+        assistantEvent("a3", "", [call("t3")]),
+      ],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1", "t2", "t3"]]);
+  });
+
+  it("breaks the row where the agent speaks", () => {
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "and now the other file", [call("t2")])],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1"], ["t2"]]);
+  });
+
+  it("keeps each chip pointing at the event that issued it", () => {
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "", [call("t2")])],
+      new Map(),
+      "agent-x",
+    );
+    const group = children.find((c) =>
+      Array.isArray((c as { attrs?: { chips?: unknown } })?.attrs?.chips),
+    ) as m.Vnode<{
+      chips: { eventId: string }[];
+    }>;
+    // The input of a call is fetched from ITS event, so a merged row cannot
+    // collapse them onto one id.
+    expect(group.attrs.chips.map((chip) => chip.eventId)).toEqual(["a1", "a2"]);
+  });
+
+  it("breaks the row for a sub-agent card, which is a conversation rather than an action", () => {
+    const agentCall: ToolCall = {
+      tool_call_id: "t2",
+      tool_name: "Agent",
+      input_chars: 10,
+      description: "explore foo",
+      subagent_type: "Explore",
+    };
+    const children = renderAssistantRun(
+      [assistantEvent("a1", "", [call("t1"), agentCall, call("t3")])],
+      new Map(),
+      "agent-x",
+    );
+    expect(chipRows(children)).toEqual([["t1"], ["t3"]]);
   });
 });
 
@@ -536,70 +613,77 @@ describe("thinking disclosure", () => {
   });
 });
 
-// Walk a mithril vnode tree and return the first element vnode whose class contains `name`.
-function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
-  if (node == null) return null;
+interface VnodeLike {
+  tag?: unknown;
+  text?: unknown;
+  children?: unknown;
+  attrs?: Record<string, unknown>;
+}
+
+// Walk a mithril vnode tree and return the first vnode `isMatch` accepts. A match is not
+// descended into, so the outermost of a nest of matches wins.
+function findVnode(node: unknown, isMatch: (vnode: VnodeLike) => boolean): VnodeLike | null {
+  if (node == null || typeof node !== "object") return null;
   if (Array.isArray(node)) {
     for (const child of node) {
-      const found = findByClass(child, name);
-      if (found) return found;
+      const found = findVnode(child, isMatch);
+      if (found !== null) return found;
     }
     return null;
   }
-  if (typeof node === "object") {
-    const v = node as { attrs?: { className?: unknown }; children?: unknown };
-    if (typeof v.attrs?.className === "string" && v.attrs.className.split(" ").includes(name)) {
-      return v as { attrs?: Record<string, unknown> };
-    }
-    return findByClass(v.children, name);
-  }
-  return null;
+  const v = node as VnodeLike;
+  if (isMatch(v)) return v;
+  return findVnode(v.children, isMatch);
 }
 
-describe("expanded tool row payload states", () => {
-  const call: ToolCall = { tool_call_id: "pc-1", tool_name: "Bash", input_chars: 20 };
-  const result: ToolResultEvent = {
-    timestamp: "t",
-    type: "tool_result",
-    event_id: "r-pc-1",
-    source: "test",
-    tool_call_id: "pc-1",
-    tool_name: "Bash",
-    output_chars: 5000,
-    is_error: false,
-  };
+// The first element vnode whose class contains `name`.
+function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
+  return findVnode(node, (v) => {
+    const className = v.attrs?.className;
+    return typeof className === "string" && className.split(" ").includes(name);
+  });
+}
+
+describe("the auth-error note's switch link", () => {
+  const OPENAI_ID = "acct-openai";
+  const ANTHROPIC_ID = "acct-anthropic";
+
+  function authErrorEvent(): AssistantMessageEvent {
+    return { ...apiErrorEvent("API Error: 401 invalid api key", null, false, true), is_auth_error: true };
+  }
+
+  function findButton(node: unknown, label: string): { attrs: { onclick: () => void } } | null {
+    const found = findVnode(node, (v) => v.tag === "button" && allText(v).trim() === label);
+    return found === null ? null : (found as { attrs: { onclick: () => void } });
+  }
 
   beforeEach(() => {
-    mockDetailState.mockReset();
-    mockRequestDetail.mockReset();
-    setBlockExpanded("tc:pc-1", true);
+    closeProviderChooser();
+    switching.beginSwitchToAccountId.mockClear();
+    vi.mocked(startChatOnAccount).mockClear();
+    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
   });
 
-  it("shows loading notes and requests the payloads while nothing is cached", () => {
-    mockDetailState.mockReturnValue(undefined);
-    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
-    expect(text).toContain("Loading");
-    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "a-pc-1");
-    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "r-pc-1");
+  it("switches the failed chat to the account picked, rather than starting a new chat", () => {
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+    findButton(children, "switch to another provider")!.attrs.onclick();
+
+    expect(isProviderChooserOpen()).toBe(true);
+    expect(isPickingAccount()).toBe(true);
+    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, reason: "failing" });
+
+    pickAccount(ANTHROPIC_ID);
+
+    expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
+    expect(startChatOnAccount).not.toHaveBeenCalled();
+    expect(isProviderChooserOpen()).toBe(false);
   });
 
-  it("renders the full fetched input and output once loaded", () => {
-    mockDetailState.mockImplementation((_chatId: string, eventId: string) =>
-      eventId === "a-pc-1"
-        ? {
-            state: "loaded",
-            detail: { inputs_by_tool_call_id: { "pc-1": "the whole input" }, output: null, thinking: null },
-          }
-        : { state: "loaded", detail: { inputs_by_tool_call_id: {}, output: "the whole output", thinking: null } },
-    );
-    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
-    expect(text).toContain("the whole input");
-    expect(text).toContain("the whole output");
-  });
+  it("is not offered until the chat itself is known", () => {
+    switching.chat = undefined;
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
 
-  it("shows the quiet placeholder when the payload is gone", () => {
-    mockDetailState.mockReturnValue({ state: "unavailable" });
-    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
-    expect(text).toContain("No longer available");
+    expect(findButton(children, "switch to another provider")).toBeNull();
+    expect(findButton(children, "Sign in again")).not.toBeNull();
   });
 });

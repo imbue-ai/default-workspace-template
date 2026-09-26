@@ -90,11 +90,34 @@ export async function updateFastModeState(chatId: string, next: ChatFastModeStat
   }
 }
 
+/** What each mode is called, everywhere one is named. */
+export const FAST_MODE_LABELS: Readonly<Record<FastModeMode, string>> = {
+  off: "Off",
+  auto: "Auto",
+  on: "On",
+};
+
+/** The modes, in the order the chooser offers them, read off the table above. */
+export const FAST_MODES: readonly FastModeMode[] = Object.keys(FAST_MODE_LABELS) as FastModeMode[];
+
 /** What the model picker's fast row says for a state. */
 export function fastModeLabel(state: ChatFastModeState): string {
-  if (state.mode === "off") return "Off";
-  if (state.mode === "on") return "On";
-  return state.is_switched ? "Auto (off now)" : "Auto";
+  const label = FAST_MODE_LABELS[state.mode];
+  return state.mode === "auto" && state.is_switched ? `${label} (off now)` : label;
+}
+
+/** The line under a mode in the chooser; auto's names the limit it runs to. */
+export function fastModeDetail(mode: FastModeMode, turnLimit: number): string {
+  switch (mode) {
+    case "off":
+      return "Standard speed always";
+    case "on":
+      return "Fast mode always";
+    case "auto": {
+      const turns = turnLimit === 1 ? "1 turn" : `${turnLimit} turns`;
+      return `Fast for the first ${turns}, then standard`;
+    }
+  }
 }
 
 /** Forget every chat's state, so a test starts clean. */

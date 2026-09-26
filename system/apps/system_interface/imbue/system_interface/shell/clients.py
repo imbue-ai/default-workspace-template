@@ -1,5 +1,8 @@
-"""Client records: ``clients.json`` (contracts.md section 7), the active view and last-seen stamp per browser context."""
+"""Client records: ``clients.json`` (desktop contracts.md section 4.3), the active desktop, the last-seen stamp, and the
+signed-in user, per browser context."""
 
+from collections.abc import Callable
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -7,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
@@ -18,16 +22,23 @@ from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DeviceKind
-from imbue.system_interface.shell.primitives import ViewId
+from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 CLIENTS_FILENAME: Final[str] = "clients.json"
-CLIENTS_FILE_VERSION: Final[int] = 1
+CLIENTS_FILE_VERSION: Final[int] = 2
+# The tabbed shell's file: each client carried ``device_kind`` and ``active_view`` beside ``active_desktop``.
+# CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION``, ``_fold_legacy_client``, ``_folded_if_legacy`` (reading the
+# file straight through ``parse_versioned_document``), and clients_test's version-one test around late October
+# 2026, once every workspace has written a version-2 clients.json (the first write after this release does).
+_LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
 
 # A client unseen for this long is dropped, together with every layout it owns.
 CLIENT_RETENTION: Final[timedelta] = timedelta(days=90)
@@ -36,9 +47,12 @@ CLIENT_RETENTION: Final[timedelta] = timedelta(days=90)
 class _StoredClient(FrozenModel):
     """One entry of the ``clients`` map (the id is the key)."""
 
-    device_kind: DeviceKind = Field(description="Desktop or mobile")
-    active_view: ViewId = Field(description="The view the client is on")
-    last_seen: datetime = Field(description="When the client last reported")
+    active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
+    last_seen: datetime = Field(description="When the client last arrived or reported")
+    user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
+    entries: dict[str, EntryPresentation] = Field(
+        default_factory=dict, description="The client's presentation of each pinned entry, by app name"
+    )
 
 
 class ClientsDocument(FrozenModel):
@@ -49,15 +63,68 @@ class ClientsDocument(FrozenModel):
 
 
 @pure
+def entries_wire_json(entries: Mapping[str, EntryPresentation]) -> dict[str, Any]:
+    """The ``entries`` map of the client object (pinned-taskbar-entries plan section 7.4)."""
+    return {app: presentation.model_dump(mode="json") for app, presentation in entries.items()}
+
+
+@pure
 def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]:
-    """The ``client`` object of contracts.md section 6."""
+    """The ``client`` object of desktop contracts.md section 5.5."""
     return {
         "id": str(record.id),
-        "device_kind": record.device_kind.value,
-        "active_view": str(record.active_view),
+        "active_desktop": str(record.active_desktop) if record.active_desktop is not None else None,
         "last_seen": record.last_seen.isoformat(),
         "is_connected": is_connected,
+        "user_id": str(record.user_id) if record.user_id is not None else None,
+        "entries": entries_wire_json(record.entries),
     }
+
+
+@pure
+def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
+    return ClientRecord(
+        id=client_id,
+        active_desktop=stored.active_desktop,
+        last_seen=stored.last_seen,
+        user_id=stored.user_id,
+        entries=stored.entries,
+    )
+
+
+@pure
+def _fold_legacy_client(entry: Any) -> Any:
+    """A version-1 entry as version 2 reads it: its desktop when it recorded one, else the view it was on (a desktop
+    of that id, when one exists, is where the client lands; ``resolve_active_desktop`` falls back to the first
+    desktop otherwise)."""
+    if not isinstance(entry, dict):
+        return entry
+    desktop = entry.get("active_desktop") or entry.get("active_view")
+    return {"active_desktop": desktop, "last_seen": entry.get("last_seen")}
+
+
+@pure
+def _folded_if_legacy(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A version-1 document as a version-2 one, entry by entry; any other document (or none) as it is."""
+    if raw is None or raw.get("version") != _LEGACY_CLIENTS_FILE_VERSION or not isinstance(raw.get("clients"), dict):
+        return raw
+    return {
+        "version": CLIENTS_FILE_VERSION,
+        "clients": {client_id: _fold_legacy_client(entry) for client_id, entry in raw["clients"].items()},
+    }
+
+
+@pure
+def _moved_client(
+    client_id: ClientId, previous: _StoredClient | None, desktop_id: DesktopId, stamped: datetime
+) -> _StoredClient:
+    """The recorded client on the desktop, stamped; a client with no record raises ClientNotFoundError."""
+    if previous is None:
+        raise ClientNotFoundError(f"No client record for {client_id!r}")
+    return previous.model_copy_update(
+        to_update(previous.field_ref().active_desktop, desktop_id),
+        to_update(previous.field_ref().last_seen, stamped),
+    )
 
 
 class ClientStore(MutableModel):
@@ -69,14 +136,10 @@ class ClientStore(MutableModel):
         return self.state_directory / CLIENTS_FILENAME
 
     def _read_unlocked(self) -> ClientsDocument:
-        raw = read_json_object(self._path())
-        if raw is None:
-            return ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
-        try:
-            return ClientsDocument.model_validate(raw)
-        except ValidationError as e:
-            logger.warning("Ignored an unreadable clients file at {}: {}", self._path(), e.errors()[0]["msg"])
-            return ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
+        document = parse_versioned_document(
+            _folded_if_legacy(read_json_object(self._path())), ClientsDocument, CLIENTS_FILE_VERSION, self._path()
+        )
+        return document if document is not None else ClientsDocument(version=CLIENTS_FILE_VERSION, clients={})
 
     def _write_unlocked(self, document: ClientsDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))
@@ -87,14 +150,7 @@ class ClientStore(MutableModel):
         records: list[ClientRecord] = []
         for client_id, stored in document.clients.items():
             try:
-                records.append(
-                    ClientRecord(
-                        id=ClientId(client_id),
-                        device_kind=stored.device_kind,
-                        active_view=stored.active_view,
-                        last_seen=stored.last_seen,
-                    )
-                )
+                records.append(_record_of(ClientId(client_id), stored))
             except (ValueError, ValidationError) as e:
                 logger.warning("Skipped an unusable client record {!r}: {}", client_id, e)
         return sorted(records, key=lambda record: record.last_seen, reverse=True)
@@ -106,27 +162,60 @@ class ClientStore(MutableModel):
         return None
 
     def record_report(self, report: ClientStateReport, now: datetime) -> ClientReportOutcome:
-        """Record a ``client_state`` report: the client's device kind, active view, and last-seen stamp."""
+        """Record a ``client_state`` report: the client's last-seen stamp and the desktop it names; the user it last
+        arrived as stays."""
         stamped = now.astimezone(timezone.utc)
-        with STATE_FILES_LOCK:
-            document = self._read_unlocked()
-            previous = document.clients.get(str(report.client_id))
-            clients = {
-                **document.clients,
-                str(report.client_id): _StoredClient(
-                    device_kind=report.device_kind, active_view=report.active_view, last_seen=stamped
-                ),
-            }
-            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        record = ClientRecord(
-            id=report.client_id, device_kind=report.device_kind, active_view=report.active_view, last_seen=stamped
-        )
-        return ClientReportOutcome(
-            record=record, is_active_view_changed=previous is None or previous.active_view != report.active_view
+        return self._store_client(
+            report.client_id,
+            lambda previous: _StoredClient(
+                active_desktop=report.active_desktop,
+                last_seen=stamped,
+                user_id=previous.user_id if previous is not None else None,
+                entries=previous.entries if previous is not None else {},
+            ),
         )
 
-    def set_active_view(self, client_id: ClientId, view_id: ViewId, now: datetime) -> ClientReportOutcome:
-        """Move a recorded client onto a view (a ``load`` op, or an op's ``--view``); raises ClientNotFoundError."""
+    def set_active_desktop(self, client_id: ClientId, desktop_id: DesktopId, now: datetime) -> ClientReportOutcome:
+        """Move a recorded client onto a desktop (a ``load`` op, an op's ``--desktop``, or a deleted desktop's
+        fallback); raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._store_client(client_id, lambda previous: _moved_client(client_id, previous, desktop_id, stamped))
+
+    def record_arrival(
+        self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
+    ) -> ClientReportOutcome:
+        """Record a client's arrival (the shell page loading): the user it arrived as and the desktop it lands on."""
+        stamped = now.astimezone(timezone.utc)
+        return self._store_client(
+            client_id,
+            lambda previous: _StoredClient(
+                active_desktop=desktop_id,
+                last_seen=stamped,
+                user_id=user_id,
+                entries=previous.entries if previous is not None else {},
+            ),
+        )
+
+    def _store_client(
+        self, client_id: ClientId, build: Callable[[_StoredClient | None], _StoredClient]
+    ) -> ClientReportOutcome:
+        """Replace one client's entry with what ``build`` makes of the previous one (None for a new client), and
+        answer whether the stored desktop moved."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            previous = document.clients.get(str(client_id))
+            stored = build(previous)
+            clients = {**document.clients, str(client_id): stored}
+            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
+        previous_desktop = previous.active_desktop if previous is not None else None
+        return ClientReportOutcome(
+            record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != stored.active_desktop
+        )
+
+    def set_entry_presentation(
+        self, client_id: ClientId, app: AppName, presentation: EntryPresentation, now: datetime
+    ) -> ClientRecord:
+        """Store how a recorded client shows one pinned entry; raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
@@ -134,13 +223,12 @@ class ClientStore(MutableModel):
             if previous is None:
                 raise ClientNotFoundError(f"No client record for {client_id!r}")
             updated = previous.model_copy_update(
-                to_update(previous.field_ref().active_view, view_id),
+                to_update(previous.field_ref().entries, {**previous.entries, str(app): presentation}),
                 to_update(previous.field_ref().last_seen, stamped),
             )
             clients = {**document.clients, str(client_id): updated}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        record = ClientRecord(id=client_id, device_kind=previous.device_kind, active_view=view_id, last_seen=stamped)
-        return ClientReportOutcome(record=record, is_active_view_changed=previous.active_view != view_id)
+        return _record_of(client_id, updated)
 
     def prune_unseen(self, now: datetime) -> list[ClientId]:
         """Drop every client unseen for the retention period; returns their ids so the caller can drop their layouts."""

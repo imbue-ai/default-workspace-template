@@ -1,5 +1,0 @@
-New project: the minds analytics app (spec: specs/minds-analytics/spec.md).
-
-A cron-only Modal app (`analytics-<env>`) that aggregates server-side product data into DuckLake lakehouses (Neon Postgres catalogs, R2 parquet) queryable read-only by analysts with DuckDB. The hourly `aggregation` cron reads the connector's product DB (read-only role) and the tier's OpenObserve log parquet, and rewrites the gold tables: `activity` (per-account per-day signal counts, with "active" deliberately defined at query time), `accounts`, `funnel_daily`, and `pipeline_health`. The daily `lake_maintenance` cron flushes DuckLake inlined data, merges small files, expires snapshots past 30 days, and cleans up unreferenced files.
-
-Ships the ops-DB migration (`job_runs`), the analyst reports (`reports/`: activity, pipeline_health, funnel, plus the attach/credential runbook), the per-tier bringup runbook (`docs/bringup.md`), and the `.minds/template/analytics.sh` Vault secret schema. Deployment is opt-in per env and off everywhere until bringup.

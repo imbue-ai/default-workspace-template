@@ -146,11 +146,11 @@
     </div>
     <div id="crashoverlay">
       <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
-      <div class="sub">Open a new browser from the + menu.</div>
+      <div class="sub">Open a new browser from the launcher.</div>
     </div>
     <div id="terminatedoverlay">
       <div class="msg">This browser has been terminated by an agent.</div>
-      <div class="sub">Open a new browser from the + menu.</div>
+      <div class="sub">Open a new browser from the launcher.</div>
     </div>
     <div id="stoppedoverlay">
       <div class="msg">This browser is stopped.</div>
@@ -232,7 +232,7 @@
   // and 1013 "retry"): the viewer renders the terminal "terminated" overlay, no reconnect.
   const WS_CLOSE_TERMINATED = 4001;
 
-  // ---- control plane (unchanged): ownership, overlay, lifecycle, over /cast ----
+  // control plane (unchanged): ownership, overlay, lifecycle, over /cast
   let controlOwner = "human";
   let castWs = null;
   let browserId = null;
@@ -374,8 +374,8 @@
   }
 
   // The user stopped this browser: Chromium is gone but the browser, its profile, and its
-  // tabs are kept. Not terminal -- the cast socket stays up, so a start (from the tab menu,
-  // the Start button here, or an agent's layout.py) arrives as the next control message and
+  // tabs are kept. Not terminal -- the cast socket stays up, so a start (the Start button
+  // here, or the fleet's POST /browsers/<name>/start) arrives as the next control message and
   // the init cover takes over from this one.
   function showStopped() {
     lifecycle = "stopped";
@@ -429,10 +429,10 @@
     closedForGood = true;
     stopIdleTimer();
     initOverlay.classList.add("show", "static");
-    initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the + menu.";
+    initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the launcher.";
   }
 
-  // ---- pixel plane: per-stripe H.264 decoder over /stream ----
+  // pixel plane: per-stripe H.264 decoder over /stream
   // Each horizontal stripe row is its own H.264 chain, decoded by its own WebCodecs
   // VideoDecoder and composited at its y-offset; the viewer acks every stripe as it
   // leaves its decoder (credit-ack flow control). From the
@@ -440,7 +440,7 @@
   // fleet's init overlay (instead of a status pill) on first paint.
   let streamWs = null, streamRetry = 500, lastSentSize = "";
 
-  // ---- Rung 2 client telemetry: buffer per-stripe decode/paint timings and POST them
+  // Rung 2 client telemetry: buffer per-stripe decode/paint timings and POST them
   // in small batches OFF the render path (requestIdleCallback), so the server-side lens
   // can subtract client render from the round trip and show pure network. The tap in the
   // decoder callback is a bare array push; nothing here touches the ack or the paint.
@@ -618,7 +618,7 @@
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
     const rect = stage.getBoundingClientRect();
-    // Skip ONLY a collapsed pane (a display:none dockview tab reads a 0x0 box): reporting that
+    // Skip ONLY a collapsed pane (a hidden window's frame reads a 0x0 box): reporting that
     // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
     // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
     // resize is never dropped and the browser reliably grows to fill the pane.
@@ -642,7 +642,7 @@
   // bandwidth). The server arbitrates (last interaction wins, ordered by its own receive
   // time so multi-device clocks don't matter) and pauses everyone else.
   // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility) AND this pane
-  // isn't a non-active dockview tab (display:none -> the canvas box is 0x0, read reliably).
+  // isn't a hidden window's frame (display:none -> the canvas box is 0x0, read reliably).
   function paneVisible() {
     if (document.hidden) return false;
     const r = stage.getBoundingClientRect();
@@ -703,7 +703,7 @@
   }
   pausedOverlay.addEventListener("pointerdown", claimActive, true);
 
-  // ---- audio playback (Opus over WebCodecs -> AudioWorklet) ----
+  // audio playback (Opus over WebCodecs -> AudioWorklet)
   // The server sends mono Opus chunks (magic byte 0x01)
   // interleaved on the SAME /stream socket, only while the tab actually makes sound
   // (pcmflux's sample-level silence gate), so this stays idle otherwise. WebCodecs
@@ -776,7 +776,7 @@ registerProcessor('pb', PB);`;
   // Browsers suspend AudioContext until a gesture; the pane is click-driven.
   window.addEventListener("pointerdown", () => { audioCtx?.resume?.(); }, true);
 
-  // ---- input capture: Selkies grammar over /stream, gated on human control ----
+  // input capture: Selkies grammar over /stream, gated on human control
   // Ported from Selkies (keysym map, letterbox-aware coords, coalesced
   // pointer moves #26, held-key heartbeat #12, release-on-blur), with two fleet
   // adaptations: input is sent ONLY while the human holds control (client-side
@@ -907,7 +907,7 @@ registerProcessor('pb', PB);`;
   // release anything whose keyup got lost in transit. Only while driving locally.
   setInterval(() => { if (!driving()) sendInput("kh" + [...heldKeysyms].map((k) => "," + k).join("")); }, 2000);
 
-  // ---- clipboard: paste-in / copy-out (text + images), OS-agnostic, with a chip ----
+  // clipboard: paste-in / copy-out (text + images), OS-agnostic, with a chip
   // We hook the browser's own copy/cut/paste ClipboardEvents rather than intercepting
   // keys, so it works identically on every OS and for menu/right-click too. Paste reads
   // the event's clipboardData and POSTs it to the remote (the server sets the X selection
@@ -1009,12 +1009,12 @@ registerProcessor('pb', PB);`;
     doWrite();
   }
 
-  // ---- tips (top-bar help card, ported from browser-fixes-v4.1) ----
+  // tips (top-bar help card, ported from browser-fixes-v4.1)
   tipsBtn.onclick = () => tipsModal.classList.add("show");
   tipsCloseBtn.onclick = () => tipsModal.classList.remove("show");
   tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) tipsModal.classList.remove("show"); });
 
-  // ---- controls (ownership only) ----
+  // controls (ownership only)
   takeControlBtn.onclick = () => {
     takeControlBtn.disabled = true;
     overlay.classList.remove("show");
@@ -1025,7 +1025,7 @@ registerProcessor('pb', PB);`;
     if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify({ type: "return_to_agents" }));
   };
 
-  // ---- /cast: control/ownership only (no pixels, no tabs, no input) ----
+  // /cast: control/ownership only (no pixels, no tabs, no input)
   // A wedged (half-open) /cast socket delivers no onclose, so a lost control-change
   // message would strand this viewer thinking an agent still holds control -- input dead
   // forever even after it's ours. Key a watchdog on the server's existing 10s keepalive
@@ -1093,7 +1093,7 @@ registerProcessor('pb', PB);`;
         returnBar.classList.remove("show");
         initOverlay.classList.add("show");
         initOverlay.classList.add("static");
-        initOverlay.querySelector(".msg").textContent = "Browser closed — reopen it from the + menu.";
+        initOverlay.querySelector(".msg").textContent = "Browser closed — reopen it from the launcher.";
         return;
       }
       if (ev.code === 1013) { setLifecycle("init"); initOverlay.classList.add("show"); scheduleReconnect(); return; }
@@ -1111,7 +1111,7 @@ registerProcessor('pb', PB);`;
   function boot() {
     const params = new URLSearchParams(location.search);
     const name = params.get("session");
-    if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the + menu."; return; }
+    if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the launcher."; return; }
     initOverlay.classList.add("show");
     if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
     setInitStage(15, "Starting browser…");  // seed the bar until the first control message lands
@@ -1120,6 +1120,29 @@ registerProcessor('pb', PB);`;
   }
   boot();
 })();
+</script>
+<script type="module">
+  // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
+  // section 7), imported from this page's own origin, which the daemon serves it from. The
+  // window's path says WHICH browser this page shows and its title is that browser's name; what
+  // the browser itself is looking at stays inside the streamed pixels. A session switch is a
+  // whole new stream, so this page declares no navigation capability and the shell reloads the
+  // frame to move it.
+  function browserTitle(name) {
+    const numbered = /^browser-([0-9]+)$/.exec(name);
+    return numbered === null ? name : `Browser ${numbered[1]}`;
+  }
+  const session = new URLSearchParams(location.search).get("session");
+  if (session) document.title = browserTitle(session);
+  if (window.parent !== window) {
+    import("/_static/app_contract.js")
+      .then(({ connectToShell }) => {
+        const connection = connectToShell({});
+        window.addEventListener("focus", () => connection.focused());
+        if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
+      })
+      .catch((error) => console.warn("[browser] could not load the shell contract", error));
+  }
 </script>
 </body>
 </html>

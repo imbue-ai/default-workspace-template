@@ -29,20 +29,23 @@ you, and the handful of ways this goes wrong in practice.
 
 **No API key needed.** Everything here is deterministic and keyless.
 
-## First: there are no browsers until you make one
+## First: there is one browser, and `new` gives it to you
 
-The fleet starts **empty**. `new` prints a **name** (numbered `browser-<N>`, shown as "Browser N"
-in the workspace UI) and the attach line. Browsers are addressed by name everywhere.
+The fleet holds **one browser** (`browser-1`, shown as "Browser 1" in the workspace UI; a
+second Chromium is more memory than a small workspace can afford). `new` prints its **name**
+and the attach line: it creates the browser the first time, and after that it answers the same
+browser, starting it again if it was stopped. Browsers are addressed by name everywhere.
 
-- `new` mints the first free `browser-<N>`; `new my-browser` chooses the name (lowercase letters
-  and digits joined by single dashes). A **duplicate** name is rejected -- note a *crashed*
-  browser still holds its name until you `close` it.
 - `new` returns as soon as the browser is registered; **Chromium is still launching**. If the
   attach line says it is still starting, wait a few seconds and run `ls`.
-- The fleet is **capped (2 by default)**. `new` past the cap returns
-  `2/2 browsers open -- close one first`.
-- **Browsers cannot be renamed.** If the user asks, say so: the only option is `close` + `new`,
-  which is a different browser with a fresh profile.
+- `new` also opens the browser's window on the user's desktop, minimized, so they can see what
+  you are doing and take over. **The browser lives as long as some window shows it**: when the
+  user closes its last window, the browser is stopped (its logins and tabs are kept) and your
+  next command fails -- that is the user telling you to stop, so do not `new` it straight back
+  without asking. Never close the user's window yourself.
+- `new my-browser` asks for a second, named browser; the fleet is capped and answers
+  `1/1 browsers open -- close one first`. Do not do this.
+- **Browsers cannot be renamed.**
 
 ## The loop
 
@@ -60,8 +63,8 @@ rather than erroring.
 ```bash
 uv run agentic-browser-fleet ls                      # the whole fleet: names, owners, tabs
 uv run agentic-browser-fleet ls --include-tabs       # every tab of every browser
-uv run agentic-browser-fleet new [name]              # start one; prints its name + attach line
-uv run agentic-browser-fleet close <name>            # close it, retire the name, DELETE its profile
+uv run agentic-browser-fleet new                     # the browser (started if stopped); prints its name + attach line
+uv run agentic-browser-fleet close <name>            # rarely: end it AND DELETE its profile (logins); closing the window stops it instead
 uv run agentic-browser-fleet acquire <name>          # reserve it (reprints the attach line)
 uv run agentic-browser-fleet acquire <name> --reclaim   # take back from a human -- only if they said so
 uv run agentic-browser-fleet release <name>          # hand it back (alias: unlock)
@@ -185,19 +188,20 @@ uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in
 ```
 
 `handoff` puts you at the **front** of the resume queue, hands control to the human (pinned, so
-it will not pass to another agent), and surfaces the pane. In the **same turn**: tell the user
+it will not pass to another agent), and opens the browser's window. In the **same turn**: tell the user
 exactly what to do and on which page, then **end your turn**. You are woken first when they hand
 it back -- re-`snapshot` to confirm the challenge cleared, then carry on.
 
 ## Live view vs. your output
 
-The browser streams to a UI pane next to your chat, and it follows whatever tab you are acting
-on. `new` and your first command surface it automatically -- but only when the user is currently
-watching your chat. Do not manage panes yourself; if the user asks for a browser that is not
-showing, tell them to open it from the workspace **+ -> browser** menu.
+The browser streams to a window on the desktop of whoever is watching your chat, and it follows
+whatever tab you are acting on. `new` and your first command open that window automatically --
+but only when the shell can tell which screen asked (the client that last messaged your chat,
+else the one connected client). Do not arrange windows yourself; if the user asks for a browser
+that is not showing, tell them to open it from the desktop's launcher (Browser).
 
-The pane is **viewer only** -- your real output is here in the CLI. Read and relay it; never tell
-the user to "check the tab" for results.
+The window is **viewer only** -- your real output is here in the CLI. Read and relay it; never tell
+the user to "check the window" for results.
 
 ## Multiple browsers, tabs, sub-agents
 
@@ -242,10 +246,6 @@ playwright-cli -s=browser-1 hover e12                  # put the wheel over the 
 playwright-cli -s=browser-1 mousewheel 0 800
 playwright-cli -s=browser-1 find "the thing you want"  # repeat until rows stop advancing
 
-# Two browsers, independently (no queueing -- different names).
-uv run agentic-browser-fleet new
-uv run agentic-browser-fleet new
-
 # Hit a CAPTCHA -- hand it over, then STOP.
 uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in page"
 ```
@@ -253,8 +253,9 @@ uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in
 ## Don'ts
 
 - **Don't run `playwright-cli close`, `attach` (twice), `detach`, `close-all`, `kill-all` or
-  `delete-data`.** The fleet owns lifecycle. Ending a browser is
-  `agentic-browser-fleet close <name>`, which also retires the name and deletes the profile.
+  `delete-data`.** The fleet owns lifecycle: the browser stops on its own once no window shows
+  it. `agentic-browser-fleet close <name>` deletes the profile (every login) with it, so use it
+  only when the user asks for a fresh browser.
 - **Don't re-attach a browser whose session died** -- see "Crashes" above. It hangs rather than
   erroring, which is the one failure you cannot recover from.
 - **Don't interpret a `playwright-cli` failure.** Run `ls`.

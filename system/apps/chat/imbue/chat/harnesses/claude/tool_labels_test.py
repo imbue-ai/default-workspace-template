@@ -1,5 +1,7 @@
 import pytest
 
+from imbue.chat.harnesses.claude.tool_labels import action_note
+from imbue.chat.harnesses.claude.tool_labels import action_parts
 from imbue.chat.harnesses.claude.tool_labels import shell_command
 from imbue.chat.harnesses.claude.tool_labels import tool_labels
 
@@ -83,3 +85,58 @@ def test_shell_command_reads_claudes_command_key_and_ignores_other_tools() -> No
     assert shell_command("Bash", '{"command":"ls -la"}') == "ls -la"
     assert shell_command("Read", '{"file_path":"/x"}') is None
     assert shell_command("Bash", '{"command":123}') is None
+
+
+@pytest.mark.parametrize(
+    "tool_name, input_preview, expected",
+    [
+        # A file is NAMED on a chip, never pathed: the chip is a phrase to read,
+        # and the whole path is one click away in its panel.
+        pytest.param("Read", '{"file_path":"/home/user/ws/src/views/midnight.ts"}', ("read", "midnight.ts"), id="read"),
+        pytest.param("Edit", '{"file_path":"a/b/plugin.py"}', ("edited", "plugin.py"), id="edit"),
+        pytest.param("Write", '{"file_path":"notes.md"}', ("wrote", "notes.md"), id="write"),
+        # A search names what it looked FOR first; the path is only the scope, and
+        # "searched src/views" says nothing about what was being sought.
+        pytest.param(
+            "Grep", '{"pattern":"harness","path":"system/apps/chat/src"}', ("searched", '"harness" in src'), id="grep"
+        ),
+        pytest.param("Glob", '{"pattern":"**/*.ts"}', ("searched", '"**/*.ts"'), id="glob_without_scope"),
+        pytest.param("Skill", '{"skill":"commit"}', ("loaded skill", "commit"), id="skill"),
+        pytest.param("Monitor", "{}", ("monitored", ""), id="known_verb_without_target"),
+        pytest.param("Agent", '{"description":"explore it"}', ("delegated", "explore it"), id="agent"),
+        pytest.param("Task", "{}", ("delegated to a sub-agent", ""), id="delegation_without_a_description"),
+        # No verb to offer, so the tool names itself -- the one case a chip still
+        # says which tool ran, because nothing more useful can be said.
+        pytest.param("Unheard", '{"file_path":"x.ts"}', ("Unheard", "x.ts"), id="unknown_tool"),
+        pytest.param("mcp__notion__search", '{"query":"roadmap"}', ("called search", '"roadmap"'), id="mcp"),
+        pytest.param("", "{}", ("ran a tool", ""), id="nameless"),
+    ],
+)
+def test_claude_action_parts(tool_name: str, input_preview: str, expected: tuple[str, str]) -> None:
+    assert action_parts(tool_name, input_preview) == expected
+
+
+def test_a_shell_chip_shows_the_command_while_its_caption_shows_the_description() -> None:
+    """The one tool where the chip's target and the strip's caption diverge, deliberately.
+
+    The chip carries the description separately as its note, so repeating it as the
+    target would make both halves of the chip say the same thing.
+    """
+    raw = '{"command":"uv run pytest -q","description":"Run the tests"}'
+    assert action_parts("Bash", raw) == ("ran", "uv run pytest -q")
+    assert action_note("Bash", raw) == "Run the tests"
+
+
+@pytest.mark.parametrize(
+    "tool_name, input_preview",
+    [
+        # Every tool that records no reason anywhere: the note is absent rather
+        # than guessed at.
+        pytest.param("Read", '{"file_path":"a.ts"}', id="read"),
+        pytest.param("Edit", '{"file_path":"a.ts","description":"not a real field"}', id="edit_ignores_a_stray_key"),
+        pytest.param("Bash", '{"command":"ls"}', id="shell_without_one"),
+        pytest.param("Bash", '{"command":"ls","description":"   "}', id="blank"),
+    ],
+)
+def test_claude_action_note_is_absent_rather_than_invented(tool_name: str, input_preview: str) -> None:
+    assert action_note(tool_name, input_preview) is None

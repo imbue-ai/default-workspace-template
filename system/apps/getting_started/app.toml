@@ -1,0 +1,23 @@
+# The Getting Started app: the ways into the workspace. Its one page holds the "Start something"
+# intents and the published template catalog (docs/system/blueprint/launcher-and-getting-started/),
+# every one of which starts a chat through the desktop's launcher (``shell:start-with-text``). It
+# declares no launch path, so the desktop offers the synthesized ``open`` at its root; its shortcut
+# focuses the one window it is for, as the browser's does.
+name = "getting-started"
+display_name = "Getting Started"
+icon = "icon.svg"
+critical = false
+priority = "getting-started"
+launcher_rank = 5
+
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# A Getting Started preview serves its page on a free port, unregistered, over a scratch state
+# directory: it neither re-points the live row nor opens the first-visit window, and its catalog
+# cache is its own. The app keeps nothing under data/.apps/, so there is nothing to copy.
+[preview]
+command = ["getting-started", "--no-register", "--state-dir", "{scratch}/state"]
+env = {GETTING_STARTED_PORT = "{port:main}", GETTING_STARTED_HOST = "{host}"}
+health_path = "/api/health"

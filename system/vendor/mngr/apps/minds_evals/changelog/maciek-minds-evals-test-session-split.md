@@ -1,1 +1,0 @@
-Tests that use the `chromium_path` fixture (directly or through `local_browser`) are marked `chromium` automatically. `just test-minds-evals` runs them in a pytest session of their own, apart from the rest of the suite, each session across two xdist workers and each with its own 150 s CI budget; the coverage report covers both.

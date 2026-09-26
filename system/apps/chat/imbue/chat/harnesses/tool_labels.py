@@ -1,9 +1,20 @@
 """Human labels for a tool call, computed where the harness is already known.
 
-Every tool call a parser emits carries two strings:
+Every tool call a parser emits carries:
 
 - ``header_label``  -- the tool's identity, for the transcript block header
 - ``caption_label`` -- verb + target, for the live activity strip
+- ``action_verb`` / ``action_target`` -- what the call DID, for the transcript's
+  inline tool chips: a past-tense verb and the thing it acted on, which for a
+  file is its NAME rather than its path (the chip is a phrase to read, and a
+  path in the middle of one is noise; the whole path is a click away in the
+  chip's panel). Kept as two fields rather than one joined string because
+  splitting a joined label back would have to guess where a multi-word verb like
+  "loaded skill" ends.
+- ``action_note`` -- the agent's OWN words for why it made the call, when the tool
+  records them. Only claude's shell and delegation tools take one, so this is
+  absent far more often than not, and a missing note is rendered as nothing
+  rather than guessed at.
 
 They are computed HERE, in the harness's own parser, rather than in the frontend.
 The frontend renders whichever it needs and so has to know nothing about which
@@ -27,7 +38,16 @@ from imbue.imbue_common.pure import pure
 # before the strip would wrap.
 MAX_TARGET_LENGTH = 60
 
+# A note is the agent's own sentence about a call, shown on a chip in a wrapping
+# row. The cap is generous -- the tools that take one ask for a handful of words,
+# so it is a guard against a runaway description rather than a routine trim.
+MAX_NOTE_LENGTH = 80
+
 GENERIC_CAPTION = "Running tool…"
+
+# The input key an agent states its reason in. Claude's Bash and Agent tools both
+# use ``description``; no other harness's tools record one at all.
+NOTE_INPUT_KEY = "description"
 
 _MCP_PREFIX = "mcp__"
 _MCP_SEPARATOR = "__"
@@ -35,8 +55,19 @@ _MCP_SEPARATOR = "__"
 
 @pure
 def basename(path: str) -> str:
-    """The final path segment, or the whole string when there is no separator."""
-    return path.rstrip("/").rsplit("/", 1)[-1] or path
+    """The final path segment, or the whole string when there is no separator.
+
+    A trailing slash is kept: ``system/apps/chat/`` reads as ``chat/`` rather than
+    ``chat``, so a directory looks like one instead of like a file with no extension.
+    It is the only thing IN a path that says which it is -- ``file_path`` and ``path``
+    carry both, and a directory the agent wrote without the slash still reads bare,
+    because inventing one would be a guess.
+    """
+    trimmed = path.rstrip("/")
+    name = trimmed.rsplit("/", 1)[-1] or path
+    if path.endswith("/") and not name.endswith("/"):
+        return name + "/"
+    return name
 
 
 @pure
@@ -71,6 +102,60 @@ def mcp_caption(tool_name: str) -> str | None:
     if not tool_part:
         return None
     return f"Running {tool_part.replace('_', ' ')}"
+
+
+# The past tense of every caption verb the harnesses use, in one table because
+# they deliberately share that vocabulary (see the noun/verb tables in each
+# harness's own module, which are written to read alike). A chip describes work
+# that already happened, so it needs the past tense; lowercase so the eye goes to
+# the target beside it, which is the half that identifies the call.
+_PAST_TENSE_BY_PARTICIPLE: dict[str, str] = {
+    "Reading": "read",
+    "Writing": "wrote",
+    "Editing": "edited",
+    "Editing notebook": "edited notebook",
+    "Running": "ran",
+    "Searching": "searched",
+    "Searching the web": "searched the web",
+    "Listing": "listed",
+    "Fetching page": "fetched",
+    "Loading skill": "loaded skill",
+    "Loading tool": "loaded tool",
+    "Querying language server": "queried language server",
+    "Monitoring": "monitored",
+    "Sending message": "sent",
+    "Checking sources": "checked sources",
+    "Retrieving results": "retrieved results",
+}
+
+
+@pure
+def past_tense(participle: str) -> str:
+    """A caption's present participle as the past tense a chip needs.
+
+    Falls back to lowercasing the participle unchanged. That reads oddly for a
+    verb this table has not learned yet ("listing foo" rather than "listed foo"),
+    which is the point: it stays legible instead of dropping the verb, and the
+    oddity is what gets the missing entry noticed.
+    """
+    known = _PAST_TENSE_BY_PARTICIPLE.get(participle)
+    if known is not None:
+        return known
+    return participle[:1].lower() + participle[1:]
+
+
+@pure
+def stated_note(tool_input: dict[str, Any]) -> str | None:
+    """The agent's own words for this call, or None when the tool records none.
+
+    Deliberately never inferred. A tool whose input has no note field -- every
+    file read, edit and write -- yields None, and the chip then says what the call
+    did instead. A guessed reason would be worse than none.
+    """
+    value = tool_input.get(NOTE_INPUT_KEY)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return shorten(value, MAX_NOTE_LENGTH)
 
 
 @pure

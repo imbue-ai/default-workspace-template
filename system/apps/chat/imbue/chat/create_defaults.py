@@ -18,7 +18,6 @@ an explicit `--type` or `--env` still wins. Keys outside the managed ones surviv
 from __future__ import annotations
 
 import os
-import shlex
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -29,10 +28,8 @@ from pydantic import Field
 from tomlkit.exceptions import ParseError
 from tomlkit.items import Table
 
-from imbue.chat.harnesses.account_scope import account_credential_path
-from imbue.chat.harnesses.account_scope import account_env
-from imbue.chat.harnesses.account_scope import agent_credential_relative_path
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.registry import build_account_binding
 from imbue.imbue_common.frozen_model import FrozenModel
 
 logger = _loguru_logger
@@ -58,10 +55,6 @@ MANAGED_KEYS: Final[tuple[str, ...]] = (
     LABEL_KEY,
 )
 
-# The state directory of the agent being created, as `extra_provision_command` sees it: mngr
-# sources the agent's env before running the command.
-_STATE_DIR_SHELL_VAR: Final = '"$MNGR_AGENT_STATE_DIR"'
-
 _HEADER: Final = (
     "Written by the chat app from the provider account store: the account a `mngr create` in this "
     "workspace runs on when it names none. The keys under [commands.create] that the chat app "
@@ -84,36 +77,17 @@ def create_defaults_path() -> Path:
     return config_dir / LOCAL_SETTINGS_FILENAME
 
 
-def _credential_link_command(harness: HarnessType, account_dir: Path) -> str | None:
-    """The shell that repoints the agent's credential link at the account's copy, or None when the harness has none.
-
-    The same `mkdir -p` and `ln -sfn` as `binding.create_args`, with the agent side written over
-    `$MNGR_AGENT_STATE_DIR` -- unquoted so the shell expands it -- since the agent does not exist yet.
-    """
-    source = account_credential_path(harness, account_dir)
-    relative = agent_credential_relative_path(harness)
-    if source is None or relative is None:
-        return None
-    return (
-        f"mkdir -p {_STATE_DIR_SHELL_VAR}/{shlex.quote(str(relative.parent))}"
-        f" && ln -sfn {shlex.quote(str(source))} {_STATE_DIR_SHELL_VAR}/{shlex.quote(str(relative))}"
-    )
-
-
 def managed_create_settings(defaults: CreateDefaults) -> dict[str, Any]:
     """The managed `[commands.create]` keys for `defaults`."""
     settings: dict[str, Any] = {
         TYPE_KEY: defaults.harness.value,
         LABEL_KEY: [f"account={defaults.account_id}"],
     }
-    if defaults.harness is HarnessType.CLAUDE:
-        settings[ENV_KEY] = [
-            f"{name}={value}" for name, value in account_env(defaults.harness, defaults.account_dir).items()
-        ]
-    else:
-        link = _credential_link_command(defaults.harness, defaults.account_dir)
-        if link is not None:
-            settings[PROVISION_COMMAND_KEY] = [link]
+    binding = build_account_binding(defaults.harness).default_create_binding(defaults.account_dir)
+    if binding.env:
+        settings[ENV_KEY] = list(binding.env)
+    if binding.provision_commands:
+        settings[PROVISION_COMMAND_KEY] = list(binding.provision_commands)
     return settings
 
 

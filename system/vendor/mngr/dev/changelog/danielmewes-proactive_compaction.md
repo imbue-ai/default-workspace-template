@@ -1,1 +1,0 @@
-Add specification for conversational agent automatic context compaction (`specs/mngr-autocompact.md`), covering stateless warm cache staleness checks, on-next-prompt compaction, `mngr autocompact (check|run)` CLI, configuration options, and lifecycle triggers.

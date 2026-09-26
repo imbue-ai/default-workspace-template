@@ -1,0 +1,3 @@
+`forward_port.py` no longer rewrites `data/.state/apps.toml` when the registration changes nothing. It renders the registry first and compares it against what is already on disk; an identical result leaves the file, and its mtime, alone. A real change still lands through the same atomic replace as before.
+
+Every app re-registers each time it starts, and the readers of the registry key off the file's mtime, so an app that crashes and restarts in a loop handed them a "changed" registry several times a second for a registry whose bytes never moved. Measured on one production workspace: 46,371 rewrites in a day, which the app watcher fanned out to 602,823 service-registration events and a 1.1 GB event log.

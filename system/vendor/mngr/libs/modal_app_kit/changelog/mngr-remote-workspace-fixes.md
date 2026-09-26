@@ -1,1 +1,0 @@
-Added `WEB_FUNCTION_REGION` (`"us"`), the region every user-facing Modal web function pins so its containers are scheduled in the US instead of anywhere in Modal's fleet, and a `web_functions_missing_region_pin` guard helper the apps' guard tests use to require the pin on every `@modal.asgi_app` function. Crons and spawned workers stay unpinned.

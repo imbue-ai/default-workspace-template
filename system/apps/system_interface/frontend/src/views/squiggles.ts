@@ -1,21 +1,20 @@
 /**
- * The hand-drawn "squiggle" glyphs that identify a project.
+ * The hand-drawn "squiggle" glyphs that identify a desktop.
  *
  * Both the glyph paths and their bounding boxes are copied verbatim from the
- * minds-dockview design prototype's bundle -- each path is drawn in its own
+ * design prototype's bundle -- each path is drawn in its own
  * arbitrary coordinate space, so the box is the only thing that says where the
  * ink actually is. `squiggleMarkup` derives a square viewBox and a stroke width
  * from that box, and the constants in that math (the 0.9 fill fraction, the
  * 0.085 stroke ratio) are calibrated against the prototype -- changing them
  * makes the glyphs render at a visibly different weight or crop.
  *
- * Two glyphs here are not one of the ten: the composite (five squiggles
- * clustered together, which is Everything's identity, not a project's) and the
- * monogram tile a project falls back to when it has no glyph to draw.
+ * One glyph here is not one of those: the monogram tile a desktop falls back
+ * to when it has no glyph to draw.
  *
  * Like `icons.ts`, glyphs are produced as SVG *strings* so they work with both
  * rendering paths in this codebase (`m.trust(...)` in Mithril views, and
- * `element.innerHTML` in the plain-DOM tab bar).
+ * `element.innerHTML` in plain DOM).
  */
 
 const XMLNS = "http://www.w3.org/2000/svg";
@@ -103,78 +102,10 @@ export function squiggleMarkup(glyphIndex: number, color: string | null, size: n
   );
 }
 
-// The composite glyph's geometry, copied verbatim from the prototype bundle
-// along with the sprite table below. Every number is calibrated against those
-// glyphs rather than derived, so changing one re-cuts the whole cluster: the
-// canvas the sprites are laid out on, the stroke weight they are drawn at in
-// canvas units, how far the layout pushes them apart, and the point they are
-// spread around.
-const COMPOSITE_CANVAS = 100;
-const COMPOSITE_STROKE_BASE = 6.5;
-const COMPOSITE_SPREAD = 1.35;
-const COMPOSITE_ORIGIN = { x: 52, y: 51 };
-
-interface CompositeSprite {
-  // Index into SQUIGGLE_GLYPHS.
-  glyph: number;
-  // Where the sprite sits, in the pre-spread layout space COMPOSITE_ORIGIN is
-  // measured in.
-  cx: number;
-  cy: number;
-  // The side length the sprite's ink is scaled to fill, before the spread.
-  target: number;
-  // Degrees, applied about the sprite's own center.
-  rot: number;
-}
-
-const COMPOSITE_SPRITES: readonly CompositeSprite[] = [
-  { glyph: 0, cx: 40, cy: 42, target: 46, rot: -10 },
-  { glyph: 3, cx: 62, cy: 40, target: 46, rot: 20 },
-  { glyph: 5, cx: 44, cy: 62, target: 46, rot: -30 },
-  { glyph: 7, cx: 64, cy: 60, target: 46, rot: 12 },
-  { glyph: 9, cx: 52, cy: 51, target: 46, rot: 0 },
-];
-
-/**
- * Full <svg> string for the composite glyph, sized to `size` pixels square.
- *
- * This is Everything's identity rather than any project's, so it takes no color
- * override: each sprite keeps its own signature color, and the multicolor
- * cluster is what reads as "all of the projects at once".
- */
-export function compositeSquiggleMarkup(size: number): string {
-  const half = COMPOSITE_CANVAS / 2;
-  const sprites = COMPOSITE_SPRITES.map((sprite) => {
-    const glyph = SQUIGGLE_GLYPHS[sprite.glyph];
-    const [x, y, w, h] = glyph.box;
-    // Each path is drawn in its own coordinate space, so the sprite is moved
-    // into place by its ink's center: scale about that center, then translate
-    // it to the spread position.
-    const inkX = x + w / 2;
-    const inkY = y + h / 2;
-    const tx = half + (sprite.cx - COMPOSITE_ORIGIN.x) * COMPOSITE_SPREAD;
-    const ty = half + (sprite.cy - COMPOSITE_ORIGIN.y) * COMPOSITE_SPREAD;
-    const scale = (sprite.target * COMPOSITE_SPREAD) / Math.max(w, h);
-    // The stroke is scaled with everything else, so it has to be pre-divided
-    // for all five sprites to end up at the same rendered weight.
-    const strokeWidth = COMPOSITE_STROKE_BASE / scale;
-    return (
-      `<g transform="translate(${tx} ${ty}) rotate(${sprite.rot}) scale(${scale}) ` +
-      `translate(${-inkX} ${-inkY})"><path d="${glyph.path}" stroke="${glyph.color}" ` +
-      `stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/></g>`
-    );
-  });
-  return (
-    `<svg xmlns="${XMLNS}" width="${size}" height="${size}" ` +
-    `viewBox="0 0 ${COMPOSITE_CANVAS} ${COMPOSITE_CANVAS}" fill="none" aria-hidden="true">` +
-    `${sprites.join("")}</svg>`
-  );
-}
-
 // The CIE L* at which black ink stops beating white ink on a tile of that
 // lightness. Mirrors the minds chrome's titlebar recipe
 // (`lch(from var(--titlebar-bg) calc((49.44 - l) * infinity) 0 0)` in the
-// shell's static/app.css), so a project's tile and the window chrome around it
+// shell's static/app.css), so a desktop's tile and the window chrome around it
 // flip at exactly the same point.
 const CONTRAST_LIGHTNESS_THRESHOLD = 49.44;
 
@@ -195,10 +126,10 @@ function hexLightness(color: string): number | null {
 }
 
 /**
- * Full <svg> string for a project's monogram, sized to `size` pixels square:
+ * Full <svg> string for a desktop's monogram, sized to `size` pixels square:
  * the first letter of its name on a rounded tile painted in its color.
  *
- * This is the fallback for a project with no glyph to draw, so it has to work
+ * This is the fallback for a desktop with no glyph to draw, so it has to work
  * against any color the user picked -- the letter flips black or white off the
  * tile's lightness, the same self-theming math the titlebar does in CSS. A
  * color that is not a hex literal cannot be measured, and falls back to the
@@ -207,7 +138,7 @@ function hexLightness(color: string): number | null {
 export function monogramMarkup(name: string, color: string, size: number): string {
   const lightness = hexLightness(color);
   const ink = lightness !== null && lightness < CONTRAST_LIGHTNESS_THRESHOLD ? "#ffffff" : "#000000";
-  // Project names are user text, so the letter is escaped before it lands in
+  // Desktop names are user text, so the letter is escaped before it lands in
   // markup that callers hand to `m.trust` / `innerHTML`.
   const initial = name
     .trim()

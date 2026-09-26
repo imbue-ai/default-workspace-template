@@ -1,1 +1,0 @@
-`scripts/check_parallel_uploads.py` reads its hosts off the `DiscoveryOutcome` that `discover_hosts_and_agents` now returns, instead of unpacking the two-tuple it used to. The old form iterated the model's three fields into two names, so the script raised before it reached the upload it exists to measure.

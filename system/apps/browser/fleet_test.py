@@ -1,5 +1,4 @@
 import pytest
-
 from browser import fleet
 
 
@@ -136,71 +135,35 @@ def test_parser_rejects_the_removed_drive_verbs() -> None:
     assert close.func is fleet.cmd_close and close.name == "morgan-lee"
 
 
-def test_pull_in_pane_opens_each_browser_in_its_own_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A user-started agent surfaces each browser as its OWN pane (--new-group), beside
-    # its own chat (--relative-to self), not tabbed into an existing browser pane. The
-    # split carries the resolved --view, and the instance address keys on the NAME.
+def test_open_viewer_window_opens_the_browsers_page_as_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A user-started agent surfaces each browser as its own window, at the viewer page selected
+    # by the browser's NAME; the shell picks the client from the chat that asked.
     calls: list[tuple] = []
-    monkeypatch.setattr(fleet, "_resolve_active_view", lambda: (True, "everything"))
     monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
-    monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
-    fleet._pull_in_pane("alex-smith")
-    assert calls and "--new-group" in calls[0] and "right" in calls[0] and "self" in calls[0]
-    assert "--view" in calls[0] and "everything" in calls[0]
-    assert "app:browser?instance=alex-smith" in calls[0]
+    fleet._open_viewer_window("alex-smith")
+    assert calls == [("open", "browser", "--path", "/?session=alex-smith", "--minimized")]
 
 
-def test_pull_in_pane_warns_cleanly_when_it_cant_show_a_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Reachable shell, but the split never lands (human isn't viewing that view): we
-    # attempt it, then warn in one clean line -- never crash, never leak layout.py's raw
-    # error (the browser is still running).
-    monkeypatch.setattr(fleet, "_resolve_active_view", lambda: (True, "everything"))
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: False)  # layout never lands
-    monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
-    fleet._pull_in_pane("riley-jones")  # must not raise
-
-
-def test_pull_in_pane_skips_silently_when_the_shell_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An isolated launch-task sub-agent can't reach the shell: _resolve_active_view
-    # returns (False, None). We must NOT attempt the split and NOT print anything.
-    attempted: list[tuple] = []
+def test_open_viewer_window_warns_cleanly_when_it_cant_show_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The open never lands (no shell, no client to place it on): we attempt it, then offer the
+    # launcher in one clean line -- never crash, never leak layout.py's raw error (the browser
+    # is still running).
     printed: list[str] = []
-    monkeypatch.setattr(fleet, "_resolve_active_view", lambda: (False, None))
-    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: attempted.append(a) or True)
+    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: False)
     monkeypatch.setattr(fleet, "_out", lambda msg: printed.append(msg))
-    fleet._pull_in_pane("riley-jones")
-    assert attempted == [] and printed == []
+    fleet._open_viewer_window("riley-jones")
+    assert printed == ["browser riley-jones is ready. To watch it live, open it from the launcher (Browser -> riley-jones)."]
 
 
-def test_resolve_active_view_prefers_client_that_messaged_this_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Two connected clients on different views; pick the one whose recent messages went to
-    # OUR chat instance (addressed by chat id, which is the agent id for an own chat).
-    stdout = (
-        '[{"is_connected": true, "active_view": "alpha",'
-        '  "recent_messages": [{"address": "app:chat?instance=agent-other"}]},'
-        ' {"is_connected": true, "active_view": "everything",'
-        '  "recent_messages": [{"address": "app:chat?instance=agent-riley"}]}]'
-    )
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-riley")
-    monkeypatch.setattr(fleet.subprocess, "run", lambda *a, **k: fleet.subprocess.CompletedProcess([], 0, stdout, ""))
-    assert fleet._resolve_active_view() == (True, "everything")
-
-
-def test_resolve_active_view_unreachable_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A non-zero context exit (isolated sub-agent / no daemon) -> (False, None): skip silently.
-    monkeypatch.setattr(fleet.subprocess, "run", lambda *a, **k: fleet.subprocess.CompletedProcess([], 1, "", "boom"))
-    assert fleet._resolve_active_view() == (False, None)
-
-
-def test_cmd_new_pulls_a_pane_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    # "Open a new browser" should visibly open its pane (by the returned name), not wait
+def test_cmd_new_opens_the_viewer_window_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    # "Open a new browser" should visibly open its viewer window (by the returned name), not wait
     # for the first command. The daemon returns the chosen name as `name`.
-    pulled: list[str] = []
+    opened: list[str] = []
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"name": "alex-smith"}))
-    monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: pulled.append(name))
+    monkeypatch.setattr(fleet, "_open_viewer_window", lambda name: opened.append(name))
     args = fleet._build_parser().parse_args(["new"])
     assert fleet.cmd_new(args) == fleet._EXIT_OK
-    assert pulled == ["alex-smith"]
+    assert opened == ["alex-smith"]
 
 
 def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,7 +176,7 @@ def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPat
         return 200, {"name": "my-browser"}
 
     monkeypatch.setattr(fleet, "_request", fake_request)
-    monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: None)
+    monkeypatch.setattr(fleet, "_open_viewer_window", lambda name: None)
     monkeypatch.setattr(fleet, "_print_attach", lambda name: None)  # polls the daemon otherwise
     args = fleet._build_parser().parse_args(["new", "my-browser"])
     assert fleet.cmd_new(args) == fleet._EXIT_OK
@@ -234,22 +197,22 @@ def test_parser_accepts_handoff_and_request_human_alias() -> None:
     assert b.func is fleet.cmd_handoff and b.name == "alex-smith" and b.reason == "human verification needed"
 
 
-def test_cmd_handoff_pulls_pane_and_returns_preempted(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A successful handoff surfaces the pane (so the human sees what to solve) and exits
+def test_cmd_handoff_opens_the_viewer_window_and_returns_preempted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A successful handoff surfaces the viewer window (so the human sees what to solve) and exits
     # PREEMPTED so the agent stops and waits to be woken to resume.
-    pulled: list[str] = []
+    opened: list[str] = []
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"ok": True, "status": "handed_off"}))
-    monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: pulled.append(name))
+    monkeypatch.setattr(fleet, "_open_viewer_window", lambda name: opened.append(name))
     args = fleet._build_parser().parse_args(["handoff", "alex-smith", "solve the captcha"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
-    assert pulled == ["alex-smith"]
+    assert opened == ["alex-smith"]
 
 
 def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.MonkeyPatch) -> None:
     # Handing off a browser you no longer hold (a human already grabbed it) still exits
     # PREEMPTED -- the agent isn't in control, so it should stop, not treat it as an error.
     monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"ok": False, "status": "not_owner"}))
-    monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: None)
+    monkeypatch.setattr(fleet, "_open_viewer_window", lambda name: None)
     args = fleet._build_parser().parse_args(["handoff", "alex-smith"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
 

@@ -56,7 +56,7 @@ you when two of you touch the same file.
 4. **Do not touch the running workspace.** Apps run under supervisord from the
    workspace's main checkout, not from this folder. Do not run `supervisorctl`,
    `system/scripts/forward_port.py` or `system/scripts/layout.py`, and do not
-   open tabs. The orchestrator shows the user a preview and takes the app live
+   open windows. The orchestrator shows the user a preview and takes the app live
    after the build.
 
 ## How to build
@@ -68,7 +68,7 @@ skill before any markup, raw-data affordances. It never tells you *what* to do.
 Read the parts that cover your subtask and follow their mechanics; ignore its
 order of steps and everything outside your subtask. Its steps for the main agent
 -- running the plan recorder, asking the user questions, showing the mock,
-surfacing the tab, and handing off to `crystallize-creation` -- are never yours.
+surfacing the window, and handing off to `crystallize-creation` -- are never yours.
 
 Where you meet something you would rather ask about (a name, a default, an
 ambiguity), decide, and say what you decided in your report.

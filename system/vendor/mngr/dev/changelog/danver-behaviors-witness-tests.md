@@ -1,1 +1,0 @@
-Harden the "Fetch pinned copybara" step in the mirror gate and push workflows: the `curl` download now uses `-fSL --retry 5 --retry-all-errors --retry-delay 5` so a transient GitHub CDN error hard-fails and retries instead of silently writing a partial/error file that then fails the SHA-256 pin check with a misleading "checksum did NOT match" message.

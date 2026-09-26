@@ -1,3 +1,0 @@
-Add the pure model layer for self-hosted sharing relays (blueprint/sharing-redesign), replacing the Cloudflare tunnel/Access model.
-
-The self-hosted sharing model section of `app.py` holds the workspace-hostname coordinate scheme (`<service>.<host-id>.<user-id>.<region>.<content-domain>`, full untruncated ids, per-user registrable-site isolation), opaque relay-token minting/hashing, the per-user shared-workspace quota, and the frps server-plugin authorization decision (`Login`/`NewProxy` only): a workspace's relay token may register only its own bare domain and wildcard, so one workspace's frpc cannot claim another's hostname on a shared relay. Migration `018_sharing.sql` adds the `shares` and `relay_tokens` tables.

@@ -1,0 +1,19 @@
+svg[data-mood="working"] .jelly-body {
+  transform-origin: 50px 84px;
+  animation: seal-paddle-body 1.2s ease-in-out infinite;
+}
+svg[data-mood="working"] .jelly-flippers {
+  transform-origin: 45px 78px;
+  animation: seal-paddle .6s ease-in-out infinite;
+}
+@keyframes seal-paddle-body {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-2px) rotate(2deg); }
+}
+@keyframes seal-paddle {
+  0%, 100% { transform: rotate(-7deg) scaleY(.9); }
+  50% { transform: rotate(7deg) scaleY(1.1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jelly-body, .jelly-eyes, .jelly-flippers { animation: none !important; }
+}

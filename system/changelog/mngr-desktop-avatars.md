@@ -1,0 +1,9 @@
+A new blueprint, `docs/system/blueprint/pinned-taskbar-entries/plan-pinned-taskbar-entries.md`, specifies pinned taskbar entries and the chat avatar for the desktop interface: an app's manifest may declare a `[pin]` whose window exists on every desktop and is never closed; each client shows that window's taskbar entry in the bar or floating above the windows, plain or drawn as an avatar whose image says whether any agent is working (read from mngr's observe event file, with no mngr import); and a window's location scope may be `independent`, so a pinned chat root keeps a separate path per client.
+
+`forward_port.py` copies a manifest's `[pin]` table onto the registry row (the `path`, and each of `style`, `scope`, and `default_mode` the manifest wrote), refusing a malformed one the way it refuses a malformed `default_shortcut`.
+
+`layout.py desktops` and `list` show each window's `is_pinned` and `scope`; a `close` of a pinned window prints the shell's refusal ("minimize it instead"). The desktop-interface concepts, plan, and contracts documents carry the pinned-window, independent-scope, presentation, and avatar amendments the pinned-taskbar-entries plan lists in its section 9, and `docs/system/avatar-designs.md` is the authoring guide for a design drawn through chat.
+
+`layout.py desktops` and `list` show each window's `client_paths` (each client's own path for an independent window). The window-bound-resources spec's reader section and the desktop contracts' desktops route describe the field.
+
+`layout.py` accepts `pinned` as a window argument (your app's pinned window on the target desktop).

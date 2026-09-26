@@ -1,15 +1,17 @@
 # The New Tab template catalog
 
-`new-tab-templates.json` is what a workspace's New Tab page shows under "Start
-from a template": every published template it can offer, and the rows
+`new-tab-templates.json` is what a workspace's Getting Started page shows under
+"Start from a template": every published template it can offer, and the rows
 ("shelves") that group them for browsing. The drawings the cards show live
 beside it under `thumbnails/`.
 
-The workspace does not ship this file. Its shell (`system/apps/system_interface`)
-fetches it from a fixed URL -- by default the raw GitHub URL of this file on the
-`mngr/new-tab-page` branch, set by `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` --
-reuses a fetched copy for six hours, and keeps the last copy that parsed under
-`data/.state/system_interface/template_catalog.json` so a machine that cannot
+The workspace does not ship this file. Its Getting Started app
+(`system/apps/getting_started`) fetches it from a fixed URL -- by default the
+raw GitHub URL of this file on the `mngr/new-tab-page` branch, set by
+`SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (the name kept from when the shell
+fetched it, so nothing outside the workspace changes) -- reuses a fetched copy
+for six hours, and keeps the last copy that parsed under
+`data/.state/getting-started/template_catalog.json` so a machine that cannot
 reach GitHub keeps showing what it last saw. A workspace on an older template
 therefore picks up a refreshed catalog without an update, and a new field here
 never breaks one: every model on the reading side ignores fields it does not
@@ -47,7 +49,7 @@ of a template.
 ```
 
 - `thumbnail` is a path relative to the catalog file (an absolute URL is kept as
-  it is); the shell resolves it against the URL it fetched the catalog from.
+  it is); the app resolves it against the URL it fetched the catalog from.
 - Slugs are unique. A shelf names templates by slug; a slug a shelf names that
   no template carries is dropped from the row.
 - The shelves are shown in this order, followed by an "All templates" row the

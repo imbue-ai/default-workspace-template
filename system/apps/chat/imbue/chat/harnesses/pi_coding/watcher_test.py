@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import PI_RETRACT_KEY
@@ -135,6 +136,32 @@ def test_queue_enqueues_from_inbox_and_leaves_on_drained_user_turn(tmp_path: Pat
     # The message drains into the transcript as a user turn -> it leaves the queue.
     _append_session(session, [_message_record("u", _user("please do X"))])
     assert watcher.get_queued_messages() == []
+
+
+def test_compaction_event_does_not_drain_queue(tmp_path: Path) -> None:
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    inbox = tmp_path / "pi_inbox"
+    inbox.write_text(json.dumps("please do X") + "\n")
+    watcher = _build(tmp_path)
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["please do X"]
+
+    # Compaction record in session: surfaces as a status event, but must NOT drain the user queue.
+    compaction_record = {
+        "type": "compaction",
+        "id": "c1",
+        "timestamp": "2026-09-21T22:31:30.122Z",
+        "summary": "Compacted context",
+    }
+    _append_session(session, [compaction_record])
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["please do X"]
+
+    events = watcher.get_all_events()
+    assert len(events) == 1
+    assert events[0]["event_id"] == "pi-c1"
+    assert events[0]["display"] == DisplayKind.STATUS
+
 
 
 @pytest.mark.parametrize("sentinel_key", [PI_INTERRUPT_KEY, PI_RETRACT_KEY])
