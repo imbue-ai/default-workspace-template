@@ -199,7 +199,9 @@ def _is_plain_read(stage: CommandSegment) -> bool:
     if name in _READERS:
         return True
     if name in _TREE_WALKERS:
-        return "/" not in args and _FIND_ACTIONS.isdisjoint(args)
+        # The lexer does not expand globs, so `/*` reaches here as written.
+        walks_root = any(a.startswith("/") and not a.strip("/*") for a in args)
+        return not walks_root and _FIND_ACTIONS.isdisjoint(args)
     if name == "git":
         return _is_git_read(args)
     if name == "supervisorctl":

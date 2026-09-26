@@ -70,6 +70,7 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         "python3 -c 'print(1)' | head",
         "timeout 300 git log | head",
         "find / -name x.json 2>/dev/null | head -1",
+        "du -sh /* 2>/dev/null | sort -h | tail -20",
         # -exec runs a program per match, so its output is that program's.
         "find . -name '*_test.py' -exec pytest {} + | tail -20",
         "git branch -D old | head",
