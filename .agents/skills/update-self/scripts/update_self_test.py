@@ -2387,8 +2387,8 @@ class _UpdateHistory:
         )
 
     def roll_back(self, restore_to: str | None = None) -> str:
-        """Put the tree back to ``restore_to`` (default: the merge at HEAD's first
-        parent) and commit it the way the apply does; return the rollback commit."""
+        """Put the tree back to ``restore_to`` (default: the first parent of the merge
+        at HEAD) and commit it the way the apply does; return the rollback commit."""
         restore_to = restore_to or _git_in(self.repo, "rev-parse", "HEAD^1")
         _git_in(self.repo, "read-tree", "-u", "--reset", restore_to)
         _git_in(
