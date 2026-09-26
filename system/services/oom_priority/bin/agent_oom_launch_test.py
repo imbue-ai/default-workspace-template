@@ -5,7 +5,10 @@ harness named by its FIRST argument with the args mngr appended. We verify the b
 classification directly, and the tag+exec+arg-forwarding end to end via a subprocess
 with a fake harness binary on PATH (so the real ``execvp`` runs without launching
 the real thing). Parametrized over every harness that uses the wrapper, since the
-whole point of the argv[1] form is that no harness is special.
+argv[1] form treats them all alike; a bare fake ``codex`` is not an npm install, so
+it takes the same plain exec. An npm-installed codex is the exception: a fake npm
+layout checks that the wrapper execs its native binary, so the pid earlyoom sheds
+maps back to the agent.
 """
 
 from __future__ import annotations
