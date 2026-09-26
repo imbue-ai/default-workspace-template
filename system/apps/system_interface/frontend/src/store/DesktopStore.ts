@@ -427,10 +427,11 @@ export class DesktopStore {
   }
 
   /** Tell the embedder which windows of the active desktop are pulled out, when that changed. Only once the
-   *  layout is known: an empty report before it loads would read, in a pulled-out window's own desktop
-   *  window, as its window having been brought back. */
+   *  layout is known and, in a solo shell, its first load has been healed: a report without the solo window
+   *  (before the layout loads, or between a first load that does not yet say it is out and the heal) would
+   *  read, in that window's own desktop window, as its window having been brought back. */
   private reportDetachedWindows(): void {
-    if (!this.state.isLayoutLoaded) return;
+    if (!this.state.isLayoutLoaded || this.isSoloFirstLayoutPending) return;
     const report = detachedWindowsOf(this.state);
     const serialized = JSON.stringify(report);
     if (serialized === this.lastReportedDetached) return;
@@ -1597,8 +1598,15 @@ export class DesktopStore {
     if (!this.isSoloFirstLayoutPending || this.soloWindowId === null) return;
     this.isSoloFirstLayoutPending = false;
     const found = findWindow(this.state, this.soloWindowId);
-    if (found === null || found.desktop.id !== this.state.activeDesktopId) return;
-    if (placementOf(this.state.layout, this.soloWindowId).is_detached) return;
+    const isHealNeeded =
+      found !== null &&
+      found.desktop.id === this.state.activeDesktopId &&
+      !placementOf(this.state.layout, this.soloWindowId).is_detached;
+    if (!isHealNeeded) {
+      // The report the first load owed, held back until now.
+      this.reportDetachedWindows();
+      return;
+    }
     this.dispatch({ type: "window_detached", windowId: this.soloWindowId });
     void this.flushPendingSave();
   }

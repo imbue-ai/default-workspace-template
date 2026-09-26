@@ -1468,7 +1468,8 @@ describe("pulled-out windows", () => {
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
     await settle();
     expect(savedCalls()).toHaveLength(1);
-    expect(reports[reports.length - 1]).toEqual([{ windowId: "win-1", title: "Docs" }]);
+    // Never an empty report first: the chrome closes the popout on a report without its window.
+    expect(reports).toEqual([[{ windowId: "win-1", title: "Docs" }]]);
     // A later layout saying the window is back is the desktop's word: reported as such, not re-detached.
     api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
     socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
