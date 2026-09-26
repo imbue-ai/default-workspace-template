@@ -298,7 +298,7 @@ carried), and a mapping for each is the fix. Decide which suites can actually
 observe a change to that path, record it in
 `system/config/test_selection_overrides.toml` (a `[[consumer]]` entry; an empty
 `suites` when no suite beyond the always-run set can observe it) as part of
-your change, and re-run `select-tests` to confirm the path is classified, so
+your change, commit it, and re-run `select-tests` to confirm the path is classified, so
 the next change to it selects those suites instead of the full root suite. When
 the path is built-in
 (AGENTS.md, "Updates", has the test), name it in your `done` report under
