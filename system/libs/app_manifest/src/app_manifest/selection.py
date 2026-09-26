@@ -7,7 +7,9 @@ app manifests' ``[[references]]`` and supervisord wiring -- plus the test files 
 changed file, the workspace modules the unpackaged scripts import, and the override file in
 ``system/config/`` for the consumers none of those can see. A small always-run set guards the
 repo-wide invariants any edit can break. A path nothing classifies falls back to the full root
-suite, so a gap in the mapping costs time rather than coverage.
+suite, which costs time. A consumer none of those sources shows (a script run as a subprocess,
+a service called over HTTP, a file one component writes and another reads) is not selected at
+all, which costs coverage; the override file is where such a consumer is recorded.
 """
 
 import ast
@@ -45,9 +47,11 @@ from app_manifest.scope import LoadedManifest
 from app_manifest.scope import find_wiring_sections
 from app_manifest.scope import list_changed_files
 from app_manifest.scope import list_tracked_files
+from app_manifest.scope import list_uncommitted_paths
 from app_manifest.scope import load_app_manifests
 from app_manifest.scope import match_referencing_manifests
 from app_manifest.scope import read_file_at_revision
+from app_manifest.scope import resolve_commit
 from app_manifest.workspace_graph import NPM_ROOT
 from app_manifest.workspace_graph import NPM_ROOT_MANIFEST
 from app_manifest.workspace_graph import ROOT_DIRECTORY
@@ -1380,9 +1384,21 @@ def read_lockfile_texts(
 
 
 def select_tests_for_diff(repo_root: Path, diff_base: str, diff_ref: str) -> SuiteSelection:
-    """The selection for what ``diff_ref`` changed since it forked from ``diff_base``."""
+    """The selection for what ``diff_ref`` changed since it forked from ``diff_base``.
+
+    Raises SuiteSelectionError when ``diff_ref`` is the checked-out commit and the working tree
+    holds changes it does not: the tests run against the working tree, so a selection read
+    from commits alone would leave those changes untested.
+    """
     repo_root = repo_root.resolve()
     changed = list_changed_files(repo_root, diff_base, diff_ref)
+    if changed.ref == resolve_commit(repo_root, "HEAD"):
+        uncommitted = list_uncommitted_paths(repo_root)
+        if uncommitted:
+            raise SuiteSelectionError(
+                "the working tree has changes the diff does not include; commit them, then run "
+                "select-tests again: " + ", ".join(uncommitted)
+            )
     return select_tests(
         load_repo_layout(repo_root),
         changed.files,

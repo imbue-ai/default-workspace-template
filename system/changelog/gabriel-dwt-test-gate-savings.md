@@ -6,6 +6,6 @@ Lint and formatting checks leave the frontend test runs, browser tests leave the
 
 - `test_claude_plugin_first_session.py` checks for the claude CLI and an API key before any fixture runs, so a run without them skips at once instead of building a worktree first.
 
-- AGENTS.md says how to pick a change's tests (`app-manifest select-tests`) and how to run the chat and shell browser tests, and that a shed test command of a harden gate follows the gate's shed handling and is never skipped.
+- AGENTS.md says how to pick a change's tests (`app-manifest select-tests`, which refuses to run while an edit is uncommitted) and how to run the chat and shell browser tests, and that a shed test command of a harden gate follows the gate's shed handling and is never skipped.
 
 - New `system/config/test_selection_overrides.toml` holds the test mappings `app-manifest select-tests` cannot derive from the workspace's declarations. A change that leaves a tracked path mapped to no suite fails CI until the file gains a mapping for it.

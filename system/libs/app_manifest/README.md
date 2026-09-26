@@ -194,7 +194,9 @@ for it. Every line runs from the repo root. With `--diff-base` the change is
 what the ref changed since it forked from the base (the same three-dot diff as
 `footprint`); with `--path` it is the paths given, as the working tree holds
 them, and `--diff-base` only names the revision a changed `uv.lock` is compared
-against.
+against. A `--diff-base` selection that runs to the checked-out commit refuses
+to run while the working tree holds uncommitted or untracked changes, and names
+them, since the tests would run against changes the diff leaves out.
 
 A path selects:
 

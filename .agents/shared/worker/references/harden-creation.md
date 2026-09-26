@@ -250,7 +250,8 @@ evicts is not hardened, no matter how well-tested its happy path is.
 
 The gate is whatever the change can reach, and a command prints it. From the
 repo root, after committing everything (the selector reads commits, like the
-scope file):
+scope file, and refuses to run while the working tree holds an uncommitted or
+untracked change, naming it):
 
 ```bash
 uv run app-manifest select-tests --diff-base "$DIFF_BASE"

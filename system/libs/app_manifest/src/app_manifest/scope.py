@@ -445,11 +445,16 @@ class ChangedFiles(FrozenModel):
     files: tuple[RepoRelativePath, ...] = Field(description="Every file the diff changed")
 
 
+def resolve_commit(repo_root: Path, ref: str) -> NonEmptyStr:
+    """The full sha of the commit ``ref`` names."""
+    return NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{ref}^{{commit}}")).strip())
+
+
 def list_changed_files(repo_root: Path, diff_base: str, diff_ref: str) -> ChangedFiles:
     """The files ``diff_ref`` changed since its merge base with ``diff_base`` (the three-dot
     form, so what the base branch did after the fork is not counted as the ref's change)."""
-    base_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_base}^{{commit}}")).strip())
-    ref_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_ref}^{{commit}}")).strip())
+    base_sha = resolve_commit(repo_root, diff_base)
+    ref_sha = resolve_commit(repo_root, diff_ref)
     merge_base_sha = NonEmptyStr(_run_git(repo_root, ("merge-base", base_sha, ref_sha)).strip())
     # A NUL-separated listing with quoting off is the only form every filename survives: git
     # otherwise renders a non-ASCII name as an escaped, double-quoted string, which is not the
@@ -479,6 +484,25 @@ def list_tracked_files(repo_root: Path) -> tuple[RepoRelativePath, ...]:
     """Every file git tracks in the repo root's index, in git's order."""
     output = _run_git(repo_root, ("-c", "core.quotePath=false", "ls-files", "-z"))
     return tuple(RepoRelativePath(entry) for entry in output.split("\0") if entry)
+
+
+def list_uncommitted_paths(repo_root: Path) -> tuple[RepoRelativePath, ...]:
+    """Every path the working tree or index holds a change to that HEAD does not, untracked
+    files included (ignored ones are not)."""
+    output = _run_git(
+        repo_root,
+        (
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+        ),
+    )
+    # Each entry is a two-letter status, a space, then the path.
+    return tuple(RepoRelativePath(entry[3:]) for entry in output.split("\0") if entry)
 
 
 def read_file_at_revision(repo_root: Path, revision: str, path: RepoRelativePath) -> str | None:

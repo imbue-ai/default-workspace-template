@@ -402,6 +402,25 @@ def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
     assert "uv run pytest .agents/skills/refresh" in lines
 
 
+def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_changes(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    _branch_with_changes(tmp_path, {"system/scripts/forward_port.py": "PORT = 2\n"})
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/core.py", "VALUE = 3\n")
+    write_repo_file(tmp_path, "system/libs/midlib/src/midlib/extra.py", "EXTRA = 1\n")
+
+    dirty = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
+    commit_everything(tmp_path, "the rest of the work")
+    committed = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
+
+    assert dirty.exit_code != 0
+    assert "system/libs/midlib/src/midlib/core.py" in dirty.output
+    assert "system/libs/midlib/src/midlib/extra.py" in dirty.output
+    assert committed.exit_code == 0, committed.output
+    assert "uv run pytest system/libs/midlib" in committed.output.splitlines()
+
+
 def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> None:
     build_selection_workspace(tmp_path)
 
