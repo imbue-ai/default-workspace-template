@@ -335,12 +335,13 @@ def _refuse_a_merge_that_leaves_an_update_rolled_back(
         return
     reverts = "; ".join(f"git revert --no-edit {sha[:12]}" for sha in pending)
     raise ApplyPreconditionError(
-        f"{merge_ref} still carries an earlier update's rollback that it has not "
-        "reverted, so git counts that update's content as merged and this one would "
+        f"{merge_ref} still carries {len(pending)} earlier update rollback(s) it has "
+        "not reverted, so git counts that content as merged and this update would "
         f"land only what {target_ref} changed since: the tree would be the previous "
         "release plus a few files, which the probes cannot tell from a good update. "
-        f"Revert it on the worker's branch first (`{reverts}`, per the update-self "
-        "worker reference), then re-run. Nothing was changed."
+        "Revert each on the worker's branch first, in this order "
+        f"(`{reverts}`, per the update-self worker reference), then re-run. Nothing "
+        "was changed."
     )
 
 
