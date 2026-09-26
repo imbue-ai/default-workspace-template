@@ -29,12 +29,17 @@ import { ShellSocket } from "./store/socket";
 import { followRenderModes } from "./theme/metrics";
 import { App } from "./views/App";
 
+/** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
+ *  history entry as they are: how a boot-time parameter is removed once it has been read. */
+function stripLocationSearch(strip: (search: string) => string): void {
+  const stripped = `${window.location.pathname}${strip(window.location.search)}${window.location.hash}`;
+  window.history.replaceState(window.history.state, "", stripped);
+}
+
 /** The deep link the page was opened with (contracts.md section 9), removed from the URL as it is read. */
 function takeDeepLinkFromLocation(): DeepLink {
   const link = parseDeepLink(window.location.search);
-  if (isDeepLinkEmpty(link)) return link;
-  const stripped = `${window.location.pathname}${stripDeepLinkParams(window.location.search)}${window.location.hash}`;
-  window.history.replaceState(window.history.state, "", stripped);
+  if (!isDeepLinkEmpty(link)) stripLocationSearch(stripDeepLinkParams);
   return link;
 }
 
@@ -42,9 +47,7 @@ function takeDeepLinkFromLocation(): DeepLink {
  *  it is read. */
 function takeSoloWindowIdFromLocation(): string | null {
   const soloWindowId = parseSoloWindowId(window.location.search);
-  if (soloWindowId === null) return null;
-  const stripped = `${window.location.pathname}${stripSoloParam(window.location.search)}${window.location.hash}`;
-  window.history.replaceState(window.history.state, "", stripped);
+  if (soloWindowId !== null) stripLocationSearch(stripSoloParam);
   return soloWindowId;
 }
 
