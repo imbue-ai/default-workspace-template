@@ -339,11 +339,11 @@ def pending_update_rollbacks(
     does not carry. An update's rollback is one carrying the
     :data:`_ROLLED_BACK_UPDATE_TRAILER`, or one made before the apply wrote it whose
     undone history carries update content (:func:`_undid_update_content`); a user who
-    asked for an app change back must keep it rolled back. A rollback is undone by a later revert of it that is not
-    itself undone, so reverting a revert puts a rollback back in force. Until each is
-    reverted, git counts the content it removed as merged, and merging any later
-    release lands only what that release changed since: the old release plus a few
-    files, which the apply's probes cannot tell from a good update.
+    asked for an app change back must keep it rolled back. A rollback is undone by a
+    later revert of it that is not itself undone, so reverting a revert puts a rollback
+    back in force. Until each is reverted, git counts the content it removed as merged,
+    and merging any later release lands only what that release changed since: the old
+    release plus a few files, which the apply's probes cannot tell from a good update.
     """
     newest_first = _log_records(
         runner,
