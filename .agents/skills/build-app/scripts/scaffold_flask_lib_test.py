@@ -200,6 +200,20 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
     assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
 
 
+def test_a_port_something_is_listening_on_is_skipped_and_refused(
+    tmp_path: Path,
+) -> None:
+    """No config holds 8080, so only the bind probe can keep the scaffold off it."""
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
+
+    def only_8080_bound(port: int) -> bool:
+        return port == 8080
+
+    assert scaffold_flask_lib._pick_port(root, None, only_8080_bound) == 8082
+    with pytest.raises(SystemExit, match="8080 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8080, only_8080_bound)
+
+
 def test_the_scaffold_writes_the_port_it_picked(tmp_path: Path) -> None:
     """The program's forward_port URL and the runner's default port are the picked one.
 
