@@ -42,7 +42,7 @@ def test_prevent_time_sleep() -> None:
     # xinput.py's XTEST device-recycle settle (on its own capture thread), and
     # mediastream.py's _await_clipboard_owned
     # poll in the Flask request thread (confirms xclip has claimed the X selection before
-    # injecting Ctrl+V, so paste success is truthful). All are real hardware/display/daemon
+    # Ctrl+V is pressed in the tab over CDP, so paste success is truthful). All are real hardware/display/daemon
     # settles, not event-loop sleeps.
     # +3 for chrome_launcher.py, which owns the Chromium process directly now that
     # browser-use is gone: the debug-port poll (Chromium publishes DevToolsActivePort
