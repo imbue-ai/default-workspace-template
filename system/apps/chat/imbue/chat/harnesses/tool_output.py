@@ -21,6 +21,14 @@ every parser:
   changing what counts as a request call -- or how many a result can carry -- means
   revisiting that gate too.
 
+- **Secret requests.** The same shape for the connect-external-service skill's
+  ``request_secret.py``: the call is recognised from its input
+  (:func:`is_secret_request_call` -> ``tool_call.display = "secret_request"``) and the
+  filed request the script echoes is lifted from the result (:func:`find_secret_request`
+  -> the event's ``secret_request`` field). The checker holds a secret request to the same
+  one-per-call rule and matches the script by the same basename, ``SECRET_REQUEST_SCRIPT``.
+  :func:`stamp_echoed_requests` is the one call every parser makes for both.
+
 - **tk step decoration.** tk lifecycle commands print machine-readable decoration on
   stdout (``Created <id>: <title>``, ``Updated <id> -> <status>``,
   ``tk-step <id> title|summary: ...``) that the chat progress view reads back from the
@@ -37,6 +45,7 @@ every parser:
 import json
 import re
 import shlex
+from collections.abc import Callable
 from typing import Any
 from typing import Final
 
@@ -53,6 +62,14 @@ from imbue.imbue_common.frozen_model import FrozenModel
 # Deliberately short enough to survive even a truncated input preview.
 PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests"
 _PERMISSION_REQUEST_POST_RE = re.compile(r"-X\s*POST|--request\s*POST", re.IGNORECASE)
+
+# The connect-external-service skill's request script, matched by basename as a whole
+# shell word (the input is the whole command, so the skill's path and a `python3` or
+# `uv run` prefix both match), with the script's required `--file` after it: a `Read`
+# or `Grep` of the script names it too but files nothing.
+SECRET_REQUEST_SCRIPT = "request_secret.py"
+_SECRET_REQUEST_SCRIPT_RE = re.compile(r"(?:^|[\s\"'/])" + re.escape(SECRET_REQUEST_SCRIPT) + r"(?=$|[\s\"'\\])")
+_SECRET_REQUEST_FILE_FLAG_RE = re.compile(r"\s--file(?:=|\s)")
 
 _TK_OUTPUT_DECORATION_PATTERN = re.compile(
     r"Updated \S+ -> (?:open|in_progress|closed)|tk-step \S+ (?:title|summary): .*"
@@ -107,19 +124,21 @@ def is_tk_lifecycle_anywhere(command: str) -> bool:
     return False
 
 
-_PERMISSION_REQUEST_ID_KEY = '"request_id"'
+# The key every echoed request carries -- a permission request's and a secret request's
+# alike -- which is what makes it the substring guard for both probes.
+_REQUEST_ID_KEY = '"request_id"'
 
-# Ceiling on a preserved permission-request object. Preservation rescues the handful of
+# Ceiling on a preserved echoed-request object. Preservation rescues the handful of
 # fields the card renders; it is not licence to open an unbounded hole in the output
 # limit. A body past this size is left to ordinary head truncation.
-_MAX_PERMISSION_REQUEST_LENGTH = 8000
+_MAX_ECHOED_REQUEST_LENGTH = 8000
 
 # Cap on the candidate `{`s probed in one tool result. Failing probes are not
 # constant-time (each JSONDecodeError rescans up to the error position), so output that is
 # mostly braces would otherwise cost O(braces x length). Legitimate output has only a
 # handful of braces at or before the object's `request_id` key, so 1000 is two to three
 # orders of magnitude of headroom.
-_MAX_PERMISSION_REQUEST_PROBES = 1000
+_MAX_ECHOED_REQUEST_PROBES = 1000
 
 # Stateless and reused across candidate offsets rather than rebuilt per probe.
 _JSON_DECODER = json.JSONDecoder()
@@ -133,14 +152,26 @@ def is_permission_request_call(raw_input: str) -> bool:
     return PERMISSION_REQUEST_HOST in raw_input and _PERMISSION_REQUEST_POST_RE.search(raw_input) is not None
 
 
+def is_secret_request_call(raw_input: str) -> bool:
+    """True when a tool call runs the secret request script. Detected from the tool INPUT
+    alone, for the same reason as a permission request: the card must show while the
+    request is pending. The script is a whole word followed by its ``--file``, the same
+    "an argument, not a mention" test the P10 checker applies."""
+    script = _SECRET_REQUEST_SCRIPT_RE.search(raw_input)
+    return script is not None and _SECRET_REQUEST_FILE_FLAG_RE.search(raw_input, script.end()) is not None
+
+
 def classify_tool_call_display(*, is_pure_tk: bool, raw_input: str) -> DisplayKind | None:
     """The render decision for one tool call, or ``None`` for an ordinary row: a pure tk
     lifecycle call is a hidden structural marker; a latchkey POST renders as the
-    permission card. One helper so every parser stamps the same way."""
+    permission card; a secret request renders as the secret card. One helper so every
+    parser stamps the same way."""
     if is_pure_tk:
         return DisplayKind.HIDDEN
     if is_permission_request_call(raw_input):
         return DisplayKind.PERMISSION_REQUEST
+    if is_secret_request_call(raw_input):
+        return DisplayKind.SECRET_REQUEST
     return None
 
 
@@ -148,6 +179,13 @@ class PermissionRequest(FrozenModel):
     """A permission-request object found in a tool result."""
 
     details: dict[str, Any] = Field(description="The parsed permission-request object the gateway echoed")
+    body: str = Field(description="The object's verbatim JSON text, exactly as it appeared in the tool output")
+
+
+class EchoedSecretRequest(FrozenModel):
+    """A filed secret request found in a tool result."""
+
+    details: dict[str, Any] = Field(description="The parsed request object the request script echoed")
     body: str = Field(description="The object's verbatim JSON text, exactly as it appeared in the tool output")
 
 
@@ -161,23 +199,33 @@ def _is_permission_request(parsed: dict[str, Any]) -> bool:
     return isinstance(parsed.get("payload"), dict)
 
 
-def find_permission_request(content: str) -> PermissionRequest | None:
-    """Locate the permission-request object a creation POST echoed in ``content``.
+def _is_secret_request(parsed: dict[str, Any]) -> bool:
+    """True for the object the request script prints: a non-empty string `request_id`, the
+    `file` it targets, and the list of `variables` the card asks for. A permission request
+    carries `payload` instead, so neither shape is mistaken for the other."""
+    request_id = parsed.get("request_id")
+    if not isinstance(request_id, str) or not request_id:
+        return False
+    return isinstance(parsed.get("file"), str) and isinstance(parsed.get("variables"), list)
 
-    Returns the first such object, or None -- the case for essentially every tool result,
-    so the cheap substring guard runs first. Candidate starts are the `{`s at or before
-    the `request_id` key, each decoded with ``raw_decode`` (which reports where the value
-    ended, making this robust to anything printed after the response). The probe count is
-    capped so pathological brace-heavy output cannot stall parsing.
+
+def _find_echoed_object(content: str, is_match: Callable[[dict[str, Any]], bool]) -> tuple[dict[str, Any], str] | None:
+    """The first JSON object in ``content`` that ``is_match`` accepts, with its verbatim text.
+
+    None is the case for essentially every tool result, so the cheap substring guard runs
+    first. Candidate starts are the `{`s at or before the `request_id` key, each decoded
+    with ``raw_decode`` (which reports where the value ended, making this robust to
+    anything printed after the response). The probe count is capped so pathological
+    brace-heavy output cannot stall parsing.
     """
-    marker = content.find(_PERMISSION_REQUEST_ID_KEY)
+    marker = content.find(_REQUEST_ID_KEY)
     if marker < 0:
         return None
     probes = 0
     start = content.find("{")
     while 0 <= start <= marker:
         probes += 1
-        if probes > _MAX_PERMISSION_REQUEST_PROBES:
+        if probes > _MAX_ECHOED_REQUEST_PROBES:
             return None
         try:
             parsed, end = _JSON_DECODER.raw_decode(content, start)
@@ -189,15 +237,47 @@ def find_permission_request(content: str) -> PermissionRequest | None:
             # The C scanner recurses per nesting level on absurdly deep input; every later
             # candidate in the same nest would just recurse again, so give up on the
             # result: no gateway echo nests thousands deep.
-            logger.warning("Giving up on a permission-request probe: absurdly deep JSON nesting in tool output")
+            logger.warning("Giving up on an echoed-request probe: absurdly deep JSON nesting in tool output")
             return None
-        if isinstance(parsed, dict) and _is_permission_request(parsed):
+        if isinstance(parsed, dict) and is_match(parsed):
             body = content[start:end]
-            if len(body) > _MAX_PERMISSION_REQUEST_LENGTH:
+            if len(body) > _MAX_ECHOED_REQUEST_LENGTH:
                 return None
-            return PermissionRequest(details=parsed, body=body)
+            return parsed, body
         start = content.find("{", start + 1)
     return None
+
+
+def find_permission_request(content: str) -> PermissionRequest | None:
+    """Locate the permission-request object a creation POST echoed in ``content``."""
+    found = _find_echoed_object(content, _is_permission_request)
+    if found is None:
+        return None
+    details, body = found
+    return PermissionRequest(details=details, body=body)
+
+
+def find_secret_request(content: str) -> EchoedSecretRequest | None:
+    """Locate the filed request the secret request script echoed in ``content``."""
+    found = _find_echoed_object(content, _is_secret_request)
+    if found is None:
+        return None
+    details, body = found
+    return EchoedSecretRequest(details=details, body=body)
+
+
+def stamp_echoed_requests(event: dict[str, Any], content: str) -> None:
+    """Stamp the structured request objects a tool result echoed onto its ``tool_result`` event.
+
+    The ONE call every parser makes, so the permission card and the secret card both
+    render from the same resident fields on every harness.
+    """
+    permission_request = find_permission_request(content)
+    if permission_request is not None:
+        event["permission_request"] = permission_request.details
+    secret_request = find_secret_request(content)
+    if secret_request is not None:
+        event["secret_request"] = secret_request.details
 
 
 # A token that looks like a tk step id (``cod-step-f1zl``). Lines carrying one are kept in
