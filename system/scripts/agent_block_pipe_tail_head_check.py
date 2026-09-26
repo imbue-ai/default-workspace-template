@@ -40,6 +40,7 @@ _PROCESS_SUBSTITUTION = re.compile(r"(?:^|[\s;&|])[<>]\(")
 # What a redirect leaves among a segment's words: the fd number of `2>&1`/`2>` and the target.
 _REDIRECT_RESIDUE = re.compile(r"^\d+$|^/dev/")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
+_CONTROL_OPERATOR = re.compile(r"\|\||\|&|&&|[|&;()]")
 
 _TRUNCATORS = frozenset({"head", "tail"})
 _PIPES = frozenset({"|", "|&"})
@@ -114,19 +115,20 @@ def is_blocked(command: str, depth: int = 0) -> bool:
 def _pipelines(segments: tuple[CommandSegment, ...]) -> list[list[CommandSegment]]:
     """Group segments into pipelines, the stages joined by `|` or `|&`.
 
-    The parser turns an unquoted newline into `;`, so a line break after a pipe shows up as
-    an empty `;` segment (or a `|;` terminator); bash continues the pipeline across it, and
-    so does this.
+    The lexer returns a run of operators as one terminator (`)|`, `|;`), so each is split
+    into its operators first: the segment's words end at the first, and every later one ends
+    an empty stage, which is how `(pytest)|head` feeds head from a group with no words. The
+    parser also turns an unquoted newline into `;`, so a line break after a pipe shows up as
+    an empty `;` stage; bash continues the pipeline across it, and so does this.
     """
     pipelines: list[list[CommandSegment]] = []
     current: list[CommandSegment] = []
     is_continuing = False
-    for segment in segments:
-        terminator = _normalize(segment.terminator)
-        if is_continuing and not segment.words and terminator == ";":
+    for stage in _stages(segments):
+        if is_continuing and not stage.words and stage.terminator == ";":
             continue
-        current.append(segment)
-        is_continuing = terminator in _PIPES
+        current.append(stage)
+        is_continuing = stage.terminator in _PIPES
         if not is_continuing:
             pipelines.append(current)
             current = []
@@ -135,10 +137,15 @@ def _pipelines(segments: tuple[CommandSegment, ...]) -> list[list[CommandSegment
     return pipelines
 
 
-def _normalize(terminator: str | None) -> str | None:
-    if terminator is not None and len(terminator) > 1 and terminator.endswith(";"):
-        return terminator.rstrip(";") or ";"
-    return terminator
+def _stages(segments: tuple[CommandSegment, ...]) -> list[CommandSegment]:
+    stages: list[CommandSegment] = []
+    for segment in segments:
+        operators = _CONTROL_OPERATOR.findall(segment.terminator or "") or [None]
+        stages.append(segment._replace(terminator=operators[0]))
+        stages.extend(
+            CommandSegment((), False, None, (), operator) for operator in operators[1:]
+        )
+    return stages
 
 
 def _is_recoverable(producers: list[CommandSegment]) -> bool:
