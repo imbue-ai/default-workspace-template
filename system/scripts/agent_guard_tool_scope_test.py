@@ -12,7 +12,7 @@ from guard_testing import run_guard
 # The two guards that inspect a command. The other two already gated on tool_name.
 _COMMAND_GUARDS = ("agent_block_pipe_tail_head.sh", "agent_prevent_commit_rewrite.sh")
 
-_PATCH_BODY = "*** Begin Patch\n*** Update File: README.md\n+Run: cat foo | head -5\n+git rebase is discussed here\n*** End Patch"
+_PATCH_BODY = "*** Begin Patch\n*** Update File: README.md\n+Run: pytest | head -5\n+git rebase is discussed here\n*** End Patch"
 
 
 @pytest.mark.parametrize("guard", _COMMAND_GUARDS)
@@ -31,7 +31,7 @@ def test_a_non_shell_tool_is_never_policed(guard: str) -> None:
     assert (
         run_guard(
             guard,
-            {"tool_name": "update_plan", "tool_input": {"command": "ls | head -5"}},
+            {"tool_name": "update_plan", "tool_input": {"command": "pytest | head -5"}},
         )
         == 0
     )
@@ -41,7 +41,7 @@ def test_a_real_shell_call_is_still_blocked() -> None:
     assert (
         run_guard(
             "agent_block_pipe_tail_head.sh",
-            {"tool_name": "Bash", "tool_input": {"command": "ls | head -5"}},
+            {"tool_name": "Bash", "tool_input": {"command": "pytest | head -5"}},
         )
         == 2
     )
@@ -58,5 +58,5 @@ def test_a_real_shell_call_is_still_blocked() -> None:
 def test_a_payload_with_no_tool_name_is_still_policed(guard: str) -> None:
     """The gate must not become a way to opt out. A payload that names no tool is treated as a
     shell call, which is also what agy's shim produces on older paths."""
-    command = "ls | head -5" if "pipe" in guard else "git rebase -i HEAD~2"
+    command = "pytest | head -5" if "pipe" in guard else "git rebase -i HEAD~2"
     assert run_guard(guard, {"tool_input": {"command": command}}) == 2

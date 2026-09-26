@@ -1,0 +1,1 @@
+The tool-call policy for piping into `tail`/`head` (P1) now states the rule the guard enforces: a pipe is blocked only when the output it truncates would have to be regenerated. Reads of files, directories and git history, and pipes downstream of a `tee FILE`, are allowed, and each pipeline in a compound command is judged on its own.
