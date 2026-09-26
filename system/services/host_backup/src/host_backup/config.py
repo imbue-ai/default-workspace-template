@@ -132,15 +132,14 @@ class BackupConfig(FrozenModel):
             # -- so without this every hourly tick would sweep a full venv
             # plus several tool environments.
             "**/data/.state/update-apply/snapshots",
-            # Copies of an app's data made while changing the app: a throwaway
-            # instance's writable copies and scratch directory, and the snapshot
-            # taken before a change to the live store. The data they copy is
-            # backed up where it lives, and one app's store can run to many GB.
-            # The instance's own state beside them (instance.json, its logs) is
-            # kept, so a restored workspace can still tear the instance down.
+            # A throwaway instance's writable copies of an app's data (a preview,
+            # or a test run against a copy) and its scratch directory. The data
+            # they copy is backed up where it lives, and one app's store can run
+            # to many GB. The instance's own state beside them (instance.json,
+            # its logs) is kept, so a restored workspace can still tear the
+            # instance down.
             "**/data/.state/isolated-instances/*/copies",
             "**/data/.state/isolated-instances/*/scratch",
-            "**/data/.state/app-data-snapshots",
         ),
         description="Glob patterns passed to `restic backup --exclude=...`",
     )

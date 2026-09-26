@@ -962,6 +962,70 @@ def test_a_copy_that_would_not_fit_on_disk_fails_the_boot_before_anything_runs(
     assert "--copy store=data/.apps/my-service" in capsys.readouterr().err
 
 
+def _seed_store(root: Path) -> Path:
+    source = root / "store"
+    (source / "repos" / "one").mkdir(parents=True)
+    (source / "repos" / "one" / "pack.bin").write_bytes(b"x" * 3000)
+    (source / "records.json").write_text("[1]")
+    os.symlink("records.json", source / "latest.json")
+    return source
+
+
+def test_a_copys_size_counts_file_bytes_and_not_symlink_targets(tmp_path: Path) -> None:
+    assert mod.tree_size_bytes(_seed_store(tmp_path)) == 3000 + len("[1]")
+
+
+def test_a_copy_that_fits_is_made_whole_with_symlinks_kept(tmp_path: Path) -> None:
+    destination = tmp_path / "copies" / "data"
+
+    mod.copy_tree_checked(_seed_store(tmp_path), destination, _plenty_of_disk)
+
+    assert (destination / "repos" / "one" / "pack.bin").read_bytes() == b"x" * 3000
+    assert os.readlink(destination / "latest.json") == "records.json"
+
+
+def test_a_copy_that_would_not_leave_the_reserve_is_refused_before_writing(
+    tmp_path: Path,
+) -> None:
+    source = _seed_store(tmp_path)
+    destination = tmp_path / "copies" / "data"
+    probed: list[Path] = []
+
+    def just_short(path: Path) -> int:
+        probed.append(path)
+        return mod.COPY_RESERVE_BYTES + mod.tree_size_bytes(source) - 1
+
+    with pytest.raises(mod.InstanceError, match="Copy only what the test needs"):
+        mod.copy_tree_checked(source, destination, just_short)
+
+    assert not destination.parent.exists()
+    # The probe asks about the disk the copy would land on, not the source's.
+    assert probed == [tmp_path]
+
+
+def test_a_copy_that_fails_part_way_is_removed(tmp_path: Path) -> None:
+    # copytree copies everything else, then fails on the pipe it cannot copy.
+    source = _seed_store(tmp_path)
+    os.mkfifo(source / "repos" / "one" / "pipe")
+    destination = tmp_path / "copies" / "data"
+
+    with pytest.raises(mod.InstanceError, match="failed"):
+        mod.copy_tree_checked(source, destination, _plenty_of_disk)
+
+    assert not destination.exists()
+
+
+def test_a_copy_never_lands_on_an_existing_destination(tmp_path: Path) -> None:
+    destination = tmp_path / "copies" / "data"
+    destination.mkdir(parents=True)
+    (destination / "kept.json").write_text("{}")
+
+    with pytest.raises(mod.InstanceError, match="already exists"):
+        mod.copy_tree_checked(_seed_store(tmp_path), destination, _plenty_of_disk)
+
+    assert (destination / "kept.json").exists()
+
+
 def test_a_port_with_no_env_var_reaches_the_argv_by_placeholder_alone(
     tmp_path: Path,
 ) -> None:

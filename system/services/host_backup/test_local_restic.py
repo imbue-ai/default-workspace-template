@@ -182,7 +182,6 @@ def test_default_excludes_drop_app_data_copies_but_keep_what_they_copy(
         / "repos"
         / "pack.bin",
         data / ".state" / "isolated-instances" / "pr-review-test" / "scratch" / "x.db",
-        data / ".state" / "app-data-snapshots" / "pr-review" / "pre-v2" / "pack.bin",
     ]
     for path in kept + dropped:
         path.parent.mkdir(parents=True, exist_ok=True)

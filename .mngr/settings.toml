@@ -479,14 +479,20 @@ ssh_bind_address = "127.0.0.1"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
-# by the aws-<region> provider start args and by the imbue_cloud slice bake's
-# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
-# slices run under runsc from the bake).
-# /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
-# persist or ride a backup. It says `exec` because Docker mounts a bare
-# `--tmpfs` noexec, and a stub executable a test writes under /tmp and puts on
-# PATH is then skipped, so the real binary it stands in for runs instead.
+# forever. A tmpfs /run makes the hard link work. The aws-<region> provider start
+# args and the imbue_cloud slice bake's per-box
+# `-S providers.imbue_cloud_slice.default_start_args` overrides mount /run the
+# same way (gen-2 slices run under runsc from the bake).
+# /tmp is tmpfs here so it starts empty on every container start: under
+# --overlay2=none the rootfs, /tmp included, otherwise survives a restart. The
+# cost is that /tmp is memory: whatever is written there counts against the
+# container's memory limit and no process kill frees it, so a multi-GB write
+# (a copy of a large app's data, say) can take the workspace down. Cloud
+# workspaces avoid this by keeping /tmp on disk and emptying it from the
+# container's entrypoint (mngr_vps); the local docker provider has no such
+# entrypoint hook yet. It says `exec` because Docker mounts a bare `--tmpfs`
+# noexec, and a stub executable a test writes under /tmp and puts on PATH is
+# then skipped, so the real binary it stands in for runs instead.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
 
 [providers.lima]
