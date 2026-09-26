@@ -65,6 +65,13 @@ SNAPPED_LEFT_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=0.5, height=1.0)
 SNAPPED_RIGHT_FRAME: Final[Frame] = Frame(x=0.5, y=0.0, width=0.5, height=1.0)
 MAXIMIZED_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=1.0, height=1.0)
 
+# How wide a window opened beside another is, and the width its anchor has to be under for the two to
+# fit side by side at all.
+PAIRED_WIDTH: Final[float] = 0.5
+# Fractions divided and added back rarely land on the figure they came from; a gap this much under the
+# width it has to hold is the width it has to hold.
+_PAIRING_TOLERANCE: Final[float] = 1e-6
+
 # The shell seeds a new desktop's shortcuts and places a shortcut added by an agent without knowing any
 # backdrop, so it lays them out in reading order over a grid this many columns wide: one column down the
 # left edge, which every grid a backdrop can hold contains.
@@ -160,6 +167,45 @@ def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
             return MAXIMIZED_FRAME
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@pure
+def paired_frames(anchor: Frame) -> tuple[Frame, Frame]:
+    """Where a window opened beside ``anchor`` goes, and where that leaves the anchor.
+
+    The anchor keeps the shape its owner gave it wherever it can: it is only ever moved across, only
+    when neither side of it has ``PAIRED_WIDTH`` to spare, and then by the least that opens that much
+    on one side -- not to the edge, which is a long way to travel for room that was a nudge away. Its
+    height and where it sits down the backdrop are never touched, and the opened window takes both, so
+    the two read as a pair without the anchor having to become a shape nobody chose. An anchor wider
+    than ``PAIRED_WIDTH`` is the one that must give, since no moving opens that much beside it.
+
+    The opened window sits against the anchor rather than against the far edge: adjacent, the two read
+    as one arrangement, where a gap between them would read as two windows that happen to be up.
+    """
+    beside = PAIRED_WIDTH
+    if anchor.width > beside + _PAIRING_TOLERANCE:
+        return (
+            Frame(x=0.0, y=anchor.y, width=beside, height=anchor.height),
+            Frame(x=beside, y=anchor.y, width=beside, height=anchor.height),
+        )
+    room_to_the_right = 1.0 - (anchor.x + anchor.width)
+    if room_to_the_right >= beside - _PAIRING_TOLERANCE:
+        return anchor, Frame(x=anchor.x + anchor.width, y=anchor.y, width=beside, height=anchor.height)
+    if anchor.x >= beside - _PAIRING_TOLERANCE:
+        return anchor, Frame(x=anchor.x - beside, y=anchor.y, width=beside, height=anchor.height)
+    # Neither side has the room. Opening it on the right costs the anchor the ``beside - room_to_the_right``
+    # it is short by, and on the left the ``beside - anchor.x`` it is short by, so the nearer side to open
+    # is the one that already has more of the room. A tie goes right, where the pair reads in order.
+    if anchor.x <= room_to_the_right:
+        return (
+            Frame(x=beside - anchor.width, y=anchor.y, width=anchor.width, height=anchor.height),
+            Frame(x=beside, y=anchor.y, width=beside, height=anchor.height),
+        )
+    return (
+        Frame(x=beside, y=anchor.y, width=anchor.width, height=anchor.height),
+        Frame(x=0.0, y=anchor.y, width=beside, height=anchor.height),
+    )
 
 
 @pure

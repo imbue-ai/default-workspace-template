@@ -62,6 +62,15 @@ never applied to every client at once.
   `--minimized` to any `open` you make for your own use (a terminal or browser you
   are driving): the window then lands out of the way of what the user is doing, and a
   window already there is left as they placed it.
+- **`open --beside` puts what you opened next to what the user is reading** --
+  the opposite of `--minimized`, and passing both is refused. Bare it pairs with
+  your own chat; name a window to pair with something else. The new window takes
+  half the backdrop's width beside it, at its height and its place down the
+  screen. The window it pairs with is disturbed as little as the room allows: it
+  is left exactly where it is when either side of it has the space, nudged across
+  by the least that opens the space when neither does, and resized only when it
+  is over half the backdrop wide.
+  Reach for it whenever you have made something for the user to look at.
 
 ## Naming a window
 
@@ -136,7 +145,13 @@ window whose `scope` is `independent` (the chat's pinned root window: each
 viewer keeps their own path there), `navigate` moves the target client's page
 alone and leaves every other client where it was.
 
-The most common natural request, "put a terminal next to my chat", is:
+The most common natural request, "put a terminal next to my chat", is one op:
+
+```bash
+python3 system/scripts/layout.py open terminal --beside
+```
+
+Two `place`s put two windows that are both already open on the halves:
 
 ```bash
 python3 system/scripts/layout.py place self --zone left

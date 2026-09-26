@@ -280,7 +280,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `context` | | read-only; every client's recent activity (`{"ok", "clients"}`) |
 | `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
-| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the page of the launch path (`launch`, else the app's `default_shortcut.launch`, else its first): a GET launch path with `params` as the query string, a POST launch path posted `params` for the page it answers (section 5.3, with the targeted client as `client_id`, or none when the open is unplaced); a window of the app at that page is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
+| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?`, `beside?` | open a window at `path`, else at the page of the launch path (`launch`, else the app's `default_shortcut.launch`, else its first): a GET launch path with `params` as the query string, a POST launch path posted `params` for the page it answers (section 5.3, with the targeted client as `client_id`, or none when the open is unplaced); a window of the app at that page is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; with `beside` (a window argument, resolved as the window verbs resolve one), the two are framed as `paired_frames` gives, for the target client alone: the opened window `PAIRED_WIDTH` wide at the named window's `y` and `height`, against whichever side of it has that much room (the right first), and on top; the named window is untouched, down to its state, where a side has the room; where neither has, it moves (keeping its width and height) by the least that opens `PAIRED_WIDTH` on one side, which is the side that already has more of it, ties going right; and it is narrowed to `PAIRED_WIDTH` at `x = 0` only when it is wider than that. And a `beside` naming no window on the desktop (or naming `self` or `pinned` with no requester to resolve it against) leaves the opened window as placed rather than refusing the open, while a `beside` that is no window spelling at all, and `beside` with `minimized`, are refused before the window is opened; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
 | `place` | `window`, `zone` (`left`, `right`, `maximized`) or `frame` (`x,y,width,height`) | set the state, or the frame with state `NORMAL` |
@@ -351,10 +351,13 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-resize-corner` | `16px` | | | no |
 | `--desk-resize-overhang` | `3px` | | | no |
 | `--desk-resize-edge-inset` | `calc(var(--desk-resize-corner) - var(--desk-resize-overhang))` | | | no |
+| `--desk-window-move` | `180ms` | | | no |
+| `--desk-window-move-ease` | `cubic-bezier(0.2, 0, 0, 1)` | | | no |
 | `--desk-launcher-menu-width` | `22rem` | `calc(100% - var(--spacing) * 4)` | | no |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
 The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.
+`--desk-window-move` and `--desk-window-move-ease` time a window's travel to a rectangle the pointer did not move it to (a snap, a `place`, an `open` with `beside`): the window's root transitions over them, a press turns the transition off for its whole length through `data-window-motion="off"` on the desktop's root, and and the transition is declared inside `prefers-reduced-motion: no-preference`, so a platform that does not say motion is welcome gets the arrangement without the travel.
 Colours, type roles, radii, and elevation come from `base.css` and are not repeated here.
 
 ## 12. Selectors shared with tests

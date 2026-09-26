@@ -1137,6 +1137,93 @@ def test_an_open_asked_for_minimized_places_the_window_out_of_sight_and_leaves_a
     assert [placement["is_minimized"] for placement in _placements(client, "c1")] == [False]
 
 
+def test_an_open_asked_to_sit_beside_a_window_with_room_leaves_that_window_alone(
+    client: FlaskClient, app: Flask
+) -> None:
+    _register_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+    anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
+    anchor_frame = {"x": 0.05, "y": 0.1, "width": 0.4, "height": 0.7}
+    _op(client, "place", {"window": anchor, "frame": "0.05,0.1,0.4,0.7"}, requester)
+
+    opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester)
+    assert opened.status_code == 200
+    window_id = opened.get_json()["window_id"]
+
+    placements = _placements(client, "c1")
+    by_window = {placement["window_id"]: placement for placement in placements}
+    # The anchor had the room beside it, so nothing about it moved.
+    assert by_window[anchor]["frame"] == anchor_frame
+    assert by_window[anchor]["state"] == "NORMAL"
+    # The opened window sits against it, at its height and its place down the backdrop.
+    assert by_window[window_id]["frame"] == {"x": 0.45, "y": 0.1, "width": 0.5, "height": 0.7}
+    assert [by_window[anchor]["is_minimized"], by_window[window_id]["is_minimized"]] == [False, False]
+    assert [placement["window_id"] for placement in placements][-1] == window_id
+
+
+def test_an_open_beside_a_window_with_no_room_moves_that_window_across_only(client: FlaskClient, app: Flask) -> None:
+    _register_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+    anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
+    # Mid-backdrop, with less than half of it free on either side.
+    _op(client, "place", {"window": anchor, "frame": "0.2,0.15,0.4,0.5"}, requester)
+
+    window_id = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester).get_json()[
+        "window_id"
+    ]
+
+    by_window = {placement["window_id"]: placement for placement in _placements(client, "c1")}
+    # Left by the 0.1 it was short by, at the width and the height it already had -- not to the edge.
+    # Approximate, since the move is a subtraction of fractions rather than a figure that was typed.
+    assert by_window[anchor]["frame"] == pytest.approx({"x": 0.1, "y": 0.15, "width": 0.4, "height": 0.5})
+    assert by_window[window_id]["frame"] == pytest.approx({"x": 0.5, "y": 0.15, "width": 0.5, "height": 0.5})
+
+
+def test_an_open_beside_a_snapped_window_leaves_the_snap_as_it_is(client: FlaskClient, app: Flask) -> None:
+    """A window already filling the half it would be paired into is where the pairing wants it: it keeps its
+    state, rather than being rewritten as the same rectangle in normal."""
+    _register_client(app, "c1", "home")
+    requester = _TERMINAL_REQUESTER
+    anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
+    _op(client, "place", {"window": anchor, "zone": "left"}, requester)
+
+    window_id = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester).get_json()[
+        "window_id"
+    ]
+
+    by_window = {placement["window_id"]: placement for placement in _placements(client, "c1")}
+    assert by_window[anchor]["state"] == "SNAPPED_LEFT"
+    assert by_window[window_id]["frame"] == {"x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0}
+
+
+@pytest.mark.parametrize("requester", [_TERMINAL_REQUESTER, {"app": "terminal"}, None])
+def test_an_open_beside_a_window_the_desktop_does_not_have_still_opens_it(
+    client: FlaskClient, app: Flask, requester: dict[str, str] | None
+) -> None:
+    """The pairing is the open's courtesy: a chat the user closed, and an op from nobody's chat (no requester, or
+    one with no marker, which is what ``self`` is resolved from), cost the open its placement, not its window."""
+    _register_client(app, "c1", "home")
+    opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "self"}, requester)
+    assert opened.status_code == 200
+    (placement,) = _placements(client, "c1")
+    assert placement["window_id"] == opened.get_json()["window_id"]
+    assert (placement["state"], placement["is_minimized"]) == ("NORMAL", False)
+
+
+def test_an_open_whose_beside_is_no_window_or_fights_minimized_is_refused_before_it_opens(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A ``beside`` the window rule refuses is the caller's mistake, not a window that is simply not there, and a
+    ``beside`` asked for alongside ``minimized`` is two places at once: either is refused rather than half applied,
+    so nothing is left on the desktop to wonder about."""
+    _register_client(app, "c1", "home")
+    refused = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "Not A Window"}, _TERMINAL_REQUESTER)
+    assert refused.status_code == 400 and "window" in refused.get_json()["detail"]
+    both = _op(client, "open", {"app": "files", "beside": "self", "minimized": True}, _TERMINAL_REQUESTER)
+    assert both.status_code == 400 and "not both" in both.get_json()["detail"]
+    assert _desktop_windows(client) == []
+
+
 def test_a_whole_app_refresh_reaches_every_client_and_needs_no_target(client: FlaskClient, app: Flask) -> None:
     first_queue = _register_client(app, "c1", "home")
     second_queue = _register_client(app, "c2", "home")
