@@ -2277,28 +2277,28 @@ def test_re_applying_a_rolled_back_merge_refuses_instead_of_claiming_success(
 _ROLLBACK_OF_TARGET = "0123456789abcdef0123456789abcdef01234567"
 
 
-def _log_record(sha: str, subject: str, body: str = "") -> str:
+def _log_record(
+    sha: str, subject: str, body: str = "", rolled_back_update: str = ""
+) -> str:
     """One commit as ``pending_update_rollbacks`` asks ``git log`` to print it."""
-    return f"{sha}\x00{subject}\x00{body}\x1e\n"
+    return f"{sha}\x00{subject}\x00{rolled_back_update}\x00{body}\x1e\n"
 
 
 def _merge_ref_carries_an_update_rollback(
     runner: _RecordingRunner, *newer_commits: str
 ) -> None:
-    """Shape git's answers as for a merge ref whose history carries an update-self
-    landing's rollback, under ``newer_commits`` (log records, newest first)."""
+    """Shape git's answers as for a merge ref whose history carries an update's
+    rollback, under ``newer_commits`` (log records, newest first)."""
     runner.respond(
         ("git", "log", "--topo-order"),
         _Result(
             stdout="".join(newer_commits)
             + _log_record(
-                _ROLLBACK_OF_TARGET, "Roll back update apply (restore to abc123def456)"
+                _ROLLBACK_OF_TARGET,
+                "Roll back update apply (restore to abc123def456)",
+                rolled_back_update="minds-v0.4.1",
             )
         ),
-    )
-    runner.respond(
-        ("git", "log", "--first-parent"),
-        _Result(stdout="update-self: merge upstream template (minds-v0.4.1)\x00\x1e\n"),
     )
 
 
@@ -2356,6 +2356,42 @@ def test_a_merge_that_reverts_the_rollback_first_is_applied(
     ] == [f"minds-v0.4.2..{_MERGE_REF}"]
 
 
+def _rolled_back_update(message: str) -> str:
+    """The release a rollback commit's message records, as git reads its trailers."""
+    trailers = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],
+        input=message,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    key = f"{update_apply._ROLLED_BACK_UPDATE_TRAILER}: "
+    return next(
+        (line[len(key) :] for line in trailers.splitlines() if line.startswith(key)),
+        "",
+    )
+
+
+@pytest.mark.parametrize("target_ref", ["minds-v0.4.2", None])
+def test_a_failed_apply_records_the_release_it_rolled_back_only_for_an_update(
+    apply_repo: Path, target_ref: str | None
+) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref=target_ref,
+    )
+
+    assert code == 2
+    [commit] = runner.argvs_starting("git", "commit", "--no-verify")
+    assert _rolled_back_update(commit[commit.index("-m") + 1]) == (target_ref or "")
+
+
 class _UpdateHistory:
     """A real repo whose history is built the way update-self passes build one: releases
     tagged on an upstream line, landed as ``update-self:`` merges, and rolled back as
@@ -2386,17 +2422,21 @@ class _UpdateHistory:
             ref,
         )
 
-    def roll_back(self, restore_to: str | None = None) -> str:
+    def roll_back(
+        self, rolled_back_update: str | None, restore_to: str | None = None
+    ) -> str:
         """Put the tree back to ``restore_to`` (default: the first parent of the merge
-        at HEAD) and commit it the way the apply does; return the rollback commit."""
+        at HEAD) and commit it the way the apply does, recording ``rolled_back_update``
+        as the release it rolled back (None: no record, as a rollback of an app change,
+        or of an update before the apply recorded one, has); return the commit."""
         restore_to = restore_to or _git_in(self.repo, "rev-parse", "HEAD^1")
         _git_in(self.repo, "read-tree", "-u", "--reset", restore_to)
-        _git_in(
+        update_apply._commit_rollback(
             self.repo,
-            "commit",
-            "-q",
-            "-m",
-            f"Roll back update apply (restore to {restore_to[:12]})\n\nApply failed",
+            update_runtime.Runner(),
+            restore_to,
+            "Apply failed",
+            rolled_back_update=rolled_back_update,
         )
         return _head_sha(self.repo)
 
@@ -2416,14 +2456,25 @@ class _UpdateHistory:
         return capsys.readouterr().out.split()
 
 
+# An update's rollback records the release it rolled back; one made before the apply
+# recorded it is recognised by the history it undid instead.
+_IS_RECORDED = pytest.mark.parametrize(
+    "is_recorded", [True, False], ids=["recorded", "unrecorded"]
+)
+
+
+@_IS_RECORDED
 @pytest.mark.parametrize("target", ["minds-v1", "minds-v2"])
 def test_an_updates_rollback_is_reverted_before_a_retry_or_a_newer_release(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], target: str
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+    is_recorded: bool,
 ) -> None:
     history = _UpdateHistory(tmp_path)
     history.release("minds-v1")
     history.land("minds-v1")
-    rollback = history.roll_back()
+    rollback = history.roll_back("minds-v1" if is_recorded else None)
     history.release("minds-v2")
 
     pending = history.pending_rollbacks(target, capsys)
@@ -2445,7 +2496,7 @@ def test_a_rollback_an_earlier_retry_already_reverted_is_left_alone(
     history = _UpdateHistory(tmp_path)
     history.release("minds-v1")
     history.land("minds-v1")
-    history.revert(history.roll_back())
+    history.revert(history.roll_back("minds-v1"))
     history.release("minds-v2")
 
     assert history.pending_rollbacks("minds-v2", capsys) == []
@@ -2459,10 +2510,10 @@ def test_every_unreverted_rollback_is_listed_newest_first(
     history = _UpdateHistory(tmp_path)
     history.release("minds-v1")
     history.land("minds-v1")
-    older = history.roll_back()
+    older = history.roll_back("minds-v1")
     history.release("minds-v2")
     history.land("minds-v2")
-    newer = history.roll_back()
+    newer = history.roll_back("minds-v2")
     history.release("minds-v3")
 
     assert history.pending_rollbacks("minds-v3", capsys) == [newer, older]
@@ -2477,25 +2528,28 @@ def test_a_reverted_revert_puts_the_rollback_back_in_force(
     history = _UpdateHistory(tmp_path)
     history.release("minds-v1")
     history.land("minds-v1")
-    rollback = history.roll_back()
+    rollback = history.roll_back("minds-v1")
     history.revert(history.revert(rollback))
     history.release("minds-v2")
 
     assert history.pending_rollbacks("minds-v2", capsys) == [rollback]
 
 
+@_IS_RECORDED
 def test_a_failed_retry_of_a_release_already_in_history_is_still_an_updates_rollback(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], is_recorded: bool
 ) -> None:
     # Re-merging a release that is already in history adds no commit, so the retry
     # landed only the revert of the first rollback; its own rollback undid just that.
     history = _UpdateHistory(tmp_path)
     history.release("minds-v1")
     history.land("minds-v1")
-    first = history.roll_back()
+    first = history.roll_back("minds-v1" if is_recorded else None)
     before_retry = _head_sha(history.repo)
     history.revert(first)
-    second = history.roll_back(restore_to=before_retry)
+    second = history.roll_back(
+        "minds-v1" if is_recorded else None, restore_to=before_retry
+    )
     history.release("minds-v2")
 
     assert history.pending_rollbacks("minds-v2", capsys) == [second]
@@ -2505,22 +2559,39 @@ def test_a_failed_retry_of_a_release_already_in_history_is_still_an_updates_roll
     assert (history.repo / "minds-v1.txt").exists()
 
 
-def test_a_users_rollback_of_an_app_change_is_not_an_updates_to_undo(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # The careful flow's rollback-last writes the same subject when the user asks for
-    # an app change back; re-applying it would undo the user's own choice.
-    history = _UpdateHistory(tmp_path)
+def _land_an_app_change(history: _UpdateHistory) -> None:
     _git_in(history.repo, "checkout", "-q", "-b", "app-edit")
     (history.repo / "app.txt").write_text("edited\n")
     _git_in(history.repo, "add", "-A")
     _git_in(history.repo, "commit", "-q", "-m", "Edit the app")
     _git_in(history.repo, "checkout", "-q", history.local)
     history.land("app-edit", subject="Merge branch 'app-edit'")
-    history.roll_back()
+
+
+def test_a_users_rollback_of_an_app_change_is_not_an_updates_to_undo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The careful flow's rollback-last writes the same subject when the user asks for
+    # an app change back; re-applying it would undo the user's own choice.
+    history = _UpdateHistory(tmp_path)
+    _land_an_app_change(history)
+    history.roll_back(None)
     history.release("minds-v1")
 
     assert history.pending_rollbacks("minds-v1", capsys) == []
+
+
+def test_a_rollback_that_records_an_update_is_one_whatever_history_it_undid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The record is what says a rollback is an update's; reading the history it undid
+    # is only the fallback for a rollback made before the apply wrote one.
+    history = _UpdateHistory(tmp_path)
+    _land_an_app_change(history)
+    rollback = history.roll_back("minds-v1")
+    history.release("minds-v1")
+
+    assert history.pending_rollbacks("minds-v1", capsys) == [rollback]
 
 
 def test_re_applying_an_already_applied_merge_is_still_a_no_op_not_a_refusal(
@@ -6837,6 +6908,47 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
 
 
 # surface-chat-tab
+
+
+def test_recovering_an_interrupted_update_records_the_release_it_rolled_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Recovery at boot runs the workspace's own copy of the apply, not the target's,
+    # so it has to write the record too for the next pass to find the rollback by it.
+    history = _UpdateHistory(tmp_path)
+    (history.repo / ".gitignore").write_text("data/\n")
+    _git_in(history.repo, "add", "-A")
+    _git_in(history.repo, "commit", "-q", "-m", "Ignore data")
+    history.release("minds-v1")
+    rollback_to = _head_sha(history.repo)
+    history.land("minds-v1")
+    update_apply_contract.write_marker(
+        update_apply_contract.ApplyMarker(
+            dri_agent="the-lead",
+            rollback_to=rollback_to,
+            merge_ref="minds-v1",
+            target_ref="minds-v1",
+            ff_only=True,
+            worker_bundles=None,
+            phase=update_apply_contract.PHASE_MERGED,
+            pid=12345,
+            started_at=1.0,
+            updated_at=1.0,
+        ),
+        history.repo,
+        now=lambda: 2.0,
+    )
+
+    assert _recover_boot_path(history.repo) == 0
+
+    rollback = _head_sha(history.repo)
+    assert not (history.repo / "minds-v1.txt").exists()
+    assert (
+        _rolled_back_update(_git_in(history.repo, "log", "-1", "--format=%B"))
+        == "minds-v1"
+    )
+    history.release("minds-v2")
+    assert history.pending_rollbacks("minds-v2", capsys) == [rollback]
 
 
 def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:

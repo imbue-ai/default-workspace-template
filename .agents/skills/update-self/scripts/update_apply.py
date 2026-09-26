@@ -183,12 +183,24 @@ def _restore_tree(
 # them apart.
 _ROLLBACK_SUBJECT_PREFIX = "Roll back update apply"
 
+# The trailer an update's rollback carries, naming the release it rolled back. A
+# rollback of an app change writes the same subject without it, and only an update's
+# is a later update-self pass's to undo (:func:`pending_update_rollbacks`).
+_ROLLED_BACK_UPDATE_TRAILER = "Rolled-back-update"
+
 
 def _commit_rollback(
-    repo_root: Path, runner: Runner, rollback_to: str, reason: str
+    repo_root: Path,
+    runner: Runner,
+    rollback_to: str,
+    reason: str,
+    *,
+    rolled_back_update: str | None,
 ) -> None:
     """Commit the staged restore as a forward revert, if there is anything to
     commit (a re-entered rollback may find the commit already landed).
+    ``rolled_back_update`` is the release an update's rollback rolled back, and
+    None for any other apply's.
 
     The gate asks the index, not ``git status``: the commit stages nothing of
     its own, and status also lists untracked files, over which a commit of an
@@ -213,6 +225,8 @@ def _commit_rollback(
             stderr=getattr(staged, "stderr", ""),
         )
     message = f"{_ROLLBACK_SUBJECT_PREFIX} (restore to {rollback_to[:12]})\n\n{reason}"
+    if rolled_back_update is not None:
+        message += f"\n\n{_ROLLED_BACK_UPDATE_TRAILER}: {rolled_back_update}"
     runner.run(
         ["git", "commit", "--no-verify", "-m", message],
         cwd=str(repo_root),
@@ -278,6 +292,10 @@ def _log_records(
     ]
 
 
+# CLEANUP: remove this function, its call in pending_update_rollbacks,
+# _UPDATE_SELF_SUBJECT_PREFIX, and the restore_to group of _ROLLBACK_SUBJECT once every
+# workspace runs a release whose apply writes the _ROLLED_BACK_UPDATE_TRAILER: landing
+# that release reverted every older update's rollback, and each later one records it.
 def _undid_update_content(
     rollback: str,
     restore_to: str,
@@ -286,13 +304,11 @@ def _undid_update_content(
     runner: Runner,
 ) -> bool:
     """Whether the history ``rollback`` undid carries update content: an update-self
-    landing, or the revert of an earlier update's rollback.
+    landing, or the revert of an earlier update's rollback -- how an update's rollback
+    made before the apply recorded the release it rolled back is recognised.
 
-    Every flow's failed apply and the careful flow's user-requested rollback write the
-    same subject; only an update's rollback is a later update-self pass's to undo. A
-    user who asked for an app change back must keep it rolled back. The second case is
-    a retry of a release already in history: its merge adds no commit, so all it landed
-    was the revert that put the release back.
+    The second case is a retry of a release already in history: its merge adds no
+    commit, so all it landed was the revert that put the release back.
     """
     undone = _log_records(
         runner,
@@ -320,8 +336,10 @@ def pending_update_rollbacks(
     the order to revert them in.
 
     Looks at ``target_ref..tip``: everything the workspace committed that the target
-    does not carry. A rollback is undone by a later revert of it that is not itself
-    undone, so reverting a revert puts a rollback back in force. Until each is
+    does not carry. An update's rollback is one carrying the
+    :data:`_ROLLED_BACK_UPDATE_TRAILER`; a user who asked for an app change back must
+    keep it rolled back. A rollback is undone by a later revert of it that is not
+    itself undone, so reverting a revert puts a rollback back in force. Until each is
     reverted, git counts the content it removed as merged, and merging any later
     release lands only what that release changed since: the old release plus a few
     files, which the apply's probes cannot tell from a good update.
@@ -329,22 +347,31 @@ def pending_update_rollbacks(
     newest_first = _log_records(
         runner,
         repo_root,
-        ["log", "--topo-order", "--format=%H%x00%s%x00%b%x1e", f"{target_ref}..{tip}"],
-        fields=3,
+        [
+            "log",
+            "--topo-order",
+            "--format=%H%x00%s%x00"
+            f"%(trailers:key={_ROLLED_BACK_UPDATE_TRAILER},valueonly)%x00%b%x1e",
+            f"{target_ref}..{tip}",
+        ],
+        fields=4,
     )
     # Oldest first, so an earlier update's rollback is known before a later rollback
     # that undid its revert is classified.
     update_rollbacks: set[str] = set()
-    for sha, subject, _body in reversed(newest_first):
+    for sha, subject, rolled_back_update, _body in reversed(newest_first):
         rollback = _ROLLBACK_SUBJECT.match(subject)
-        if rollback is not None and _undid_update_content(
-            sha, rollback.group("restore_to"), update_rollbacks, repo_root, runner
+        if rollback is not None and (
+            rolled_back_update.strip()
+            or _undid_update_content(
+                sha, rollback.group("restore_to"), update_rollbacks, repo_root, runner
+            )
         ):
             update_rollbacks.add(sha)
     # Newest first, so a commit's own undoing is known before its reverts are counted.
     undone: set[str] = set()
     pending: list[str] = []
-    for sha, _subject, body in newest_first:
+    for sha, _subject, _rolled_back_update, body in newest_first:
         if sha in undone:
             continue
         undone.update(_REVERTS_COMMIT.findall(body))
@@ -1370,6 +1397,7 @@ def apply_update(
                 runner,
                 marker.rollback_to,
                 f"Apply failed and was auto-reverted: {failure.headline()}",
+                rolled_back_update=marker.target_ref,
             )
             outcome = _recover_running_state(
                 plan,
@@ -1763,6 +1791,7 @@ def _run_rollback(
         runner,
         record.rollback_to,
         f"Rolled back on the user's request from the update notice (reverting {record.merge_sha[:12]})",
+        rolled_back_update=None,
     )
 
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_RESTORING)
@@ -2011,6 +2040,7 @@ def recover(
             marker.rollback_to,
             f"Interrupted apply of {marker.merge_ref} (last completed phase: "
             f"{marker.phase}) rolled back by recover",
+            rolled_back_update=marker.target_ref,
         )
     except (subprocess.CalledProcessError, OSError) as exc:
         # The marker is kept: the tree is still mid-motion and a later recover
