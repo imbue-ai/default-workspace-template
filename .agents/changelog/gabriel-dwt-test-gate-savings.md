@@ -4,6 +4,8 @@ Harden workers and update-self now run only the tests a change can reach, as `ap
 
 - A path the selector cannot classify still brings in the full root suite. The worker records a mapping for it in the override file, and names a built-in one under `Selector gaps:` in its report, which the lead adds to its single report of built-in issues.
 
+- A worker that has a concrete reason to think a suite the selector left out can observe its change runs that suite too, and records the consumer in the override file. A heal that fixes a regression checks whether the selector would have picked the catching test for the change that caused it, and records the missing consumer when it would not.
+
 - A gate command that dies from a signal is checked against the shed ledger. A shed is rerun once memory is settling, or raised to the lead as a `question`, and is never skipped or treated as a test failure.
 
 - When an agent reports a shed, the lead follows the new `shared/references/freeing-memory.md`: list what could be stopped, offer it to the user, and stop only what they approve.

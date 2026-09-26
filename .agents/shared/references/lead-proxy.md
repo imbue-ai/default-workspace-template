@@ -238,8 +238,9 @@ or supersede the pass per `.agents/shared/references/harden-contention.md`.
 On `type: status`:
 
 - `name: done` -- if the body lists `Selector gaps:`, they are built-in
-  defects (the test selector could not map a built-in path): add them to the
-  pass's single report per `.agents/shared/references/report-built-in-issues.md`.
+  defects (the test selector could not map a built-in path, or missed a suite
+  that observes one): add them to the pass's single report per
+  `.agents/shared/references/report-built-in-issues.md`.
   Then merge the worker's branch:
   ```bash
   git merge --no-ff <WORKER_BRANCH>

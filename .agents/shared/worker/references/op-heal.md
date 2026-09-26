@@ -26,7 +26,7 @@ Fixed <app> on branch `<branch>`. Ready to preview.
 - Change: <one-sentence (root cause + fix)>
 - Frontend / backend: <which, and the files touched>
 - Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
-- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
+- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
@@ -48,6 +48,9 @@ Fixed <app> on branch `<branch>`. Ready to preview.
   touching anything.
 - If you cannot identify a root cause confidently, emit a `stuck` report
   describing what you observed. Don't apply a speculative fix.
+- If an earlier change introduced the break, note that commit: once your fix
+  has its test, check whether the gate would have caught it, per
+  `harden-creation.md` ("A regression the gate let through").
 
 ## Stage 3: Apply the minimal fix
 
@@ -84,7 +87,7 @@ Fixed `<name>`:
 - Scenarios run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
+- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
 ```
 
 **App or service:**
@@ -96,7 +99,7 @@ Fixed app or service `<name>`:
 - Scenarios / tests run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Selector gaps: <none, or each built-in path select-tests left unclassified, with the mapping you added>
+- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
 ```
 
 The last two lines come from the scope file (`harden-creation.md`); a

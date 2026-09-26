@@ -264,9 +264,30 @@ invocation breaks collection. What it selects, and why, is in
 `system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
 changed packages' and skills' own suites with their ratchets, the suites of
 whatever consumes them, the tests paired with a changed script, the browser
-tests of an app that itself changed, and the frontend checks. Do not add runs
-beside it, and do not drop any line of it; if something should run that the
-selector leaves out, that is a mapping to add (below).
+tests of an app that itself changed, and the frontend checks. Do not drop any
+line of it.
+
+**A suite the selector left out.** The selector sees declared dependencies,
+imports, and test files that name a path; a coupling none of those shows is
+invisible to it. When you have a concrete reason to think a suite it left out
+can observe your change (it runs your script as a subprocess, calls your
+service over HTTP, reads a file your change writes), run that suite too, and
+add a `[[consumer]]` entry for it to
+`system/config/test_selection_overrides.toml` as part of your change, so the
+next change to that path selects it without anyone having to notice. When the
+path is built-in, name the entry under `Selector gaps:` (below).
+
+**A regression the gate let through.** When your task fixes something an
+earlier change broke, and a test catches the break (one that already existed,
+or the one you add), check whether the selector picks that test for the
+earlier change:
+
+```bash
+uv run app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
+```
+
+If the test's suite is not among the lines, add the `[[consumer]]` entry that
+would have selected it, the same way.
 
 **An unclassified path.** When the output ends with an `# unclassified` block,
 each listed path is one the selector could not map, and the full root suite is
@@ -278,10 +299,12 @@ observe a change to that path, record it in
 `system/config/test_selection_overrides.toml` (a `[[consumer]]` entry; an empty
 `suites` when no suite beyond the always-run set can observe it) as part of
 your change, and re-run `select-tests` to confirm the path is classified, so
-the next change to it runs only what it needs. When the path is built-in
+the next change to it selects those suites instead of the full root suite. When
+the path is built-in
 (AGENTS.md, "Updates", has the test), name it in your `done` report under
-`Selector gaps:`, one line each with the mapping you added: your lead includes
-it in its report of built-in issues for the pass.
+`Selector gaps:`, one line each with the mapping you added (a consumer entry
+from the paragraphs above goes there too): your lead includes it in its report
+of built-in issues for the pass.
 
 **A command that dies from a signal.** Exit status 137 or 143, or `Killed`
 with no failure output, is not a test failure until the shed ledger says it is
