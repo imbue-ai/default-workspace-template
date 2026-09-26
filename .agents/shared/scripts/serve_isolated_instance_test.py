@@ -930,6 +930,33 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
     assert state["scratch"] == str(scratch)
 
 
+def test_a_copy_that_would_not_fit_on_disk_fails_the_boot_before_anything_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "data" / ".apps" / "my-service"
+    source.mkdir(parents=True)
+    (source / "records.json").write_text("[1]")
+    spawner = _FakeSpawner()
+    code = mod.up(
+        _NAME,
+        ["my-service", "--store", "{copy:store}"],
+        str(tmp_path),
+        tmp_path,
+        port_env_by_name={"main": _PORT_ENV},
+        copy_sources={"store": "data/.apps/my-service"},
+        runner=_RecordingRunner(),
+        http=_FakeHttp(_all_healthy),
+        spawner=spawner,
+        sleeper=lambda _seconds: None,
+        free_space=lambda _path: 0,
+    )
+
+    assert code == 1
+    assert spawner.detached_spawns == []
+    assert not mod._state_dir(tmp_path, _NAME).exists()
+    assert "--copy store=data/.apps/my-service" in capsys.readouterr().err
+
+
 def test_a_port_with_no_env_var_reaches_the_argv_by_placeholder_alone(
     tmp_path: Path,
 ) -> None:
