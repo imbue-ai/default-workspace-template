@@ -134,8 +134,8 @@ Both refusals cost you a turn, and both are easy to avoid:
 Commit before you report -- an uncommitted change is one the orchestrator cannot
 merge, and it will read as a node that did nothing.
 
-Then follow `.agents/shared/references/worker-reporting.md`: read your task file's
-stamped paths, write your report body to a file, and hand that file to the
+Then follow `.agents/shared/references/worker-reporting.md`: read your task
+file's stamped paths, write your report body to a file, and hand that file to the
 launcher's `report` subcommand, which delivers it to the orchestrator. Your
 flow's only report values are `--type status` with `--name done` or
 `--name stuck`. That file tells you to address the user; in this flow the reader
