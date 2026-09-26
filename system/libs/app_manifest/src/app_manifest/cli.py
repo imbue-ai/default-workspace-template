@@ -80,7 +80,14 @@ def validate_manifest(manifest_path: Path, repo_root: Path | None) -> None:
     "--diff-base",
     "diff_base",
     default=None,
-    help="A git ref to diff HEAD against; the scope file then reports the changes outside the footprint.",
+    help="A git ref to diff against; the scope file then splits the changes into those inside "
+    "and outside the footprint.",
+)
+@click.option(
+    "--diff-ref",
+    "diff_ref",
+    default=None,
+    help="The ref the diff runs to (default HEAD); only meaningful with --diff-base.",
 )
 @click.option(
     "--out",
@@ -94,11 +101,14 @@ def footprint(
     for_path: str | None,
     repo_root: Path | None,
     diff_base: str | None,
+    diff_ref: str | None,
     out_path: Path | None,
 ) -> None:
     """Write the scope file for one creation: its own paths, its wiring, and what it references."""
     if manifest_path is not None and for_path is not None:
         raise click.UsageError("pass either a manifest path or --for-path, not both")
+    if diff_ref is not None and diff_base is None:
+        raise click.UsageError("--diff-ref only says where a --diff-base diff runs to; pass both")
     resolved_repo_root = _resolved_repo_root(repo_root)
     try:
         if manifest_path is not None:
@@ -108,7 +118,9 @@ def footprint(
         else:
             raise click.UsageError("pass either a manifest path or --for-path")
         if diff_base is not None:
-            scope = with_diff_against_base(scope, resolved_repo_root, diff_base)
+            scope = with_diff_against_base(
+                scope, resolved_repo_root, diff_base, diff_ref if diff_ref is not None else "HEAD"
+            )
     except AppManifestError as e:
         raise click.ClickException(str(e)) from e
     _emit_scope_file(scope, out_path)
