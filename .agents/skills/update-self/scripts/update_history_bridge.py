@@ -240,13 +240,16 @@ def bridge_history(repo: Path, target: str, state: Path) -> HistoryBridge:
     pending = state.with_suffix(".json.tmp")
     pending.write_text(json.dumps({"twin": twin, "fork_point": fork}))
     pending.replace(state)
-    _git(repo, "replace", "-f", "--graft", twin, *parents, fork)
-    bridged = _merge_base(repo, "HEAD", target, is_graft_seen=True)
-    if bridged != fork:
+    try:
+        _git(repo, "replace", "-f", "--graft", twin, *parents, fork)
+        bridged = _merge_base(repo, "HEAD", target, is_graft_seen=True)
+        if bridged != fork:
+            raise HistoryBridgeError(
+                f"the graft on {twin[:12]} gives a merge base of {bridged}, not the fork point {fork[:12]}"
+            )
+    except HistoryBridgeError:
         _drop_recorded_graft(repo, state)
-        raise HistoryBridgeError(
-            f"the graft on {twin[:12]} gives a merge base of {bridged}, not the fork point {fork[:12]}"
-        )
+        raise
     return HistoryBridge(True, fork, twin, None if stale == twin else stale)
 
 

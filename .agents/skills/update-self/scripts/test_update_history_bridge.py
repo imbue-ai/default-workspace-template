@@ -134,6 +134,17 @@ def _bridge(workspace: Path, capsys) -> dict:
     return json.loads(capsys.readouterr().out)
 
 
+def _refused_bridge(repo: Path, capsys) -> str:
+    """The error ``bridge-history`` prints when it exits 1."""
+    assert (
+        update_self.main(
+            ["bridge-history", "--ref", "minds-v2", "--repo-root", str(repo)]
+        )
+        == 1
+    )
+    return capsys.readouterr().err
+
+
 def _drop(workspace: Path, capsys) -> dict:
     assert (
         update_self.main(["bridge-history", "--drop", "--repo-root", str(workspace)])
@@ -343,16 +354,27 @@ def test_bridge_history_refuses_a_workspace_it_cannot_match_and_changes_nothing(
         stranger, "fetch", "-q", str(upstream), "refs/tags/minds-v2:refs/tags/minds-v2"
     )
 
-    assert (
-        update_self.main(
-            ["bridge-history", "--ref", "minds-v2", "--repo-root", str(stranger)]
-        )
-        == 1
-    )
+    error = _refused_bridge(stranger, capsys)
 
-    assert "shares no history" in capsys.readouterr().err
+    assert "shares no history" in error
     assert _replace_refs(stranger) == []
     assert not (stranger / "data").exists()
+
+
+def test_bridge_history_leaves_no_record_when_the_graft_fails(
+    upstream, workspace, capsys
+) -> None:
+    twin = _git(upstream, "rev-parse", "minds-v1^{commit}")
+    # A held ref lock makes `git replace` fail.
+    lock = workspace / ".git/refs/replace" / f"{twin}.lock"
+    lock.parent.mkdir(parents=True)
+    lock.touch()
+
+    error = _refused_bridge(workspace, capsys)
+
+    assert "git replace" in error
+    assert _replace_refs(workspace) == []
+    assert not (workspace / DEFAULT_STATE_PATH).exists()
 
 
 def test_bridge_history_drop_removes_a_live_graft(workspace, capsys) -> None:
