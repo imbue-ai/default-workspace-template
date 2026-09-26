@@ -221,6 +221,38 @@ describe("a window drag", () => {
     listener.onPressEnd(binding);
     expect(page.style.pointerEvents).toBe("auto");
   });
+  // The chrome's release ends the gesture with no release the pointer source sees (its events stop at the chrome
+  // window's edge), so the redraw must settle the hidden window itself: a return before the cursor is back over
+  // the shell would otherwise show a window whose page stays marked as out.
+  it("shows the page of a window the chrome released out and then returned, with no pointer release seen", async () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const measureContent = (): void => {
+      const content = document.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement | null;
+      if (content !== null) {
+        content.getBoundingClientRect = () => ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+      }
+    };
+    const pageOf = (): HTMLElement =>
+      document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    measureContent();
+    m.redraw.sync();
+    expect(pageOf().style.display).toBe("");
+    store.setCanPopOut(true);
+    const listener = gestureListener as GestureListener;
+    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
+    store.setTearOut("win-1", "out");
+    m.redraw.sync();
+    expect(pageOf().style.display).toBe("none");
+    store.setTearOut("win-1", "released");
+    m.redraw.sync();
+    expect(store.getGesture()).toBeNull();
+    await store.reattachWindow("win-1", null);
+    m.redraw.sync();
+    measureContent();
+    m.redraw.sync();
+    expect(pageOf().style.display).toBe("");
+  });
 });
 
 describe("Escape", () => {

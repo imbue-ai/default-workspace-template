@@ -148,6 +148,8 @@ export function App(): m.Component<AppAttrs> {
   let launcherFieldRise = 0;
   let selectedShortcutKey: string | null = null;
   let pages: LivePagesLayer | null = null;
+  // The window the last redraw painted as dragged, for one more paint once the gesture is gone.
+  let draggedWindowId: string | null = null;
   let backdropArea: HTMLElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let detachGestures: (() => void) | null = null;
@@ -822,9 +824,14 @@ export function App(): m.Component<AppAttrs> {
     },
     onupdate() {
       // The chrome's word on a tear-out arrives between pointer moves (its window has the cursor by then), so
-      // the dragged window is painted here too, hidden or shown as the store now has it.
+      // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
+      // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
+      // painted once more when the gesture is gone: shown again, its page's torn-out mark lifted.
       const gesture = store?.getGesture() ?? null;
-      if (store !== null && gesture !== null && gesture.kind === "move") paintWindow(store, gesture.windowId);
+      const movingWindowId = gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
+      const windowToPaint = movingWindowId ?? draggedWindowId;
+      if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
+      draggedWindowId = movingWindowId;
       pages?.reconcile();
     },
     onremove() {
