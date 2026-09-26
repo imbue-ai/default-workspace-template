@@ -221,13 +221,25 @@ What gets generated:
   `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
   are what let a future edit boot a throwaway instance on a spare port
   against a data copy (see `update-app`). The scaffolded index page also
-  carries the **location beacon** one-liner -- a script that posts
-  `{type: "shell:location", path: location.pathname + location.search}`
-  to `window.parent` on page load. Keep that line on every page the app
-  serves: it is what lets the workspace shell reopen the app's window at
-  the place it was showing (the shell validates the sender's origin and
-  stores the path on the window's record). An app that drops it simply
-  always reopens at its origin.
+  carries the **shell page script** (`SHELL_PAGE_SCRIPT` in the runner) -- a
+  module script that connects the page to the workspace shell framing it,
+  reports where the page is on the handshake (so the shell reopens this
+  app's window at the place it was showing), and installs the **element
+  context menu**: the right-click menu whose last rows ("Copy reference",
+  "Explain...", "Modify...") hand the clicked element to a chat as a
+  `REF-<id>.json` attachment an agent can resolve
+  (`.agents/shared/references/element-references.md`,
+  `docs/system/blueprint/element-reference-menu/`). Keep the script on
+  every page the app serves. An app that drops it always reopens at its
+  origin and gets the browser's own menu. The runner serves the two modules
+  the script imports from its own origin at `/_static/app_contract.js` and
+  `/_static/context_menu.js` (a module import is a fetch without cookies,
+  which the forwarder refuses across origins); keep that route too.
+  A reference names an element by what its markup carries -- its `id`, its
+  `data-*` attributes, its classes, a selector -- so give a list
+  row the `id` or a `data-*` attribute of the record it shows, and an
+  interactive control a stable `id` or a first class that names it, and a
+  reference resolves to one thing.
 - `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
