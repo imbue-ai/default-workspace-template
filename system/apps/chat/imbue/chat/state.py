@@ -23,6 +23,8 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.secret_requests import SecretRequestChatBridge
+from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -60,7 +62,7 @@ class ChatAppState(MutableModel):
     is_secondary: bool = Field(
         default=False,
         description="A second chat beside the live one (a preview): it reports no client activity to the shell, "
-        "whose activity log is the live chat's",
+        "whose activity log is the live chat's, and answers no secret card, whose answer belongs to the live chat",
     )
     # The workspace-wide chat settings the settings routes read and write; the manager reads
     # the same store at create. In memory unless the composition root points it at the file.
@@ -73,6 +75,10 @@ class ChatAppState(MutableModel):
     auth_flows: AuthFlowService
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
+    # The secret requests agents file and the env files their answers are written to, and
+    # the router's bridge the routes reach the chats through (attached by ``create_application``).
+    secret_requests: SecretRequestStore
+    secret_request_bridge: SecretRequestChatBridge | None = None
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not

@@ -556,6 +556,34 @@ describe("opening", () => {
     );
   });
 
+  it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
+    const store = await startedStore();
+    expect(await store.draftText("Explain this element:")).toBe(false);
+    expect(last(notices)).toBe("No app on this machine can take a draft");
+    offerApps(api, socket, [
+      appRecord("docs", {
+        launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
+      }),
+      appRecord("notes", {
+        launch_paths: [
+          launchPathRecord({
+            id: "draft",
+            path: "/api/intake",
+            method: "POST",
+            params: ["message"],
+            presets: { is_draft: "true" },
+            draft_param: "message",
+          }),
+        ],
+      }),
+    ]);
+    api.postLaunchAnswer = "/?note=1";
+    expect(await store.draftText("Explain this element:")).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:notes:draft:{"message":"Explain this element:"}:new`,
+    );
+  });
+
   it("tells the user when the shell refuses, and about a launch path that does not exist", async () => {
     const store = await startedStore();
     api.refusal = "No registered app named 'docs'";
