@@ -272,6 +272,14 @@ export function App(): m.Component<AppAttrs> {
     measure();
   }
 
+  /** Build the live-pages layer over ``host`` once the render that made the host is over (the window chrome is
+   *  in the DOM), and place the pages now: when every load had already landed no further redraw follows. */
+  function startPagesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
+    pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
+    pages.start();
+    pages.reconcile();
+  }
+
   /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and
    *  once more when the drag ends or is cancelled, for the same reason ``paintWindow`` exists. */
   function paintFloatingEntry(current: DesktopStore, app: string): void {
@@ -838,12 +846,7 @@ export function App(): m.Component<AppAttrs> {
             store: current,
             windowId: soloWindowId,
             onPagesHostCreated: (host) => {
-              pages = new LivePagesLayer(host, current, {
-                host: vnode.attrs.host,
-                protocol: vnode.attrs.protocol,
-              });
-              pages.start();
-              pages.reconcile();
+              startPagesLayer(current, host, vnode.attrs);
               // The host is the whole viewport here: the page is laid over it edge to edge, and follows its size.
               observeBackdropSize(current, host);
             },
@@ -925,16 +928,7 @@ export function App(): m.Component<AppAttrs> {
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
                     onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
                     onBringBackWindow: (windowId) => void current.reattachWindow(windowId, null),
-                    onPagesHostCreated: (host) => {
-                      pages = new LivePagesLayer(host, current, {
-                        host: vnode.attrs.host,
-                        protocol: vnode.attrs.protocol,
-                      });
-                      pages.start();
-                      // The render that made the host is over (the window chrome is in the DOM), and when every
-                      // load had already landed no further redraw follows it: the pages are placed now.
-                      pages.reconcile();
-                    },
+                    onPagesHostCreated: (host) => startPagesLayer(current, host, vnode.attrs),
                   }),
               isLauncherOpen
                 ? m(LauncherMenu, {
