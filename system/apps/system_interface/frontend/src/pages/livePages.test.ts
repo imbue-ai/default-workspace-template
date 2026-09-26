@@ -665,4 +665,19 @@ describe("the contract", () => {
     expect(spy.mock.calls[0][0]).toEqual({ type: SHELL_CLOSE_REQUEST });
     expect(api.calls).toContain("closeWindow:home:win-1");
   });
+
+  it("only tells a page that owns the close chord, and forgets that on its next load", async () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false, closeChord: true });
+    spy.mockClear();
+    await store.closeFocusedWindow();
+    expect(spy.mock.calls[0][0]).toEqual({ type: SHELL_CLOSE_REQUEST });
+    expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
+
+    // A reload is a fresh page that has declared nothing yet.
+    load("win-1");
+    await store.closeFocusedWindow();
+    expect(api.calls).toContain("closeWindow:home:win-1");
+  });
 });

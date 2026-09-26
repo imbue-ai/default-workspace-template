@@ -172,8 +172,10 @@ for critical apps; the desktop offers them on the window menu
 (`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
-stored on its window and reopens there, and one that declared `navigation`
-is sent `shell:navigate` when an agent points its window elsewhere.
+stored on its window and reopens there, one that declared `navigation`
+is sent `shell:navigate` when an agent points its window elsewhere, and one
+that declared `closeChord` keeps its window on the close chord (it is only sent
+`shell:close-request`; the browser closes one of its own tabs that way).
 
 ### Who is here
 
@@ -323,7 +325,7 @@ and windows (desktop-interface contracts.md section 8):
 ```bash
 python3 system/scripts/layout.py desktops
 python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open files --path /notes/ --desktop Research
+python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/ --desktop Research
 python3 system/scripts/layout.py open terminal
 python3 system/scripts/layout.py place self --zone left
 python3 system/scripts/layout.py navigate win-0123456789abcdef /other/

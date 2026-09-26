@@ -10,9 +10,10 @@ Provisioning and utility scripts:
   the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
-  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi
-  spawns their `*_check.py` checkers from `.pi/extensions/`. See
-  `tool-call-policies.md` for what each one enforces.
+  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
+  `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same
+  scripts the payload they read on stdin. See `tool-call-policies.md` for what
+  each one enforces.
 - Plugin provisioning: `claude_update_plugin.sh` installs project-scoped Claude
   plugins; `codex_update_plugin.sh` installs native code-guardian into each
   mngr Codex agent's isolated home, after its config is written and before
