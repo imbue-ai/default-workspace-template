@@ -30,9 +30,9 @@ fi
 
 # Cheap guard, matched with bash's own regex so it forks nothing: only a command whose text
 # contains a pipe (`|` or `|&`, not `||`) into tail or head pays for the Python checker, which
-# decides whether what feeds that pipe can be read again (a file read, git history) or not. A
-# backslash may sit between the two, as a line continuation after the pipe.
-pipe_re='(^|[^|])\|&?[[:space:]\]*(tail|head)([^[:alnum:]_.-]|$)'
+# decides whether what feeds that pipe can be read again (a file read, git history) or not.
+# Keep in step with _PIPE_INTO_TRUNCATOR there.
+pipe_re='(^|[^|])\|&?[[:space:]]*(tail|head)([[:space:]]|$)'
 [[ "$command" =~ $pipe_re ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
