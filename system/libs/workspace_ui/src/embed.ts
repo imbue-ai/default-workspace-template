@@ -44,14 +44,17 @@ export const FOCUS_CHAT: "minds:focus-chat" =
 export const WORKSPACE_READY: "minds:workspace-ready" =
   "WORKSPACE_READY" in embedContract ? embedContract.WORKSPACE_READY : "minds:workspace-ready";
 // The pull-out window set (contract v6, the pull-out-window spec), probed the same way.
-// Workspace -> embedder: pull one window out into a desktop window of the chrome's own.
-// Payload: { windowId, title, width, height, grabX, grabY, mode: "drag" | "open" }.
+// Workspace -> embedder: show one pulled-out window in a desktop window of the chrome's own, opened
+// if it has none. Payload: { windowId, title, width, height } (the window's rendered size in CSS px).
 export const POP_OUT_WINDOW: "minds:pop-out-window" =
   "POP_OUT_WINDOW" in embedContract ? embedContract.POP_OUT_WINDOW : "minds:pop-out-window";
-// Workspace -> embedder: the tear-out drag came back inside or was cancelled. Payload: { windowId }.
+// Workspace -> embedder: a title-bar drag began; the chrome watches the cursor from here and pulls
+// the window out once it leaves the chrome's window. Payload: { windowId, title, width, height,
+// grabX, grabY } (the size the window renders at, and where inside it the pointer holds it).
 export const WINDOW_DRAG_STARTED: "minds:window-drag-started" =
   "WINDOW_DRAG_STARTED" in embedContract ? embedContract.WINDOW_DRAG_STARTED : "minds:window-drag-started";
-// Workspace -> embedder: the tear-out drag was released. Payload: { windowId }.
+// Workspace -> embedder: the shell's own end of a watched drag (a release it saw, or Escape).
+// Payload: { windowId, isDetached }.
 export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
   "WINDOW_DRAG_ENDED" in embedContract ? embedContract.WINDOW_DRAG_ENDED : "minds:window-drag-ended";
 // Workspace -> embedder: the pulled-out windows of this shell's active desktop, with their titles.
@@ -64,6 +67,9 @@ export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
 export const REATTACH_WINDOW: "minds:reattach-window" =
   "REATTACH_WINDOW" in embedContract ? embedContract.REATTACH_WINDOW : "minds:reattach-window";
+// Embedder -> workspace: a step of a watched drag: the cursor left the chrome's window and its own
+// desktop window follows it, came back inside, or was released out there.
+// Payload: { windowId, phase: "out" | "in" | "released" }.
 export const TEAR_OUT: "minds:tear-out" = "TEAR_OUT" in embedContract ? embedContract.TEAR_OUT : "minds:tear-out";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;

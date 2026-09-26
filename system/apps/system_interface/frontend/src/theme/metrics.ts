@@ -28,7 +28,6 @@ export interface ThemeMetrics {
   readonly snapThreshold: number;
   readonly unsnapDistance: number;
   readonly dragThreshold: number;
-  /** How far past the viewport a dragged window's pointer travels before the window is pulled out. */
   readonly touchTarget: number;
   readonly floatingEntrySize: number;
   readonly floatingEntryInsetX: number;
