@@ -242,6 +242,22 @@ class CdpClient:
             for event in _PASTE_CHORD_EVENTS:
                 await self.send("Input.dispatchKeyEvent", dict(event), session_id=session_id)
 
+    async def is_shown(self, target_id: str) -> bool:
+        """Whether one tab is the one in front of its window, asked of the page itself.
+
+        The fleet's own record of the foreground tab goes stale when a human switches tabs
+        inside Chrome (see ``LiveBrowser._on_proxy_activity``); the page always knows:
+        exactly one tab of a shown window has a visible document. Raises CdpError when the
+        page cannot answer.
+        """
+        async with self._attached(target_id) as session_id:
+            result = await self.send(
+                "Runtime.evaluate",
+                {"expression": 'document.visibilityState === "visible"', "returnByValue": True},
+                session_id=session_id,
+            )
+        return result.get("result", {}).get("value") is True
+
     @contextlib.asynccontextmanager
     async def _attached(self, target_id: str) -> AsyncIterator[str]:
         """A flattened session on one target for the page-domain calls of the block.

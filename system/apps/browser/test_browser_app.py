@@ -141,7 +141,8 @@ def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_res
     running = bsession.LiveBrowser(browser_id="browser-1")
     running._lifecycle = "running"
     cdp = TabClosingCdpClient(
-        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}]
+        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}],
+        shown_target_id="t1",
     )
     running._cdp = cdp
     running._active_target_id = "t1"
