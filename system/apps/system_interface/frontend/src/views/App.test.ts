@@ -390,6 +390,28 @@ describe("a press outside what is open", () => {
   });
 });
 
+describe("a pulled-out window", () => {
+  it("draws a ghost in place of the window, whose Bring back returns the window to the desktop", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("true");
+    (document.querySelector('[data-ghost-action="bring-back"]') as HTMLElement).click();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("false");
+    expect(api.layoutOf("home", CLIENT).placements.find((p) => p.window_id === "win-1")?.is_detached).toBe(false);
+  });
+});
+
 describe("a solo shell", () => {
   /** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
    *  empty and the real observer never fires. */
