@@ -212,9 +212,10 @@ class MessageDisplay(FrozenModel):
     # Chip title (CHIP) or skill name (SKILL_EXPANSION); omitted otherwise.
     display_label: str | None = None
     # The body to display when a wrapper sentinel was stripped (a fleet nudge), or the user's
-    # own words behind a stripped context block (PROMPT_WITH_CONTEXT), or a secret notice without
-    # the background-task reports flushed with it (SECRET_RESOLUTION); omitted when the raw
-    # content is already the display body.
+    # own words behind a stripped context block (PROMPT_WITH_CONTEXT); omitted when the raw
+    # content is already the display body. On a SECRET_RESOLUTION, which draws no row, the
+    # notice alone when background-task reports were flushed with it: the page reads the
+    # declined note from it.
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error. SECRET_RESOLUTION only: stored /
     # declined / superseded.
