@@ -1159,6 +1159,12 @@ registerProcessor('pb', PB);`;
         const closeRemoteTab = () => {
           if (browserId === null) return;
           fetch(new URL("browsers/" + browserId + "/close-tab", document.baseURI), { method: "POST" })
+            .then(async (response) => {
+              if (response.ok) return;
+              let reason = "";
+              try { reason = (await response.json()).error || ""; } catch (_) {}
+              console.warn("[browser] close-tab refused (" + response.status + ")", reason);
+            })
             .catch((error) => console.warn("[browser] close-tab request failed", error));
         };
         const connection = connectToShell({
