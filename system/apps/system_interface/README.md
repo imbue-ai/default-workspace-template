@@ -167,8 +167,10 @@ for critical apps; the desktop offers them on the window menu
 (`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
-stored on its window and reopens there, and one that declared `navigation`
-is sent `shell:navigate` when an agent points its window elsewhere.
+stored on its window and reopens there, one that declared `navigation`
+is sent `shell:navigate` when an agent points its window elsewhere, and one
+that declared `closeChord` keeps its window on the close chord (it is only sent
+`shell:close-request`; the browser closes one of its own tabs that way).
 
 ### Who is here
 
