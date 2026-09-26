@@ -243,13 +243,14 @@ Outbound:
 ## 7. The app contract (`app_contract.js`)
 
 Built once, into the shell's static output, and served by every app at `/_static/app_contract.js` from its own origin (the shell serves it too, with `Access-Control-Allow-Origin: *`): a page imports it as a module, and a module import is a fetch without cookies, which the desktop client's forwarder and the share gateway refuse across origins.
-Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), disconnect()}`.
-`openPath` sends `shell:open` below; `startWithText` sends `shell:start-with-text`.
+Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), draftText(text), disconnect()}`.
+`openPath` sends `shell:open` below; `startWithText` sends `shell:start-with-text`; `draftText` sends `shell:draft-text`.
+Beside it the shell builds and every app serves `/_static/context_menu.js`, the element context menu of the element-reference-menu plan (section 9 there), which drafts through `draftText`.
 `capabilities` is `{navigation: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect.
 
 | Direction | Type | Payload |
 |---|---|---|
-| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "path"}`; after every `load` of the frame and when the window's desktop changes |
+| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "app", "path"}`; after every `load` of the frame and when the window's desktop changes; `app` is the name of the app the window belongs to (element-reference-menu plan section 5) |
 | shell to page | `shell:shown`, `shell:hidden` | `{}` |
 | shell to page | `shell:close-request` | `{}` |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |
@@ -258,11 +259,12 @@ Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavig
 | page to shell | `shell:focused` | `{}`; the shell raises the page's window |
 | page to shell | `shell:open` | `{"path", "ifPresent"}`; opens a window of the posting frame's own app on the posting window's desktop, with `client_id` the hosting client |
 | page to shell | `shell:start-with-text` | `{"text"}`; the shell runs the launcher's primary free-text row with the text (launcher-and-getting-started plan section 3.7), so a page starts a chat without naming the chat app; with no free-text row on the machine the shell notifies and does nothing |
+| page to shell | `shell:draft-text` | `{"text"}`; the shell drafts the text, unsent, through the pinned app's launch path with a `draft_param` into this client's view of the pinned window (as the avatar dialog's "Design your own..." does, post-launch-paths plan section 4.3), else through the first draft row of the machine; with neither the shell notifies and does nothing (element-reference-menu plan section 5) |
 
 Following rule: after every `desktops_updated`, for every live page of a window whose stored `path` differs from that page's last reported path, the shell sends `shell:navigate` when the page declared navigation, else reassigns the iframe `src`, and records the stored path as that page's last report at once, so a second broadcast before the page lands does not navigate it again.
 A page's own report never navigates it.
 
-Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, re-posts the inner page's `shell:focused` as its own, and forwards the inner page's `shell:open` of a sub-agent view, from one module named in `test_embed_ratchets.py`'s allowlist.
+Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, re-posts the inner page's `shell:focused` as its own, and forwards the inner page's `shell:open` of a sub-agent view and its `shell:draft-text`, from one module named in `test_embed_ratchets.py`'s allowlist.
 A `shell:open` whose path is the root's own (`/` or `/?chat=<id>`) it answers itself, by selecting that chat in place, rather than asking the shell for a second root window.
 The shell and the minds chrome accept messages only from frames they created, so nothing else reaches them from an inner frame.
 
