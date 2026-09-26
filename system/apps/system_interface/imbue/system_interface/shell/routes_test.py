@@ -1157,7 +1157,6 @@ def test_an_open_whose_beside_is_no_window_or_fights_minimized_is_refused_before
     _register_client(app, "c1", "home")
     refused = _op(client, "open", {"app": "files", "path": "/notes/", "beside": "Not A Window"}, _TERMINAL_REQUESTER)
     assert refused.status_code == 400 and "window" in refused.get_json()["detail"]
-    # Out of sight and across half the screen are two different places to put a window.
     both = _op(client, "open", {"app": "files", "beside": "self", "minimized": True}, _TERMINAL_REQUESTER)
     assert both.status_code == 400 and "not both" in both.get_json()["detail"]
     assert _desktop_windows(client) == []
