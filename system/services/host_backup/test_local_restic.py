@@ -119,14 +119,7 @@ def test_full_backup_forget_prune_cycle(tmp_path: Path) -> None:
     )
     assert second_backup.returncode == 0, second_backup.stderr
 
-    forget_result = restic_forget(
-        keep_hourly=1,
-        keep_daily=1,
-        keep_weekly=1,
-        keep_monthly=1,
-        env_overrides=env,
-    )
-    assert forget_result.returncode == 0, forget_result.stderr
+    _forget(env, keep_hourly=1)
 
     prune_result = restic_prune(env)
     assert prune_result.returncode == 0, prune_result.stderr
