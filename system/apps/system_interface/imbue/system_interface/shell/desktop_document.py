@@ -808,21 +808,17 @@ def with_window_detached(layout: DesktopLayout, window_id: WindowId) -> DesktopL
 
 @pure
 def with_window_reattached(layout: DesktopLayout, window_id: WindowId, frame: Frame | None) -> DesktopLayout:
-    """Bring back: the window shown on the desktop again, normal, on top of the stack, at ``frame`` (clamped) when a
-    drop back onto the desktop named one, else at its kept frame."""
+    """Bring back: the window shown on the desktop again, normal, on top of the stack, at ``frame`` when a drop back
+    onto the desktop named one, else at its kept frame. A ``Frame`` lies inside the unit square by construction;
+    the frontend, which takes the drop as raw fractions, clamps it into the square first."""
     current = placement_of(layout, window_id)
-    landing = (
-        current.frame
-        if frame is None
-        else clamp_frame_into_unit_square(frame.x, frame.y, frame.width, frame.height)
-    )
     return _with_placement_on_top(
         layout,
         current.model_copy_update(
             to_update(current.field_ref().is_minimized, False),
             to_update(current.field_ref().is_detached, False),
             to_update(current.field_ref().state, WindowState.NORMAL),
-            to_update(current.field_ref().frame, landing),
+            to_update(current.field_ref().frame, current.frame if frame is None else frame),
         ),
     )
 
