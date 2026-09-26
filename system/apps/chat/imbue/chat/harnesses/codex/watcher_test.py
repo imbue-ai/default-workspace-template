@@ -89,13 +89,19 @@ def _turn_context_line(model: str, effort: str, timestamp: str) -> dict[str, Any
     return {"timestamp": timestamp, "type": "turn_context", "payload": {"model": model, "effort": effort}}
 
 
+def _write_model_state(agent_state_dir: Path, model: str, effort: str) -> Path:
+    """Write the model-bar state file with fast on, as the ledger mirrors the selected settings."""
+    state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"model": model, "effort": effort, "fast": True}))
+    return state_path
+
+
 def test_effective_model_from_turn_context_is_reflected_in_the_state_file(tmp_path: Path) -> None:
     """§4b: the watcher writes the EFFECTIVE per-turn model (from turn_context) into the model-bar
     state file, preserving the ledger-owned fast bit, so a framework fallback shows in the bar."""
-    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
     # The ledger already mirrored the SELECTED settings (fast on).
-    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "high", "fast": True}))
+    state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "high")
     # The turn actually RAN on a fallback model/effort (over-quota downgrade).
     _write_rollout(
         tmp_path,
@@ -119,9 +125,7 @@ def test_effective_model_from_turn_context_is_reflected_in_the_state_file(tmp_pa
 def test_effective_model_matching_the_file_writes_nothing_new(tmp_path: Path) -> None:
     """When the effective model equals what the file already holds (selected == effective), the
     watcher does not rewrite it (no churn), leaving the existing content untouched."""
-    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "high", "fast": True}))
+    state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "high")
     before = state_path.read_text()
     _write_rollout(
         tmp_path,
@@ -150,9 +154,7 @@ def _settings_applied_line(model: str, effort: str, timestamp: str) -> dict[str,
 def test_an_effort_picked_between_turns_is_not_reverted_to_the_previous_turn(tmp_path: Path) -> None:
     """Codex logs a settings change to the rollout before any turn runs on it. That append must not
     make the watcher write the previous turn's effort over the pick the ledger just recorded."""
-    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "high", "fast": True}))
+    state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "high")
     rollout = _write_rollout(
         tmp_path,
         [
@@ -165,7 +167,7 @@ def test_an_effort_picked_between_turns_is_not_reverted_to_the_previous_turn(tmp
 
     # The user picks a new effort between turns: the ledger records it, and codex appends the
     # change to the rollout.
-    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "max", "fast": True}))
+    _write_model_state(tmp_path, "gpt-5.6-sol", "max")
     with rollout.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_settings_applied_line("gpt-5.6-sol", "max", "2026-08-03T00:00:03Z")) + "\n")
     watcher.get_all_events()
@@ -178,9 +180,7 @@ def test_an_effort_picked_between_turns_is_not_reverted_to_the_previous_turn(tmp
 def test_a_fallback_turn_after_an_effort_change_is_still_reflected(tmp_path: Path) -> None:
     """A settings change holds off the reflection only until the next turn: a turn that then runs on
     a fallback still shows in the bar."""
-    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "max", "fast": True}))
+    state_path = _write_model_state(tmp_path, "gpt-5.6-sol", "max")
     _write_rollout(
         tmp_path,
         [
