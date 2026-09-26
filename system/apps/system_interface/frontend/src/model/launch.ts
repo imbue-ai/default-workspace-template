@@ -24,6 +24,8 @@ export const TEXT_TOO_LONG_REASON = "Too long to send from here";
 
 /** Why a text cannot be started anywhere: no app declares a launch path that takes typed text. */
 export const NO_TEXT_APP_REASON = "No app on this machine can start a chat";
+/** Why a page's ``shell:draft-text`` went nowhere. */
+export const NO_DRAFT_APP_REASON = "No app on this machine can take a draft";
 
 /** Every launch path of every openable app, in registry and manifest order. */
 export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
@@ -69,6 +71,12 @@ export function freeTextRowsOf(apps: readonly AppRecord[]): AppLaunch[] {
   return orderAppLaunches(appLaunchesOf(apps)).filter(
     (launch) => launchRowKindOf(launch.app, launch.launchPath) === "text",
   );
+}
+
+/** The draft rows of the machine (element-reference-menu plan section 6): the free-text rows whose launch path
+ *  takes text to be drafted rather than sent, in launcher order. */
+export function draftRowsOf(apps: readonly AppRecord[]): AppLaunch[] {
+  return freeTextRowsOf(apps).filter((launch) => launch.launchPath.draft_param !== null);
 }
 
 /** The launch path of ``app`` with ``launchId``, or null when the app declares none by that id. */

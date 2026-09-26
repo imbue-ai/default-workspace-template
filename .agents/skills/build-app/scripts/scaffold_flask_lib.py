@@ -79,7 +79,19 @@ _FORWARD_PORT_PATH = (
     Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 )
 LOWEST_AUTO_PORT = 8080
+# The browser-side modules every app serves from its own origin (a module import is a fetch
+# without cookies, which the forwarder refuses across origins): the app contract and the
+# element context menu, built by the shell's frontend into its static output. Mirrors
+# app_manifest.registry's SHELL_APP_CONTRACT_PATH and SHELL_CONTEXT_MENU_PATH; the scaffold
+# runs in its own environment and cannot import the library, so it carries the path.
+SHELL_STATIC_MODULES_DIR = (
+    "system/apps/system_interface/imbue/system_interface/static/_static"
+)
+SHELL_STATIC_MODULE_NAMES = ("app_contract.js", "context_menu.js")
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+# The <name> of data/.secrets/<name>.env, as the chat app's secret card and
+# app_manifest.primitives.SECRET_FILE_NAME_PATTERN spell it.
+SECRET_FILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
 
@@ -122,9 +134,23 @@ def _validate_name(name: str) -> None:
         )
     registration_problem = _load_forward_port().validate_service_name(name)
     if registration_problem is not None:
-        sys.exit(f"error: --name {name!r} could not be registered: {registration_problem}")
+        sys.exit(
+            f"error: --name {name!r} could not be registered: {registration_problem}"
+        )
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
+
+
+def _validate_secrets_file(name: str) -> None:
+    # The name is spliced into the program's `bash -c` string as
+    # data/.secrets/<name>.env, so anything outside the slug would break the
+    # command or name a file the secret card can never write.
+    if not SECRET_FILE_NAME_RE.fullmatch(name):
+        sys.exit(
+            f"error: --secrets-file {name!r} must be lowercase letters, digits and "
+            "hyphens, starting with a letter or digit "
+            "(the <name> of data/.secrets/<name>.env)"
+        )
 
 
 def _supervisord_dropin_dir(supervisord_conf: Path) -> Path:
@@ -286,7 +312,7 @@ WebSockets.
 import os
 from pathlib import Path
 
-from flask import Flask, Response
+from flask import Flask, Response, abort, send_file
 from werkzeug.serving import run_simple
 
 # Persistent state for this app lives under DATA_DIR. It defaults to
@@ -304,24 +330,60 @@ DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 # Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
 PORT = int(os.environ.get("{port_env_var}", "{port}"))
 
+# The browser-side modules the workspace shell builds and every app serves from
+# its own origin: the app contract (how a page talks to the shell framing it) and
+# the element context menu (the right-click menu whose last rows hand the
+# clicked element to a chat). A module import is a fetch without cookies, which
+# the forwarder refuses across origins, so they are served here rather than from
+# the shell. Relative to the repo root the service runs from, like DATA_DIR.
+SHELL_STATIC_MODULES_DIR = Path("{SHELL_STATIC_MODULES_DIR}")
+SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
+
+# The script every page serves (keep it on every page): it connects the page to
+# the shell, reports where the page is on the handshake so the shell can reopen
+# this app's window at the same place, and installs the element context menu.
+# A page visited outside the shell runs it harmlessly: nothing arrives, and the
+# menu's Explain and Modify rows grey out.
+SHELL_PAGE_SCRIPT = """\
+<script type="module">
+  import {{ connectToShell }} from "/_static/app_contract.js";
+  import {{ installElementContextMenu }} from "/_static/context_menu.js";
+  let handshake = null;
+  const connection = connectToShell({{
+    onHandshake: (received) => {{
+      handshake = received;
+      connection.location(location.pathname + location.search, document.title);
+    }},
+  }});
+  installElementContextMenu({{ connection, handshake: () => handshake }});
+</script>"""
+
 app = Flask("{package}", static_folder=None)
 
 
 @app.route("/")
 def index() -> Response:
-    # The location beacon: post the path being viewed one hop up (to the
-    # workspace shell embedding this page) on each page load, so the shell can
-    # reopen this app's window at the same place. Keep the line on every page you
-    # serve; the shell validates the sender's origin and ignores the rest.
     return Response(
-        "<!doctype html><html><body>"
+        "<!doctype html><html><head><title>{name}</title></head><body>"
         "<h1>{name}</h1>"
         "<p>{description}</p>"
-        "<script>if (window.parent !== window) window.parent.postMessage("
-        '{{type: "shell:location", path: location.pathname + location.search}}, "*");</script>'
-        "</body></html>",
+        + SHELL_PAGE_SCRIPT
+        + "</body></html>",
         mimetype="text/html",
     )
+
+
+@app.route("/_static/<basename>")
+def shell_module(basename: str) -> Response:
+    # The two shell-built modules and nothing else: a name that is not one of
+    # them is a 404, so this route can never read outside that directory.
+    if basename not in SHELL_STATIC_MODULE_NAMES:
+        abort(404)
+    module_path = SHELL_STATIC_MODULES_DIR / basename
+    if not module_path.is_file():
+        abort(404)
+    # Flask resolves a relative path against the app's own directory, not the cwd.
+    return send_file(module_path.absolute(), mimetype="text/javascript")
 
 
 @app.route("/health")
@@ -349,7 +411,7 @@ from inline_snapshot import snapshot
 _DIR = Path(__file__).parent
 
 
-# --- Code safety ---
+# Code safety
 
 
 def test_prevent_todos() -> None:
@@ -380,7 +442,7 @@ def test_prevent_bare_print() -> None:
     rc.check_bare_print(_DIR, snapshot(0))
 
 
-# --- Exception handling ---
+# Exception handling
 
 
 def test_prevent_bare_except() -> None:
@@ -395,7 +457,7 @@ def test_prevent_builtin_exception_raises() -> None:
     rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
-# --- Import style ---
+# Import style
 
 
 def test_prevent_inline_imports() -> None:
@@ -406,7 +468,7 @@ def test_prevent_relative_imports() -> None:
     rc.check_relative_imports(_DIR, snapshot(0))
 
 
-# --- Banned libraries and patterns ---
+# Banned libraries and patterns
 
 
 def test_prevent_asyncio_import() -> None:
@@ -509,7 +571,7 @@ copies = {{data = "data/.apps/{name}"}}
 # workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {entry_point}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -552,7 +614,21 @@ def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
     return _supervisord_program_path(conf, name)
 
 
-def _write_supervisord_program(path: Path, name: str, package: str, port: int) -> None:
+def _entry_point_command(name: str, secrets_file: str | None) -> str:
+    """The program's entry point, wrapped so a declared secret file's variables reach it.
+
+    `with_secrets.py` is the one sanctioned reader of data/.secrets/ (see the
+    connect-external-service skill): it loads the file into the child's environment
+    and execs the app, so the value appears in no config file and no command line.
+    """
+    if secrets_file is None:
+        return name
+    return f"python3 system/scripts/with_secrets.py data/.secrets/{secrets_file}.env -- {name}"
+
+
+def _write_supervisord_program(
+    path: Path, name: str, package: str, port: int, secrets_file: str | None
+) -> None:
     """Write the app's supervisord program to its own drop-in file.
 
     The command is wrapped in `bash -c "..."` because supervisord exec's commands
@@ -566,7 +642,12 @@ def _write_supervisord_program(path: Path, name: str, package: str, port: int) -
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
+        _SUPERVISORD_PROGRAM_TEMPLATE.format(
+            name=name,
+            package=package,
+            port=port,
+            entry_point=_entry_point_command(name, secrets_file),
+        )
     )
 
 
@@ -679,6 +760,11 @@ def main() -> None:
         help="repo root (defaults to nearest ancestor containing pyproject.toml + system/supervisord.conf)",
     )
     parser.add_argument(
+        "--secrets-file",
+        default=None,
+        help="the <name> of a data/.secrets/<name>.env the app needs (requested through the connect-external-service skill); the program runs under with_secrets.py so its variables reach the app",
+    )
+    parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
         help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
@@ -691,6 +777,8 @@ def main() -> None:
     args = parser.parse_args()
 
     _validate_name(args.name)
+    if args.secrets_file is not None:
+        _validate_secrets_file(args.secrets_file)
     icon_markup = _read_and_validate_icon(Path(args.icon_file))
     repo_root = (
         Path(args.repo_root).resolve()
@@ -711,7 +799,9 @@ def main() -> None:
         list(args.extra_dep),
         icon_markup,
     )
-    _write_supervisord_program(program_path, args.name, package, port)
+    _write_supervisord_program(
+        program_path, args.name, package, port, args.secrets_file
+    )
 
     if not args.skip_uv_sync:
         _validate_manifest(repo_root, package)

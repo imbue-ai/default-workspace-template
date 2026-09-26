@@ -72,7 +72,7 @@ def _extract_test_function_names(file_path: Path) -> frozenset[str]:
     )
 
 
-# Meta: ensure every project has ratchets
+# --- Meta: ensure every project has ratchets ---
 
 
 def test_every_project_has_test_ratchets_file() -> None:
@@ -124,18 +124,21 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
     )
 
 
-# Repo-wide ratchets
+# --- Repo-wide ratchets ---
 
 
 def _find_bash_scripts_without_strict_mode() -> list[str]:
     """Find bash scripts missing 'set -euo pipefail', excluding vendored code.
 
-    Scans the files git would commit (tracked, plus untracked but not ignored),
-    so a script is checked before it is committed while gitignored trees are
-    not: ``data/`` holds workspace scratch such as update-self's copies of the
-    venv, whose third-party scripts are not this template's to govern.
+    Only scripts git would consider count (tracked, or untracked but not
+    ignored), for the same reason :func:`_live_prose_files` asks git: in a live
+    workspace ``data/`` accumulates generated machine state, and the terminal
+    app writes shell scripts into it. Those are gitignored, not the template's
+    code, and their style is not this ratchet's business. Asking git also drops
+    the non-source trees that hold no template code (virtualenvs, node_modules,
+    git internals), all of which are gitignored.
     """
-    listed = subprocess.run(
+    candidates = subprocess.run(
         [
             "git",
             "ls-files",
@@ -152,7 +155,7 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
         check=True,
     )
     violations: list[str] = []
-    for rel in filter(None, listed.stdout.split("\0")):
+    for rel in filter(None, candidates.stdout.split("\0")):
         script = _REPO_ROOT / rel
         if _VENDORED_DIR in script.parents or not script.is_file():
             continue
@@ -282,7 +285,7 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
     )
 
 
-# Retired-terminology ratchets (the creation rename)
+# --- Retired-terminology ratchets (the creation rename) ---
 #
 # The workspace vocabulary is: users make "creations" -- apps (opened as
 # tabs), skills (an automation is a skill run on a schedule), data, and
@@ -409,7 +412,7 @@ def test_prevent_application_terminology() -> None:
     )
 
 
-# Apps are apps, not services
+# --- Apps are apps, not services ---
 #
 # The shell is a window manager over apps; "service" is a background program
 # with no tab. The shell's own code, its frontend, and the frontend library the
