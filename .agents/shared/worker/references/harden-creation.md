@@ -298,13 +298,12 @@ carried), and a mapping for each is the fix. Decide which suites can actually
 observe a change to that path, record it in
 `system/config/test_selection_overrides.toml` (a `[[consumer]]` entry; an empty
 `suites` when no suite beyond the always-run set can observe it) as part of
-your change, commit it, and re-run `select-tests` to confirm the path is classified, so
-the next change to it selects those suites instead of the full root suite. When
-the path is built-in
-(AGENTS.md, "Updates", has the test), name it in your `done` report under
-`Selector gaps:`, one line each with the mapping you added (a consumer entry
-from the paragraphs above goes there too): your lead includes it in its report
-of built-in issues for the pass.
+your change, commit it, and re-run `select-tests` to confirm the path is
+classified, so the next change to it selects those suites instead of the full
+root suite. When the path is built-in (AGENTS.md, "Updates", has the test),
+name it in your `done` report under `Selector gaps:`, one line each with the
+mapping you added (a consumer entry from the paragraphs above goes there too):
+your lead includes it in its report of built-in issues for the pass.
 
 **A command that dies from a signal.** Exit status 137 or 143, or `Killed`
 with no failure output, is not a test failure until the shed ledger says it is
