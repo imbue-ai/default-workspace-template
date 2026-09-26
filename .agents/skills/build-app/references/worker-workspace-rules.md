@@ -8,8 +8,8 @@ no chat. Everything here is copied from it, with the parts meant for the other
 kind of agent taken out.
 
 Your brief is your task file and the handoffs quoted inside it. Read those and
-`.agents/skills/build-app/references/worker-node.md`, then read of the
-rest of the repo only what your own subtask needs.
+`.agents/skills/build-app/references/worker-node.md`, then read only as much of
+the rest of the repo as your own subtask needs.
 
 You launch no agents of your own.
 
@@ -65,7 +65,7 @@ Skip records for trivial work -- a single quick file read, and nothing else to d
 
 ## Steps and prose
 
-- **Never name the machinery to the user — describe the work instead.** (You never address the user yourself; the orchestrating agent does. This governs the words you put in a title or a summary, which reach the user through it.) The `tk` calls and the words for them are invisible plumbing: the user sees only the progress timeline and your prose, so a sentence like "Let me close this step" refers to something they cannot see and reads as a non-sequitur. This is the single most common leak, so treat it as a hard rule. When talking to the user, NEVER use these words in their `tk` sense: **step, ticket, `tk`, close/closing, open/reopen, start/starting, mark, check off, in progress, record, todo, task list, progress view**. There is nothing to announce before or after a `tk` call — just make the call silently and let the timeline update itself. The same hard rule covers git (see "Git" below): **commit, branch, push, merge, PR, rebase, checkout, diff, repo** are plumbing words too.
+- **Never name the machinery to the user — describe the work instead.** (You never address the user yourself; the orchestrating agent does. This governs the words you put in a title or a summary, which reach the user through it.) The `tk` calls and the words for them are invisible plumbing: the user sees only the progress timeline and your prose, so a sentence like "Let me close this step" refers to something they cannot see and reads as a non-sequitur. This is the single most common leak, so treat it as a hard rule. When talking to the user, NEVER use these words in their `tk` sense: **step, ticket, `tk`, close/closing, open/reopen, start/starting, mark, check off, in progress, record, todo, task list, progress view**. There is nothing to announce before or after a `tk` call — just make the call silently and let the timeline update itself. The same hard rule covers git: **commit, branch, push, merge, PR, rebase, checkout, diff, repo** are plumbing words too.
   - Instead, speak only about the actual work, using natural transitions. These are good: "Moving on to the API wiring." / "Finishing up with the tests." / "Next I'll check the config." / "That's the migration done — now the cleanup." Say nothing at all if there's no substantive work to describe.
   - Concrete rewrites: "Let me close this step" / "Closing this out" / "Marking this done" → just say what you finished, e.g. "The parser changes are in." (or say nothing). "Starting the next step" → "Now I'll wire up the endpoint." "Let me add a step for that" → "I'll also need to update the schema." If a sentence's subject is the record rather than the work, delete or rewrite it.
 - There is no "failed" status — every record terminates as `closed`. If a step didn't pan out, still close it; the summary describes the work you did, and your final message reports the result honestly.
@@ -79,8 +79,8 @@ Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `prio
 # Important commands and conventions:
 
 - Never run `uv sync`, always run `uv sync --all-packages` instead
-- **Headless scripting with no human in the loop** (testing an app you just built, scraping a page into a file, a one-off check): use **Playwright's Python API** in the root venv (`from playwright.sync_api import sync_playwright`, run via `uv run python`). No pane, no fleet, no ownership -- just a browser you drive from a script.
-- The browser here is Fortress (a stealth-patched Chromium fork), not Playwright's own managed Chromium. For the Python API, pass `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly to `chromium.launch(...)`, since Playwright's browser-cache lookup only auto-discovers builds it downloaded itself. (The fleet does this for you.) Fortress installs asynchronously on first container boot (the one-shot `env-converge` program's env.d units), so in a fresh workspace confirm it finished -- `supervisorctl status env-converge` or `test -x /opt/fortress/tilion-fortress/tilion` -- before launching, or the launch fails with a clear error. It runs as-is under the docker provider's gVisor runtime; if you hit a "No usable sandbox!" error on a runtime without unprivileged user namespaces, pass `args=["--no-sandbox"]`. See `system/libs/bootstrap/README.md` for the full deferral contract.
+- Drive a browser with **Playwright's Python API** in the root venv (`from playwright.sync_api import sync_playwright`, run via `uv run python`): for testing an app you just built, scraping a page into a file, or a one-off check.
+- The browser here is Fortress (a stealth-patched Chromium fork), not Playwright's own managed Chromium. For the Python API, pass `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly to `chromium.launch(...)`, since Playwright's browser-cache lookup only auto-discovers builds it downloaded itself. Fortress installs asynchronously on first container boot (the one-shot `env-converge` program's env.d units), so in a fresh workspace confirm it finished -- `supervisorctl status env-converge` or `test -x /opt/fortress/tilion-fortress/tilion` -- before launching, or the launch fails with a clear error. It runs as-is under the docker provider's gVisor runtime; if you hit a "No usable sandbox!" error on a runtime without unprivileged user namespaces, pass `args=["--no-sandbox"]`. See `system/libs/bootstrap/README.md` for the full deferral contract.
 
 # Always remember these guidelines:
 
@@ -128,7 +128,6 @@ To add, change, or remove a service, add/edit/delete its own `system/supervisord
 # Git
 
 `data/` is gitignored (it holds all workspace data: `data/memories/` for Claude memory, `data/.tickets/`, per-app data, uploads, and machine state).
-
 
 # Silly error workarounds
 
