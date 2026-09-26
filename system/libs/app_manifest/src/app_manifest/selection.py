@@ -1396,8 +1396,9 @@ def select_tests_for_diff(repo_root: Path, diff_base: str, diff_ref: str) -> Sui
         uncommitted = list_uncommitted_paths(repo_root)
         if uncommitted:
             raise SuiteSelectionError(
-                "the working tree has changes the diff does not include; commit them, then run "
-                "select-tests again: " + ", ".join(uncommitted)
+                "the working tree has changes the diff does not include; commit them, or remove "
+                "any that are not part of the change, then run select-tests again: "
+                + ", ".join(uncommitted)
             )
     return select_tests(
         load_repo_layout(repo_root),
