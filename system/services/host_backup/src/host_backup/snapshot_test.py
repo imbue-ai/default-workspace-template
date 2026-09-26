@@ -104,9 +104,9 @@ def _start_fake_outer_helper(
     result_path = trigger_dir / "result.json"
 
     def _loop() -> None:
-        # Keyed on the request id, as the real caller keys its wait for the result:
-        # a file's mtime can repeat across two requests or change under one, which
-        # would drop or double-handle a request.
+        # Keyed on the request id, as the real helper and caller are: under gVisor
+        # an unchanged file's reported mtime moves when the sandbox drops its cached
+        # entry and re-reads the host's, so an mtime key handles one request twice.
         last_request_id: str | None = None
         handled = 0
         while not stop_event.is_set():

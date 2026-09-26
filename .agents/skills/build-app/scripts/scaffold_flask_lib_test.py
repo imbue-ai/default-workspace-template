@@ -19,7 +19,6 @@ writes, asserting only what holds whatever this machine is listening on.
 from __future__ import annotations
 
 import configparser
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -233,9 +232,9 @@ def test_the_scaffold_writes_the_port_it_picked(tmp_path: Path) -> None:
         for match in scaffold_flask_lib.LOCALHOST_PORT_RE.finditer(program)
     }
     runner = (root / "system/apps/news/src/news/runner.py").read_text()
-    runner_default = re.search(r'os\.environ\.get\("NEWS_PORT", "(\d+)"\)', runner)
-    assert runner_default is not None
-    assert int(runner_default.group(1)) == program_port
+    assert runner == scaffold_flask_lib._lib_runner(
+        "news", "news", "a test app", program_port
+    )
     assert program_port >= scaffold_flask_lib.LOWEST_AUTO_PORT
     assert program_port not in {8080, 8081}
 
