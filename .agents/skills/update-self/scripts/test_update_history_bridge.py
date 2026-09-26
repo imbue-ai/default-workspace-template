@@ -57,11 +57,10 @@ def _commit(repo: Path, message: str, files: dict[str, str]) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
-@pytest.fixture
-def template(tmp_path: Path) -> Path:
+@pytest.fixture(scope="module")
+def template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A template that vendors mngr, released as ``minds-v1`` and ``minds-v1.1``."""
-    template = tmp_path / "template"
-    template.mkdir()
+    template = tmp_path_factory.mktemp("template")
     _git(template, "init", "-q", "-b", "main")
     _commit(
         template,
@@ -76,14 +75,15 @@ def template(tmp_path: Path) -> Path:
     return template
 
 
-@pytest.fixture
-def upstream(tmp_path: Path, template: Path) -> Path:
+@pytest.fixture(scope="module")
+def upstream(tmp_path_factory: pytest.TempPathFactory, template: Path) -> Path:
     """``template`` rewritten as upstream's is, then released again as ``minds-v2`` without the vendored copy."""
-    upstream = tmp_path / "upstream.git"
-    _git(tmp_path, "clone", "-q", "--mirror", template.as_uri(), str(upstream))
+    root = tmp_path_factory.mktemp("upstream")
+    upstream = root / "upstream.git"
+    _git(root, "clone", "-q", "--mirror", template.as_uri(), str(upstream))
     subprocess.run(_UPSTREAM_FILTER, cwd=upstream, capture_output=True, check=True)
-    work = tmp_path / "release"
-    _git(tmp_path, "clone", "-q", str(upstream), str(work))
+    work = root / "release"
+    _git(root, "clone", "-q", str(upstream), str(work))
     _commit(work, "Pin mngr by git", {"pyproject.toml": "mngr = 'git'\n"})
     _git(work, "tag", "-a", "minds-v2", "-m", "minds-v2")
     _git(work, "push", "-q", "origin", "main", "minds-v2")
