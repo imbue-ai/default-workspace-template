@@ -25,8 +25,8 @@ from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
-# Where registered designs live: under the app data directory (the originals are the user's), relative to the
-# workspace root the supervised process runs from.
+# Where registered designs live: under the app data directory (the originals are the user's), named relative to
+# the workspace root ``build_shell_state`` resolves it against.
 DEFAULT_AVATAR_CATALOG_DIRECTORY: Final[Path] = Path("data/.apps/system_interface/avatars")
 CATALOG_FILENAME: Final[str] = "catalog.json"
 CATALOG_FILE_VERSION: Final[int] = 1
