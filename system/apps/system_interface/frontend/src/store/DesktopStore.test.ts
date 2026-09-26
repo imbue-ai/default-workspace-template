@@ -1457,4 +1457,32 @@ describe("pulled-out windows", () => {
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
     expect(reports[reports.length - 1]).toEqual([]);
   });
+
+  it("brings a window of another desktop back by showing that desktop first, and ignores a window that is gone", async () => {
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home" })];
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] }),
+      desktopRecord("work", { windows: [windowRecord("win-5", "notes", "/n")] }),
+    ];
+    api.writeLayout("work", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-5", { is_detached: true })],
+    });
+    const { store } = makePopOutStore();
+    await store.start(NO_LINK);
+    expect(store.getState().activeDesktopId).toBe("home");
+    // The chrome names the window, not a desktop: the drop lands on the window's own desktop.
+    await store.reattachWindow("win-5", { x: 0.1, y: 0.1, width: 0.5, height: 0.5 });
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(last(activePlacements(store.getState()))).toMatchObject({
+      window_id: "win-5",
+      is_detached: false,
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 },
+    });
+    expect(api.layoutOf("work", CLIENT).placements.find((p) => p.window_id === "win-5")?.is_detached).toBe(false);
+    expect(api.layoutOf("home", CLIENT).placements.some((p) => p.window_id === "win-5")).toBe(false);
+    expect(savedCalls()).toHaveLength(1);
+    await store.reattachWindow("win-9", null);
+    expect(savedCalls()).toHaveLength(1);
+  });
 });

@@ -1209,9 +1209,13 @@ export class DesktopStore {
   }
 
   /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
-   *  entry's menu): shown and raised, at ``frame`` when a drop back onto the desktop named one. Saved at once: the chrome's
-   *  window is closing on the answer. */
+   *  entry's menu): shown and raised, at ``frame`` when a drop back onto the desktop named one. The window's own
+   *  desktop is shown first when the client has moved to another meanwhile (the chrome names a window, not a
+   *  desktop). Saved at once: the chrome's window is closing on the answer. */
   async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
+    const found = findWindow(this.state, windowId);
+    if (found === null) return;
+    if (found.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(found.desktop.id);
     this.dispatch({ type: "window_reattached", windowId, frame });
     await this.flushPendingSave();
   }
