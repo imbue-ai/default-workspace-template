@@ -92,6 +92,11 @@ def _pipelines(segments: tuple[CommandSegment, ...]) -> list[list[CommandSegment
         # A blank line after a pipe reaches here as an empty `;` segment; bash keeps piping.
         if current and not segment.words and set(segment.terminator or "") == {";"}:
             continue
+        # `x)|` pipes the whole group or substitution the `)` closes, not just `x`.
+        if ")" in (segment.terminator or "") and _continues_pipeline(
+            segment.terminator
+        ):
+            segment = segment._replace(words=())
         current.append(segment)
         if not _continues_pipeline(segment.terminator):
             pipelines.append(current)

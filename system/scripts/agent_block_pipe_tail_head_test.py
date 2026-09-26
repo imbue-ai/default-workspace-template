@@ -80,7 +80,9 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         # The lexer returns `)|` as one token; it still pipes the group into head.
         "(pytest)|head",
         "(cd x && pytest)|tail -5",
+        "(pytest; cat log)|tail -5",
         "cat $(pytest)|head",
+        "cat <(pytest)|head",
         "cat f | head; pytest | tail -5",
         "cat f && pytest | tail -20",
         "cat f & pytest | tail -20",
