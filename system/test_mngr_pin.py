@@ -36,6 +36,7 @@ _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 sys.path.insert(0, str(_REPO_ROOT / "system" / "scripts"))
 
 import list_mngr_plugins  # noqa: E402
+import set_mngr_pin  # noqa: E402
 
 _MNGR_REPOS = (_PUBLIC_MNGR_REPO, _INTERNAL_MNGR_REPO)
 
@@ -257,8 +258,6 @@ def test_every_imported_mngr_module_is_installed(module: str) -> None:
         f"{module} is not in the installed packages"
     )
 
-
-import set_mngr_pin  # noqa: E402
 
 _OTHER_REV = "fedcba9876543210fedcba9876543210fedcba98"
 _MAINTAINED_FILES = (
