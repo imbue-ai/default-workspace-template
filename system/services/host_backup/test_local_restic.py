@@ -24,6 +24,7 @@ from host_backup.restic import (
 )
 from host_backup.restic import (
     extract_snapshot_id_from_backup_output,
+    find_backup_summary,
     init_repo,
     is_repo_missing_error,
     probe_repo,
@@ -265,6 +266,73 @@ def test_forget_thins_snapshots_that_each_came_from_their_own_snapshot_path(
         "keep-hourly=1 must keep exactly the newest tick's snapshot across all "
         f"snapshot paths, but {len(surviving)} of 4 survived"
     )
+
+
+def test_backup_skips_unchanged_files_when_each_tick_reads_a_new_snapshot_path(
+    tmp_path: Path,
+) -> None:
+    """A tick reading a new snapshot path must still reuse the previous backup's file metadata.
+
+    outer_trigger reads every tick from `<mount>/snapshots/<timestamp>/home`.
+    The copy below keeps each file's size and mtime but not its inode, as a
+    fresh snapshot seen through another path may not.
+    """
+    repo_dir = tmp_path / "repo"
+    env = _env_for_local_repo(repo_dir)
+    assert init_repo(env).returncode == 0
+
+    first_tick = tmp_path / "snapshots" / "2026-09-24T10:00:00.000000Z" / "home"
+    (first_tick / "workspace").mkdir(parents=True)
+    for index in range(20):
+        (first_tick / "workspace" / f"file-{index}.txt").write_text(f"content {index}")
+    first = restic_backup(
+        source_path=first_tick, excludes=(), tag="tick-1", env_overrides=env
+    )
+    assert first.returncode == 0, first.stderr
+
+    second_tick = tmp_path / "snapshots" / "2026-09-24T11:00:00.000000Z" / "home"
+    shutil.copytree(first_tick, second_tick)
+    (second_tick / "workspace" / "file-7.txt").write_text("changed since tick 1")
+    second = restic_backup(
+        source_path=second_tick, excludes=(), tag="tick-2", env_overrides=env
+    )
+    assert second.returncode == 0, second.stderr
+
+    summary = find_backup_summary(second.stdout)
+    assert summary is not None, second.stdout
+    assert summary["files_unmodified"] == 19
+    assert summary["files_changed"] == 1
+    assert summary["files_new"] == 0
+
+
+def test_backup_stores_the_source_tree_at_the_snapshot_root(tmp_path: Path) -> None:
+    """`<snapshot>:/` restores exactly the backed-up tree -- the subpath minds restores from."""
+    repo_dir = tmp_path / "repo"
+    env = _env_for_local_repo(repo_dir)
+    assert init_repo(env).returncode == 0
+    source_dir = tmp_path / "snapshots" / "2026-09-24T10:00:00.000000Z" / "home"
+    (source_dir / "workspace").mkdir(parents=True)
+    (source_dir / "workspace" / "notes.md").write_text("restore me")
+
+    backup_result = restic_backup(
+        source_path=source_dir, excludes=(), tag="tick", env_overrides=env
+    )
+    assert backup_result.returncode == 0, backup_result.stderr
+    snapshot_id = extract_snapshot_id_from_backup_output(backup_result.stdout)
+
+    target_dir = tmp_path / "restored"
+    restore_result = run_restic(
+        ("restore", f"{snapshot_id}:/", "--target", str(target_dir)),
+        env_overrides=env,
+    )
+    assert restore_result.returncode == 0, restore_result.stderr
+    assert sorted(
+        p.relative_to(target_dir).as_posix() for p in target_dir.rglob("*")
+    ) == [
+        "workspace",
+        "workspace/notes.md",
+    ]
+    assert (target_dir / "workspace" / "notes.md").read_text() == "restore me"
 
 
 def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
