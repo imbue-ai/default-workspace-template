@@ -40,7 +40,7 @@ def _runner_returning(finished: _Finished, seen: dict[str, Any] | None = None):
 
 
 def test_pi_reads_its_actual_signed_out_message(tmp_path: Path) -> None:
-    """Measured against 0.83.0 and 0.84.1: an empty dir, an unknown provider id and a
+    """Measured against 0.83.0, 0.84.1 and 0.87.1: an empty dir, an unknown provider id and a
     malformed auth.json all print this and exit ZERO. Matching anything else makes NO
     unreachable and the gate a round trip that always says yes."""
     runner = _runner_returning(

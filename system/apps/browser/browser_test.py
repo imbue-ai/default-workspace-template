@@ -10,9 +10,10 @@ from typing import Any
 import pytest
 from browser import chrome_args, chrome_launcher, manifest
 from browser import session as bsession
-from browser.errors import UnknownBrowserError
+from browser.cdp_client import CdpError
+from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from loguru import logger
-from mock_cdp_client_test import NavigatingCdpClient
+from mock_cdp_client_test import NavigatingCdpClient, RecordingCdpClient
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
@@ -2005,3 +2006,119 @@ def test_restore_brings_saved_browsers_beyond_the_cap_back_stopped(monkeypatch: 
     assert mgr.get("browser-2")._lifecycle == "stopped"
     assert asyncio.run(mgr.get("browser-2").tab_urls()) == (["https://y"], 0)
     assert mgr.the_browser() is mgr.get("browser-1")
+
+
+def test_press_paste_delivers_the_chord_to_the_tab_and_detaches() -> None:
+    client = RecordingCdpClient(failing_method=None)
+
+    asyncio.run(client.press_paste("t1"))
+
+    methods = [method for method, _params, _session in client.frames]
+    assert methods == [
+        "Target.attachToTarget",
+        "Input.dispatchKeyEvent",
+        "Input.dispatchKeyEvent",
+        "Input.dispatchKeyEvent",
+        "Input.dispatchKeyEvent",
+        "Target.detachFromTarget",
+    ]
+    assert client.frames[0][1] == {"targetId": "t1", "flatten": True}
+    key_events = [(params["type"], params["key"], params["modifiers"]) for _m, params, _s in client.frames[1:5]]
+    assert key_events == [
+        ("rawKeyDown", "Control", 2),
+        ("rawKeyDown", "v", 2),
+        ("keyUp", "v", 2),
+        ("keyUp", "Control", 0),
+    ]
+    # Every key event rides the attached session; the detach names it back.
+    assert {session for _m, _p, session in client.frames[1:5]} == {"session-1"}
+    assert client.frames[5][1] == {"sessionId": "session-1"}
+
+
+def test_press_paste_detaches_even_when_a_key_event_is_refused() -> None:
+    client = RecordingCdpClient(failing_method="Input.dispatchKeyEvent")
+
+    with pytest.raises(CdpError):
+        asyncio.run(client.press_paste("t1"))
+
+    assert client.frames[-1][0] == "Target.detachFromTarget"
+
+
+def test_paste_into_active_tab_reports_whether_the_chord_landed() -> None:
+    browser = _running_browser("browser-1")
+    client = RecordingCdpClient(failing_method=None)
+    browser._cdp = client
+    browser._active_target_id = "t2"
+
+    async def go() -> tuple[bool, bool, bool]:
+        landed = await browser.paste_into_active_tab()
+        browser._cdp = RecordingCdpClient(failing_method="Input.dispatchKeyEvent")
+        refused = await browser.paste_into_active_tab()
+        browser._cdp = None
+        without_chromium = await browser.paste_into_active_tab()
+        return landed, refused, without_chromium
+
+    assert asyncio.run(go()) == (True, False, False)
+    assert client.frames[0] == ("Target.attachToTarget", {"targetId": "t2", "flatten": True}, None)
+
+
+class _TabClosingCdpClient(NavigatingCdpClient):
+    """Answers targets and records the tabs the fleet creates, closes, and foregrounds."""
+
+    def __init__(self, targets: list[dict[str, Any]]) -> None:
+        super().__init__(targets, navigation_failure=None)
+        self.created: list[str] = []
+        self.closed: list[str] = []
+        self.activated: list[str] = []
+
+    async def create_target(self, url: str) -> str:
+        target_id = f"new-{len(self.created) + 1}"
+        self.created.append(url)
+        self.targets.append({"targetId": target_id, "url": url})
+        return target_id
+
+    async def close_target(self, target_id: str) -> None:
+        self.closed.append(target_id)
+        self.targets = [t for t in self.targets if t["targetId"] != target_id]
+
+    async def activate(self, target_id: str) -> None:
+        self.activated.append(target_id)
+
+
+def test_close_active_tab_closes_the_shown_tab_and_foregrounds_the_last_remaining_one() -> None:
+    browser = _running_browser("browser-1")
+    cdp = _TabClosingCdpClient(
+        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}]
+    )
+    browser._cdp = cdp
+    browser._active_target_id = "t1"
+
+    asyncio.run(browser.close_active_tab())
+
+    assert cdp.closed == ["t1"]
+    assert cdp.created == []
+    assert cdp.activated == ["t2"]
+    assert browser._active_target_id == "t2"
+
+
+def test_close_active_tab_replaces_the_last_tab_so_the_window_stays_open() -> None:
+    # Chromium closes its window with its last tab, and the window-bound sweep would then stop
+    # the browser: the last tab is swapped for a fresh home page instead.
+    browser = _running_browser("browser-1")
+    cdp = _TabClosingCdpClient([{"targetId": "t1", "url": "https://one.example"}])
+    browser._cdp = cdp
+    browser._active_target_id = "t1"
+
+    asyncio.run(browser.close_active_tab())
+
+    assert cdp.created == [bsession._HOME_URL]
+    assert cdp.closed == ["t1"]
+    assert [t["targetId"] for t in cdp.targets] == ["new-1"]
+    assert browser._active_target_id == "new-1"
+
+
+def test_close_active_tab_refuses_a_browser_that_is_not_running() -> None:
+    browser = bsession.LiveBrowser(browser_id="browser-1")
+
+    with pytest.raises(BrowserNotDrivableError):
+        asyncio.run(browser.close_active_tab())

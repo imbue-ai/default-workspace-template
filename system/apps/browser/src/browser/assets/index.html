@@ -909,6 +909,9 @@ registerProcessor('pb', PB);`;
     if (driving()) return;
     reconcileModifiers(e);  // backstop: sync held modifiers to the event's flags
     if (e.metaKey || e.key === "Meta") return;
+    // The keydown never went to the remote, so its release must not either: an unpaired
+    // release lands on the remote keyboard while the paste chord is being delivered.
+    if (e.ctrlKey && (e.key === "c" || e.key === "x" || e.key === "v")) return;
     const keysym = keysymFor(e);
     if (keysym === null) return;
     e.preventDefault();
@@ -968,6 +971,7 @@ registerProcessor('pb', PB);`;
   document.addEventListener("paste", (e) => {
     if (driving()) return;
     e.preventDefault();
+    releaseHeldInput();  // the remote keyboard is quiescent before the paste chord lands
     const dt = e.clipboardData;
     if (!dt) return;
     for (const item of dt.items || []) {
@@ -1152,7 +1156,17 @@ registerProcessor('pb', PB);`;
   if (window.parent !== window) {
     import("/_static/app_contract.js")
       .then(({ connectToShell }) => {
-        const connection = connectToShell({});
+        // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
+        // the window-bound sweep would otherwise stop the whole browser.
+        const closeRemoteTab = () => {
+          if (browserId === null) return;
+          fetch(new URL("browsers/" + browserId + "/close-tab", document.baseURI), { method: "POST" })
+            .catch((error) => console.warn("[browser] close-tab request failed", error));
+        };
+        const connection = connectToShell({
+          capabilities: { navigation: false, closeChord: true },
+          onCloseRequest: closeRemoteTab,
+        });
         window.addEventListener("focus", () => connection.focused());
         if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
       })

@@ -240,3 +240,14 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
     assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
     assert 'import("/_static/app_contract.js")' in page_html
+
+
+def test_render_page_points_the_pty_frame_only_once_the_page_has_a_box() -> None:
+    page = SessionPage(name="terminal-1", title="Terminal 1", pty_path="/?arg=session", pty_label="pty")
+
+    page_html = render_page(PageConfig(session="terminal-1", page=page))
+
+    # ttyd fits its grid once at mount, so the frame may only be pointed at a rendered page.
+    assert "new ResizeObserver" in page_html
+    assert "pointFrameAt(originFor(page.pty_label) + page.pty_path)" in page_html
+    assert "if (frame.src !== src) frame.src = src;" in page_html

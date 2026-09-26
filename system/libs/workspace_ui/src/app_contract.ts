@@ -57,10 +57,13 @@ export interface ShellHandshake {
 /**
  * What a page can do beyond the base contract. A page that handles `shell:navigate` in place
  * declares `navigation: true` and gives `onNavigate`; a shell then asks it to move rather than
- * reloading its frame.
+ * reloading its frame. A page that owns the close chord (a browser closing one of its own
+ * tabs) declares `closeChord: true` and gives `onCloseRequest`; a shell then only sends
+ * `shell:close-request` and leaves the window open.
  */
 export interface ShellCapabilities {
   navigation: boolean;
+  closeChord: boolean;
 }
 
 /** What an open does when a page of this app at the same path is already showing. */
@@ -93,7 +96,7 @@ export interface ShellConnection {
 /** Raised when a page's handlers and its declared capabilities disagree. */
 export class ShellContractError extends Error {}
 
-const DEFAULT_CAPABILITIES: ShellCapabilities = { navigation: false };
+const DEFAULT_CAPABILITIES: ShellCapabilities = { navigation: false, closeChord: false };
 
 function optionalString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -117,6 +120,9 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
     throw new ShellContractError(
       "a page that handles shell:navigate declares capabilities.navigation: true, and one that declares it gives onNavigate",
     );
+  }
+  if (capabilities.closeChord && handlers.onCloseRequest === undefined) {
+    throw new ShellContractError("a page that declares capabilities.closeChord: true gives onCloseRequest");
   }
   return capabilities;
 }
@@ -166,7 +172,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   }
 
   boundWindow.addEventListener("message", onMessage);
-  send(SHELL_CAPABILITIES, { navigation: capabilities.navigation });
+  send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
     isFramed,
     focused: () => send(SHELL_FOCUSED, {}),

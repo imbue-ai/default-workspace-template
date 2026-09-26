@@ -7,6 +7,30 @@ from browser.cdp_client import CdpClient, CdpError
 _UNUSED_ENDPOINT = "http://127.0.0.1:0"
 
 
+class RecordingCdpClient(CdpClient):
+    """A CdpClient with no socket: records every protocol frame and answers attaches with one session."""
+
+    def __init__(self, failing_method: str | None) -> None:
+        super().__init__(_UNUSED_ENDPOINT)
+        # When set, a send of this method raises CdpError, as Chromium's refusal would.
+        self.failing_method = failing_method
+        self.frames: list[tuple[str, dict[str, Any], str | None]] = []
+
+    async def send(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.frames.append((method, dict(params or {}), session_id))
+        if method == self.failing_method:
+            raise CdpError(f"{method}: refused")
+        if method == "Target.attachToTarget":
+            return {"sessionId": "session-1"}
+        return {}
+
+
 class NavigatingCdpClient(CdpClient):
     """A CdpClient with no socket: answers the tabs it was built with and records every navigation."""
 

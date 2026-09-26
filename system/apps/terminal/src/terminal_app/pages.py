@@ -122,6 +122,30 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     empty.hidden = false;
   }
 
+  let sizeWatch = null;
+  function hasBox() {
+    return document.documentElement.clientWidth > 0 && document.documentElement.clientHeight > 0;
+  }
+
+  // ttyd fits its grid once, when it mounts, and only listens for resizes after its socket
+  // opens; a frame pointed while this page has no box (the shell creates it hidden) keeps
+  // that empty fit until a real resize. So the frame is pointed only once the page has a box.
+  function pointFrameAt(src) {
+    sizeWatch?.disconnect();
+    sizeWatch = null;
+    if (hasBox()) {
+      if (frame.src !== src) frame.src = src;
+      return;
+    }
+    sizeWatch = new ResizeObserver(() => {
+      if (!hasBox()) return;
+      sizeWatch.disconnect();
+      sizeWatch = null;
+      if (frame.src !== src) frame.src = src;
+    });
+    sizeWatch.observe(document.documentElement);
+  }
+
   function show(page) {
     current = page.name;
     document.title = page.title;
@@ -133,8 +157,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       frame.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
-      const src = originFor(page.pty_label) + page.pty_path;
-      if (frame.src !== src) frame.src = src;
+      pointFrameAt(originFor(page.pty_label) + page.pty_path);
     }
     connection?.location(pathFor(page.name), page.title);
   }
@@ -200,7 +223,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     import("__CONTRACT_PATH__")
       .then(({ connectToShell }) => {
         connection = connectToShell({
-          capabilities: { navigation: true },
+          capabilities: { navigation: true, closeChord: false },
           onNavigate: navigate,
           onShown: focusPty,
         });

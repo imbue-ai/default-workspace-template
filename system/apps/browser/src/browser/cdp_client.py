@@ -234,12 +234,51 @@ class CdpClient:
         if error_text:
             raise CdpError(f"Page.navigate to {url}: {error_text}")
 
+    async def press_paste(self, target_id: str) -> None:
+        """Deliver a Ctrl+V chord to one tab through the protocol, raising CdpError on refusal.
+
+        The chord goes to the page's input pipeline directly, so it needs no X keyboard
+        focus and cannot interleave with keys a human is physically holding on the XTEST
+        keyboard. ``rawKeyDown`` (no ``text``) is what makes Chromium run the editing
+        command for the combination rather than insert a character.
+        """
+        attached = await self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+        session_id = attached["sessionId"]
+        try:
+            for event in _PASTE_CHORD_EVENTS:
+                await self.send("Input.dispatchKeyEvent", dict(event), session_id=session_id)
+        finally:
+            await self._detach_quietly(session_id)
+
     async def _detach_quietly(self, session_id: str) -> None:
         """Drop a session opened for one call; a detach that fails changes nothing for the caller."""
         try:
             await self.send("Target.detachFromTarget", {"sessionId": session_id})
         except CdpError as e:
             logger.debug("cdp detach of session {} ignored ({})", session_id, e)
+
+
+_CONTROL_MODIFIER = 2
+_CONTROL_KEY_EVENT: dict[str, Any] = {
+    "key": "Control",
+    "code": "ControlLeft",
+    "windowsVirtualKeyCode": 17,
+    "nativeVirtualKeyCode": 17,
+}
+_V_KEY_EVENT: dict[str, Any] = {
+    "key": "v",
+    "code": "KeyV",
+    "windowsVirtualKeyCode": 86,
+    "nativeVirtualKeyCode": 86,
+}
+# Ctrl+V as ``Input.dispatchKeyEvent`` params, in press order: Control down, v down, v up,
+# Control up. The modifier flag rides every event while Control is held.
+_PASTE_CHORD_EVENTS: tuple[dict[str, Any], ...] = (
+    {"type": "rawKeyDown", "modifiers": _CONTROL_MODIFIER, **_CONTROL_KEY_EVENT},
+    {"type": "rawKeyDown", "modifiers": _CONTROL_MODIFIER, **_V_KEY_EVENT},
+    {"type": "keyUp", "modifiers": _CONTROL_MODIFIER, **_V_KEY_EVENT},
+    {"type": "keyUp", "modifiers": 0, **_CONTROL_KEY_EVENT},
+)
 
 
 def _is_real_page(target: dict[str, Any]) -> bool:

@@ -79,6 +79,8 @@ interface LivePage {
    *  (``fromPath``, a stored record still naming it is stale) and the path it reported. */
   pendingReport: { readonly fromPath: string; readonly path: string } | null;
   isNavigationCapable: boolean;
+  /** Whether the page owns the close chord: it gets ``shell:close-request`` and its window stays open. */
+  isCloseChordCapable: boolean;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
   lastSentVisibility: boolean | null;
@@ -180,6 +182,10 @@ export class LivePagesLayer implements PageDriver {
   requestClose(windowId: string): void {
     const page = this.pages.get(windowId);
     if (page !== undefined) sendToChildFrame(page.frame, SHELL_CLOSE_REQUEST);
+  }
+
+  ownsCloseChord(windowId: string): boolean {
+    return this.pages.get(windowId)?.isCloseChordCapable === true;
   }
 
   /** Put one shown page over its window's content box as it is now, leaving its stacking and
@@ -341,6 +347,7 @@ export class LivePagesLayer implements PageDriver {
       lastReportedPath: openingPath,
       pendingReport: null,
       isNavigationCapable: false,
+      isCloseChordCapable: false,
       greetedDesktopId: null,
       lastSentVisibility: null,
       isHeldForStop: false,
@@ -349,6 +356,7 @@ export class LivePagesLayer implements PageDriver {
     // has to be told who it is again, and has declared nothing yet.
     frame.addEventListener("load", () => {
       page.isNavigationCapable = false;
+      page.isCloseChordCapable = false;
       page.lastSentVisibility = null;
       this.greet(page);
       this.syncVisibility(page, page.wrapper.style.display !== "none");
@@ -418,7 +426,9 @@ export class LivePagesLayer implements PageDriver {
 
   private takeCapabilities(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const page = this.pageOfFrame(frame);
-    if (page !== undefined) page.isNavigationCapable = payload.navigation === true;
+    if (page === undefined) return;
+    page.isNavigationCapable = payload.navigation === true;
+    page.isCloseChordCapable = payload.closeChord === true;
   }
 
   private takeLocation(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

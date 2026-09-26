@@ -1,0 +1,1 @@
+A terminal now opens at the right size for its window instead of needing a nudge. The terminal page waits until its window actually has a size before starting the terminal inside it, so the first layout is the real one rather than an empty placeholder that only a resize would correct.

@@ -871,6 +871,38 @@ class LiveBrowser(MutableModel):
                 return
             await self._focus_and_foreground(target_id)
 
+    async def close_active_tab(self) -> None:
+        """Close the tab the pane is showing, keeping the Chromium window alive.
+
+        The window-bound sweep stops a browser whose window is gone, and Chromium closes
+        its window with its last tab, so the last tab is replaced with a fresh home page
+        before it goes. A browser that is not running has no tab to close.
+        """
+        if self._cdp is None or self._lifecycle != "running":
+            raise BrowserNotDrivableError(f"browser {self.browser_id} is not running")
+        async with self._lock:
+            try:
+                targets = await self._cdp.page_targets()
+            except _BROWSER_ERRORS as e:
+                raise BrowserNotDrivableError(f"browser {self.browser_id} cannot list its tabs: {e}") from e
+            if not targets:
+                return
+            active = self._active_target()
+            closing = next((t["targetId"] for t in targets if t["targetId"] == active), targets[-1]["targetId"])
+            remaining = [t["targetId"] for t in targets if t["targetId"] != closing]
+            if not remaining:
+                notify_chromium_processes_expected()
+                try:
+                    replacement = await asyncio.wait_for(self._cdp.create_target(_HOME_URL), timeout=_RESTORE_NAV_TIMEOUT)
+                except (asyncio.TimeoutError, *_BROWSER_ERRORS) as e:
+                    raise BrowserNotDrivableError(f"browser {self.browser_id} could not open a fresh tab: {e}") from e
+                remaining = [replacement]
+            try:
+                await asyncio.wait_for(self._cdp.close_target(closing), timeout=5.0)
+            except (asyncio.TimeoutError, *_BROWSER_ERRORS) as e:
+                raise BrowserNotDrivableError(f"browser {self.browser_id} could not close its tab: {e}") from e
+            await self._focus_and_foreground(remaining[-1])
+
     # tabs (the fleet's own CDP client is the single source of truth)
 
     def _active_target(self) -> str | None:
@@ -889,6 +921,18 @@ class LiveBrowser(MutableModel):
             logger.debug("active-url targets ignored ({})", e)
             return None
         return next((t["url"] for t in targets if t["targetId"] == active), None)
+
+    async def paste_into_active_tab(self) -> bool:
+        """Press Ctrl+V in the tab the pane is showing, through CDP; False when it could not land."""
+        target = self._active_target()
+        if not target or self._cdp is None:
+            return False
+        try:
+            await asyncio.wait_for(self._cdp.press_paste(target), timeout=5.0)
+        except Exception as e:  # noqa: BLE001  (CDP best-effort; the route reports the failure)
+            logger.debug("paste into {} ignored ({})", target, e)
+            return False
+        return True
 
     async def _focus_and_foreground(self, target_id: str) -> None:
         """The one tab primitive: foreground ``target_id`` in Chrome so pixelflux, which

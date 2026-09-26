@@ -102,24 +102,51 @@ describe("connectToShell", () => {
   it("announces its capabilities to the parent once, before anything else", () => {
     const parent = framed();
     connection = connectToShell({});
-    expect(parent.postMessage.mock.calls).toEqual([[{ type: SHELL_CAPABILITIES, navigation: false }, "*"]]);
+    expect(parent.postMessage.mock.calls).toEqual([
+      [{ type: SHELL_CAPABILITIES, navigation: false, closeChord: false }, "*"],
+    ]);
 
     connection.disconnect();
-    const navigating = connectToShell({ onNavigate: vi.fn(), capabilities: { navigation: true } });
-    expect(parent.postMessage.mock.calls[1]).toEqual([{ type: SHELL_CAPABILITIES, navigation: true }, "*"]);
+    const navigating = connectToShell({
+      onNavigate: vi.fn(),
+      capabilities: { navigation: true, closeChord: false },
+    });
+    expect(parent.postMessage.mock.calls[1]).toEqual([
+      { type: SHELL_CAPABILITIES, navigation: true, closeChord: false },
+      "*",
+    ]);
     navigating.disconnect();
+
+    const closing = connectToShell({
+      onCloseRequest: vi.fn(),
+      capabilities: { navigation: false, closeChord: true },
+    });
+    expect(parent.postMessage.mock.calls[2]).toEqual([
+      { type: SHELL_CAPABILITIES, navigation: false, closeChord: true },
+      "*",
+    ]);
+    closing.disconnect();
   });
 
   it("refuses a navigate handler without the capability, and the capability without a handler", () => {
     framed();
     expect(() => connectToShell({ onNavigate: vi.fn() })).toThrow(ShellContractError);
-    expect(() => connectToShell({ capabilities: { navigation: true } })).toThrow(ShellContractError);
+    expect(() => connectToShell({ capabilities: { navigation: true, closeChord: false } })).toThrow(
+      ShellContractError,
+    );
+  });
+
+  it("refuses the close-chord capability without a close handler", () => {
+    framed();
+    expect(() => connectToShell({ capabilities: { navigation: false, closeChord: true } })).toThrow(
+      ShellContractError,
+    );
   });
 
   it("delivers a navigate with a string path from the parent only", () => {
     const parent = framed();
     const onNavigate = vi.fn();
-    connection = connectToShell({ onNavigate, capabilities: { navigation: true } });
+    connection = connectToShell({ onNavigate, capabilities: { navigation: true, closeChord: false } });
 
     deliver({ type: SHELL_NAVIGATE, path: "/?chat=agent-2" }, parent);
     deliver({ type: SHELL_NAVIGATE, path: 7 }, parent);
