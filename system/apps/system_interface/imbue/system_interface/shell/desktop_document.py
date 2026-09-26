@@ -173,11 +173,12 @@ def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
 def paired_frames(anchor: Frame) -> tuple[Frame, Frame]:
     """Where a window opened beside ``anchor`` goes, and where that leaves the anchor.
 
-    The anchor keeps the shape its owner gave it wherever it can: it is only ever moved across, and
-    only when neither side of it has ``PAIRED_WIDTH`` to spare. Its height and where it sits down the
-    backdrop are never touched, and the opened window takes both, so the two read as a pair without
-    the anchor having to become a shape nobody chose. An anchor wider than ``PAIRED_WIDTH`` is the one
-    that must give, since no amount of moving opens that much beside it.
+    The anchor keeps the shape its owner gave it wherever it can: it is only ever moved across, only
+    when neither side of it has ``PAIRED_WIDTH`` to spare, and then by the least that opens that much
+    on one side -- not to the edge, which is a long way to travel for room that was a nudge away. Its
+    height and where it sits down the backdrop are never touched, and the opened window takes both, so
+    the two read as a pair without the anchor having to become a shape nobody chose. An anchor wider
+    than ``PAIRED_WIDTH`` is the one that must give, since no moving opens that much beside it.
 
     The opened window sits against the anchor rather than against the far edge: adjacent, the two read
     as one arrangement, where a gap between them would read as two windows that happen to be up.
@@ -193,16 +194,17 @@ def paired_frames(anchor: Frame) -> tuple[Frame, Frame]:
         return anchor, Frame(x=anchor.x + anchor.width, y=anchor.y, width=beside, height=anchor.height)
     if anchor.x >= beside - _PAIRING_TOLERANCE:
         return anchor, Frame(x=anchor.x - beside, y=anchor.y, width=beside, height=anchor.height)
-    # Neither side has the room, so the anchor goes to whichever edge is nearer and the window takes
-    # what that frees. A tie goes left, which is where a chat sits in the arrangement this is for.
+    # Neither side has the room. Opening it on the right costs the anchor the ``beside - room_to_the_right``
+    # it is short by, and on the left the ``beside - anchor.x`` it is short by, so the nearer side to open
+    # is the one that already has more of the room. A tie goes right, where the pair reads in order.
     if anchor.x <= room_to_the_right:
         return (
-            Frame(x=0.0, y=anchor.y, width=anchor.width, height=anchor.height),
-            Frame(x=anchor.width, y=anchor.y, width=beside, height=anchor.height),
+            Frame(x=beside - anchor.width, y=anchor.y, width=anchor.width, height=anchor.height),
+            Frame(x=beside, y=anchor.y, width=beside, height=anchor.height),
         )
     return (
-        Frame(x=1.0 - anchor.width, y=anchor.y, width=anchor.width, height=anchor.height),
-        Frame(x=1.0 - anchor.width - beside, y=anchor.y, width=beside, height=anchor.height),
+        Frame(x=beside, y=anchor.y, width=anchor.width, height=anchor.height),
+        Frame(x=0.0, y=anchor.y, width=beside, height=anchor.height),
     )
 
 

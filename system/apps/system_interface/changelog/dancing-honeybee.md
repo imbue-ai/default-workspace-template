@@ -6,9 +6,11 @@ the backdrop, and lands on top of the stack, for the target client alone.
 
 The named window is disturbed as little as the room allows, which is usually not
 at all: it is left exactly as it stands, down to its state, when either side of
-it has half the backdrop free; moved to the nearer edge, keeping its width and
-height, when neither does; and narrowed to half the backdrop only when it is
-wider than that, since no amount of moving opens that much beside it. Nothing
+it has half the backdrop free; moved, keeping its width and height, by the least
+that opens half the backdrop on one side when neither does -- the side that
+already has more of the room, ties going right -- rather than travelling to an
+edge for space that was a nudge away; and narrowed to half the backdrop only when
+it is wider than that, since no amount of moving opens that much beside it. Nothing
 ever changes its height or where it sits down the screen. A `beside` that matches no window on the desktop -- a chat the user
 closed, a requester that is nobody's chat -- leaves the opened window where it
 would have landed rather than refusing the open: the pairing is the open's

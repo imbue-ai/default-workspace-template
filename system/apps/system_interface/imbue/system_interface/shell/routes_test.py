@@ -1147,9 +1147,10 @@ def test_an_open_beside_a_window_with_no_room_moves_that_window_across_only(clie
     ]
 
     by_window = {placement["window_id"]: placement for placement in _placements(client, "c1")}
-    # Across to the nearer edge, at the width and the height it already had.
-    assert by_window[anchor]["frame"] == {"x": 0.0, "y": 0.15, "width": 0.4, "height": 0.5}
-    assert by_window[window_id]["frame"] == {"x": 0.4, "y": 0.15, "width": 0.5, "height": 0.5}
+    # Left by the 0.1 it was short by, at the width and the height it already had -- not to the edge.
+    # Approximate, since the move is a subtraction of fractions rather than a figure that was typed.
+    assert by_window[anchor]["frame"] == pytest.approx({"x": 0.1, "y": 0.15, "width": 0.4, "height": 0.5})
+    assert by_window[window_id]["frame"] == pytest.approx({"x": 0.5, "y": 0.15, "width": 0.5, "height": 0.5})
 
 
 def test_an_open_beside_a_snapped_window_leaves_the_snap_as_it_is(client: FlaskClient, app: Flask) -> None:

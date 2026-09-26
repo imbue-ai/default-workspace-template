@@ -144,11 +144,14 @@ def test_snap_frame_vectors(state_name: str) -> None:
         ((0.5, 0.2, 0.5, 0.6), (0.5, 0.2, 0.5, 0.6), (0.0, 0.2, 0.5, 0.6)),
         # A window already snapped to the left half is exactly the first case, at the edge.
         ((0.0, 0.0, 0.5, 1.0), (0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
-        # Neither side has the room, and the left edge is nearer: the anchor moves there, keeping its shape.
-        ((0.2, 0.15, 0.4, 0.5), (0.0, 0.15, 0.4, 0.5), (0.4, 0.15, 0.5, 0.5)),
-        # Neither side has the room, and the right edge is nearer.
-        ((0.45, 0.15, 0.4, 0.5), (0.6, 0.15, 0.4, 0.5), (0.1, 0.15, 0.5, 0.5)),
-        # A tie goes left, which is where the chat this is for belongs.
+        # Neither side has the room, and the right is the nearer to open: the anchor goes left by the
+        # 0.1 it is short by, not the 0.2 that would take it to the edge.
+        ((0.2, 0.15, 0.4, 0.5), (0.1, 0.15, 0.4, 0.5), (0.5, 0.15, 0.5, 0.5)),
+        # A chat only just short of the room: a nudge of 0.05, and nothing like a trip to the edge.
+        ((0.17, 0.1, 0.38, 0.7), (0.12, 0.1, 0.38, 0.7), (0.5, 0.1, 0.5, 0.7)),
+        # Neither side has the room, and the left is the nearer to open: the anchor goes right by 0.05.
+        ((0.45, 0.15, 0.4, 0.5), (0.5, 0.15, 0.4, 0.5), (0.0, 0.15, 0.5, 0.5)),
+        # A tie goes right, where the pair reads in order; here the least move is to the edge anyway.
         ((0.25, 0.0, 0.5, 1.0), (0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
         # Wider than the pair's width, so no amount of moving opens that much beside it: this is the one
         # anchor that is resized, and even then only across -- its height and its top are its own.

@@ -444,8 +444,9 @@ python3 system/scripts/layout.py open <name> --beside
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
 conversation, taking half the backdrop at the chat's own height. The chat is
-moved only if there is no room beside it, and resized only if it is over half
-the backdrop wide, so most of the time nothing about it changes. Drop the flag
+nudged sideways only if there is no room beside it, and then by the least that
+makes room; it is resized only if it is over half the backdrop wide. Most of the
+time nothing about it changes. Drop the flag
 only for an app the user wanted running rather than shown; with no chat on that
 desktop it is already a no-op.
 

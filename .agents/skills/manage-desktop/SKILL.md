@@ -67,8 +67,9 @@ never applied to every client at once.
   your own chat; name a window to pair with something else. The new window takes
   half the backdrop's width beside it, at its height and its place down the
   screen. The window it pairs with is disturbed as little as the room allows: it
-  is left exactly where it is when either side of it has the space, moved across
-  when neither does, and resized only when it is over half the backdrop wide.
+  is left exactly where it is when either side of it has the space, nudged across
+  by the least that opens the space when neither does, and resized only when it
+  is over half the backdrop wide.
   Reach for it whenever you have made something for the user to look at.
 
 ## Naming a window
