@@ -19,10 +19,14 @@ All three must hold:
 3. You authored no in-branch edits of your own. A 4a mirror edit, or any
    other commit you added on top of the merge, is merge work even though
    `classify-merge` (which diffs `HEAD^1` against the base) cannot see it.
-   The commits that are not are the rollback reverts Step 1 mandates: they put
-   earlier updates' own content back, so when `git diff <merge-sha> HEAD` is
-   empty they authored nothing. Name the merge and each revert sha in the
-   report as this condition's evidence.
+   The commits that are not are the rollback reverts Step 1 mandates, as git
+   made them: they put earlier updates' own content back. A revert conflict
+   you resolved is your edit, unless you took the target's version of a
+   `both added` file. `git diff <merge-sha> HEAD` must still be empty, where
+   `<merge-sha>` is this pass's merge or, on a retry of a release already in
+   history (whose merge adds no commit), that release's landed merge. Name the
+   merge, each revert sha, and any revert conflict with how you resolved it
+   in the report as this condition's evidence.
 
 Every changed file then arrives exactly as upstream shipped and tested it, and
 there is nothing local for a review to protect. Running `/autofix` here would

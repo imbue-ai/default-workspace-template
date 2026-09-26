@@ -283,7 +283,8 @@ your 4a analysis found no user-created code depending on anything the update
 changed (and no global-dep bump with a user-created dependent) **and** you
 authored no in-branch edits of your own (a mirror edit from 4a is merge work
 even though `classify-merge` cannot see it; Step 1's rollback reverts are not,
-when the tree they leave is identical to the landed merge). **Otherwise run
+as git made them, when the tree they leave is identical to the landed merge).
+**Otherwise run
 the real gates**,
 scoped to every file whose merged content differs from the target release. The
 full rule, its scope, and the keep/revert disposition for fix commits are in
