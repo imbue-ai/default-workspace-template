@@ -407,6 +407,8 @@ def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_change
 ) -> None:
     build_selection_workspace(tmp_path)
     _branch_with_changes(tmp_path, {"system/scripts/forward_port.py": "PORT = 2\n"})
+    write_repo_file(tmp_path, ".git/info/exclude", "*.log\n")
+    write_repo_file(tmp_path, "system/libs/midlib/run.log", "ignored\n")
     write_repo_file(tmp_path, "system/libs/midlib/src/midlib/core.py", "VALUE = 3\n")
     write_repo_file(tmp_path, "system/libs/midlib/src/midlib/extra.py", "EXTRA = 1\n")
 
@@ -417,6 +419,7 @@ def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_change
     assert dirty.exit_code != 0
     assert "system/libs/midlib/src/midlib/core.py" in dirty.output
     assert "system/libs/midlib/src/midlib/extra.py" in dirty.output
+    assert "run.log" not in dirty.output
     assert committed.exit_code == 0, committed.output
     assert "uv run pytest system/libs/midlib" in committed.output.splitlines()
 
