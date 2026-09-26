@@ -1,7 +1,7 @@
 /**
  * Record factories for the frontend tests: an app as the shell lists it (and one shaped like the
- * chat's manifest), a desktop, a window, a placement, a launch path, a client record, a layout, the
- * avatar state, the theme metrics, a connected user, and the update notice as the shell sends it.
+ * chat's manifest), a desktop, a shortcut, a window, a placement, a launch path, a client record, a layout,
+ * the avatar state, the theme metrics, a connected user, and the update notice as the shell sends it.
  * Each takes overrides so a test spells only what it is about.
  */
 
@@ -9,6 +9,8 @@ import type {
   AppRecord,
   ClientRecord,
   Desktop,
+  DesktopShortcut,
+  GridCell,
   LaunchPath,
   Layout,
   Placement,
@@ -143,6 +145,11 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
     windows: [],
     ...overrides,
   };
+}
+
+/** A focus-mode shortcut for an app's ``new`` launch path, in the cell given. */
+export function shortcutRecord(app: string, cell: GridCell, launch = "new"): DesktopShortcut {
+  return { target: { kind: "launch", app, launch }, mode: "focus", cell };
 }
 
 /** A connected client on no desktop yet, with no entry presentations. */

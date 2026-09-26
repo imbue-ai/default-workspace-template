@@ -40,7 +40,7 @@ import {
 } from "../reducers/launcherRows";
 import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
 import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
-import { PINNED_ENTRY_ATTRIBUTE } from "../gestures/pointerGestures";
+import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
@@ -49,6 +49,7 @@ import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
+import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { Taskbar } from "./Taskbar";
@@ -77,6 +78,8 @@ const MENU_MIN_WIDTH = 176;
  *  pointer should hold the closed hand (style.css). Written straight onto the element: the drag
  *  paints without redrawing, and mithril leaves an attribute no vnode carries alone. */
 const WINDOW_DRAGGING_ATTRIBUTE = "data-window-dragging";
+/** Set on the layout root while a shortcut is in the hand, so the closed hand holds for the whole gesture. */
+const SHORTCUT_DRAGGING_ATTRIBUTE = "data-shortcut-dragging";
 
 interface SettingsDialogState {
   readonly desktopId: string;
@@ -219,6 +222,22 @@ export function App(): m.Component<AppAttrs> {
     if (element !== undefined && element !== null) applyRectStyle(element, current.floatingEntryRectOf(app));
   }
 
+  /** Paint a lifted shortcut's travel straight onto its icon: the per-move step of its drag, and once more
+   *  when the drag ends or is cancelled, for the same reason ``paintWindow`` exists. With the drag over it
+   *  settles the icon into the cell it landed in instead. */
+  function paintShortcut(current: DesktopStore, app: string, launch: string): void {
+    const key = shortcutKey(app, launch);
+    const element = backdropArea?.querySelector<HTMLElement>(`[${SHORTCUT_ATTRIBUTE}="${CSS.escape(key)}"]`);
+    if (element === undefined || element === null) return;
+    const gesture = current.getGesture();
+    if (gesture !== null && gesture.kind === "shortcut") {
+      applyLiftStyle(element, gesture.lift);
+      return;
+    }
+    const rect = current.shortcutRect(app, launch);
+    if (rect !== null) applyDropStyle(element, rect);
+  }
+
   /** The gesture source measures points against ``root`` (the whole layout, so the taskbar's long presses
    *  count too); the store wants the backdrop's pixels, which differ by whatever sits above the backdrop. */
   function gestureListener(current: DesktopStore, root: HTMLElement): GestureListener {
@@ -261,12 +280,8 @@ export function App(): m.Component<AppAttrs> {
             current.beginWindowResize(binding.windowId, binding.edge);
             return;
           case "shortcut":
-            current.beginShortcutDrag(
-              binding.app,
-              binding.launch,
-              point,
-              grabOffsetInside(binding.element, toBackdrop(rootPress)),
-            );
+            root.setAttribute(SHORTCUT_DRAGGING_ATTRIBUTE, "");
+            current.beginShortcutDrag(binding.app, binding.launch, point);
             return;
           case "floating-entry":
             current.beginFloatingEntryDrag(
@@ -291,7 +306,8 @@ export function App(): m.Component<AppAttrs> {
             paintWindow(current, binding.windowId);
             return;
           case "shortcut":
-            current.updateShortcutDrag(point);
+            current.updateShortcutDrag(point, delta);
+            paintShortcut(current, binding.app, binding.launch);
             return;
           case "floating-entry":
             current.updateFloatingEntryDrag(point);
@@ -314,7 +330,9 @@ export function App(): m.Component<AppAttrs> {
             paintWindow(current, binding.windowId);
             break;
           case "shortcut":
-            current.endShortcutDrag(point);
+            root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
+            current.endShortcutDrag(point, delta);
+            paintShortcut(current, binding.app, binding.launch);
             break;
           case "floating-entry":
             current.endFloatingEntryDrag(point);
@@ -326,9 +344,11 @@ export function App(): m.Component<AppAttrs> {
       },
       onCancel: (binding) => {
         root.removeAttribute(WINDOW_DRAGGING_ATTRIBUTE);
+        root.removeAttribute(SHORTCUT_DRAGGING_ATTRIBUTE);
         current.cancelGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);
+        if (binding.kind === "shortcut") paintShortcut(current, binding.app, binding.launch);
       },
       onLongPress: (binding, client) => {
         const anchor = anchorForPoint(client.x, client.y);

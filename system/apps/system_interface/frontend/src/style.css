@@ -52,3 +52,13 @@
 [data-window-dragging] [data-drag-handle] {
   cursor: grabbing;
 }
+
+/* A shortcut being carried: the closed hand for the whole gesture, wherever on the desktop the pointer
+   has got to, since the icon is lifted out of the cell the cursor would otherwise be over. Every
+   descendant and not the root alone, because a cursor is only inherited where none is declared: a
+   shortcut's own open hand, a title bar's, a shielded window's arrow, a resize edge's, and a floating
+   entry's pointer each have to give way while the hand is full. */
+[data-shortcut-dragging],
+[data-shortcut-dragging] * {
+  cursor: grabbing;
+}

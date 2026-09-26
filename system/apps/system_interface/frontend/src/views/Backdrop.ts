@@ -1,22 +1,22 @@
 /**
  * The backdrop (concepts.md section 2.4): over the active desktop's wallpaper, its shortcut grid
  * fitted to the current backdrop at render time, its windows in stacking order (each over the
- * live page the pages layer positions for it), the floating pinned entries above them, the snap
- * preview, and the ghost of a dragged shortcut. Every pixel comes from the store's geometry;
- * nothing here measures the DOM or listens for gestures.
+ * live page the pages layer positions for it), the floating pinned entries above them, and the snap
+ * preview. A shortcut being dragged needs no layer of its own: the icon carries its own lift, and the
+ * store's placement carries the room made for it. Every pixel comes from the store's geometry; nothing
+ * here measures the DOM or listens for gestures.
  */
 
 import m from "mithril";
-import { cellRect, placeShortcuts } from "../geometry/grid";
-import type { PixelPoint, PixelRect } from "../geometry/frames";
-import type { AppRecord, Desktop, DesktopShortcut, Placement } from "../model/records";
+import { cellRect } from "../geometry/grid";
+import type { PixelPoint } from "../geometry/frames";
+import type { Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { FloatingEntries } from "./FloatingEntries";
-import { rectStyle } from "./pixelStyle";
-import { ShortcutIcon, shortcutContent } from "./ShortcutIcon";
+import { ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
 import type { WindowControl } from "./TitleBar";
@@ -53,9 +53,11 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       const state = store.getState();
       const metrics = store.getMetrics();
       const gesture = store.getGesture();
-      const dimensions = store.gridDimensions();
-      const placed = placeShortcuts(desktop.shortcuts, dimensions);
-      const liftedKey = gesture?.kind === "shortcut" ? shortcutKey(gesture.app, gesture.launch) : null;
+      // The placement already carries the drag: the held shortcut sits in the cell under the pointer (its
+      // lift translates it there from the cell it came from) and the shortcut that was there has stepped aside.
+      const placed = store.placedShortcuts();
+      const held = gesture !== null && gesture.kind === "shortcut" ? gesture : null;
+      const heldKey = held === null ? null : shortcutKey(held.app, held.launch);
       const windowsById = new Map(desktop.windows.map((window) => [window.id, window]));
       const snapRect = store.snapPreviewRect();
 
@@ -79,15 +81,19 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             },
             placed.map(({ shortcut, cell }) => {
               const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
+              // The one in the hand is drawn in the cell it came from and translated out of it, so the icon
+              // stays exactly where it was grabbed whatever cell the room being made has put it in.
+              const lifted = heldKey === key ? held : null;
               return m(ShortcutIcon, {
                 key,
                 shortcut,
                 cell,
-                rect: cellRect(cell, metrics),
+                rect: cellRect(lifted === null ? cell : lifted.originCell, metrics),
                 app: appByName(state, shortcut.target.app),
                 isAppsLoaded: state.isAppsLoaded,
                 isSelected: attrs.selectedShortcutKey === key,
-                isLifted: liftedKey === key,
+                lift: lifted === null ? null : lifted.lift,
+                isSliding: held !== null,
                 isRunOnClick: state.modes.isTouch,
                 onSelect: () => attrs.onSelectShortcut(key),
                 onRun: () => attrs.onRunShortcut(shortcut),
@@ -147,48 +153,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             onContextMenu: attrs.onEntryContextMenu,
           }),
           m(SnapPreview, { rect: snapRect }),
-          gesture?.kind === "shortcut"
-            ? shortcutGhost(
-                { ...gesture.iconPosition, width: metrics.cellWidth, height: metrics.cellHeight },
-                cellRect(gesture.targetCell, metrics),
-                appByName(state, gesture.app),
-                gesture.app,
-              )
-            : null,
         ],
       );
     },
   };
-}
-
-/** The lifted shortcut under the pointer, drawn as the shortcut itself, and the outline of the cell
- *  it would drop into, inset from that cell by the same gap the shortcuts leave each other. */
-function shortcutGhost(
-  ghostRect: PixelRect,
-  target: PixelRect,
-  app: AppRecord | undefined,
-  appName: string,
-): m.Children {
-  return [
-    m(
-      "div",
-      {
-        "data-drop-cell": "",
-        class: "pointer-events-none absolute z-(--z-sticky)",
-        style: rectStyle(target),
-      },
-      m("div", { class: "absolute inset-(--desk-cell-gap) rounded-lg border-2 border-dashed border-accent" }),
-    ),
-    m(
-      "div",
-      {
-        "data-shortcut-ghost": "",
-        class:
-          "pointer-events-none absolute z-(--z-sticky) flex flex-col items-center justify-start gap-3 " +
-          "px-(--desk-cell-gap) py-1 text-center",
-        style: rectStyle(ghostRect),
-      },
-      shortcutContent(app, app?.display_name ?? appName),
-    ),
-  ];
 }

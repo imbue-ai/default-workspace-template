@@ -1220,15 +1220,16 @@ def test_close_removes_the_window_for_every_client_and_the_close_chord_closes_th
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupant(tmp_path: Path, page: Page) -> None:
-    """Dragging a shortcut to an empty cell moves it there for everyone; dropping one on an occupied cell takes the
-    cell and moves the occupant to the nearest free one, so no two shortcuts share a cell."""
+def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tmp_path: Path, page: Page) -> None:
+    """Dragging a shortcut to an empty cell moves it there for everyone and moves nothing else; held over an
+    occupied cell the occupant steps aside under the hand, before the drop, and the drop keeps it there."""
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
         assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (0, 1)}
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
 
         docs = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
+        notes = page.locator(f'[data-shortcut="{_SECOND_SHORTCUT_KEY}"]')
         _drag(page, _center(_box(docs)), _cell_center(backdrop, 2, 2))
         wait_for(
             lambda: _shortcut_cells(server.base_url)[_STUB_SHORTCUT_KEY] == (2, 2),
@@ -1237,19 +1238,28 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
             error_message="the shortcut never moved to (2, 2)",
         )
         expect(docs).to_have_attribute("data-cell", "2,2")
+        # An empty cell needs nothing stepping aside: the other shortcut stayed where it was.
+        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (0, 1)
 
-        notes = page.locator(f'[data-shortcut="{_SECOND_SHORTCUT_KEY}"]')
-        _drag(page, _center(_box(notes)), _cell_center(backdrop, 2, 2))
+        # Held over the cell docs is in, without releasing: docs has already stepped aside to (1, 2), the
+        # nearest free cell to the one it is being displaced from, and notes is the icon in the hand.
+        _drag(page, _center(_box(notes)), _cell_center(backdrop, 2, 2), is_released=False)
+        expect(notes).to_have_attribute("data-lifted", "true")
+        expect(notes).to_have_attribute("data-cell", "2,2")
+        expect(docs).to_have_attribute("data-cell", "1,2")
+        # Nothing is written until the drop: the step aside is the desktop showing where the icon would land.
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (0, 1)}
+
+        page.mouse.up()
         wait_for(
-            lambda: _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (2, 2),
+            lambda: _shortcut_cells(server.base_url)
+            == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
             timeout=15.0,
             poll_interval=0.1,
-            error_message="the dropped shortcut never took the occupied cell",
+            error_message="the drop did not keep the room that was made for it",
         )
-        # The nearest free cell, ties by lower column then lower row (contracts.md section 10).
-        displaced = _shortcut_cells(server.base_url)[_STUB_SHORTCUT_KEY]
-        assert displaced == (1, 2)
         expect(notes).to_have_attribute("data-cell", "2,2")
+        expect(notes).not_to_have_attribute("data-lifted", "true")
         expect(docs).to_have_attribute("data-cell", "1,2")
 
 

@@ -5,7 +5,7 @@ import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopShortcut } from "../model/records";
 import { appRecord, launchPathRecord } from "../testing/records";
-import { CONNECTING_TOOLTIP, ShortcutIcon, shortcutLabel, shortcutTooltip } from "./ShortcutIcon";
+import { CONNECTING_TOOLTIP, ShortcutIcon, applyDropStyle, shortcutLabel, shortcutTooltip } from "./ShortcutIcon";
 import type { ShortcutIconAttrs } from "./ShortcutIcon";
 
 const docs = appRecord("docs", { launch_paths: [launchPathRecord({ id: "new", label: "New docs" })] });
@@ -41,7 +41,8 @@ function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
     app: docs,
     isAppsLoaded: true,
     isSelected: false,
-    isLifted: false,
+    lift: null,
+    isSliding: false,
     isRunOnClick: false,
     onSelect: vi.fn(),
     onRun: vi.fn(),
@@ -89,10 +90,28 @@ describe("ShortcutIcon", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("marks selection and fades while lifted", () => {
+  it("marks selection, and slides between cells only while a drag is making room and it is not in the hand", () => {
     expect(render({ isSelected: true }).getAttribute("aria-pressed")).toBe("true");
     unmountViews();
-    expect(render({ isLifted: true }).className).toContain("opacity-40");
+    // No drag: a cell change is the grid being re-fitted, which the icons take without sliding.
+    expect(render().className).not.toContain("transition-[left,top]");
+    unmountViews();
+    expect(render({ isSliding: true }).className).toContain("transition-[left,top]");
+    unmountViews();
+    expect(render({ isSliding: true, lift: { x: 1, y: 2 } }).className).not.toContain("transition-[left,top]");
+  });
+
+  it("draws the one in the hand in its own box, translated and grown above everything, with nothing eased", () => {
+    const lifted = render({ lift: { x: 40, y: -12 }, isSliding: true });
+    expect(lifted.getAttribute("data-lifted")).toBe("true");
+    // Still the box of the cell it was lifted from: the lift is what carries it out of there.
+    expect(lifted.style.left).toBe("112px");
+    expect(lifted.style.top).toBe("240px");
+    expect(lifted.style.transform).toBe("translate(40px, -12px) scale(var(--desk-shortcut-lift-scale))");
+    expect(lifted.style.transition).toBe("none");
+    expect(lifted.className).not.toContain("transition-[left,top]");
+    unmountViews();
+    expect(render().hasAttribute("data-lifted")).toBe(false);
   });
 
   it("draws an unknown app as connecting only while no app list has landed", () => {
@@ -106,5 +125,17 @@ describe("ShortcutIcon", () => {
     expect(unregistered.className).toContain("text-primary");
     unmountViews();
     expect(render().hasAttribute("data-connecting")).toBe(false);
+  });
+});
+
+describe("applyDropStyle", () => {
+  it("settles an icon into the cell it landed in with the lift cleared and the slide off for the frame", () => {
+    const icon = render({ lift: { x: 40, y: -12 }, isSliding: true });
+    applyDropStyle(icon, { x: 208, y: 128, width: 96, height: 112 });
+    expect(icon.style.left).toBe("208px");
+    expect(icon.style.top).toBe("128px");
+    expect(icon.style.transform).toBe("");
+    expect(icon.style.transition).toBe("none");
+    expect(icon.style.zIndex).toBe("");
   });
 });

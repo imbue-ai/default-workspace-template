@@ -12,10 +12,11 @@ import {
   launchPathRecord,
   placementRecord,
   presentUserRecord,
+  shortcutRecord,
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import type { AppRecord } from "../model/records";
+import type { AppRecord, GridCell } from "../model/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
@@ -781,19 +782,104 @@ describe("gestures", () => {
     expect(store.getGesture()).toBeNull();
   });
 
-  it("a shortcut drag moves the shortcut to the cell under the pointer", async () => {
-    const store = await startedStore();
-    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 }, { x: 10, y: 10 });
-    store.updateShortcutDrag({ x: 230, y: 260 });
+  /** A store whose home desktop carries two shortcuts: docs at (0,0) and notes beside it at (1,0), or at
+   *  ``notesCell`` when one is given. */
+  async function shortcutStore(options: { notesCell?: GridCell; redraw?: () => void } = {}): Promise<DesktopStore> {
+    api.desktops = [
+      desktopRecord("home", {
+        shortcuts: [
+          shortcutRecord("docs", { column: 0, row: 0 }),
+          shortcutRecord("notes", options.notesCell ?? { column: 1, row: 0 }),
+        ],
+      }),
+      desktopRecord("work"),
+    ];
+    return startedStore(options.redraw);
+  }
+
+  /** Where each shortcut is drawn right now, as ``"<column>,<row>"`` by app name. */
+  function cellsByApp(store: DesktopStore): Record<string, string> {
+    return Object.fromEntries(
+      store.placedShortcuts().map((entry) => [entry.shortcut.target.app, `${entry.cell.column},${entry.cell.row}`]),
+    );
+  }
+
+  it("a shortcut drag lifts the icon out of its own cell and lands it in the cell under the pointer", async () => {
+    const store = await shortcutStore();
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     expect(store.getGesture()).toMatchObject({
       kind: "shortcut",
+      originCell: { column: 0, row: 0 },
       targetCell: { column: 2, row: 2 },
-      iconPosition: { x: 220, y: 250 },
+      lift: { x: 200, y: 220 },
     });
-    store.endShortcutDrag({ x: 230, y: 260 });
+    // An empty cell needs no room made: nothing else moves.
+    expect(cellsByApp(store)).toEqual({ docs: "2,2", notes: "1,0" });
+    store.endShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     await settle();
     expect(api.calls).toContain("moveDesktopShortcut:home:docs:new:2,2");
     expect(store.getGesture()).toBeNull();
+    expect(store.shortcutRect("docs", "new")).toMatchObject({ x: 208, y: 240 });
+  });
+
+  it("a shortcut held over an occupied cell sends the occupant aside, and the drop draws that at once", async () => {
+    const store = await shortcutStore();
+    // The nearest free cell to notes is the one docs is leaving, so the two swap.
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.updateShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    expect(cellsByApp(store)).toEqual({ docs: "1,0", notes: "0,0" });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    // Both cells are drawn before the round trip rather than after it, so the drop shows no jump back.
+    expect(cellsByApp(store)).toEqual({ docs: "1,0", notes: "0,0" });
+    // One request, naming the shortcut that was dragged: the shell displaces the occupant itself.
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([
+      "moveDesktopShortcut:home:docs:new:1,0",
+    ]);
+  });
+
+  it("only a new cell under the pointer redraws during a shortcut drag: the lift itself is painted", async () => {
+    let redraws = 0;
+    const store = await shortcutStore({ redraw: () => void (redraws += 1) });
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    const afterBegin = redraws;
+    store.updateShortcutDrag({ x: 40, y: 45 }, { x: 10, y: 5 });
+    expect(redraws).toBe(afterBegin);
+    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
+    expect(redraws).toBeGreaterThan(afterBegin);
+  });
+
+  it("a drop back into the cell it came from asks the shell for nothing", async () => {
+    const store = await shortcutStore();
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 30, y: 40 }, { x: 0, y: 0 });
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([]);
+  });
+
+  it("a drop commits what the room made moved, not a cell the placement had re-fitted", async () => {
+    const store = await shortcutStore({ notesCell: { column: 20, row: 0 } });
+    // notes is stored off the ten columns this backdrop gives, so the placement has always drawn it at (9,0).
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "9,0" });
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 30, y: 40 }, { x: 0, y: 0 });
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([]);
+    expect(store.getState().desktops[0].shortcuts.map((shortcut) => shortcut.cell)).toEqual([
+      { column: 0, row: 0 },
+      { column: 20, row: 0 },
+    ]);
+  });
+
+  it("puts the cells back and says so when the shell refuses an arrangement", async () => {
+    const store = await shortcutStore();
+    api.refusal = "down";
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    await settle();
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
+    expect(notices).toEqual(["Could not move the shortcut: down"]);
   });
 });
 

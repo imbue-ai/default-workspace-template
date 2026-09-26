@@ -3,14 +3,17 @@
  * (``data-shortcut="<app>:<launch>"``, ``data-cell="<column>,<row>"``). A single click selects
  * and a double click, Enter, or Space runs; on touch a tap runs (there is no selection step); a
  * right click or long press asks for the menu. The drag is the gesture layer's, bound by the
- * ``data-shortcut`` attribute, so nothing here listens to pointer movement. While the page has
+ * ``data-shortcut`` attribute, so nothing here listens to pointer movement; the one being dragged is
+ * the icon ITSELF, translated out of its own cell (``data-lifted``) rather than copied into a ghost, and
+ * whichever shortcut it is held over slides aside -- for the length of that drag only -- so the one in the
+ * hand has somewhere to land. While the page has
  * no app list yet, a shortcut whose app it cannot look up draws as connecting
  * (``data-connecting="true"``) rather than as an unknown app.
  */
 
 import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import type { PixelRect } from "../geometry/frames";
+import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appGlyph } from "./glyphs";
@@ -28,8 +31,13 @@ export interface ShortcutIconAttrs {
   /** Whether an app list has landed: an unknown app before that is the page still connecting, not a missing app. */
   readonly isAppsLoaded: boolean;
   readonly isSelected: boolean;
-  /** The icon is lifted by a drag: it draws faded in its cell while the ghost follows the pointer. */
-  readonly isLifted: boolean;
+  /** How far a drag has carried this icon out of its cell, or null when it is resting: the icon in the hand
+   *  is drawn in the cell it was lifted from and translated by this, at full strength and above everything. */
+  readonly lift: PixelPoint | null;
+  /** Whether a drag is making room right now: only then does an icon slide between cells. Outside a drag a
+   *  cell changes because the grid was re-fitted -- a desktop switch, or a resize, which re-fits it on every
+   *  frame of the drag. */
+  readonly isSliding: boolean;
   /** A click runs the shortcut instead of selecting it (touch: a finger has no double tap worth asking for). */
   readonly isRunOnClick: boolean;
   readonly onSelect: () => void;
@@ -45,9 +53,16 @@ export function shortcutLabel(shortcut: DesktopShortcut, app: AppRecord | undefi
 
 export const CONNECTING_TOOLTIP = "Connecting to the workspace...";
 
-/** The icon tile over the label: what a shortcut draws inside its cell, and what its drag ghost carries,
- *  so the thing under the pointer is the thing that was lifted. */
-export function shortcutContent(app: AppRecord | undefined, label: string): m.Children {
+/** The three properties a lift writes, spelled once for the render and the paint. */
+export interface LiftStyle {
+  readonly transform: string;
+  readonly transition: string;
+  readonly zIndex: string;
+}
+
+/** The icon tile over the label: what a shortcut draws inside its cell. The whole thing is what a drag
+ *  carries, so the tile forgoes its own hover growth while lifted rather than compounding it with the lift. */
+function shortcutContent(app: AppRecord | undefined, label: string, isLifted: boolean): m.Children {
   return [
     m(
       "span",
@@ -56,8 +71,10 @@ export function shortcutContent(app: AppRecord | undefined, label: string): m.Ch
         // cannot say both. A transform moves nothing around it.
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
-          "rounded-(--desk-icon-radius) bg-surface p-2 shadow-(--desk-icon-shadow) transition-transform " +
-          "group-hover:scale-110 [&>svg]:size-full",
+          "rounded-(--desk-icon-radius) bg-surface p-2 [&>svg]:size-full " +
+          (isLifted
+            ? "shadow-(--desk-icon-shadow-lifted)"
+            : "shadow-(--desk-icon-shadow) transition-transform group-hover:scale-110"),
       },
       m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
     ),
@@ -84,6 +101,30 @@ export function shortcutTooltip(label: string, isStopped: boolean, isConnecting:
   return isStopped ? `${label}: not running` : null;
 }
 
+/** What being in the hand comes to, spelled once for the render and for the per-frame paint of the drag:
+ *  the icon translated out of its cell and grown, over everything, with nothing eased so it tracks the
+ *  pointer exactly. Resting (``null``) clears all three. */
+export function liftStyle(lift: PixelPoint | null): LiftStyle {
+  if (lift === null) return { transform: "", transition: "", zIndex: "" };
+  return {
+    transform: `translate(${lift.x}px, ${lift.y}px) scale(var(--desk-shortcut-lift-scale))`,
+    transition: "none",
+    zIndex: "var(--z-sticky)",
+  };
+}
+
+/** Write the lift onto an icon outside any redraw. */
+export function applyLiftStyle(element: HTMLElement, lift: PixelPoint | null): void {
+  Object.assign(element.style, liftStyle(lift));
+}
+
+/** Write a dropped icon's landing straight onto it: the cell it landed in, the lift cleared, and the slide
+ *  off for this one frame -- the hand left it at that cell, so sliding it over from the cell it was picked up
+ *  in would take it backwards. The next render writes the same box and lets the slide back on. */
+export function applyDropStyle(element: HTMLElement, rect: PixelRect): void {
+  Object.assign(element.style, rectStyle(rect), { transform: "", transition: "none", zIndex: "" });
+}
+
 export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
   return {
     view(vnode) {
@@ -94,7 +135,8 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
         app,
         isAppsLoaded,
         isSelected,
-        isLifted,
+        lift,
+        isSliding,
         isRunOnClick,
         onSelect,
         onRun,
@@ -111,13 +153,16 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           "data-shortcut": key,
           "data-cell": `${cell.column},${cell.row}`,
           "data-connecting": isConnecting ? "true" : null,
+          "data-lifted": lift === null ? null : "true",
           "aria-pressed": isSelected ? "true" : "false",
           class:
-            "shortcut group absolute flex flex-col items-center justify-start px-(--desk-cell-gap) " +
-            "text-center outline-none touch-none select-none " +
-            (isLifted ? "opacity-40 " : "") +
+            "shortcut group absolute flex cursor-grab flex-col items-center justify-start " +
+            "px-(--desk-cell-gap) text-center outline-none touch-none select-none " +
+            // An icon that is not in the hand slides between cells, which is how the desktop shows where the
+            // one in the hand would land. The one in the hand is not transitioned at all: it tracks the pointer.
+            (isSliding && lift === null ? "transition-[left,top] duration-(--desk-shortcut-slide) ease-out " : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
-          style: rectStyle(rect),
+          style: { ...rectStyle(rect), ...liftStyle(lift) },
           ...hoverTooltipAttrs(shortcutTooltip(label, isStopped, isConnecting)),
           onclick: isRunOnClick ? onRun : onSelect,
           // A double tap's dblclick follows two clicks that already ran the shortcut.
@@ -147,7 +192,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
               "group-focus-visible:outline-2 group-focus-visible:outline-accent " +
               (isSelected ? "bg-accent/15 outline-1 outline-accent" : ""),
           },
-          shortcutContent(app, label),
+          shortcutContent(app, label, lift !== null),
         ),
       );
     },

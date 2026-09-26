@@ -1,10 +1,12 @@
 /**
  * The shortcut grid (desktop-interface contracts.md section 10): how many cells the backdrop
  * holds, reading order, the nearest free cell, and the render-time placement of shortcuts,
- * mirroring ``shell/desktop_document.py``. Nothing here reads the DOM.
+ * mirroring ``shell/desktop_document.py``; and the room made for a shortcut held over a cell, which
+ * applies that same nearest-free-cell rule, over the grid where the shell searches unbounded. Nothing
+ * here reads the DOM.
  */
 
-import { isSameCell } from "../model/records";
+import { isSameCell, shortcutKey } from "../model/records";
 import type { DesktopShortcut, GridCell } from "../model/records";
 import type { PixelPoint, PixelRect, PixelSize } from "./frames";
 
@@ -145,4 +147,43 @@ export function cellAtPoint(point: PixelPoint, metrics: GridMetrics, dimensions:
     },
     dimensions,
   );
+}
+
+/** The key a placed shortcut answers to (``<app>:<launch>``). */
+export function placedShortcutKey(entry: PlacedShortcut): string {
+  return shortcutKey(entry.shortcut.target.app, entry.shortcut.target.launch);
+}
+
+/**
+ * Where the shortcuts sit while the one keyed ``heldKey`` is held over ``target``: it takes that cell, and
+ * whatever was in it steps aside (desktop-interface contracts.md section 10).
+ *
+ * Only the shortcut in the way moves, and it moves to the nearest free cell -- the rule the shell applies
+ * on a move, which is what lets the drop commit through that route. A free cell needs nothing stepping
+ * aside, so holding over one moves nothing else at all.
+ *
+ * Answers the placement in the same order it was given, so a caller can draw it directly.
+ */
+export function withRoomMadeFor(
+  placed: readonly PlacedShortcut[],
+  heldKey: string,
+  target: GridCell,
+  dimensions: GridDimensions,
+): PlacedShortcut[] {
+  const held = placed.find((entry) => placedShortcutKey(entry) === heldKey);
+  const wanted = clampCellIntoGrid(target, dimensions);
+  if (held === undefined || isSameCell(held.cell, wanted)) return placed.slice();
+  const occupant = placed.find((entry) => entry !== held && isSameCell(entry.cell, wanted));
+  // The cell the held shortcut is leaving is free for the occupant to take, as it is for the shell's own
+  // move; the cell it is taking is not.
+  const blocked = placed
+    .filter((entry) => entry !== held && entry !== occupant)
+    .map((entry) => entry.cell)
+    .concat(wanted);
+  const stepped = occupant === undefined ? null : nearestFreeCell(wanted, blocked, dimensions);
+  return placed.map((entry) => {
+    if (entry === held) return { shortcut: entry.shortcut, cell: wanted };
+    if (entry === occupant && stepped !== null) return { shortcut: entry.shortcut, cell: stepped };
+    return entry;
+  });
 }
