@@ -276,7 +276,8 @@ command = "sleep infinity"
 extra_provision_command__extend = ["bash system/scripts/codex_update_plugin.sh"]
 # Launch through the OOM band wrapper, exactly as claude does above -- without it an
 # agent runs unbanded and earlyoom sheds it by kernel score instead of by our tiering.
-# The wrapper execs `codex` in place, so process detection still matches `codex`.
+# The wrapper execs codex's native binary in place (not the npm entry point, which runs
+# it as a child), so process detection still matches `codex`.
 # Note codex uses this base for BOTH its visible `--remote` TUI and its `app-server`
 # daemon, so both are banded (the daemon is where turns run, so it is the one that
 # matters for memory).
