@@ -30,6 +30,7 @@ def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
             model_state_path=state_dir / "model_state.json",
             send_to_harness=lambda text: (sent.append(text), True)[1],
             notify_agents_changed=lambda: None,
+            is_harness_starting_up=lambda: False,
             is_tracked=lambda: True,
             on_queue_snapshot=lambda snapshot: None,
             on_user_turn=lambda event: None,

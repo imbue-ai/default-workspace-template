@@ -1,0 +1,16 @@
+# The terminal's pty origin: ttyd, on an origin of its own, framed by the terminal app's
+# wrapper page (system/apps/terminal). Internal: the wrapper is what users open; this row
+# exists so ttyd has an origin the wrapper can embed (desktop-interface contracts.md section 2).
+name = "terminal-pty"
+display_name = "Terminal PTY"
+internal = true
+critical = true
+priority = "terminal"
+program = "terminal-pty"
+
+# A pty preview is ttyd on a free port, unregistered, with its dispatch scripts under a scratch
+# state directory; the terminal's preview frames it through the registry copy. ttyd's own page
+# is what answers, so the probe asks for it.
+[preview]
+command = ["terminal-pty", "--no-register", "--app-url", "http://127.0.0.1:{port:main}", "--state-dir", "{scratch}/state"]
+health_path = "/"

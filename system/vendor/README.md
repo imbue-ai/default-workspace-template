@@ -1,9 +1,8 @@
 # system/vendor/
 
-Vendored external repositories:
-
-- `mngr/` - A mutable copy of [mngr](https://github.com/imbue-ai/mngr), the
-  agent manager this workspace runs on. Changes here affect the live `mngr`
-  command.
-- `tk/` - The [tk](https://github.com/wedow/ticket) ticket tracker the agents
-  use for task management (tickets live in `data/.tickets/`).
+- `mngr-assets/` - Gitignored. The few non-Python files this workspace needs from
+  [mngr](https://github.com/imbue-ai/mngr), fetched at build time from the commit
+  `pyproject.toml` pins (`system/scripts/fetch_mngr_assets.sh`). mngr itself is
+  installed as Python packages from that same commit.
+- `tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket
+  tracker the agents use for task management (tickets live in `data/.tickets/`).

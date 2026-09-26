@@ -1,0 +1,19 @@
+
+.jelly-body {transform-origin:50px 87px;animation:jelly-breathe 3.6s ease-in-out infinite}
+.jelly-eyes {transform-box:fill-box;transform-origin:center;animation:jelly-blink 5.2s infinite}
+.jelly-extra {transform-box:fill-box;transform-origin:center bottom;animation:jelly-sway 3.2s ease-in-out infinite}
+svg[data-mood="working"] .jelly-body,[data-mood="working"] svg .jelly-body {animation:jelly-work 1.3s ease-in-out infinite}
+svg[data-mood="attention"] .jelly-body,[data-mood="attention"] svg .jelly-body {animation:jelly-hop 1.2s ease-in-out infinite}
+@keyframes jelly-breathe {50%{transform:scale(1.035,.965)}}
+@keyframes jelly-blink {0%,91%,97%,100%{transform:scaleY(1)}94%{transform:scaleY(.08)}}
+@keyframes jelly-sway {50%{transform:rotate(5deg)}}
+@keyframes jelly-work {0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg) scale(1.02,.98)}}
+@keyframes jelly-hop {0%,65%,100%{transform:translateY(0)}18%{transform:translateY(1px) scale(1.07,.93)}38%{transform:translateY(-9px) scale(.96,1.04)}57%{transform:scale(1.06,.94)}}
+.jelly-listen {display:none}
+svg[data-mood="listening"] .jelly-body,[data-mood="listening"] svg .jelly-body {animation:jelly-listen 4s ease-in-out infinite;transform:translateY(-2px) scale(1.015,1.025)}
+svg[data-mood="listening"] .jelly-eyes,[data-mood="listening"] svg .jelly-eyes {animation:none;transform:translateY(-1px) scale(1.12)}
+svg[data-mood="listening"] .jelly-listen,[data-mood="listening"] svg .jelly-listen {display:inline}
+svg[data-mood="listening"]:has(.jelly-listen) .jelly-eyes,[data-mood="listening"] svg:has(.jelly-listen) .jelly-eyes {display:none}
+svg[data-mood="listening"] .jelly-extra,[data-mood="listening"] svg .jelly-extra {animation:none;transform:translateY(-2px) rotate(-3deg)}
+@keyframes jelly-listen {0%,100%{transform:translateY(-2px) scale(1.015,1.025)}50%{transform:translateY(-3px) scale(1.02,1.03)}}
+@media(prefers-reduced-motion:reduce){.jelly-body,.jelly-eyes,.jelly-extra{animation:none!important}}

@@ -15,6 +15,7 @@ import {
   getChatFastMode,
   setFastMode,
   setModelChoice,
+  showSwitchChoice,
 } from "./ModelSettings";
 import type { ModelChoice } from "./ModelSettings";
 import type { CatalogModelOption } from "./HarnessCatalog";
@@ -170,6 +171,54 @@ describe("effectiveChoice", () => {
     // Nothing pending is nothing to forget.
     forgetPendingChoice("a10");
     expect(effectiveChoice("a10", opusLive)?.isPending).toBe(false);
+    await flush();
+  });
+
+  it("shows a switch's pick without posting it, and holds it through the models a switch passes through", async () => {
+    // The switch applies the pick itself, on the far side of a restart or a create; from there until
+    // the harness writes its model state the pushed live choice names models the user never asked
+    // for -- the account the chat is leaving, then the one the new account last ran.
+    showSwitchChoice("a11", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
+    expect(mockRequest).not.toHaveBeenCalled();
+
+    const leaving = effectiveChoice("a11", live("claude-opus-4-8", "high", false, OPUS));
+    expect(leaving).toEqual({
+      identity: { model_id: "sonnet", effort: "medium", fast: false },
+      matched: SONNET,
+      isPending: true,
+    });
+    // The agent came up on the new account, on the model IT last ran: still not the pick.
+    expect(effectiveChoice("a11", live("claude-opus-4-8", "medium", false, OPUS))?.matched).toBe(SONNET);
+    // The harness took the pick.
+    expect(effectiveChoice("a11", live("claude-sonnet-5", "medium", false, SONNET))?.isPending).toBe(false);
+    await flush();
+  });
+
+  it("keeps a switch's pick when the chat moves to the new agent, unlike the bar's own", async () => {
+    // What a handoff does: the successor becomes the chat's agent before the harness has reported
+    // the model applied to it. The pick was made FOR that successor, so it is not the old agent's
+    // to forget.
+    mockGetChatById.mockReturnValue(chatSnapshotFixture("a12", { active_agent: { agent_id: "successor" } }));
+    showSwitchChoice("a12", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
+    forgetPendingChoice("a12");
+    expect(effectiveChoice("a12", live("claude-opus-4-8", "medium", false, OPUS))?.matched).toBe(SONNET);
+
+    setModelChoice("a12", { model_id: "opus[1m]", effort: "high", fast: false }, OPUS, ["model"]);
+    forgetPendingChoice("a12");
+    expect(effectiveChoice("a12", live("claude-opus-4-8", "medium", false, OPUS))?.isPending).toBe(false);
+    await flush();
+  });
+
+  it("gives a switch's pick up once the chat moves on again, to an agent it was never made for", async () => {
+    // A second switch inside the window the first one's pick is held for: its successor is not the
+    // agent the pick was handed over for, and nothing else would drop it -- a pick with no POST
+    // behind it settles only against a live choice that will never match, or the 5-minute timeout.
+    mockGetChatById.mockReturnValue(chatSnapshotFixture("a13", { active_agent: { agent_id: "successor" } }));
+    showSwitchChoice("a13", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
+
+    mockGetChatById.mockReturnValue(chatSnapshotFixture("a13", { active_agent: { agent_id: "third" } }));
+    forgetPendingChoice("a13");
+    expect(effectiveChoice("a13", live("claude-opus-4-8", "medium", false, OPUS))?.isPending).toBe(false);
     await flush();
   });
 

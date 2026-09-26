@@ -3,8 +3,7 @@
 The assembly script had no test at all, which is how a workspace-wiping hazard
 survived in it. These run the real script over a real repo and assert on the
 files a publisher ships, because every one of them is read by someone who is
-not the publisher: the adopter's agent boots the generated `/welcome`, and a
-human browsing GitHub reads the generated README.
+not the publisher: a human browsing GitHub reads the generated README.
 """
 
 import os
@@ -60,7 +59,6 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
     for relative in (
         "system",
         "system/supervisord.conf.d",
-        ".agents/skills/welcome",
         "docs",
         ".agents/skills/publish-template/scripts",
         "system/services/env_converge/src/env_converge",
@@ -77,7 +75,6 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
         "[program:system_interface]\ncommand=bash -c 'system-interface'\n"
     )
     (source / "README.md").write_text("# base\n")
-    (source / ".agents/skills/welcome/SKILL.md").write_text("base welcome\n")
     (source / "docs/VERSION_HISTORY.md").write_text("# V\n")
     (source / ".gitignore").write_text("data/*\n")
     for name in (
@@ -237,17 +234,6 @@ def test_the_readme_is_regenerated_to_describe_this_template(
     # The repo does not exist yet, so the call-to-action carries a placeholder
     # the lead substitutes before the push; §8 blocks a push that still has it.
     assert "MINDS_TEMPLATE_REPO_URL" in readme
-
-
-@_needs_scanners
-def test_the_generated_welcome_replaces_the_base_one(built_snapshot: Path) -> None:
-    # A mind created from a template must open by naming THAT template, not
-    # with the generic greeting the base workspace ships.
-    welcome = (built_snapshot / ".agents/skills/welcome/SKILL.md").read_text()
-
-    assert "base welcome" not in welcome
-    assert "Demo" in welcome
-    assert "template.md" in welcome
 
 
 @_needs_scanners

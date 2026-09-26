@@ -3,6 +3,7 @@ import {
   classifyUserMessage,
   isHiddenUserMessage,
   isNonBoundaryUserMessage,
+  isNoticeUserMessage,
   isSkillExpansionUserMessage,
   isStatusUserMessage,
   isSystemChipUserMessage,
@@ -60,6 +61,17 @@ describe("classifyUserMessage", () => {
     expect(c.label).toBe("deep-research");
   });
 
+  it("maps display: prompt_with_context to a plain user bubble showing only what the user typed", () => {
+    const c = classifyUserMessage({
+      content: "<chat-seed-context>the conversation so far</chat-seed-context>\n1",
+      display: "prompt_with_context",
+      display_body: "1",
+    });
+    expect(c.kind).toBe(UserMessageKind.UserPrompt);
+    expect(c.body).toBe("1");
+    expect(c.label).toBeNull();
+  });
+
   it("maps an uncorrelated permission_resolution to UserPrompt (the walk owns suppression)", () => {
     const c = classifyUserMessage({
       content: "Your permission request for GitHub was granted.",
@@ -107,6 +119,24 @@ describe("semantic helpers", () => {
     expect(isSystemChipUserMessage({ content: "x", display: "skill_expansion" })).toBe(false);
     expect(isSystemChipUserMessage({ content: "/welcome", display: "hidden" })).toBe(false);
     expect(isSystemChipUserMessage({ content: "a normal message" })).toBe(false);
+  });
+
+  it("a notice carries the lead and the summary the backend extracted", () => {
+    const cls = classifyUserMessage({
+      content: "<task-notification>...</task-notification>",
+      display: "notice",
+      display_label: "Background task completed",
+      display_body: 'Agent "Crispy comments" finished',
+    });
+    expect(cls.kind).toBe(UserMessageKind.Notice);
+    expect(cls.label).toBe("Background task completed");
+    expect(cls.body).toBe('Agent "Crispy comments" finished');
+    // It tucks into the running turn rather than opening one, and it is the agent that was
+    // told, so it sits on the agent's rail.
+    expect(isNonBoundaryUserMessage({ content: "x", display: "notice" })).toBe(true);
+    expect(isNoticeUserMessage({ content: "x", display: "notice" })).toBe(true);
+    expect(isNoticeUserMessage({ content: "x", display: "chip", display_label: "Background task" })).toBe(false);
+    expect(isSystemChipUserMessage({ content: "x", display: "notice" })).toBe(false);
   });
 
   it("isStatusUserMessage is true only for status kind", () => {

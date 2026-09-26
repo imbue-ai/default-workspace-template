@@ -52,10 +52,20 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
       };
     case "skill_expansion":
       return { kind: UserMessageKind.SkillExpansion, label: event.display_label ?? null, body: content };
+    // The user's own turn, shown as one: the context block the chat app wrote ahead of their
+    // words is kept out of the bubble.
+    case "prompt_with_context":
+      return { kind: UserMessageKind.UserPrompt, label: null, body: event.display_body ?? content };
     case "status":
       return {
         kind: UserMessageKind.StatusMessage,
         label: event.display_label ?? (event.display_body !== undefined ? content : null),
+        body: event.display_body ?? content,
+      };
+    case "notice":
+      return {
+        kind: UserMessageKind.Notice,
+        label: event.display_label ?? null,
         body: event.display_body ?? content,
       };
     default:
@@ -84,6 +94,17 @@ export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
 }
 
+/** True when the message is a one-line notice on the agent's rail. */
+export function isNoticeUserMessage(event: ClassifiableUserMessage): boolean {
+  return classifyUserMessage(event).kind === UserMessageKind.Notice;
+}
+
+/** True for a seeded chat's first send: the user's own words behind the context block the chat
+ *  app prefixed for the agent (the backend's `prompt_with_context`). A genuine human turn. */
+export function isPromptWithContext(event: ClassifiableUserMessage): boolean {
+  return event.display === "prompt_with_context";
+}
+
 /** True when the message is a subtle inline status message. */
 export function isStatusUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.StatusMessage;
@@ -95,11 +116,14 @@ export function isSkillExpansionUserMessage(event: ClassifiableUserMessage): boo
   return classifyUserMessage(event).kind === UserMessageKind.SkillExpansion;
 }
 
-/** True when the message produces NO row on the user rail -- either fully hidden
- *  (`/welcome`, an is_meta injection) or relocated into an assistant-side block
- *  (skill expansion). The rendering/rows layers use this to skip emitting a row. */
+/** True when the message produces NO row of its own -- either fully hidden (`/welcome`, an
+ *  is_meta injection) or relocated into an assistant-side block (a skill expansion). The
+ *  rendering/rows layers use this to skip emitting a row.
+ *
+ *  Not "off the user rail": a notice draws its own row on the agent's. */
 export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
-  return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
+  const kind = classifyUserMessage(event).kind;
+  return KIND_SPEC[kind].rail === Rail.None || kind === UserMessageKind.SkillExpansion;
 }
 
 /** The slash command the chat app sends a retiring agent for its handoff summary (the backend's

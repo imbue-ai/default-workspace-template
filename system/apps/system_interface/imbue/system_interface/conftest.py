@@ -1,23 +1,47 @@
 import json
 import os
+import queue
 import socket
 import subprocess
 import tempfile
+import threading
 from collections.abc import Generator
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from flask import Flask
+from flask.testing import FlaskClient
 from loguru import logger as loguru_logger
 from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
 
+from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.config import Config
+from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.testing import build_inventory
+from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import shell_application
+from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.testing import FORTRESS_CHROMIUM_PATH
 from imbue.system_interface.testing import FakeSupervisorServer
+from imbue.system_interface.testing import PIPELINE_BASE_URL
+from imbue.system_interface.testing import PIPELINE_CLIENT_ID
+from imbue.system_interface.testing import PIPELINE_DEFAULT_DESKTOP_ID
+from imbue.system_interface.testing import PIPELINE_PORT
+from imbue.system_interface.testing import PIPELINE_SEEDED_APP_NAME
+from imbue.system_interface.testing import PIPELINE_STUB_APP_NAME
+from imbue.system_interface.testing import PipelineHarness
+from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import is_server_answering
+from imbue.system_interface.testing import serve_app
+from imbue.system_interface.testing import stand_in_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+from imbue.system_interface.wsgi import make_threaded_server
 
 
 @pytest.fixture(autouse=True)
@@ -28,15 +52,16 @@ def _isolate_system_interface_tests(
     """Keep every shell test away from the live workspace's registry and shell.
 
     The shell's inventory reads the app registry from the working directory otherwise, which
-    in a workspace is the live one; and a test app's own posts (a tab rebind, a nudge) would
-    reach the workspace's real shell. A port nothing listens on refuses them at once; the
+    in a workspace is the live one; and the scripts a test drives (``layout.py``,
+    ``refresh_workspace_view.py``) post to the shell ``MINDS_WORKSPACE_SERVER_URL`` names, which
+    would be the workspace's real one. A port nothing listens on refuses them at once; the
     pipeline and e2e tests serve a shell of their own and point at it.
     """
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
     monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
 
 
-# --- pytest-playwright fixture-scope overrides -------------------------------
+# pytest-playwright fixture-scope overrides
 #
 # pytest-playwright (installed as a plugin) ships these fixtures at SESSION
 # scope: `playwright` (the sync_playwright handle, which spawns the node
@@ -189,6 +214,19 @@ def browser(
 
 
 @pytest.fixture
+def app(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> Flask:
+    """The shell app over the two-app registry, its state (the avatar catalog and selection included) under
+    ``tmp_path``; a test module with a shell of its own defines ``app`` itself."""
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
+    return shell_application(tmp_path, inventory, broadcaster)
+
+
+@pytest.fixture
+def client(app: Flask) -> FlaskClient:
+    return app.test_client()
+
+
+@pytest.fixture
 def broadcaster() -> WebSocketBroadcaster:
     return WebSocketBroadcaster()
 
@@ -273,3 +311,60 @@ def git_work_dir(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
+
+
+@pytest.fixture
+def layout_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[PipelineHarness, None, None]:
+    """A workspace server over a registry of two stand-in apps, one declaring launch paths, and a started shell:
+    what ``test_layout_pipeline.py`` drives ``layout.py`` against."""
+    registry_path = tmp_path / "apps.toml"
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
+    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", PIPELINE_BASE_URL)
+
+    with serve_app(stand_in_app()) as seeded, serve_app(stand_in_app()) as stub:
+        write_registry(
+            registry_path,
+            registry_row_toml(
+                PIPELINE_SEEDED_APP_NAME,
+                seeded.http_url,
+                is_critical=True,
+                default_shortcut=("new", "new"),
+                launch_paths=(("new", "New Chat", "/new"), ("subagent", "Open subagent", "/subagent")),
+            ),
+            registry_row_toml(PIPELINE_STUB_APP_NAME, stub.http_url),
+        )
+
+        broadcaster = WebSocketBroadcaster()
+        config = Config(system_interface_host="127.0.0.1", system_interface_port=PIPELINE_PORT)
+        state = build_test_state(config=config, broadcaster=broadcaster, shell_state_directory=tmp_path / "shell")
+        app = create_application(state)
+
+        server = make_threaded_server("127.0.0.1", PIPELINE_PORT, app)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            wait_for(
+                lambda: is_server_answering(PIPELINE_BASE_URL),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message=f"workspace server did not come up at {PIPELINE_BASE_URL}",
+            )
+            state.shell.start()
+            try:
+                yield PipelineHarness(base_url=PIPELINE_BASE_URL, broadcaster=broadcaster, registry_path=registry_path)
+            finally:
+                state.shell.stop()
+        finally:
+            server.shutdown()
+            thread.join(timeout=5.0)
+
+
+@pytest.fixture
+def connected_client(layout_server: PipelineHarness) -> Generator[queue.Queue[str | None], None, None]:
+    """One connected browser client on the default desktop: the client every op with no ``--client`` targets."""
+    client_queue = layout_server.broadcaster.register()
+    layout_server.broadcaster.set_client_info(client_queue, PIPELINE_CLIENT_ID, PIPELINE_DEFAULT_DESKTOP_ID)
+    try:
+        yield client_queue
+    finally:
+        layout_server.broadcaster.unregister(client_queue)

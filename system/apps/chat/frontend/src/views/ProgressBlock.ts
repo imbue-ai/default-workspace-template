@@ -15,14 +15,19 @@ import m from "mithril";
 import { MarkdownContent, renderMarkdown } from "../markdown";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import type { ToolResultEvent, AssistantMessageEvent } from "../models/Response";
-import {
-  renderAssistantMessage,
-  renderAssistantMessageChildren,
-  renderPermissionItem,
-  renderUserMessage,
-} from "./message-renderers";
+import { renderAssistantRun, renderPermissionItem, renderUserMessage } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 import { renderHandoffNode } from "./handoff-node";
+import {
+  TIMELINE_BODY_CLASS,
+  TIMELINE_BULLET_CLASS,
+  TIMELINE_CHEVRON_CLASS,
+  TIMELINE_NODE_CLASS,
+  timelineChevronStateClass,
+  timelineSpinnerBullet,
+  timelineTitleClass,
+  type TimelineTone,
+} from "./timeline-node";
 import { statusDoneIcon, statusPendingIcon, statusRingIcon } from "@imbue/workspace-ui/src/components/icons";
 
 interface ProgressBlockAttrs {
@@ -47,18 +52,13 @@ interface ProgressBlockAttrs {
  * (rendered content), and the expanded panel's tool-block override (a
  * contextual rule over shared markup). */
 
-/** The step title button: a reset button carrying the row's typography. All
- *  statuses share this one de-emphasized look (medium weight, soft color);
- *  the status is carried by the bullet icon instead. */
-const TITLE_CLASS =
-  "pv-tl-title inline-flex cursor-pointer items-center appearance-none border-0 bg-transparent p-0 text-left " +
-  "text-(length:--font-size-body) leading-[1.4] font-medium text-secondary disabled:cursor-default";
-
-/** The expand chevron beside the title. text-[18px]: icon glyph, sized
- *  independently of the text scale (and deliberately not text-lg, whose
- *  line-height would reflow the row). */
-const CHEV_CLASS =
-  "pv-chev ml-1.5 inline-block text-[18px] font-normal transition-transform duration-(--dur-base) ease-[ease]";
+/** A step's status as the title reads it: only a closed step greys out, and only
+ *  the live frontier one shimmers (a settled active step -- a carryover, an idle
+ *  agent -- reads like any other open step). */
+function titleTone(step: StepNode): TimelineTone {
+  if (step.status === "done") return "done";
+  return step.status === "active" && step.is_frontier ? "current" : "upcoming";
+}
 
 function statusIcon(status: StepStatus, is_frontier: boolean): m.Children {
   if (status === "done") {
@@ -71,11 +71,7 @@ function statusIcon(status: StepStatus, is_frontier: boolean): m.Children {
     if (!is_frontier) {
       return m.trust(statusRingIcon());
     }
-    return m(
-      "span",
-      { class: "pv-icon pv-icon--active inline-flex h-4 w-4 shrink-0 items-center justify-center text-accent" },
-      m("span.spinner.spinner--sm.spinner--current"),
-    );
+    return timelineSpinnerBullet();
   }
   return m.trust(statusPendingIcon());
 }
@@ -89,7 +85,8 @@ function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null 
     return step.summary
       ? m(
           "div",
-          { class: "pv-tl-summary mt-[3px] pl-0.5 text-(length:--font-size-body) leading-normal text-secondary" },
+          // Faint, matching the greyed-out title of the closed step it belongs to.
+          { class: "pv-tl-summary mt-[3px] pl-0.5 text-(length:--font-size-helper) leading-normal text-faint" },
           step.summary,
         )
       : null;
@@ -104,19 +101,14 @@ function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null 
 }
 
 function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolResultEvent>, chatId: string): m.Vnode {
-  const children: m.Children[] = [];
-  for (const e of step.events) {
-    children.push(...renderAssistantMessageChildren(e, toolResults, chatId));
-  }
-  // The subtle indent + left rule containing the revealed work; its p and
-  // tool-block child rules stay in style.css.
-  return m(
-    "div",
-    {
-      class: "pv-expanded markdown-content mt-2.5 border-l-2 border-subtle py-1 pl-3.5 text-(length:--font-size-body)",
-    },
-    children,
-  );
+  // One run over all the step's events, so a sequence of tool calls reads as a
+  // single row of chips rather than one row per event.
+  const children = renderAssistantRun(step.events, toolResults, chatId);
+  // The revealed work sits flush under its title -- no indent and no left rule.
+  // The timeline's own thread already runs down the left of every node, so a
+  // second vertical line inside an opened step would read as a nested timeline
+  // that is not one. Its p and tool-block child rules stay in style.css.
+  return m("div", { class: "pv-expanded markdown-content mt-2.5 text-(length:--font-size-body)" }, children);
 }
 
 export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
@@ -140,29 +132,24 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     const canExpand = step.events.length > 0;
     const isExpanded = isBlockExpanded(stepKey(step.ticket_id));
     // The status/step modifiers are bare markers (the status look is resolved
-    // in code -- see TITLE_CLASS and statusIcon); the padding caps the thread
-    // on the last node.
+    // in code -- see timelineTitleClass and statusIcon); the padding caps the
+    // thread on the last node.
     const nodeClasses = [
       "pv-tl-node",
       `pv-tl-node--${step.status}`,
       "pv-tl-node--step",
       is_last ? "pv-tl-node--last pb-0" : "pb-[18px]",
-      "relative flex items-start gap-3.5",
+      TIMELINE_NODE_CLASS,
     ].join(" ");
 
     return m("div", { class: nodeClasses, key: `step-${step.ticket_id}` }, [
-      // The bullet's opaque chat background masks the thread behind it.
-      m(
-        "div",
-        { class: "pv-tl-bullet relative z-(--z-content) w-4 shrink-0 bg-chat py-px" },
-        statusIcon(step.status, step.is_frontier),
-      ),
-      m("div", { class: "pv-tl-body min-w-0 flex-1" }, [
+      m("div", { class: TIMELINE_BULLET_CLASS }, statusIcon(step.status, step.is_frontier)),
+      m("div", { class: TIMELINE_BODY_CLASS }, [
         m(
           "button",
           {
             type: "button",
-            class: TITLE_CLASS,
+            class: timelineTitleClass(titleTone(step)),
             disabled: !canExpand,
             onclick: canExpand ? () => toggleBlockExpanded(stepKey(step.ticket_id)) : undefined,
           },
@@ -171,9 +158,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             canExpand
               ? m(
                   "span",
-                  {
-                    class: `${CHEV_CLASS} ${isExpanded ? "pv-chev--open rotate-90 text-primary" : "text-secondary"}`,
-                  },
+                  { class: `${TIMELINE_CHEVRON_CLASS} ${timelineChevronStateClass(isExpanded)}` },
                   m.trust("&rsaquo;"),
                 )
               : null,
@@ -213,7 +198,9 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           return m(
             "div",
             { class: "pv-ungrouped relative z-[2] mb-3.5 bg-chat pt-1.5", key: item.key },
-            item.events.map((e) => renderAssistantMessage(e, toolResults, chatId)),
+            // The whole ungrouped run at once, so its tool calls merge into one
+            // chip row the way a step's revealed work does.
+            renderAssistantRun(item.events, toolResults, chatId),
           );
         }
         if (item.kind === "permission") {

@@ -14,11 +14,9 @@ Then register + surface it as a workspace tab::
 
 import argparse
 import html
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import markdown
 
@@ -119,7 +117,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), _Handler)
-    print(f"docs-viewer serving {DOCS_DIR} on http://{args.host}:{args.port}", flush=True)
+    print(
+        f"docs-viewer serving {DOCS_DIR} on http://{args.host}:{args.port}", flush=True
+    )
     server.serve_forever()
 
 

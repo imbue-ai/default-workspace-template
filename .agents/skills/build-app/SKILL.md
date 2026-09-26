@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. A planner splits the build into parts, workers build those parts side by side in one shared folder, and you handle every contact with the user (including the throwaway mock and working-site reviews) and take the confirmed app live. For changing or removing an existing app use update-app."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. A planner splits the build into parts, workers build those parts side by side in one shared folder, and you handle every contact with the user (including the throwaway mock and working-site reviews) and take the confirmed app live. For changing or removing an existing app use update-app."
 metadata:
   author: imbue
 ---
@@ -325,7 +325,7 @@ anything. There are two kinds:
 For a review:
 
 1. **Serve a preview from the build folder.** The app is not live yet, so show
-   a throwaway instance wrapped in a labeled preview tab, with its own scratch
+   a throwaway instance wrapped in a labeled preview window, with its own scratch
    data folder:
 
    ```bash
@@ -389,7 +389,7 @@ After the working-site conversation is confirmed and every node is done:
 3. **Start it for real:**
    `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
    then `supervisorctl status "$APP"`. Verify it with
-   `.agents/skills/build-app/references/verify.md`, and open the tab with
+   `.agents/skills/build-app/references/verify.md`, and open the window with
    `python3 system/scripts/layout.py open "$APP"`.
 4. **Remove the build folder.** List it first (`git -C "$BUILD" status --porcelain`
    must be empty, since everything was committed and merged), then

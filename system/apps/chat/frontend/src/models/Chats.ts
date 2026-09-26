@@ -36,6 +36,9 @@ export interface ActiveAgent {
   // Backend-computed shoulder-tap availability: true iff something is queued AND no send is in
   // flight.
   shoulder_tap_available: boolean;
+  // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
+  // Sending, shown beside the model bar.
+  is_connecting: boolean;
 }
 
 /** A handoff runs draining, summarizing, switching; a rebind runs draining, restarting; both can end failed. */
@@ -67,6 +70,10 @@ export interface HandoffState {
   target_label: string;
   // The messages held for after the switch, the confirming one first.
   held_sends: HeldSend[];
+  // The model the chat runs on once the switch lands, applied on the far side of the restart or
+  // the create; null when none was picked. Read by a page that has no armed switch of its own to
+  // name it -- one reloaded mid-switch -- since the pushed live choice does not carry it yet.
+  model_pick: ModelIdentity | null;
   // Why the switch failed, in the failed phase; null otherwise.
   error: string | null;
   // Which step failed, in the failed phase: the agent's start, or the model picked for it.
@@ -89,7 +96,7 @@ export interface ChatSnapshot {
   // The mngr ``project`` label: the project this chat was created in, which mngr propagates to
   // the agent's own children. Null when the agent carries no label.
   project: string | null;
-  // The chat's status, as its instance record reports it.
+  // The chat's status: the `ChatStatus` value the `chats_updated` snapshot carries.
   status: string;
   // The active agent's mngr labels.
   labels: Record<string, string>;
@@ -98,6 +105,9 @@ export interface ChatSnapshot {
   // Null while the chat is not converging on a new agent.
   handoff: HandoffState | null;
   active_agent: ActiveAgent;
+  // Epoch seconds of the chat's most recent message; null when it has never been messaged.
+  // The chat root's list orders on it.
+  last_messaged_at: number | null;
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
@@ -108,12 +118,12 @@ export interface QueuedMessage {
   content: string;
   timestamp: string;
   // True while the backend is actively re-sending this chip (a codex shoulder-tap's
-  // interrupt+resend): it renders "Sending…" rather than as a plain queued chip.
+  // interrupt+resend): it renders as an ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
 }
 
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
-export type ProvisionalChatPhase = "awaiting_account" | "awaiting_first_send" | "creating" | "failed";
+export type ProvisionalChatPhase = "awaiting_first_send" | "creating" | "failed";
 
 /** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
 export interface ProvisionalChat {
@@ -152,6 +162,9 @@ let chats: ChatSnapshot[] = [];
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
+// Whether the chat app has sent its chat list at least once: before that, a chat the page names
+// may simply not be known here yet.
+let isChatListReceived = false;
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
 // is in flight: from the socket opening to the chat list that ends it. Null otherwise.
 let replayedProvisionalIds: Set<string> | null = null;
@@ -220,6 +233,7 @@ function scheduleReconnect(): void {
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "chats_updated": {
+      isChatListReceived = true;
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
       const serialized = JSON.stringify(event.chats);
@@ -266,7 +280,7 @@ function handleEvent(event: WsEvent): void {
       break;
     }
     case "provisional_chat_created": {
-      // Also how a chat moves between phases (a reserved chat launched, a failed one retried):
+      // Also how a chat moves between phases (a seeded chat launched, a failed one retried):
       // the backend pushes the whole record again. A reconnect replays every provisional chat
       // this way too, so a failed record seen here settles a send held for it as the
       // completion message would have.
@@ -283,7 +297,7 @@ function handleEvent(event: WsEvent): void {
         // The chat itself arrives on the chats_updated push, which is what settles waiters.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
       } else if (event.error === null) {
-        // Discarded (its tab was closed before it launched): gone, with nothing to show.
+        // Discarded before it launched: gone, with nothing to show.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
         settleRegistration(event.chat_id, new Error("The chat was closed before it started"));
       } else {
@@ -340,6 +354,11 @@ export function isConnected(): boolean {
   return connected;
 }
 
+/** Whether the chat app has sent its chat list yet; until it has, a chat missing from it is unknown, not gone. */
+export function hasReceivedChatList(): boolean {
+  return isChatListReceived;
+}
+
 /** Every chat the app lists: the backend keeps the workspace's services-only "primary" agent
  *  out of the snapshots it pushes, so nothing here needs filtering. */
 export function getChats(): ChatSnapshot[] {
@@ -358,6 +377,11 @@ export function getQueuedMessagesForChat(chatId: string): QueuedMessage[] {
 /** Whether the shoulder-tap is available for this chat, per the backend. */
 export function getShoulderTapAvailableForChat(chatId: string): boolean {
   return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
+}
+
+/** Every chat the app has minted that is not an agent yet, for the root's list. */
+export function getProvisionalChats(): ProvisionalChat[] {
+  return provisionalChats;
 }
 
 /** The provisional record of ``chatId``, while the app lists it as one. */
@@ -434,12 +458,12 @@ export function createChat(
 }
 
 /**
- * Launch a chat minted earlier (one that waited for an account, or one whose create failed)
- * on ``accountId``: it keeps its id and name, so the tab showing it becomes the chat.
+ * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
+ * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
  */
 export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
-  // A seeded chat's launch brings the user's first message; a reserved chat keeps the one it
-  // was minted with, and a launch that names one for it is refused, so none is sent then.
+  // A seeded chat's launch brings the user's first message; a failed create's retry has none
+  // to bring, so the field is left out then.
   return postCreateChat(
     message === "" ? { chat_id: chatId, account_id: accountId } : { chat_id: chatId, account_id: accountId, message },
   );
@@ -464,4 +488,76 @@ async function postCreateChat(body: Record<string, string | ModelIdentity | null
     name: created.name ?? "",
     displayName: created.display_name ?? created.name ?? "",
   };
+}
+
+/** A held intake as ``GET /api/chats/intakes/<token>`` answers it (the backend's ``PendingIntakeView``). */
+export interface PendingIntake {
+  message: string;
+  isDraft: boolean;
+  // Whether the root has to offer the picker over the chats before the intake can be applied.
+  needsPick: boolean;
+  // The chat the intake resolved to; null for a choice the user makes.
+  chatId: string | null;
+}
+
+/** What applying a held intake came to (the backend's ``IntakeApplyResponse``). */
+export interface AppliedIntake {
+  chatId: string;
+  // Text for the chat's composer, unsent; null when nothing is drafted.
+  composerText: string | null;
+  // The first message of a chat awaiting its first send with no account: the root launches it with this.
+  firstMessage: string | null;
+}
+
+/** Thrown when a token names no held intake: it was applied, dismissed, or expired. */
+export class PendingIntakeGoneError extends Error {}
+
+async function readIntakeResponse<T>(response: Response, token: string): Promise<T> {
+  if (response.status === 404) throw new PendingIntakeGoneError(`no pending intake ${token}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail ?? `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+/** The held intake a token names. Throws ``PendingIntakeGoneError`` when it is gone. */
+export async function fetchPendingIntake(token: string): Promise<PendingIntake> {
+  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`));
+  const data = await readIntakeResponse<{
+    message: string;
+    is_draft: boolean;
+    needs_pick: boolean;
+    chat_id: string | null;
+  }>(response, token);
+  return { message: data.message, isDraft: data.is_draft, needsPick: data.needs_pick, chatId: data.chat_id };
+}
+
+/** Apply a held intake, on ``chatId`` when it needed a pick; the token is consumed. Throws
+ *  ``PendingIntakeGoneError`` when another apply got there first. */
+export async function applyPendingIntake(token: string, chatId: string | null = null): Promise<AppliedIntake> {
+  const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}/apply`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chatId === null ? {} : { chat_id: chatId }),
+  });
+  const data = await readIntakeResponse<{
+    chat_id: string;
+    composer_text: string | null;
+    first_message: string | null;
+  }>(response, token);
+  return { chatId: data.chat_id, composerText: data.composer_text, firstMessage: data.first_message };
+}
+
+/** Drop a held intake unapplied (the picker was dismissed); a token already gone is fine. The dismissal never
+ *  waits on this, so a failure is logged rather than thrown. */
+export async function discardPendingIntake(token: string): Promise<void> {
+  try {
+    const response = await fetch(apiUrl(`/api/chats/intakes/${encodeURIComponent(token)}`), { method: "DELETE" });
+    if (!response.ok && response.status !== 404) {
+      console.warn(`Could not drop the pending intake ${token}: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    console.warn(`Could not drop the pending intake ${token}`, error);
+  }
 }

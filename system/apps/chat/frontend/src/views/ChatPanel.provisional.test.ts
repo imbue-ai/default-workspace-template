@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type m from "mithril";
 
 // vi.mock factories are hoisted above module scope, so anything they close over must come from
@@ -12,21 +12,23 @@ const mocks = vi.hoisted(() => {
     // The chat the list names, once its agent exists; undefined while it is provisional.
     chat: undefined as unknown,
     chatsUpdatedListener: null as (() => void) | null,
-    accountsLoaded: true,
-    selectedAccount: null as { id: string } | null,
     launchChat: vi.fn(async (_chatId: string, _accountId: string) => ({})),
-    openProviderChooser: vi.fn(),
-    closeProviderChooser: vi.fn(),
     fetchEvents: vi.fn(async (_chatId: string) => undefined),
     loadSnapshotWithStream: vi.fn(async (_chatId: string) => undefined),
     connectToStream: vi.fn(),
     noteLoadedArrivals: vi.fn(),
+    // The page's not-yet-real bubbles, as the outgoing view renders them.
+    outgoingBubbles: [] as unknown[],
+    // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
+    isConversationNotFound: false,
+    isChatListReceived: true,
   };
 });
 
 vi.mock("../models/Chats", () => ({
   getChatById: () => mocks.chat,
   getProvisionalChat: () => mocks.proto,
+  hasReceivedChatList: () => mocks.isChatListReceived,
   launchChat: (chatId: string, accountId: string) => mocks.launchChat(chatId, accountId),
   addChatsUpdatedListener: (listener: () => void) => {
     mocks.chatsUpdatedListener = listener;
@@ -34,12 +36,6 @@ vi.mock("../models/Chats", () => ({
   removeChatsUpdatedListener: () => undefined,
   buildAgentTerminalUrl: () => "",
   getTerminalUrl: () => "",
-}));
-vi.mock("../models/Providers", () => ({
-  areAccountsLoaded: () => mocks.accountsLoaded,
-  getSelectedAccount: () => mocks.selectedAccount,
-  openProviderChooser: mocks.openProviderChooser,
-  closeProviderChooser: mocks.closeProviderChooser,
 }));
 vi.mock("../models/Response", () => ({
   addMessageSentListener: () => undefined,
@@ -55,7 +51,7 @@ vi.mock("../models/Response", () => ({
   getFirstOffset: () => 0,
   getRenderVersion: () => 0,
   getTotalEventCount: () => 0,
-  isConversationNotFound: () => false,
+  isConversationNotFound: () => mocks.isConversationNotFound,
   noteLoadedArrivals: mocks.noteLoadedArrivals,
 }));
 vi.mock("../models/StreamingMessage", () => ({
@@ -78,18 +74,19 @@ vi.mock("./transcript-scroll-engine", () => ({
 // (a factory is hoisted, so it cannot share one constant).
 vi.mock("./TranscriptScrollbar", () => ({ TranscriptScrollbar: { view: () => null } }));
 vi.mock("./MessageInput", () => ({ MessageInput: { view: () => null } }));
-vi.mock("./ModelBar", () => ({ ModelBar: { view: () => null } }));
+vi.mock("./ModelProviderMenu", () => ({ ModelProviderMenu: { view: () => null } }));
 vi.mock("./AgentTerminalPanel", () => ({ AgentTerminalPanel: { view: () => null } }));
 vi.mock("./ActivityIndicator", () => ({ ActivityIndicator: { view: () => null } }));
 vi.mock("./TerminalViewToggle", () => ({ TerminalViewToggle: { view: () => null } }));
 vi.mock("./EmptySlot", () => ({ EmptySlot: { view: () => null } }));
 vi.mock("./QueuedMessageView", () => ({ renderQueuedMessages: () => [] }));
-vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => [] }));
+vi.mock("./OutgoingMessageView", () => ({ renderOutgoingMessages: () => mocks.outgoingBubbles }));
 vi.mock("./fast-mode-limit", () => ({ maybeApplyFastModeLimit: () => undefined }));
 vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
+import { MESSAGE_LIST_CLASS } from "./conversation-rows";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown };
 
@@ -137,17 +134,6 @@ function mountPanel(): () => unknown {
   return () => panel.view({ attrs: { chatId: AGENT_ID } } as m.Vnode<{ chatId: string }>);
 }
 
-function awaiting(): void {
-  mocks.proto = {
-    chat_id: AGENT_ID,
-    name: "Chat 1",
-    account_id: "",
-    phase: "awaiting_account",
-    error: null,
-    is_seeded: false,
-  };
-}
-
 /** A seeded chat (the Mind app's onboarding conversation) in `phase`, its create having failed
  *  with `error` in the failed phase. */
 function seeded(phase: "awaiting_first_send" | "creating" | "failed", error: string | null = null): void {
@@ -161,89 +147,138 @@ function seeded(phase: "awaiting_first_send" | "creating" | "failed", error: str
   };
 }
 
+/** A chat whose create failed on `accountId`, with `error` as the reason. */
+function failed(accountId: string, error: string): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 1",
+    account_id: accountId,
+    phase: "failed",
+    error,
+    is_seeded: false,
+  };
+}
+
+/** A chat whose create is running. */
+function creating(): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 1",
+    account_id: "acct-1",
+    phase: "creating",
+    error: null,
+    is_seeded: false,
+  };
+}
+
+/** A chat with no seed that waits for its first send (an intake that could not launch it at once). */
+function awaiting(accountId: string): void {
+  mocks.proto = {
+    chat_id: AGENT_ID,
+    name: "Chat 2",
+    account_id: accountId,
+    phase: "awaiting_first_send",
+    error: null,
+    is_seeded: false,
+  };
+}
+
+/** The list the page's bubbles sit in: the child of the scroll area's content, by its class. */
+function bubbleListOf(tree: unknown): AnyVnode | undefined {
+  const wrapper = findByClass(tree, "message-list-wrapper");
+  return flatten(wrapper?.children).find((vnode) =>
+    [vnode.attrs?.class, vnode.attrs?.className].includes(MESSAGE_LIST_CLASS),
+  );
+}
+
 describe("ChatPanel over a provisional chat", () => {
   beforeEach(() => {
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
     mocks.launchChat.mockReset();
     mocks.launchChat.mockImplementation(async () => ({}));
-    mocks.openProviderChooser.mockReset();
-    mocks.closeProviderChooser.mockReset();
-    mocks.accountsLoaded = true;
-    mocks.selectedAccount = null;
     mocks.chat = undefined;
-    awaiting();
+    mocks.outgoingBubbles = [];
+    mocks.fetchEvents.mockClear();
   });
 
-  it("decides nothing before the account list has loaded", () => {
-    mocks.accountsLoaded = false;
-    const render = mountPanel();
+  it("shows a chat being created as an empty conversation, with no placeholder text", () => {
+    creating();
+    const tree = mountPanel()();
 
-    const tree = render();
-
-    expect(renderedText(tree)).toContain("Checking which providers are signed in");
-    expect(mocks.launchChat).not.toHaveBeenCalled();
-    expect(mocks.openProviderChooser).not.toHaveBeenCalled();
-  });
-
-  it("offers the chooser once with nothing signed in, and keeps a button to reopen it", () => {
-    const render = mountPanel();
-
-    const tree = render();
-    render();
-
-    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
-    expect(renderedText(tree)).toContain("Sign in to a provider to start this chat");
-    expect(mocks.launchChat).not.toHaveBeenCalled();
-    // The chooser's sign-in launches this chat.
-    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
-    intent.onSignedIn("acct-2");
-    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-2");
-    expect(findByClass(render(), "message-list-creating")).toBeTruthy();
-  });
-
-  it("launches at once on the selected account, closing the chooser, and only once", () => {
-    mocks.selectedAccount = { id: "acct-1" };
-    const render = mountPanel();
-
-    const tree = render();
-    render();
-
-    expect(mocks.launchChat).toHaveBeenCalledTimes(1);
-    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
-    expect(mocks.closeProviderChooser).toHaveBeenCalled();
-    expect(mocks.openProviderChooser).not.toHaveBeenCalled();
+    expect(renderedText(tree).trim()).toBe("");
     expect(findByClass(tree, "message-list-creating")).toBeTruthy();
+    expect(bubbleListOf(tree)?.children).toEqual([]);
   });
 
-  it("shows a refused launch's reason with a retry on the same account", async () => {
-    mocks.selectedAccount = { id: "acct-1" };
+  it("draws a created chat with no events as the same empty conversation, with no placeholder text", () => {
+    creating();
+    const render = mountPanel();
+    const starting = render();
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+
+    const started = render();
+
+    expect(renderedText(started).trim()).toBe("");
+    expect(findByClass(started, "message-list-empty")).toBeTruthy();
+    expect(bubbleListOf(started)?.attrs).toEqual(bubbleListOf(starting)?.attrs);
+  });
+
+  it("keeps a message sent while the chat starts where the empty transcript after it puts the message", () => {
+    const bubble = { tag: "div", key: "outgoing-0", attrs: { class: "outgoing-message" }, children: [] };
+    mocks.outgoingBubbles = [bubble];
+    creating();
+    const render = mountPanel();
+
+    const starting = render();
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    const started = render();
+
+    expect(bubbleListOf(starting)?.children).toEqual([bubble]);
+    expect(bubbleListOf(started)?.children).toEqual([bubble]);
+  });
+
+  it("shows an unseeded chat awaiting its first send as an empty conversation with no placeholder, not a failure", () => {
+    awaiting("");
+    const render = mountPanel();
+
+    const tree = render();
+
+    expect(findByClass(tree, "message-list-awaiting")).toBeTruthy();
+    expect(findByClass(tree, "message-list-create-failed")).toBeUndefined();
+    expect(findByClass(tree, "message-list-creating")).toBeUndefined();
+    expect(renderedText(tree).trim()).toBe("");
+    // Nothing to read: the chat has no seed and no agent.
+    expect(mocks.fetchEvents).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed create's reason and retries it on the record's account", () => {
+    failed("acct-1", "mngr create exited with code 1");
+    const render = mountPanel();
+
+    const tree = render();
+
+    expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
+    expect(renderedText(tree)).toContain("mngr create exited with code 1");
+    click(findButton(tree, "message-list-create-retry"));
+    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
+  });
+
+  it("shows a refused relaunch's reason beside the create's, and forgets it once the chat is being created", async () => {
+    failed("acct-1", "mngr create exited with code 1");
     mocks.launchChat.mockImplementationOnce(async () => {
       throw new Error("account acct-1 is on a lane this build does not have");
     });
     const render = mountPanel();
-    render();
+    click(findButton(render(), "message-list-create-retry"));
     await flushAsync();
 
-    const tree = render();
+    const refused = render();
 
-    expect(renderedText(tree)).toContain("account acct-1 is on a lane this build does not have");
-    expect(findByClass(tree, "message-list-creating")).toBeUndefined();
-    click(findButton(tree, "message-list-launch-retry"));
-    expect(mocks.launchChat).toHaveBeenCalledTimes(2);
-    expect(mocks.launchChat).toHaveBeenLastCalledWith(AGENT_ID, "acct-1");
-    expect(findByClass(render(), "message-list-creating")).toBeTruthy();
-  });
-
-  it("forgets a refusal once the chat is being created, so a later failure shows its own reason", async () => {
-    // Two pages of one waiting chat both launch on the selected account; the backend
-    // takes one and refuses the other, and the push then moves both to creating.
-    mocks.selectedAccount = { id: "acct-1" };
-    mocks.launchChat.mockImplementationOnce(async () => {
-      throw new Error("Chat agent-1 is not waiting to be launched");
-    });
-    const render = mountPanel();
-    render();
-    await flushAsync();
-    expect(renderedText(render())).toContain("is not waiting to be launched");
+    expect(renderedText(refused)).toContain("mngr create exited with code 1");
+    expect(renderedText(refused)).toContain("account acct-1 is on a lane this build does not have");
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -254,42 +289,72 @@ describe("ChatPanel over a provisional chat", () => {
       is_seeded: false,
     };
     render();
-    mocks.proto = {
-      chat_id: AGENT_ID,
-      name: "Chat 1",
-      account_id: "acct-1",
-      phase: "failed",
-      error: "mngr create exited with code 1",
-      is_seeded: false,
-    };
+    failed("acct-1", "mngr create exited with code 2");
     const tree = render();
 
-    expect(renderedText(tree)).toContain("mngr create exited with code 1");
-    expect(renderedText(tree)).not.toContain("is not waiting to be launched");
+    expect(renderedText(tree)).toContain("mngr create exited with code 2");
+    expect(renderedText(tree)).not.toContain("is on a lane this build does not have");
+  });
+});
+
+describe("ChatPanel over a transcript that 404'd", () => {
+  beforeEach(() => {
+    mocks.proto = undefined;
+    mocks.chat = undefined;
+    mocks.outgoingBubbles = [];
+    mocks.isConversationNotFound = true;
+    mocks.isChatListReceived = true;
+    mocks.loadSnapshotWithStream.mockReset();
+    mocks.loadSnapshotWithStream.mockImplementation(async () => undefined);
   });
 
-  it("shows a failed create's reason and retries it on the record's account", () => {
-    mocks.proto = {
-      chat_id: AGENT_ID,
-      name: "Chat 1",
-      account_id: "acct-1",
-      phase: "failed",
-      error: "mngr create exited with code 1",
-      is_seeded: false,
-    };
+  afterEach(() => {
+    mocks.loadSnapshotWithStream.mockImplementation(async () => undefined);
+  });
+
+  it("draws a chat the page has not been told about yet as an empty chat, not as one with no conversation", () => {
+    // A new chat's page can load, and its transcript 404, before the chat app's list reaches it.
+    mocks.isChatListReceived = false;
+
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).not.toContain("No conversation data");
+    expect(findByClass(tree, "message-list-loading")).toBeTruthy();
+  });
+
+  it("says a chat the app does not list has no conversation", () => {
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).toContain("No conversation data");
+  });
+
+  it("keeps a chat that has just come up empty while its transcript is reloaded", async () => {
+    let finishReload: () => void = () => {};
+    mocks.loadSnapshotWithStream.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          finishReload = () => resolve(undefined);
+        }),
+    );
     const render = mountPanel();
+    render();
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    mocks.chatsUpdatedListener?.();
 
-    const tree = render();
+    const reloading = render();
 
-    expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
-    expect(renderedText(tree)).toContain("mngr create exited with code 1");
-    click(findButton(tree, "message-list-create-retry"));
-    expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
+    expect(renderedText(reloading)).not.toContain("No conversation data");
+    mocks.isConversationNotFound = false;
+    finishReload();
+    await flushAsync();
+    expect(renderedText(render())).not.toContain("No conversation data");
   });
 });
 
 describe("ChatPanel over a seeded chat", () => {
   beforeEach(() => {
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
     mocks.fetchEvents.mockClear();
     mocks.loadSnapshotWithStream.mockClear();
     mocks.connectToStream.mockClear();
@@ -306,7 +371,6 @@ describe("ChatPanel over a seeded chat", () => {
     render();
 
     // The transcript path, not a provisional screen: the seed segment is what the page reads.
-    expect(findByClass(tree, "message-list-awaiting-account")).toBeUndefined();
     expect(findByClass(tree, "message-list-creating")).toBeUndefined();
     expect(findByClass(tree, "message-list-empty")).toBeTruthy();
     expect(mocks.fetchEvents).toHaveBeenCalledTimes(1);

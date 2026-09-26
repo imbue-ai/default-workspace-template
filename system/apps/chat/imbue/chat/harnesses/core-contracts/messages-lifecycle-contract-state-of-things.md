@@ -368,7 +368,7 @@ single-channel / id-reconciliation work as limitation 1.
 
 **What:** this is the one genuine message *loss*, and the only limitation here that is not merely
 a visual transient. During a shoulder-tap flush, the mngr pi lifecycle extension
-(`system/vendor/mngr/libs/mngr_pi_coding/.../mngr_pi_lifecycle.ts`) aborts pi's live turn and
+(mngr's `libs/mngr_pi_coding/.../mngr_pi_lifecycle.ts`) aborts pi's live turn and
 holds the captured steer messages in an in-memory `pendingResubmit` while it waits for idle to
 re-inject them -- and the dwt queue mirror has already been cleared by the flush sentinel. If a
 Stop (retract) lands in that window, the backend reads an empty mirror (returns nothing to the

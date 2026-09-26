@@ -6,16 +6,23 @@
 // suite stays on vitest's node default. Every "an attacker writes X" case below
 // is therefore parsed the way the workspace would parse it.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-// The app list is the machine's, delivered over the WebSocket. Standing in for
-// it keeps these tests about the icon rule and away from the socket.
-const registry = vi.hoisted(() => ({ apps: [] as { name: string; url: string; label: string; icon?: string }[] }));
-vi.mock("../../models/Inventory", () => ({
-  getApp: (name: string) => registry.apps.find((app) => app.name === name),
-}));
+// The app list is the machine's, delivered over the WebSocket; the views hand the record they
+// hold to the icon rule, so the tests keep a table of records and look them up the same way.
+const registry = { apps: [] as { name: string; url: string; label: string; icon?: string }[] };
 
-import { MAX_ICON_LENGTH, appIconMarkup, sanitizeIconMarkup, appIconMarkupByName } from "./appIcon";
+import { MAX_ICON_LENGTH, appIconMarkup, sanitizeIconMarkup, appIconMarkupForApp } from "./appIcon";
+
+/** The icon rule over the record registered under ``name`` (or none), as a view applies it. */
+function appIconMarkupByName(name: string | null, sizePx: number, fallback: string): string {
+  const app = name === null ? undefined : registry.apps.find((candidate) => candidate.name === name);
+  return appIconMarkupForApp(
+    app === undefined ? undefined : { name: app.name, icon: app.icon ?? "" },
+    sizePx,
+    fallback,
+  );
+}
 
 const FALLBACK = '<svg class="generic-glyph"></svg>';
 

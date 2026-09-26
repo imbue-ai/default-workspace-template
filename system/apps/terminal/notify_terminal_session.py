@@ -1,1 +1,0 @@
-bin/notify_terminal_session.py

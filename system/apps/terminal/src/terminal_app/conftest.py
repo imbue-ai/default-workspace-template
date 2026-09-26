@@ -3,37 +3,34 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from app_instances.testing import (
-    RecordedShellRequests,
-    RecordingNudger,
-    serve_recording_shell,
-)
-from app_manifest.primitives import AppName
-from flask import Flask
+from app_manifest.testing import ShellStub
 from flask.testing import FlaskClient
 
 from terminal_app.data_types import TerminalPaths
-from terminal_app.hooks import HttpShellPoster, build_tmux_hook_blueprint
+from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
     DEFAULT_TEST_WORKDIR,
     ENV_FAKE_TMUX_DIR,
+    TEST_APP_CONTRACT_SOURCE,
+    TEST_PTY_LABEL,
     TEST_SESSION_COMMAND,
     FakeTmux,
+    build_pages_test_client,
     install_fake_tmux,
+    write_registry_labels,
 )
 from terminal_app.tmux import SubprocessTmux
 
 
 @pytest.fixture
 def fake_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeTmux:
-    """A fake ``tmux`` on PATH, reporting a running server with no sessions and no clients."""
+    """A fake ``tmux`` on PATH, reporting a running server with no sessions."""
     fake = install_fake_tmux(tmp_path / "fake-tmux")
     monkeypatch.setenv("PATH", f"{fake.bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv(ENV_FAKE_TMUX_DIR, str(fake.state_dir))
     fake.set_sessions([])
-    fake.set_clients([])
     return fake
 
 
@@ -64,32 +61,26 @@ def session_source(
 
 
 @pytest.fixture
-def recording_shell() -> Iterator[RecordedShellRequests]:
-    with serve_recording_shell() as recorded:
-        yield recorded
+def window_closed_posts() -> list[TmuxSessionName | None]:
+    """One entry per window-closed post the pages under test took: the terminal the hint named."""
+    return []
 
 
 @pytest.fixture
-def recording_nudger() -> RecordingNudger:
-    return RecordingNudger()
+def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_closed_posts: list[TmuxSessionName | None]) -> FlaskClient:
+    """A test client over the wrapper pages, with the pty registered and a built contract module to serve."""
+    registry_path = write_registry_labels(tmp_path / "apps.toml", {"terminal-pty": TEST_PTY_LABEL})
+    contract_path = tmp_path / "app_contract.js"
+    contract_path.write_text(TEST_APP_CONTRACT_SOURCE)
+    return build_pages_test_client(session_source, registry_path, contract_path, window_closed_posts)
 
 
 @pytest.fixture
-def hook_client(
-    session_source: TmuxSessionSource,
-    terminal_paths: TerminalPaths,
-    recording_shell: RecordedShellRequests,
-    recording_nudger: RecordingNudger,
-) -> FlaskClient:
-    """A test client over the hook route alone, posting to the recording shell."""
-    app = Flask(__name__, static_folder=None)
-    app.register_blueprint(
-        build_tmux_hook_blueprint(
-            source=session_source,
-            paths=terminal_paths,
-            shell=HttpShellPoster(shell_url=recording_shell.base_url),
-            nudger=recording_nudger,
-            app_name=AppName("terminal"),
-        )
-    )
-    return app.test_client()
+def shell_stub() -> Iterator[ShellStub]:
+    """A loopback stand-in for the shell, answering what a test sets."""
+    stub = ShellStub()
+    stub.start()
+    try:
+        yield stub
+    finally:
+        stub.close()

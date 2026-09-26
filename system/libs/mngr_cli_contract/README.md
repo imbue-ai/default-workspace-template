@@ -6,7 +6,7 @@ structurally accepted by the **live** `imbue.mngr.main.cli` click command tree
 so value validators do not run.
 
 It exists because repo code shells out to the `mngr` CLI, and tests that pin
-those invocations against hand-written expected argvs cannot catch a system/vendor/mngr
+those invocations against hand-written expected argvs cannot catch a new mngr's
 subcommand/flag rename -- both the production string and the mirrored test
 string drift together. `assert_mngr_argv_valid` confronts the emitted argv with
 the real CLI surface instead, so that class of breakage fails at merge time.

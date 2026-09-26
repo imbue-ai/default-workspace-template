@@ -41,7 +41,8 @@ it will be skipped when the machine is off.
 ## Timezone: confirm it before scheduling anything
 
 The container's clock is set to the **user's local timezone at each boot** (the
-bootstrap fetches it from the minds app on the user's machine). But the user may
+bootstrap fetches it from the minds app on the user's machine, and re-applies the
+last zone it set, from `data/.state/user_timezone`, when that fetch fails). But the user may
 have moved since boot, so **when the user asks to schedule something, re-check
 their current timezone first**:
 
@@ -51,13 +52,14 @@ latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/timezone
 cat /etc/timezone                          # what the container currently uses
 ```
 
-If the boot-time fetch failed, the container is still on UTC -- replace it
-with the user's real zone. If they differ, update the container before writing
-the schedule entry:
+If the container is on UTC (no boot has fetched the zone yet) or on a zone that
+differs from the user's, update it before writing the schedule entry -- and
+record it for later boots whose fetch fails:
 
 ```bash
 ln -sf "/usr/share/zoneinfo/<Area/City>" /etc/localtime
 echo "<Area/City>" > /etc/timezone
+echo "<Area/City>" > /home/user/workspace/data/.state/user_timezone
 ```
 
 Runner jobs pick the change up immediately -- `run_job.sh` reads the clock on
@@ -157,7 +159,7 @@ rescans `/etc/cron.d/` within a minute; no reload.
 
 An **automation** is a skill run automatically on a schedule (the workspace
 vocabulary term): a scheduled job that, instead of running a plain script,
-wakes a dedicated agent to run one skill in its own chat tab. The machinery
+wakes a dedicated agent to run one skill in its own chat. The machinery
 lives in `system/libs/automations/`. To add one -- say a news digest:
 
 1. **Write the skill** at `.agents/skills/<name>/SKILL.md` -- the instructions
@@ -173,8 +175,8 @@ lives in `system/libs/automations/`. To add one -- say a news digest:
 That is all -- no new agent template is required. `system/libs/automations/run_automation.sh
 <skill>` creates a persistent singleton agent (labelled `automation=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
-`/<skill>`, so the skill runs fresh; the agent surfaces its own chat tab
-right after its first message via `system/scripts/layout.py open "app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
+`/<skill>`, so the skill runs fresh; the agent surfaces its own chat window
+right after its first message via `system/scripts/layout.py open chat --path "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`
 (the same way web apps are surfaced). Pass `--template <t>` only when you want a custom agent
 template; otherwise the generic `automation` template is used. The agent runs on the
 workspace's default provider account and its harness (from `.mngr/settings.local.toml`, which

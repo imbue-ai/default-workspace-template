@@ -34,7 +34,10 @@ def test_prevent_while_true() -> None:
 def test_prevent_time_sleep() -> None:
     # +1 for testing.py's _wait_until_serving TCP-ready poll loop, used by the
     # WebSocket/SSE tests that need a real Werkzeug listener.
-    rc.check_time_sleep(_DIR, snapshot(4))
+    # +1 for the codex account probe's wait for the daemon to bind its socket: codex emits nothing
+    # when it binds (verified against 0.154.0 -- its only startup line is an unrelated sandbox
+    # warning), so there is no readiness signal to block on. mngr's own launcher waits the same way.
+    rc.check_time_sleep(_DIR, snapshot(5))
 
 
 def test_prevent_global_keyword() -> None:
@@ -56,7 +59,7 @@ def test_prevent_broad_exception_catch() -> None:
     # One for the intentional catch-all wrapping the creation thread's body in
     # agent_manager._run_creation. The thread runs with is_checked=False, so any
     # exception that escapes is silently swallowed; without that catch-all a bug
-    # anywhere inside leaves the chat's page on "Starting the chat..." forever,
+    # anywhere inside leaves the chat's page waiting on its create forever,
     # because the provisional chat is never settled and provisional_chat_completed
     # never fires. Treat this one as load-bearing rather than sloppy.
     # One for auth_flows._credentials_restored_on_error, which puts the previous
@@ -156,8 +159,8 @@ def test_prevent_num_prefix() -> None:
     # parameters are num-prefixed (`num_last_images_to_include`, `num_games`). Renaming
     # them would make the documented signature wrong, and no identifier in our code is
     # num-prefixed. The rule's regex (`\bnum_\w+`) scans raw source and cannot tell a
-    # docstring from a declaration; it lives in the vendored imbue_common, so narrowing
-    # it here would diverge the subtree from mngr. Should a real violation ever land,
+    # docstring from a declaration; it lives in imbue_common, which this repo does not
+    # edit, so it cannot be narrowed here. Should a real violation ever land,
     # it will push this to 3 and be caught.
     rc.check_num_prefix(_DIR, snapshot(2))
 

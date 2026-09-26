@@ -11,8 +11,11 @@ from pathlib import Path
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import is_non_turn_tail
+
+_SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
 
 def test_ordinary_human_prompt_gets_no_decision() -> None:
@@ -35,20 +38,84 @@ def test_browser_fleet_nudge_is_a_chip_with_the_sentinel_stripped() -> None:
     assert decision.display_body == inner
 
 
-def test_bare_task_notification_is_a_chip() -> None:
-    decision = classify_user_message("<task-notification>\n<status>completed</status>\n</task-notification>")
+def test_a_seeded_chats_first_send_shows_the_words_and_hides_the_context_it_carries() -> None:
+    """The agent reads the conversation the chat opened on; the page shows what the user typed."""
+    decision = classify_user_message(f"{_SEED_BLOCK}\n1")
     assert decision is not None
-    assert decision.display is DisplayKind.CHIP
-    assert decision.display_label == "Background task"
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "1"
 
 
-def test_task_notification_behind_a_system_preamble_is_a_chip() -> None:
+def test_a_seeded_chats_first_send_keeps_the_attachment_block_its_bubble_renders() -> None:
+    """The block the composer appends renders in the bubble (an inline image, a download link),
+    so stripping the context block in front of the message must not take it off the end."""
+    decision = classify_user_message(f"{_SEED_BLOCK}\nhere you go\n\nSee attachment here: ![a](/uploads/1/a.png)")
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body == "here you go\n\nSee attachment here: ![a](/uploads/1/a.png)"
+
+
+def test_a_context_block_with_nothing_after_it_is_left_to_render_whole() -> None:
+    """Never a bubble with nothing in it: the block is only ever a prefix to the user's words,
+    so one standing alone is not this app's message and is shown as it arrived."""
+    assert classify_user_message(_SEED_BLOCK) is None
+    assert classify_user_message(f"{_SEED_BLOCK}\n   ") is None
+
+
+def test_a_first_send_that_is_only_an_attachment_still_shows_the_attachment() -> None:
+    """The user's words can be whitespace and the message still theirs: the attachment block is
+    stripped before the detectors run, so judging "nothing after the block" on what they see
+    would leave the whole machine block rendering as the user's bubble."""
+    attachment = "See attachment here: ![a](/uploads/1/a.png)"
+    decision = classify_user_message(f"{_SEED_BLOCK}\n  \n\n{attachment}")
+    assert decision is not None
+    assert decision.display is DisplayKind.PROMPT_WITH_CONTEXT
+    assert decision.display_body is not None and decision.display_body.endswith(attachment)
+    assert SEED_CONTEXT_TAG not in decision.display_body
+
+
+def test_bare_task_notification_is_a_notice_carrying_its_summary() -> None:
+    decision = classify_user_message(
+        "<task-notification>\n<status>completed</status>\n"
+        '<summary>Agent "Crispy comments" finished</summary>\n</task-notification>'
+    )
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background task completed"
+    assert decision.display_body == 'Agent "Crispy comments" finished'
+
+
+def test_task_notification_behind_a_system_preamble_is_a_notice() -> None:
     decision = classify_user_message(
         "[SYSTEM NOTIFICATION - NOT USER INPUT]\nblah\n<task-notification>x</task-notification>"
     )
     assert decision is not None
-    assert decision.display is DisplayKind.CHIP
-    assert decision.display_label == "Background task"
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background task completed"
+
+
+def test_a_task_notification_summary_drops_a_zero_exit_code_and_keeps_any_other() -> None:
+    """Every ordinary completion carries "(exit code 0)", so it says nothing "completed" has
+    not; a non-zero one is the whole news."""
+    zero = classify_user_message(
+        "<task-notification>\n<summary>Background command \"build\" completed (exit code 0)</summary>\n"
+        "</task-notification>"
+    )
+    assert zero is not None
+    assert zero.display_body == 'Background command "build" completed'
+
+    failed = classify_user_message(
+        "<task-notification>\n<summary>Background command \"build\" completed (exit code 2)</summary>\n"
+        "</task-notification>"
+    )
+    assert failed is not None
+    assert failed.display_body == 'Background command "build" completed (exit code 2)'
+
+
+def test_a_task_notification_with_no_summary_shows_what_it_does_carry() -> None:
+    decision = classify_user_message("<task-notification>\n<status>completed</status>\n</task-notification>")
+    assert decision is not None
+    assert decision.display_body == "<task-notification>\n<status>completed</status>\n</task-notification>"
 
 
 def test_skill_expansion_lifts_the_skill_name_as_the_label() -> None:

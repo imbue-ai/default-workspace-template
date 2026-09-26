@@ -1,0 +1,1 @@
+`SERVICE_BANDS` gains `getting-started` at 80, just above the file viewer's: a shed Getting Started page costs one reload, so it is the most expendable built-in service. The built-in gets a band of its own because `test_app_manifests.py` refuses a built-in app in the `user` band.
