@@ -107,7 +107,7 @@ def _start_fake_outer_helper(
         # Keyed on the request id, as the real caller keys its wait for the result:
         # a file's mtime can repeat across two requests or change under one, which
         # would drop or double-handle a request.
-        last_request_id: object = None
+        last_request_id: str | None = None
         handled = 0
         while not stop_event.is_set():
             try:
