@@ -108,6 +108,5 @@
       }
     }
   },
-  "effortLevel": "high",
   "autoMemoryDirectory": "~/workspace/data/memories"
 }
