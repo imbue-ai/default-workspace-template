@@ -23,9 +23,9 @@ mngr repo; every plugin's location derives from ``imbue-mngr``'s.
 
 The repo is one of two: the public mirror, which every release pins, or the private
 ``mngr-internal`` repo, which a branch iterating on a paired mngr change may pin. A
-build that installs from the private repo needs a credential; ``--kind`` tells the
-build scripts and CI which case they are in, and ``_mngr_git_auth.sh`` supplies the
-credential when one has been delivered to the build.
+build that installs from the private repo needs a credential, which ``_mngr_git_auth.sh``
+supplies when one has been delivered to the build; ``--kind`` reports which case a tree
+is in (``set_mngr_pin.py`` moves the pin between them and is what CI checks).
 """
 
 import argparse
