@@ -942,17 +942,10 @@ def test_a_copy_that_would_not_fit_on_disk_fails_the_boot_before_anything_runs(
     source.mkdir(parents=True)
     (source / "records.json").write_text("[1]")
     spawner = _FakeSpawner()
-    code = mod.up(
-        _NAME,
-        ["my-service", "--store", "{copy:store}"],
-        str(tmp_path),
+    code = _up(
         tmp_path,
-        port_env_by_name={"main": _PORT_ENV},
-        copy_sources={"store": "data/.apps/my-service"},
-        runner=_RecordingRunner(),
-        http=_FakeHttp(_all_healthy),
         spawner=spawner,
-        sleeper=lambda _seconds: None,
+        copy_sources={"store": "data/.apps/my-service"},
         free_space=lambda _path: 0,
     )
 
