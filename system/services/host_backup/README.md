@@ -93,8 +93,12 @@ an encrypted restic repo on cheaper object storage.
   `RESTIC_READ_CONCURRENCY=1`, so a backup or prune uses one core and reads
   one file at a time. This is the only lever that works everywhere: gVisor
   (remote workspaces) ignores `nice`, and rejects `ionice` outright.
-- After every successful backup, `restic forget --group-by '' --keep-hourly N
-  --keep-daily M --keep-weekly W --keep-monthly O` runs (cheap, index-only).
+- After every successful backup, `restic forget --group-by '' --keep-within 1h
+  --keep-hourly N --keep-daily M --keep-weekly W --keep-monthly O` runs
+  (cheap, index-only). `--keep-within 1h` keeps every snapshot taken within an
+  hour of the newest, so an extra tick in the same hour (a service restart, a
+  changed `restic.env`, a manual backup) cannot thin away a snapshot that a
+  user may be restoring at that moment.
   Grouping is disabled because restic applies the keep-* policy per group and
   its default grouping (`host,paths`) would put every snapshot in a group of
   its own -- `outer_trigger` reads each tick from a uniquely-named snapshot
