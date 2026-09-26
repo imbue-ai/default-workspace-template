@@ -6809,6 +6809,34 @@ def _repo_left_mid_merge(tmp_path: Path, *, is_conflicting: bool) -> tuple[Path,
     return repo, rollback_to
 
 
+def _write_interrupted_marker(
+    repo: Path,
+    *,
+    rollback_to: str,
+    merge_ref: str,
+    target_ref: str | None,
+    ff_only: bool,
+    phase: str,
+) -> None:
+    """Write the marker an apply killed at ``phase`` leaves in a real repo."""
+    update_apply_contract.write_marker(
+        update_apply_contract.ApplyMarker(
+            dri_agent="the-lead",
+            rollback_to=rollback_to,
+            merge_ref=merge_ref,
+            target_ref=target_ref,
+            ff_only=ff_only,
+            worker_bundles=None,
+            phase=phase,
+            pid=12345,
+            started_at=1.0,
+            updated_at=1.0,
+        ),
+        repo,
+        now=lambda: 2.0,
+    )
+
+
 def _recover_boot_path(repo: Path) -> int:
     """``recover --no-restart``: the boot path, which touches only disk state."""
     return update_apply.recover(
@@ -6836,21 +6864,13 @@ def test_recover_aborts_a_merge_killed_before_it_committed(
     without the abort recovery never makes progress.
     """
     repo, rollback_to = _repo_left_mid_merge(tmp_path, is_conflicting=is_conflicting)
-    update_apply_contract.write_marker(
-        update_apply_contract.ApplyMarker(
-            dri_agent="the-lead",
-            rollback_to=rollback_to,
-            merge_ref="worker",
-            target_ref=None,
-            ff_only=False,
-            worker_bundles=None,
-            phase=update_apply_contract.PHASE_STARTED,
-            pid=12345,
-            started_at=1.0,
-            updated_at=1.0,
-        ),
+    _write_interrupted_marker(
         repo,
-        now=lambda: 2.0,
+        rollback_to=rollback_to,
+        merge_ref="worker",
+        target_ref=None,
+        ff_only=False,
+        phase=update_apply_contract.PHASE_STARTED,
     )
 
     assert _recover_boot_path(repo) == 0
@@ -6883,21 +6903,13 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
     (repo / "stray-notes.txt").write_text("untracked\n")
     rollback_to = _head_sha(repo)
     commits_before = _commit_count(repo)
-    update_apply_contract.write_marker(
-        update_apply_contract.ApplyMarker(
-            dri_agent="the-lead",
-            rollback_to=rollback_to,
-            merge_ref="worker",
-            target_ref=None,
-            ff_only=True,
-            worker_bundles=None,
-            phase=update_apply_contract.PHASE_STARTED,
-            pid=12345,
-            started_at=1.0,
-            updated_at=1.0,
-        ),
+    _write_interrupted_marker(
         repo,
-        now=lambda: 2.0,
+        rollback_to=rollback_to,
+        merge_ref="worker",
+        target_ref=None,
+        ff_only=True,
+        phase=update_apply_contract.PHASE_STARTED,
     )
 
     assert _recover_boot_path(repo) == 0
@@ -6919,21 +6931,13 @@ def test_recovering_an_interrupted_update_records_the_release_it_rolled_back(
     history.release("minds-v1")
     rollback_to = _head_sha(history.repo)
     history.land("minds-v1")
-    update_apply_contract.write_marker(
-        update_apply_contract.ApplyMarker(
-            dri_agent="the-lead",
-            rollback_to=rollback_to,
-            merge_ref="minds-v1",
-            target_ref="minds-v1",
-            ff_only=True,
-            worker_bundles=None,
-            phase=update_apply_contract.PHASE_MERGED,
-            pid=12345,
-            started_at=1.0,
-            updated_at=1.0,
-        ),
+    _write_interrupted_marker(
         history.repo,
-        now=lambda: 2.0,
+        rollback_to=rollback_to,
+        merge_ref="minds-v1",
+        target_ref="minds-v1",
+        ff_only=True,
+        phase=update_apply_contract.PHASE_MERGED,
     )
 
     assert _recover_boot_path(history.repo) == 0
