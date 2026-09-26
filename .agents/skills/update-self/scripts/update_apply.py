@@ -305,8 +305,8 @@ def _undid_update_content(
 def pending_update_rollbacks(
     target_ref: str, tip: str, repo_root: Path, runner: Runner
 ) -> list[str]:
-    """The rollbacks of update-self landings on ``tip`` that nothing has undone yet,
-    newest first -- the order to revert them in.
+    """The rollbacks of updates on ``tip`` that nothing has undone yet, newest first --
+    the order to revert them in.
 
     Looks at ``target_ref..tip``: everything the workspace committed that the target
     does not carry. A rollback is undone by a later revert of it that is not itself
@@ -349,8 +349,8 @@ def pending_update_rollbacks(
 def _refuse_a_merge_that_leaves_an_update_rolled_back(
     target_ref: str, merge_ref: str, repo_root: Path, runner: Runner
 ) -> None:
-    """Refuse to apply ``merge_ref`` while it still carries a rollback of an update-self
-    landing that it has not reverted, whether it re-merges that release or a newer one.
+    """Refuse to apply ``merge_ref`` while it still carries an update's rollback that it
+    has not reverted, whether it re-merges that release or a newer one.
 
     Reverting the rollback on the worker's branch is what puts the content back (the
     update-self worker reference's first step does it).

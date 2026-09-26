@@ -56,10 +56,10 @@ belong in tested code rather than agent prose:
     the worker's "what's new" report.
 
 ``pending-rollbacks``
-    List the rollbacks of earlier update-self landings that nothing has undone
-    yet, newest first -- the commits the worker reverts before it merges, since
-    until then git counts the content they removed as merged. ``apply`` refuses a
-    merge ref that still carries one, by the same rule.
+    List the rollbacks of earlier updates that nothing has undone yet, newest
+    first -- the commits the worker reverts before it merges, since until then git
+    counts the content they removed as merged. ``apply`` refuses a merge ref that
+    still carries one, by the same rule.
 
 ``surface-chat-tab``
     Open this run's own chat window in the workspace UI, so a user sent into the
@@ -756,8 +756,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     pending_parser = sub.add_parser(
         "pending-rollbacks",
-        help="List the rollbacks of earlier update-self landings that nothing has "
-        "undone yet, newest first: the commits to revert before merging the target.",
+        help="List the rollbacks of earlier updates that nothing has undone yet, "
+        "newest first: the commits to revert before merging the target.",
         parents=[common],
     )
     pending_parser.add_argument(
@@ -837,7 +837,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="The release this update lands (update-self mode, which requires "
         "--ff-only): enables the VERSION_HISTORY.md ledger entry and the post-success "
         "`env-converge upgrade`, and refuses a merge ref that still carries a "
-        "rollback of an earlier update-self landing it has not reverted.",
+        "rollback of an earlier update it has not reverted.",
     )
     apply_parser.add_argument(
         "--keep-rollback-point",

@@ -42,7 +42,7 @@ release's content as already merged, and a plain `git merge "$TARGET_REF"` --
 of the same release or a newer one -- lands only what the target changed since,
 a tree that is the old release plus a few files, which the apply's probes
 cannot tell from a good update. `pending-rollbacks` lists every rollback of an
-update-self landing that nothing has undone yet, newest first; revert each on
+earlier update that nothing has undone yet, newest first; revert each on
 your branch before merging (a `both added` conflict on a file the target changed
 since is resolved by taking the target's version). It skips a rollback an
 earlier retry already reverted, and a user's rollback of an app change, which is
