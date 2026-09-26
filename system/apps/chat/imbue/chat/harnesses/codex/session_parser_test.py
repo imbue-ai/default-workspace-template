@@ -353,6 +353,28 @@ def test_command_result_envelopes_preserve_the_filed_permission_request(wrapped:
     assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_command_result_envelopes_preserve_the_filed_secret_request(wrapped: bool) -> None:
+    echoed_request = {
+        "request_id": f"secret-{uuid4().hex}",
+        "chat_id": "agent-1",
+        "file": "widget",
+        "variables": ["WIDGET_TOKEN"],
+        "rationale": "to call the widget API",
+        "status": "pending",
+        "existing_variables": [],
+        "overwrites": [],
+    }
+    stdout = json.dumps(echoed_request, indent=2) + "\n"
+    text = json.dumps({"chunk_id": "0", "output": stdout}) if wrapped else stdout
+    raw = "Script completed\nWall time 0.3 seconds\nOutput:\n" + text
+    line = _code_mode_result_line(raw)
+    event = parse_lines(line, {"c1": "exec"})[0]
+    assert event["secret_request"] == echoed_request
+    assert "permission_request" not in event
+    assert parse_line_detail(line)["codex-result-c1"]["output"] == raw
+
+
 @pytest.mark.parametrize(
     "raw",
     [

@@ -59,7 +59,7 @@ describe("FloatingEntries", () => {
     entry.click();
     expect(onClick).toHaveBeenCalledWith("win-9");
     entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }));
-    expect(onContextMenu).toHaveBeenCalledWith("win-9", 30, 40);
+    expect(onContextMenu).toHaveBeenCalledWith("win-9", 30, 40, expect.any(Element));
   });
 
   it("draws the avatar wearing the mood in the avatar style, marked stale when the status may be old", () => {

@@ -45,7 +45,11 @@ host_env__extend = [
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
     "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1",
     # Disable claude.ai account MCP connector sync -- it's an OAuth side
-    # channel to third-party services that bypasses the latchkey gateway.
+    # channel to third-party services that bypasses the latchkey gateway for
+    # the services latchkey DOES support. MCP itself is not disallowed: for a
+    # service latchkey has no builtin for, the connect-external-service skill
+    # connects that service's MCP server through mcpc, the workspace's shared
+    # MCP client, rather than through any one harness.
     "ENABLE_CLAUDEAI_MCP_SERVERS=false",
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
@@ -461,13 +465,10 @@ isolate_host_volumes = true
 host_dir = "/home/user/.mngr"
 volume_mount_path = "/home/user"
 host_log_dir = "/var/log/mngr"
-# Publish each workspace container's sshd on loopback only. The minds desktop
-# client always talks to a local daemon and connects to 127.0.0.1, so nothing
-# needs the container reachable from the machine's LAN. This is also mngr's
-# default for a local daemon; it is pinned here so the workspace's exposure does
-# not depend on that default. (Requires an mngr pin that knows the field: an
-# older one rejects it as an unknown provider setting.)
-ssh_bind_address = "127.0.0.1"
+# No `ssh_bind_address` is set here: mngr's default already publishes each
+# container's sshd on loopback for a local daemon, and on the daemon host's
+# interfaces for a remote one (`host = "ssh://..."` in the user's config), where
+# a loopback bind would be unreachable.
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
@@ -627,6 +628,11 @@ extra_provision_command__extend = [
 provider = "docker"
 target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
+# While pyproject.toml pins mngr from the private mngr-internal repo, every docker
+# build_arg here carries a `--secret=id=mngr_internal_git_token,...` element that
+# hands the build its credential; system/scripts/set_mngr_pin.py adds it with
+# such a pin and removes it with a public one, because the flag needs BuildKit
+# (docker buildx), which a public pin must not require. Never edit it by hand.
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Security hardening for `docker run`: block privilege escalation via setuid
 # binaries. `--cap-add=SYS_PTRACE` was removed deliberately -- gVisor is the
@@ -707,6 +713,10 @@ extra_provision_command__extend = [
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
+    # The creator uploads a credential for a private mngr pin to this path before
+    # the commands above run; build_workspace.sh is its last reader, so it goes
+    # here, before anything else runs. A no-op for a public pin.
+    "rm -f /run/secrets/mngr_internal_git_token",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
@@ -759,6 +769,8 @@ extra_provision_command__extend = [
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
+    # Same credential cleanup as the lima template, at the same point.
+    "rm -f /run/secrets/mngr_internal_git_token",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",

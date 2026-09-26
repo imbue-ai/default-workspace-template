@@ -18,6 +18,9 @@ import m from "mithril";
 import "../style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import {
@@ -142,7 +145,8 @@ function settleIntake(chatId: string | null): void {
 }
 
 /** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
- *  its persisted draft on mount. */
+ *  its persisted draft on mount. Either way an element reference in it is attached as a file (the page's
+ *  ``prependToComposer`` does it, and so does this document's, which the page's store reads on load). */
 function draftInto(chatId: string, text: string): void {
   if (pool?.draftInto(chatId, text) === true) return;
   prependToComposer(chatId, text);
@@ -171,6 +175,21 @@ function launchWithFirstMessage(chatId: string, text: string): void {
     return;
   }
   openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
+}
+
+/** A reference drafted from the root's own chrome (the rail, the empty slot): into the selected chat's composer,
+ *  else through the shell, which lands it in the chat on screen (element-reference-menu plan section 3.4). */
+function draftReference(text: string): void {
+  if (selectedChatId !== null) {
+    draftInto(selectedChatId, text);
+    return;
+  }
+  connection?.draftText(text);
+}
+
+/** Whether a reference drafted from the root has somewhere to go: a selected chat, or a shell to ask. */
+function isReferenceDraftAvailable(): boolean {
+  return selectedChatId !== null || (connection?.isFramed ?? false);
 }
 
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
@@ -316,6 +335,9 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isCompact,
     onPick: (chatId: string) => select(chatId),
     onNew: () => startNewChat(),
+    referenceScope: scopeOfHandshake(handshake),
+    onDraftReference: draftReference,
+    isReferenceDraftAvailable: isReferenceDraftAvailable(),
   };
 }
 
@@ -329,8 +351,8 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
   addChatsUpdatedListener(onceListed);
 }
 
-function connectRootToShell(accountsLoaded: Promise<void>): void {
-  connection = connectToShell({
+function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
+  const shell = connectToShell({
     capabilities: { navigation: true, closeChord: false },
     onHandshake: (received) => {
       handshake = received;
@@ -366,9 +388,11 @@ function connectRootToShell(accountsLoaded: Promise<void>): void {
       select(requested);
     },
   });
+  connection = shell;
   // Hidden until the shell says shown: the root can load into a background tab.
-  if (connection.isFramed) isRootShown = false;
-  window.addEventListener("focus", () => connection?.focused());
+  if (shell.isFramed) isRootShown = false;
+  window.addEventListener("focus", () => shell.focused());
+  return shell;
 }
 
 function bootstrap(): void {
@@ -377,7 +401,7 @@ function bootstrap(): void {
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
   compactQuery.addEventListener("change", () => m.redraw());
-  connectRootToShell(accountsLoaded);
+  const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     (chatId) => select(chatId),
@@ -387,6 +411,15 @@ function bootstrap(): void {
   selectedChatId = selectionFromSearch(window.location.search);
   pendingToken = intakeTokenFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
+  // The element menu over the root's own chrome (element-reference-menu plan section 7.3); the rail's rows append
+  // the reference rows to their own menu instead.
+  installElementContextMenu({
+    connection: shell,
+    handshake: () => handshake,
+    draft: draftReference,
+    isDraftAvailable: isReferenceDraftAvailable,
+    open: createContextMenuOpener().open,
+  });
   reportLocation();
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));

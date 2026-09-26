@@ -325,6 +325,9 @@ class InputRouter:
     def close(self) -> None:
         self.release_all()
         try:
+            # A round trip first: closing right after a flush can drop or delay events still in
+            # flight (a release that never lands leaves the key held for the next connection).
+            self._display.sync()
             self._display.close()
         except Xlib.error.ConnectionClosedError:
             # The browser's X server is already gone (e.g. teardown on daemon restart):

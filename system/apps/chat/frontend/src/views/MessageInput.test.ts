@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => {
     drainToComposer: vi.fn(async () => ({ block: "" })),
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     clearComposerAttachments: vi.fn(),
+    uploadDescribedFileToComposer: vi.fn(),
     interruptAgent: vi.fn(async () => {}),
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
@@ -102,6 +103,7 @@ vi.mock("../models/ComposerAttachments", () => ({
   hasReadyAttachments: () => false,
   removeComposerAttachment: vi.fn(),
   restoreComposerAttachments: vi.fn(),
+  uploadDescribedFileToComposer: mocks.uploadDescribedFileToComposer,
   uploadFilesToComposer: vi.fn(),
   waitForComposerUploads: vi.fn(async () => {}),
 }));
@@ -177,8 +179,9 @@ vi.mock("../models/Providers", () => ({
   accountForAgent: () => null,
 }));
 
+import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
-import { MessageInput, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
+import { MessageInput, prependToComposer, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -1024,5 +1027,53 @@ describe("MessageInput switching harness", () => {
     const [, text, messageId] = mocks.sendMessage.mock.calls[0] as unknown as string[];
     expect(text).toBe("hello");
     expect(messageId).toMatch(/^m-/);
+  });
+});
+
+describe("prependToComposer with an element reference", () => {
+  const REFERENCE_ID = "REF-aaaaaaaaaaa";
+  // The fields the chat reads off a reference; the rest of a real one locates nothing here.
+  const BLOCK = jsonBlock({
+    element_reference: {
+      reference_id: REFERENCE_ID,
+      tag: "button",
+      id: "save",
+      classes: ["primary"],
+      app: "docs",
+      page_path: "/intro",
+    },
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    mocks.uploadDescribedFileToComposer.mockClear();
+  });
+
+  function stagedFile(): { chatId: string; file: File; summary: string } {
+    expect(mocks.uploadDescribedFileToComposer).toHaveBeenCalledTimes(1);
+    const [chatId, file, summary] = mocks.uploadDescribedFileToComposer.mock.calls[0] as [string, File, string];
+    return { chatId, file, summary };
+  }
+
+  it("attaches the block as the reference's file and keeps only the prompt as text, above the draft", () => {
+    const component = MessageInput();
+    localStorage.setItem("message-text:agent-1", "my draft");
+    prependToComposer("agent-1", `Explain what I attached in ${REFERENCE_ID}\n\n${BLOCK}`);
+    expect(localStorage.getItem("message-text:agent-1")).toBe(
+      `Explain what I attached in ${REFERENCE_ID}\n\nmy draft`,
+    );
+    const { chatId, file, summary } = stagedFile();
+    expect(chatId).toBe("agent-1");
+    expect(file.name).toBe(`${REFERENCE_ID}.json`);
+    expect(summary).toBe("button#save.primary in docs /intro");
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.value).toBe(`Explain what I attached in ${REFERENCE_ID}\n\nmy draft`);
+  });
+
+  it("stages a block on its own and leaves the draft text alone", () => {
+    localStorage.setItem("message-text:agent-1", "my draft");
+    prependToComposer("agent-1", BLOCK);
+    expect(localStorage.getItem("message-text:agent-1")).toBe("my draft");
+    expect(stagedFile().file.name).toBe(`${REFERENCE_ID}.json`);
   });
 });

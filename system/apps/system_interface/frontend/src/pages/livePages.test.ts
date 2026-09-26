@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
+  SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
@@ -306,6 +307,7 @@ describe("the contract", () => {
         clientId: CLIENT,
         windowId: "win-1",
         desktopId: "home",
+        app: "docs",
         path: "/?doc=1",
       },
       { type: SHELL_SHOWN },
@@ -321,6 +323,7 @@ describe("the contract", () => {
         clientId: CLIENT,
         windowId: "win-1",
         desktopId: "home",
+        app: "docs",
         path: "/?doc=1",
       },
       { type: SHELL_HIDDEN },
@@ -610,6 +613,39 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_START_WITH_TEXT });
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:start-with-text ignored"));
+    warn.mockRestore();
+  });
+
+  it("drafts a page's shell:draft-text into the pinned window that takes a draft, and warns when it carries no text", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const buddy = appRecord("buddy", {
+      url: "http://127.0.0.1:7003",
+      pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
+      launch_paths: [
+        launchPathRecord({
+          id: "draft",
+          path: "/api/intake",
+          method: "POST",
+          params: ["message"],
+          presets: { is_draft: "true" },
+          draft_param: "message",
+        }),
+      ],
+    });
+    offerApps(api, socket, [docs, notes, buddy]);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    const [home, work] = api.desktops;
+    api.desktops = [
+      { ...home, windows: [...home.windows, windowRecord("win-9", "buddy", "/", { is_pinned: true })] },
+      work,
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    messageFromPage("win-1", { type: SHELL_DRAFT_TEXT, text: "Explain this element:" });
+    await settle();
+    expect(api.calls).toContain(`launch:home:buddy:draft:{"message":"Explain this element:"}:window:win-9`);
+    messageFromPage("win-1", { type: SHELL_DRAFT_TEXT });
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:draft-text ignored"));
     warn.mockRestore();
   });
 
