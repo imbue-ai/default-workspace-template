@@ -168,6 +168,10 @@ def set_pin(root: Path, kind: str, rev: str) -> list[str]:
     guessing which state to move from; lines that merely disagree with the pyproject's
     repo are brought into line, since that is the repair.
     """
+    if kind not in (PUBLIC_KIND, INTERNAL_KIND):
+        raise MngrPinError(
+            f"the pin kind is {PUBLIC_KIND!r} or {INTERNAL_KIND!r}, not {kind!r}"
+        )
     if not _FULL_SHA.match(rev):
         raise MngrPinError(f"pin a full 40-hex commit, not {rev!r}")
     repo_url = INTERNAL_MNGR_REPO if kind == INTERNAL_KIND else PUBLIC_MNGR_REPO

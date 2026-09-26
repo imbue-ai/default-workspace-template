@@ -336,6 +336,18 @@ def test_a_pin_move_within_the_same_repo_touches_only_the_pyproject(
     } == {_OTHER_REV}
 
 
+def test_a_pin_move_to_an_unknown_kind_is_refused_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    _copy_maintained_files(tmp_path)
+    original = _texts(tmp_path)
+
+    with pytest.raises(list_mngr_plugins.MngrPinError, match="not 'mirror'"):
+        set_mngr_pin.set_pin(tmp_path, "mirror", _OTHER_REV)
+
+    assert _texts(tmp_path) == original
+
+
 def test_a_tree_whose_buildkit_lines_disagree_with_the_pin_fails_the_check_until_repinned(
     tmp_path: Path,
 ) -> None:
