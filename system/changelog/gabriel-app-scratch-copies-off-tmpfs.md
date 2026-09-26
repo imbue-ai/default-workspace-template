@@ -1,0 +1,1 @@
+The template's `[providers.docker]` notes now say why local Docker workspaces keep `/tmp` on a tmpfs while cloud workspaces moved it to disk, and what that costs: a large write to `/tmp` there is held in memory. The workspace app model contract (section 17) says an isolated instance's `copies/` also hold what its `--copy` flags name.
