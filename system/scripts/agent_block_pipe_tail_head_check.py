@@ -78,6 +78,18 @@ _GIT_LISTING_ARGS = {
 }
 # git global options that take a separate value.
 _GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+# branch/tag options that put them in list mode (git documents the filters as implying --list).
+_GIT_LIST_FLAGS = frozenset(
+    {
+        "-l",
+        "--list",
+        "--contains",
+        "--no-contains",
+        "--merged",
+        "--no-merged",
+        "--points-at",
+    }
+)
 _GIT_BRANCH_MUTATING_FLAGS = (
     "--set-upstream-to",
     "-u",
@@ -203,9 +215,10 @@ def _is_git_read(args: list[str]) -> bool:
     if subcommand in _GIT_LISTING_ARGS:
         return (rest[0] if rest else "") in _GIT_LISTING_ARGS[subcommand]
     if subcommand in ("branch", "tag"):
-        # With no name given, branch and tag only list; `-l`/`--list` makes a name a pattern.
-        is_listing = (
-            all(a.startswith("-") for a in rest) or "-l" in rest or "--list" in rest
+        # With no name given, branch and tag only list; `-l`/`--list`, or a filter such as
+        # `--merged main`, makes a name a pattern or the filter's commit.
+        is_listing = all(a.startswith("-") for a in rest) or any(
+            a in _GIT_LIST_FLAGS for a in rest
         )
         return is_listing and not any(
             a.startswith(_GIT_BRANCH_MUTATING_FLAGS) for a in rest

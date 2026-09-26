@@ -27,6 +27,7 @@ def _run(command: str) -> int:
         "git -C ../other log --oneline main..HEAD | head -50",
         "git show HEAD:system/supervisord.conf | grep -A 20 '^\\[program:' | head -50",
         "git branch -a 2>&1 | head -50",
+        "git branch --merged main | head",
         # A `>(` inside a heredoc body is text, not a process substitution.
         "python3 - <<'PY' > /tmp/scan.txt\nre.search(r'<href>(.*?)</href>', x)\nPY\n"
         "sort -rn /tmp/scan.txt | head -30",
