@@ -1175,7 +1175,7 @@ export class DesktopStore {
    *  its own window"): the chrome opens it beside its window, at the size the window renders here. The
    *  placement is saved at once, since the chrome's new window reads it as soon as it loads. */
   async detachWindow(windowId: string): Promise<void> {
-    if (!this.canPopOut || findWindow(this.state, windowId) === null) return;
+    if (!this.canPopOut || !this.isPopOutVerbOwn(windowId) || findWindow(this.state, windowId) === null) return;
     this.showDetachedWindow(windowId);
     this.dispatch({ type: "window_detached", windowId });
     await this.flushPendingSave();
@@ -1207,11 +1207,19 @@ export class DesktopStore {
    *  desktop is shown first when the client has moved to another meanwhile (the chrome names a window, not a
    *  desktop). Saved at once: the chrome's window is closing on the answer. */
   async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
+    if (!this.isPopOutVerbOwn(windowId)) return;
     const found = findWindow(this.state, windowId);
     if (found === null) return;
     if (found.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(found.desktop.id);
     this.dispatch({ type: "window_reattached", windowId, frame });
     await this.flushPendingSave();
+  }
+
+  /** Whether a pull-out verb for ``windowId`` is this shell's to apply: any window's in a desktop shell, and only
+   *  its own window's in a solo shell, whose desktop and arrangement belong to the client's main window. Checked
+   *  before the verb's side effects (a desktop switch, an ask of the chrome), which ``dispatch`` cannot refuse. */
+  private isPopOutVerbOwn(windowId: string): boolean {
+    return this.soloWindowId === null || windowId === this.soloWindowId;
   }
 
   /** A taskbar entry's click: show a pulled-out window's own desktop window; else restore and raise when

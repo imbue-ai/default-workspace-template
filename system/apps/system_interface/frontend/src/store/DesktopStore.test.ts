@@ -1397,7 +1397,7 @@ describe("pulled-out windows", () => {
       updated_at: null,
       placements: [placementRecord("win-5", { is_detached: true })],
     });
-    const { store, reports } = makePopOutStore("win-5");
+    const { store, calls, reports } = makePopOutStore("win-5");
     await store.start(NO_LINK);
     expect(store.getSoloWindowId()).toBe("win-5");
     expect(store.getState().activeDesktopId).toBe("work");
@@ -1415,6 +1415,14 @@ describe("pulled-out windows", () => {
     socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home" });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
+    // Another window's pull-out verbs are the main window's too: a return named for one on another desktop
+    // shows no other desktop here, and nothing is asked of the chrome or saved.
+    store.setCanPopOut(true);
+    await store.detachWindow("win-1");
+    await store.reattachWindow("win-1", null);
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(calls).toEqual([]);
+    expect(savedCalls()).toHaveLength(0);
     // Its own window's return is the one arrangement it writes, at once.
     await store.reattachWindow("win-5", null);
     expect(placementOf(store.getState().layout, "win-5").is_detached).toBe(false);
