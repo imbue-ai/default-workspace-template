@@ -928,7 +928,7 @@ registerProcessor('pb', PB);`;
   // We hook the browser's own copy/cut/paste ClipboardEvents rather than intercepting
   // keys, so it works identically on every OS and for menu/right-click too. Paste reads
   // the event's clipboardData and POSTs it to the remote (the server sets the X selection
-  // and injects Ctrl+V). Copy/cut trigger a remote Ctrl+C/X; the server's XFixes monitor
+  // and presses Ctrl+V in the tab over CDP). Copy/cut trigger a remote Ctrl+C/X; the server's XFixes monitor
   // then pushes the new remote selection back over the stream and we write it locally.
   const CLIP_MAX_BYTES = 10 * 1024 * 1024;
   const clipchip = document.getElementById("clipchip");
