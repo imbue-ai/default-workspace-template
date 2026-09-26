@@ -92,6 +92,12 @@ def test_full_backup_forget_prune_cycle(tmp_path: Path) -> None:
     init = init_repo(env)
     assert init.returncode == 0, init.stderr
 
+    # Old enough to fall outside `--keep-within 1h` and every keep-* bucket,
+    # so forget has something to drop and prune something to reclaim.
+    expired_id = _backup_at(
+        source_dir, taken_at="2000-01-01 00:00:00", tag="expired", env=env
+    )
+
     backup_result = restic_backup(
         source_path=source_dir,
         excludes=("**/skip-me",),
@@ -118,8 +124,12 @@ def test_full_backup_forget_prune_cycle(tmp_path: Path) -> None:
         env_overrides=env,
     )
     assert second_backup.returncode == 0, second_backup.stderr
+    second_id = extract_snapshot_id_from_backup_output(second_backup.stdout)
 
     _forget(env, keep_hourly=1)
+    assert _snapshot_ids(env) == {snapshot_id, second_id}, (
+        f"forget must drop only the expired snapshot {expired_id}"
+    )
 
     prune_result = restic_prune(env)
     assert prune_result.returncode == 0, prune_result.stderr
