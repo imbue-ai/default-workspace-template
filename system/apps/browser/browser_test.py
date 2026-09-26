@@ -13,7 +13,11 @@ from browser import session as bsession
 from browser.cdp_client import CdpError
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from loguru import logger
-from mock_cdp_client_test import NavigatingCdpClient, RecordingCdpClient
+from mock_cdp_client_test import (
+    NavigatingCdpClient,
+    RecordingCdpClient,
+    TabClosingCdpClient,
+)
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
@@ -2062,32 +2066,9 @@ def test_paste_into_active_tab_reports_whether_the_chord_landed() -> None:
     assert client.frames[0] == ("Target.attachToTarget", {"targetId": "t2", "flatten": True}, None)
 
 
-class _TabClosingCdpClient(NavigatingCdpClient):
-    """Answers targets and records the tabs the fleet creates, closes, and foregrounds."""
-
-    def __init__(self, targets: list[dict[str, Any]]) -> None:
-        super().__init__(targets, navigation_failure=None)
-        self.created: list[str] = []
-        self.closed: list[str] = []
-        self.activated: list[str] = []
-
-    async def create_target(self, url: str) -> str:
-        target_id = f"new-{len(self.created) + 1}"
-        self.created.append(url)
-        self.targets.append({"targetId": target_id, "url": url})
-        return target_id
-
-    async def close_target(self, target_id: str) -> None:
-        self.closed.append(target_id)
-        self.targets = [t for t in self.targets if t["targetId"] != target_id]
-
-    async def activate(self, target_id: str) -> None:
-        self.activated.append(target_id)
-
-
 def test_close_active_tab_closes_the_shown_tab_and_foregrounds_the_last_remaining_one() -> None:
     browser = _running_browser("browser-1")
-    cdp = _TabClosingCdpClient(
+    cdp = TabClosingCdpClient(
         [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}]
     )
     browser._cdp = cdp
@@ -2105,7 +2086,7 @@ def test_close_active_tab_replaces_the_last_tab_so_the_window_stays_open() -> No
     # Chromium closes its window with its last tab, and the window-bound sweep would then stop
     # the browser: the last tab is swapped for a fresh home page instead.
     browser = _running_browser("browser-1")
-    cdp = _TabClosingCdpClient([{"targetId": "t1", "url": "https://one.example"}])
+    cdp = TabClosingCdpClient([{"targetId": "t1", "url": "https://one.example"}])
     browser._cdp = cdp
     browser._active_target_id = "t1"
 

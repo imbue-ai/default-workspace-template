@@ -11,6 +11,7 @@ from browser import runner
 from browser import session as bsession
 from browser.primitives import APP_NAME
 from imbue.mngr.utils.polling import wait_for
+from mock_cdp_client_test import TabClosingCdpClient
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
 _APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"
@@ -134,3 +135,28 @@ def test_a_window_closed_post_sweeps_at_once_and_answers_no_content(monkeypatch:
     assert response.status_code == 204
     # The route only schedules the sweep on the bridge loop, so the answer can land before the sweep runs.
     wait_for(lambda: len(swept) == 1, timeout=5.0, poll_interval=0.02, error_message="the hinted sweep never ran")
+
+
+def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_rest() -> None:
+    running = bsession.LiveBrowser(browser_id="browser-1")
+    running._lifecycle = "running"
+    cdp = TabClosingCdpClient(
+        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}]
+    )
+    running._cdp = cdp
+    running._active_target_id = "t1"
+    runner.manager._browsers["browser-1"] = running
+    runner.manager._browsers["browser-2"] = bsession.LiveBrowser(browser_id="browser-2")
+    client = runner.application.test_client()
+
+    closed = client.post("/browsers/browser-1/close-tab")
+    still_launching = client.post("/browsers/browser-2/close-tab")
+    unknown = client.post("/browsers/browser-9/close-tab")
+
+    assert closed.status_code == 200, closed.text
+    assert closed.get_json() == {"closed": True}
+    assert cdp.closed == ["t1"]
+    assert running._active_target_id == "t2"
+    assert still_launching.status_code == 409
+    assert "not running" in still_launching.get_json()["error"]
+    assert unknown.status_code == 404

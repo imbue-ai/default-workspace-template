@@ -55,3 +55,26 @@ class NavigatingCdpClient(CdpClient):
             {**target, "url": url} if target["targetId"] == target_id else target
             for target in self.targets
         ]
+
+
+class TabClosingCdpClient(NavigatingCdpClient):
+    """Answers targets and records the tabs the fleet creates, closes, and foregrounds."""
+
+    def __init__(self, targets: Sequence[dict[str, Any]]) -> None:
+        super().__init__(targets, navigation_failure=None)
+        self.created: list[str] = []
+        self.closed: list[str] = []
+        self.activated: list[str] = []
+
+    async def create_target(self, url: str) -> str:
+        target_id = f"new-{len(self.created) + 1}"
+        self.created.append(url)
+        self.targets.append({"targetId": target_id, "url": url})
+        return target_id
+
+    async def close_target(self, target_id: str) -> None:
+        self.closed.append(target_id)
+        self.targets = [t for t in self.targets if t["targetId"] != target_id]
+
+    async def activate(self, target_id: str) -> None:
+        self.activated.append(target_id)
