@@ -1,131 +1,140 @@
 // This workspace's tool-call guards, for pi.
 //
-// claude and codex reach the same checkers through hook wrappers, which read a hook
-// payload on stdin; pi has no shell-hook surface, so it gets them here instead. pi
-// auto-discovers `.pi/extensions/*.ts` from the project, and every extension's
-// `tool_call` handler runs -- so this loads alongside mngr's own lifecycle extension
-// and either may block.
+// pi has no shell-hook surface, so the hook scripts claude and codex run from
+// `.claude/settings.json` / `.codex/hooks.json` reach a pi agent through this
+// extension instead: pi auto-discovers `.pi/extensions/*.ts` from the project and
+// calls every extension's `tool_call` handler. Each guard is fed the same
+// claude-shaped payload the hooks get on stdin, so the rule and its wording live
+// once, in system/scripts/ -- the agy shim does the same thing from bash.
 //
-// Two shapes of checker. A `command` checker takes the agent's shell command as $1 and
-// runs on bash calls only. A `payload` checker reads a claude-shaped hook payload
-// (`{tool_name, tool_input}`) on stdin and runs on every tool call, because the rule
-// it enforces (a secret file is never opened directly) applies to pi's file tools as
-// much as to its shell. Either exits 2 to refuse, with the reason on stderr. `match`
-// keeps a checker off the calls it has nothing to say about, which matters because
-// every entry here costs a process per tool call.
+// The guards run first, on the command the agent wrote; the OOM self-tag and git
+// identity are prepended only once they all pass, so no guard ever sees the prefix.
 //
-// See system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md for what each one enforces and how the harnesses
-// harnesses reach it.
+// See system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md for
+// what each one enforces, and tool-call-policies-state-of-things.md beside it for how
+// the other harnesses reach it.
 
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 const WORK_DIR = process.env.MNGR_AGENT_WORK_DIR || process.cwd();
 const SCRIPTS = join(WORK_DIR, "system", "scripts");
+// A file, not stderr: pi is a TUI, and stderr would land on the agent's screen.
+const LOG_PATH = join(process.env.MNGR_AGENT_STATE_DIR || "/tmp", "pi_policy_guards.log");
 
-interface Checker {
+interface Guard {
   script: string;
   match: RegExp;
-  input: "command" | "payload";
+  // Whether the guard also polices pi's non-shell tools (read, edit, ...). Its `match`
+  // then runs against the serialized payload rather than the command.
+  allTools?: boolean;
 }
 
-// `match` mirrors the prefilter each `.sh` wrapper uses, so pi refuses exactly what
-// claude and codex refuse: the host path or the request script for a filing, the
-// `tk`/`ticket` word for a step transition (`ticket` does not contain `tk`, so a
-// substring test would miss the spelling the checker and the shared parser both
-// accept), and the secrets directory (or mcpc's store in it, as `~/.mcpc`) for a
-// direct read of a secret file. A payload checker's `match`
-// runs against the serialized payload, a command checker's against the command.
-const CHECKERS: Checker[] = [
+// claude's PreToolUse order. `match` is a loose superset of what each script can
+// refuse, so a call no guard has anything to say about spawns no guard process.
+const GUARDS: Guard[] = [
+  { script: join(SCRIPTS, "agent_prevent_commit_rewrite.sh"), match: /\bgit\b/ },
+  { script: join(SCRIPTS, "agent_block_pipe_tail_head.sh"), match: /\b(tail|head)\b/ },
   {
-    script: join(SCRIPTS, "agent_latchkey_request_check.py"),
+    script: join(SCRIPTS, "agent_latchkey_request_standalone.sh"),
     match: /permission-requests|request_secret\.py/,
-    input: "command",
   },
-  { script: join(SCRIPTS, "agent_tk_standalone_check.py"), match: /\b(tk|ticket)\b/, input: "command" },
-  { script: join(SCRIPTS, "agent_secrets_guard_check.py"), match: /\.secrets|\.mcpc/, input: "payload" },
+  // A `read` of a secret file defeats P9 as surely as a `cat`, so this one runs on
+  // every tool call.
+  { script: join(SCRIPTS, "agent_secrets_guard.sh"), match: /\.secrets|\.mcpc/, allTools: true },
+  // `ticket` does not contain `tk`, so a substring test would miss the spelling the
+  // checker accepts.
+  { script: join(SCRIPTS, "agent_tk_standalone.sh"), match: /\b(tk|ticket)\b/ },
 ];
 
-/** Run one checker and return its refusal reason, or null when it allows the call.
- *
- * The checker runs through bash so its own line keeps shell expansions, with the
- * agent's command passed as `$1` rather than interpolated -- a command containing
- * quotes or `$(...)` cannot rewrite the checker's line. A payload checker gets the
- * payload on stdin instead, for the same reason. BASH_ENV and sh's ENV are dropped:
- * a startup file writing to stderr would be indistinguishable from the checker's own
- * output, and would become the whole reason for a silent refusal. */
-function runChecker(checker: Checker, command: string | null, payload: string): string | null {
-  const argv =
-    checker.input === "command"
-      ? ["--noprofile", "--norc", "-c", `python3 "${checker.script}" "$1"`, "bash", command ?? ""]
-      : ["--noprofile", "--norc", "-c", `python3 "${checker.script}"`];
-  const result = spawnSync("bash", argv, {
-    encoding: "utf-8",
-    env: { ...process.env, BASH_ENV: undefined, ENV: undefined },
-    input: checker.input === "payload" ? payload : undefined,
-  });
-  if (result.status === 2) {
-    const reason = typeof result.stderr === "string" ? result.stderr.trim() : "";
-    return reason || "Blocked by a policy check.";
-  }
-  return null;
+const REWRITE_SCRIPT = join(SCRIPTS, "agent_rewrite_bash_command.py");
+
+// BASH_ENV and sh's ENV are dropped: a startup file writing to stderr would be
+// indistinguishable from a guard's own output, and would become the whole reason for
+// a silent refusal.
+function scriptEnv() {
+  return { ...process.env, BASH_ENV: undefined, ENV: undefined };
 }
 
-/** The reason to refuse the call, from the first checker that refuses it, else null.
+/** Record a fail-open path, so a guard that stopped running is visible. Never throws. */
+function note(message: string): void {
+  try {
+    appendFileSync(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // Nowhere left to report to; the command must still run.
+  }
+}
+
+function describeFailure(result: SpawnSyncReturns<string>): string {
+  if (result.error) return String(result.error);
+  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+  return `exited ${result.status ?? result.signal}${stderr ? `: ${stderr}` : ""}`;
+}
+
+/** The reason to refuse the call, from the first guard that refuses it, else null.
  *
- * `command` is the agent's shell command for a bash call and null otherwise; a command
- * checker only ever sees a bash call. Never throws. A broken checker must not block
- * every command. */
+ * `command` is the agent's shell command for a bash call and null for any other tool,
+ * which only the `allTools` guards see. Only exit 2 refuses, as on claude. Anything
+ * else -- a missing script (bash exits 127), a crash -- lets the call through and is
+ * noted in LOG_PATH: a broken guard must not block every call. Never throws. */
 function refusalReason(toolName: string, command: string | null, toolInput: unknown): string | null {
-  const payload = JSON.stringify({ tool_name: toolName, tool_input: toolInput ?? {} });
-  for (const checker of CHECKERS) {
-    if (checker.input === "command") {
-      if (command === null || !checker.match.test(command)) continue;
-    } else if (!checker.match.test(payload)) {
-      continue;
-    }
-    // A checker that is not on disk refuses nothing: python3 exits 2 on a file it
-    // cannot open, the same status a real refusal uses, so without this every
-    // matching command would be blocked with a python error as its reason.
-    if (!existsSync(checker.script)) continue;
+  const payload =
+    command === null
+      ? JSON.stringify({ tool_name: toolName, tool_input: toolInput ?? {} })
+      : JSON.stringify({ tool_name: "Bash", tool_input: { command } });
+  for (const guard of GUARDS) {
+    if (command === null && !guard.allTools) continue;
+    if (!guard.match.test(guard.allTools ? payload : (command ?? ""))) continue;
     try {
-      const reason = runChecker(checker, command, payload);
-      if (reason !== null) return reason;
-    } catch {
-      // Fail open, per checker.
+      const result = spawnSync("bash", [guard.script], { input: payload, encoding: "utf-8", env: scriptEnv() });
+      if (result.status === 2) {
+        const reason = typeof result.stderr === "string" ? result.stderr.trim() : "";
+        return reason || "Blocked by a policy check.";
+      }
+      if (result.status !== 0) note(`guard ${guard.script} ${describeFailure(result)}; failing open`);
+    } catch (error) {
+      note(`guard ${guard.script} threw ${String(error)}; failing open`);
     }
   }
   return null;
 }
 
-/** The command the agent wrote, from a bash `tool_call` event, or null.
+/** The OOM self-tag and git-identity prefix, or "" if it cannot be built.
  *
- * `input.command` is mutable and mngr's lifecycle extension rewrites it in place,
- * prepending the OOM self-tag and git identity as their own `;`-joined commands. pi
- * runs every extension's `tool_call` handler on the same event without specifying
- * their order, so that rewrite may already have happened by the time we read it --
- * and the checkers would refuse the prefix as a command chained ahead of the
- * agent's, blocking every request and every step transition. mngr therefore records
- * the pre-rewrite command as `mngrOriginalCommand`; it is absent when we run first,
- * which is exactly when `input.command` is still untouched. */
-function agentCommand(event: any): string | null {
-  for (const candidate of [event?.mngrOriginalCommand, event?.input?.command]) {
-    if (typeof candidate === "string" && candidate) return candidate;
+ * `--prefix-only` keeps the command out of the round-trip, so what runs is exactly
+ * what the agent wrote with the prefix in front. Never throws. */
+function rewritePrefix(): string {
+  try {
+    const result = spawnSync("python3", [REWRITE_SCRIPT, "--prefix-only"], { encoding: "utf-8", env: scriptEnv() });
+    if (result.status === 0 && typeof result.stdout === "string") return result.stdout;
+    note(`rewrite ${REWRITE_SCRIPT} ${describeFailure(result)}; running the command unprefixed`);
+  } catch (error) {
+    note(`rewrite ${REWRITE_SCRIPT} threw ${String(error)}; running the command unprefixed`);
   }
-  return null;
+  return "";
 }
 
 export default function policyGuards(pi: any): void {
   pi.on("tool_call", (event: any) => {
     const toolName = event?.toolName;
     if (typeof toolName !== "string") return;
-    const command = toolName === "bash" ? agentCommand(event) : null;
-    if (toolName === "bash" && command === null) return;
-    // The payload checker judges a bash call by the command the agent wrote, not the
-    // rewritten one, for the same reason `agentCommand` exists.
-    const toolInput = toolName === "bash" ? { ...(event?.input ?? {}), command } : event?.input;
-    const reason = refusalReason(toolName, command, toolInput);
+    const input = event.input;
+    if (toolName !== "bash") {
+      const reason = refusalReason(toolName, null, input);
+      if (reason !== null) return { block: true, reason };
+      return;
+    }
+    // CLEANUP: read only `input.command` once no running pi agent was created by an mngr
+    // whose lifecycle extension rewrites it. mngr writes that extension into the agent's
+    // state dir at create time, so bumping the mngr pin does not retire it. That extension
+    // may prefix the command before this handler runs, and records what the agent wrote as
+    // `mngrOriginalCommand`.
+    const original = event.mngrOriginalCommand;
+    const command = typeof original === "string" && original ? original : input?.command;
+    if (typeof command !== "string" || !command) return;
+    const reason = refusalReason(toolName, command, input);
     if (reason !== null) return { block: true, reason };
+    input.command = rewritePrefix() + command;
   });
 }
