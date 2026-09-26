@@ -72,6 +72,8 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         "find / -name x.json 2>/dev/null | head -1",
         "git branch -D old | head",
         "git stash | tail -1",
+        # Queries the remote unless given -n.
+        "git remote show origin | head",
         # The cat is reading pytest's output, not a file.
         "pytest | cat | tail -20",
         "pytest |& cat | tail -20",

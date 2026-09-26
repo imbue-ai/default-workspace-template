@@ -74,7 +74,7 @@ _GIT_READ_SUBCOMMANDS = frozenset(
 _GIT_LISTING_ARGS = {
     "worktree": frozenset({"list"}),
     "stash": frozenset({"list", "show"}),
-    "remote": frozenset({"", "-v", "--verbose", "show", "get-url"}),
+    "remote": frozenset({"", "-v", "--verbose", "get-url"}),
     "reflog": frozenset({"", "show"}),
 }
 # git global options that take a separate value.
