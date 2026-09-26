@@ -116,7 +116,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
               const window = windowsById.get(placement.window_id);
               if (placement.is_minimized || window === undefined) return [];
               const app = appByName(state, window.app);
-              // A pulled-out window leaves its ghost at its frame; its page is in the chrome's own window.
+              // A pulled-out window leaves its ghost at its frame, where a return lands, whatever state it was
+              // pulled out in (detach keeps the state); its page is in the chrome's own window.
               if (placement.is_detached) {
                 return [
                   m(DetachedWindowGhost, {
@@ -124,7 +125,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                     window,
                     app,
                     title: effectiveWindowTitle(state, window, app),
-                    rect: store.windowRect(window.id),
+                    rect: store.renderedRect({ ...placement, state: "NORMAL" }),
                     stackIndex: index,
                     onShow: () => attrs.onShowDetachedWindow(window.id),
                     onBringBack: () => attrs.onBringBackWindow(window.id),

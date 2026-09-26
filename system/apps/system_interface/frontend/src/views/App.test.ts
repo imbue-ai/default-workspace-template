@@ -438,6 +438,19 @@ describe("a pulled-out window", () => {
     expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("false");
     expect(api.layoutOf("home", CLIENT).placements.find((p) => p.window_id === "win-1")?.is_detached).toBe(false);
   });
+
+  it("draws the ghost of a window pulled out while maximized at the window's frame, where Bring back lands it", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true, state: "MAXIMIZED" })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const ghost = document.querySelector('[data-detached-window="win-1"]') as HTMLElement;
+    expect([ghost.style.left, ghost.style.width, ghost.style.height]).toEqual(["50px", "600px", "560px"]);
+  });
 });
 
 describe("a solo shell", () => {
