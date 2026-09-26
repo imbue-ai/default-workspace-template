@@ -6907,9 +6907,6 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
     assert (repo / "stray-notes.txt").exists()
 
 
-# surface-chat-tab
-
-
 def test_recovering_an_interrupted_update_records_the_release_it_rolled_back(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -6949,6 +6946,9 @@ def test_recovering_an_interrupted_update_records_the_release_it_rolled_back(
     )
     history.release("minds-v2")
     assert history.pending_rollbacks("minds-v2", capsys) == [rollback]
+
+
+# surface-chat-tab
 
 
 def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:
