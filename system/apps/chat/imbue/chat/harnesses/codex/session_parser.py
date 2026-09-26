@@ -88,7 +88,7 @@ SOURCE = "codex/common_transcript"
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
 
-# ``turn_state`` key, present only while a settings change is newer than the latest ``turn_context``.
+# ``turn_state`` key, present only while a ``thread_settings_applied`` is newer than the latest ``turn_context``.
 SETTINGS_CHANGED_SINCE_TURN_KEY: Final[str] = "settings_changed_since_turn"
 
 # codex's own `codex_error_info.type` tags, mapped to the shared kind vocabulary. Preferred over
@@ -478,8 +478,8 @@ def parse_lines(
 
     # event_msg: the clean human prompt + the turn-abort marker
     if outer == "event_msg":
-        # A settings change the user made after the latest turn_context: until the next turn
-        # runs, that turn_context no longer says what the agent is set to.
+        # Codex logs the thread's settings whenever it applies them (a user's change, each turn
+        # start). Until the next turn_context, the latest one may predate what the agent is set to.
         if payload_type == "thread_settings_applied":
             if turn_state is not None:
                 turn_state[SETTINGS_CHANGED_SINCE_TURN_KEY] = True

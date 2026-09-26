@@ -238,8 +238,8 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
         # framework fallback (turn_context.model differing from the selected setting) shows
         # in the bar. Runs on every refresh that read new lines, gated on divergence, so the
         # write is rare and cheap enough to do under the lock -- no callback runs here.
-        # Skipped while a settings change is newer than the last turn_context: that turn
-        # predates the change, and the ledger has already written what the agent is set to.
+        # Skipped while applied settings are newer than the last turn_context: that turn may
+        # predate them, and the ledger writes what the agent is set to.
         if not self._turn_state.get(SETTINGS_CHANGED_SINCE_TURN_KEY):
             self._reflect_effective_model(self._turn_state.get("model"), self._turn_state.get("effort"))
 
