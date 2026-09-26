@@ -24,21 +24,17 @@ from __future__ import annotations
 import os
 import re
 import sys
+from pathlib import Path
 
 sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-        "libs",
-        "tk_command_parsing",
-        "src",
-    ),
+    0, str(Path(__file__).resolve().parents[1] / "libs" / "tk_command_parsing" / "src")
 )
 
 from tk_command_parsing.parser import CommandSegment, parse_command
 
-# The same trigger the wrapper uses: a pipe (`|` or `|&`, not `||`) into head or tail.
-_PIPE_INTO_TRUNCATOR = re.compile(r"(?<!\|)\|&?\s*(tail|head)(\s|$)")
+# The same trigger the wrapper uses: a pipe (`|` or `|&`, not `||`) into head or tail, which
+# may be followed by the quote or paren that closes the text it sits in.
+_PIPE_INTO_TRUNCATOR = re.compile(r"(?<!\|)\|&?\s*(tail|head)(?![\w.-])")
 # Process substitution starts a word; `<tag>(` inside quoted text or a heredoc body does not.
 _PROCESS_SUBSTITUTION = re.compile(r"(?:^|[\s;&|])[<>]\(")
 # What a redirect leaves among a segment's words: the fd number of `2>&1`/`2>` and the target.
