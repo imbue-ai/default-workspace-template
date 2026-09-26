@@ -16,9 +16,11 @@ loop can keep its two-poll debounce (see `LiveBrowser._keepalive_loop`).
 """
 
 import asyncio
+import contextlib
 import json
 import urllib.error
 import urllib.request
+from collections.abc import AsyncIterator
 from typing import Any
 
 import websockets
@@ -219,17 +221,11 @@ class CdpClient:
     async def navigate(self, target_id: str, url: str) -> None:
         """Point one tab at ``url``, raising CdpError when Chromium refuses.
 
-        ``Page.navigate`` is a page-domain call, so it needs a session on the target: attach
-        flattened, navigate through that session, detach. Chromium reports a navigation it
-        could not even start (a bad host, a refused scheme) in ``errorText`` rather than as a
-        protocol error, so that is raised too.
+        Chromium reports a navigation it could not even start (a bad host, a refused scheme)
+        in ``errorText`` rather than as a protocol error, so that is raised too.
         """
-        attached = await self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
-        session_id = attached["sessionId"]
-        try:
+        async with self._attached(target_id) as session_id:
             result = await self.send("Page.navigate", {"url": url}, session_id=session_id)
-        finally:
-            await self._detach_quietly(session_id)
         error_text = result.get("errorText")
         if error_text:
             raise CdpError(f"Page.navigate to {url}: {error_text}")
@@ -242,11 +238,22 @@ class CdpClient:
         keyboard. ``rawKeyDown`` (no ``text``) is what makes Chromium run the editing
         command for the combination rather than insert a character.
         """
+        async with self._attached(target_id) as session_id:
+            for event in _PASTE_CHORD_EVENTS:
+                await self.send("Input.dispatchKeyEvent", dict(event), session_id=session_id)
+
+    @contextlib.asynccontextmanager
+    async def _attached(self, target_id: str) -> AsyncIterator[str]:
+        """A flattened session on one target for the page-domain calls of the block.
+
+        Page-domain calls (``Page.*``, ``Input.*``, ``Runtime.*``) need a session on the
+        target; the block's calls pass the yielded session id, and the session is dropped on
+        the way out whether or not they succeeded.
+        """
         attached = await self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
         session_id = attached["sessionId"]
         try:
-            for event in _PASTE_CHORD_EVENTS:
-                await self.send("Input.dispatchKeyEvent", dict(event), session_id=session_id)
+            yield session_id
         finally:
             await self._detach_quietly(session_id)
 
