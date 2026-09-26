@@ -259,6 +259,19 @@ export function App(): m.Component<AppAttrs> {
     if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
   }
 
+  /** Feed ``element``'s size to the store as the backdrop's, now and whenever it changes: the backdrop area of a
+   *  desktop, or the pages host of a solo shell, whose one page is laid over it on every redraw. */
+  function observeBackdropSize(current: DesktopStore, element: HTMLElement): void {
+    const measure = (): void => {
+      const box = element.getBoundingClientRect();
+      current.setBackdropSize({ width: box.width, height: box.height });
+    };
+    resizeObserver?.disconnect();
+    resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(element);
+    measure();
+  }
+
   /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and
    *  once more when the drag ends or is cancelled, for the same reason ``paintWindow`` exists. */
   function paintFloatingEntry(current: DesktopStore, app: string): void {
@@ -831,6 +844,8 @@ export function App(): m.Component<AppAttrs> {
               });
               pages.start();
               pages.reconcile();
+              // The host is the whole viewport here: the page is laid over it edge to edge, and follows its size.
+              observeBackdropSize(current, host);
             },
           }),
         ]);
@@ -870,13 +885,7 @@ export function App(): m.Component<AppAttrs> {
               class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
               oncreate: (created: m.VnodeDOM) => {
                 backdropArea = created.dom as HTMLElement;
-                const measure = (): void => {
-                  const box = backdropArea?.getBoundingClientRect();
-                  if (box !== undefined) current.setBackdropSize({ width: box.width, height: box.height });
-                };
-                resizeObserver = new ResizeObserver(measure);
-                resizeObserver.observe(backdropArea);
-                measure();
+                observeBackdropSize(current, backdropArea);
               },
             },
             [
