@@ -68,8 +68,10 @@ instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
 health; ``sidecar=MYSVC_API_PORT`` adds a second), and ``--port <name>`` gives it
 one that no env var carries, reachable only by placeholder (what a manifest's
 ``[preview]`` table declares). ``--copy KEY=SOURCE`` copies
-a directory (repo-relative or absolute) into the instance's scratch space before
-boot, so the instance can write to it freely. The launch argv and every ``--env``
+a directory (repo-relative or absolute) into the instance's scratch space on disk
+before boot, so the instance can write to it freely, and ``down`` removes it. A
+copy that would not leave the disk room to spare fails the boot before anything
+runs (see ``copy_app_data.py``). The launch argv and every ``--env``
 value may carry ``{port:<name>}``, ``{copy:<key>}``, ``{scratch}`` (a fresh
 directory of the instance's own), and ``{host}`` (the loopback host); they are
 filled once the ports are allocated and the copies made. These are the
