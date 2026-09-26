@@ -14,7 +14,6 @@ from __future__ import annotations
 import contextlib
 import json
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -114,12 +113,6 @@ _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
 _GEOMETRY_TOLERANCE_PX = 4
-# A window travels to a new rectangle over --desk-window-move, so a box read the moment its state
-# flips is a frame of the journey rather than where it is going. Two reads this far apart that agree
-# are the arrival; the ceiling is many times the travel, so only a window that never arrives fails.
-_TRAVEL_POLL_MS = 60
-_TRAVEL_SETTLE_TIMEOUT_SECONDS = 5.0
-_TRAVEL_SETTLE_EPSILON_PX = 0.5
 
 
 class E2EServer(FrozenModel):
@@ -542,17 +535,9 @@ def _box(locator: Locator) -> FloatRect:
     return box
 
 
-def _settled_box(locator: Locator) -> FloatRect:
-    """The element's box once it has stopped moving, for a window whose state has just changed."""
-    deadline = time.monotonic() + _TRAVEL_SETTLE_TIMEOUT_SECONDS
-    previous = _box(locator)
-    while time.monotonic() < deadline:
-        locator.page.wait_for_timeout(_TRAVEL_POLL_MS)
-        current = _box(locator)
-        if all(abs(current[key] - previous[key]) < _TRAVEL_SETTLE_EPSILON_PX for key in ("x", "y", "width", "height")):
-            return current
-        previous = current
-    raise AssertionError(f"the element was still moving after {_TRAVEL_SETTLE_TIMEOUT_SECONDS}s: {previous}")
+def _travel_duration(window: Locator) -> str:
+    """How long the window's chrome would take to travel to a new rectangle, as its computed style has it."""
+    return window.evaluate("(element) => getComputedStyle(element).transitionDuration.split(',')[0].trim()")
 
 
 def _center(box: FloatRect) -> tuple[float, float]:
@@ -636,6 +621,8 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
     """A second browser context: its own storage, so its own client id."""
     browser = page.context.browser
     assert browser is not None
+    # Nothing of ``browser_context_args`` reaches here, so the suite's reduced motion is asked for again.
+    context_args.setdefault("reduced_motion", "reduce")
     return browser.new_context(**context_args)
 
 
@@ -1032,6 +1019,22 @@ def test_move_and_resize_persist_across_reload(e2e_server: E2EServer, page: Page
     assert _page_frame(page, window_id).url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
 
 
+@pytest.mark.timeout(60, func_only=False)
+def test_a_window_travels_only_where_the_platform_welcomes_motion(e2e_server: E2EServer, page: Page) -> None:
+    """The travel is asked for, not taken away: a context saying motion is welcome transitions a window's
+    rectangle, and one asking for less motion -- which every context of this suite does, so a box can be read
+    the moment a state lands -- puts the window at its new rectangle outright."""
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    assert _travel_duration(_window(page, window_id)) == "0s"
+
+    with _second_client(page, e2e_server, reduced_motion="no-preference") as other_page:
+        # The window is shared but its placement is not, so it reaches a fresh client minimized.
+        _taskbar_entry(other_page, window_id).click()
+        expect(_window(other_page, window_id)).to_be_visible(timeout=15000)
+        assert _travel_duration(_window(other_page, window_id)) != "0s"
+
+
 @pytest.mark.timeout(90, func_only=False)
 def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page) -> None:
     """Dragging a window's title to the left edge shows the snap preview and snaps it to the left half; to the top
@@ -1049,7 +1052,7 @@ def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page)
     expect(page.locator("[data-snap-preview]")).to_be_visible()
     page.mouse.up()
     expect(window).to_have_attribute("data-window-state", "SNAPPED_LEFT")
-    snapped = _settled_box(window)
+    snapped = _box(window)
     _assert_close(snapped["x"], backdrop["x"], "snapped x")
     _assert_close(snapped["width"], backdrop["width"] / 2, "snapped width")
     _assert_close(snapped["height"], backdrop["height"], "snapped height")
@@ -1062,7 +1065,7 @@ def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page)
     start = _center(_box(window.locator("[data-drag-handle]")))
     _drag(page, start, (start[0] + 200, start[1] + 150))
     expect(window).to_have_attribute("data-window-state", "NORMAL")
-    unsnapped = _settled_box(window)
+    unsnapped = _box(window)
     _assert_close(unsnapped["width"], normal["width"], "unsnapped width")
     _assert_close(unsnapped["height"], normal["height"], "unsnapped height")
     assert unsnapped["x"] > snapped["x"] + _SNAP_THRESHOLD
@@ -1073,7 +1076,7 @@ def test_snap_maximize_and_unsnap_by_dragging(e2e_server: E2EServer, page: Page)
     start = _center(_box(window.locator("[data-drag-handle]")))
     _drag(page, start, (start[0], backdrop["y"] + _SNAP_THRESHOLD / 2))
     expect(window).to_have_attribute("data-window-state", "MAXIMIZED")
-    _assert_same_box(_settled_box(window), backdrop, "maximized")
+    _assert_same_box(_box(window), backdrop, "maximized")
     _wait_for_stored_placement(
         e2e_server, client_id, window_id, lambda placement: placement["state"] == "MAXIMIZED", "MAXIMIZED"
     )
@@ -1099,7 +1102,7 @@ def test_title_bar_double_click_and_controls_toggle_maximize_and_minimize(e2e_se
     expect(window.locator('[data-window-control="restore"]')).to_be_visible()
     window.locator("[data-drag-handle]").dblclick()
     expect(window).to_have_attribute("data-window-state", "NORMAL")
-    _assert_same_box(_settled_box(window), normal, "restored")
+    _assert_same_box(_box(window), normal, "restored")
 
     window.locator('[data-window-control="minimize"]').click()
     expect(_shown_windows(page)).to_have_count(0)

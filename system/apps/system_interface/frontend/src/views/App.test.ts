@@ -206,9 +206,7 @@ describe("a window drag", () => {
   });
 });
 
-// The move the pointer did not make: the chrome transitions to its new rectangle and its page, which has no
-// rectangle of its own to transition, is laid over the chrome again every frame of the way. jsdom raises no
-// transition events of its own, so each travel is driven by hand here.
+// jsdom raises no transition events of its own, so each travel is driven by hand here.
 describe("a window's travel", () => {
   let root: HTMLElement;
   let page: HTMLElement;
@@ -252,9 +250,16 @@ describe("a window's travel", () => {
     travelTo(640);
     root.dispatchEvent(new Event("transitionend", { bubbles: true }));
     expect(page.style.left).toBe("640px");
-    travelTo(900);
-    await twoFrames();
-    expect(page.style.left).toBe("640px");
+
+    // The stop is asserted on the loop rather than on where the page sits: a redraw lays every page over
+    // its window too, so a page that has not moved proves nothing. One frame is still scheduled when the
+    // last property ends; the frame after it finds nothing left.
+    const frame = requestAnimationFrame.bind(globalThis);
+    await twoFrames(frame);
+    const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
+    await twoFrames(frame);
+    expect(scheduled).not.toHaveBeenCalled();
+    scheduled.mockRestore();
   });
 
   it("gives up on a window whose chrome leaves the desktop before it lands", async () => {
@@ -265,9 +270,8 @@ describe("a window's travel", () => {
     expect(page.style.left).toBe("300px");
 
     const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
-    // A closed window (or a desktop swapped for another) takes its chrome out of the document, and the
-    // transition the browser cancels there raises its event where the backdrop cannot hear it: nothing is
-    // left to end the travel but the frame that goes looking for the chrome.
+    // Out of the document, where the cancelled transition raises its event where the backdrop cannot
+    // hear it: the follow's own frame is what has to notice.
     root.remove();
     await twoFrames(frame);
 
