@@ -13,7 +13,8 @@ call, an unknown program, a command substitution or process substitution feeding
 is blocked, and so is a command the lexer cannot parse. The command structure comes from the
 shared shlex-based `tk_command_parsing` parser, so a `cd x && cat f | head` is judged pipeline
 by pipeline rather than as one string. Quoted text that itself contains a pipe into
-`head`/`tail` (`bash -c '...'`, `ssh host '...'`) is judged as a command of its own.
+`head`/`tail` (`bash -c '...'`, `ssh host '...'`) is judged as a command of its own, unless a
+plain read receives it as a pattern or text (`grep -E 'error|tail' log`).
 
 Runs under a bare `python3` with no virtualenv, like the sibling checkers, so it puts the parser
 lib's source directory on `sys.path` itself; the lib is stdlib-only for the same reason.
@@ -122,6 +123,9 @@ def is_blocked(command: str, depth: int = 0) -> bool:
                     return True
     if depth < _MAX_QUOTED_DEPTH:
         for segment in parsed.segments:
+            # A plain read's quoted words are patterns or text (`grep -E 'a|tail'`), not shell.
+            if _is_plain_read(segment):
+                continue
             for word in segment.words:
                 if _PIPE_INTO_TRUNCATOR.search(word):
                     if is_blocked(word, depth + 1):

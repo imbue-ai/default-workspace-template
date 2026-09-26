@@ -49,6 +49,9 @@ def _run(command: str) -> int:
         "PYTEST_MAX_DURATION_SECONDS=300 uv run pytest -q 2>&1 | tee /tmp/pytest.txt | tail -30",
         "uv run mngr list --help 2>&1 | head -50",
         "uv run sh -c 'dmesg | tail -n 30'",
+        # A read's quoted pattern is not a command, however pipe-shaped it is.
+        "grep -nE 'error|tail' /tmp/log.txt",
+        "rg 'foo|head' src | head -20",
     ],
 )
 def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) -> None:
@@ -98,6 +101,7 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         # Quoted shell text is judged as a command of its own.
         "bash -c 'pytest | tail -20'",
         "ssh host 'uv sync|tail'",
+        'echo "$(pytest | tail -5)"',
         # A command the lexer cannot read is blocked, as before.
         "pytest | tail -20 'unbalanced",
     ],
