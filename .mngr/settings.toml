@@ -1664,7 +1664,7 @@ env__extend = ["MNGR_AGENT_ROLE=chat"]
 # resolved are inert, so this template is safe to stack with any --type.
 [create_templates.fast]
 setting__extend = [
-    "agent_types.claude.settings_overrides.fastMode=true",
+    "agent_types.claude.settings_overrides.fastMode=false",
     'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
 ]
 
