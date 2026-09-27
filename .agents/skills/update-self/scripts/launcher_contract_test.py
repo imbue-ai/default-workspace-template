@@ -48,9 +48,9 @@ _LAUNCHER_FLAGS_AT_FLOOR: dict[str, frozenset[str]] = {
 
 _FENCED_CODE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
-# Where the report poll runs from: staged out of the target release, since the
-# workspace's own tree may predate ``system/scripts/run_in_background.py``.
-_STAGED_RUNNER = "data/.tasks/update-self/run_in_background.py"
+# Where the report poll runs from: the staged skill's own copy, since the workspace's
+# own tree may predate ``system/scripts/run_in_background.py``.
+_STAGED_RUNNER = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py"
 
 
 def _fenced_commands(text: str) -> list[str]:
@@ -103,10 +103,14 @@ def test_update_self_prose_uses_only_the_floor_launcher_interface() -> None:
         )
 
 
-def test_update_self_waits_through_the_runner_staged_from_the_target() -> None:
+def test_update_self_waits_through_the_staged_skills_runner() -> None:
     """The floor release has no ``system/scripts/run_in_background.py``, so the report poll
-    runs the copy staged from ``$REF``; the workspace's own path would fail on exactly the
-    workspaces the update exists for."""
+    runs the skill's own copy, which ``bootstrap-skill`` stages from ``$REF``; the
+    workspace's own path would fail on exactly the workspaces the update exists for."""
+    assert (_SKILL_DIR / "scripts" / "run_in_background.py").is_file(), (
+        "the skill no longer carries run_in_background.py, so the staged copy the prose runs "
+        "does not exist"
+    )
     commands = [
         command
         for prose in _PROSE_FILES
@@ -122,19 +126,5 @@ def test_update_self_waits_through_the_runner_staged_from_the_target() -> None:
     )
     for words in await_commands:
         assert words[:2] == ["python3", _STAGED_RUNNER], (
-            f"`{shlex.join(words)}` does not wait through the runner staged from $REF"
+            f"`{shlex.join(words)}` does not wait through the staged skill's runner"
         )
-    staging_commands = [
-        shlex.split(command, comments=True)
-        for command in commands
-        if command.startswith("git show")
-    ]
-    assert [
-        "git",
-        "show",
-        "$REF:system/scripts/run_in_background.py",
-        ">",
-        _STAGED_RUNNER,
-    ] in staging_commands, (
-        f"the update-self prose no longer stages {_STAGED_RUNNER} from $REF"
-    )

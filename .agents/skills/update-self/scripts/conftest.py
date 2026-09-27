@@ -1,10 +1,12 @@
 """The skill's scripts import each other as siblings (the directory is ``sys.path[0]``
 when ``update_self.py`` runs); put it there for the tests too."""
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+from messenger_testing import RecordingMessengers
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -34,3 +36,13 @@ def _isolate_tool_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     installation it was validating a release against.
     """
     monkeypatch.setenv("TOOL_ENV_HOME", str(tmp_path / "pinned-tool-home"))
+
+
+@pytest.fixture
+def recording_messengers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> RecordingMessengers:
+    bin_dir = tmp_path / "fake-bin"
+    messengers = RecordingMessengers(bin_dir, tmp_path / "messenger-calls.jsonl")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return messengers

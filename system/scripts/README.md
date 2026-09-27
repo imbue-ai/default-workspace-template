@@ -32,7 +32,9 @@ Provisioning and utility scripts:
   the same way, with `mngr create` as the backoff), `run_in_background.py` (run a
   command detached and, when it exits, send its exit code and output to the
   caller's own chat as a message that starts the agent's next turn, on any
-  harness; how a lead waits for a worker's report), `with_secrets.py` (run a
+  harness; how a lead waits for a worker's report; vendored byte-identically into
+  `.agents/skills/update-self/scripts/`, whose staged copy update-self waits
+  through), `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which
   `agent_secrets_guard.sh` enforces -- see the `connect-external-service`
