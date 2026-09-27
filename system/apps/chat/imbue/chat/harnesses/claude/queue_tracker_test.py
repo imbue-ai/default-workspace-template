@@ -209,6 +209,19 @@ def test_a_leave_parks_the_rest_of_the_queue_again() -> None:
     assert _contents(tracker) == ["second"]
 
 
+def test_the_agent_working_again_parks_what_an_early_idle_reading_marked() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("first"), _enqueue_line("second"))
+    _feed(tracker, _dequeue_line())
+    # An idle reading taken before the turn "first" opened was folded in marks "second" too.
+    tracker.on_idle(now=100.0)
+    tracker.on_busy()
+    assert [(entry["content"], entry["is_sending"]) for entry in tracker.snapshot()] == [("second", False)]
+    # Parked behind that turn, it outlasts the grace.
+    tracker.expire(now=100.0 + DELIVERY_GRACE_SECONDS)
+    assert _contents(tracker) == ["second"]
+
+
 def test_clear_and_reset_forget_the_idle_marks() -> None:
     for drop in (ClaudeQueueTracker.clear, ClaudeQueueTracker.reset):
         tracker = ClaudeQueueTracker.build()

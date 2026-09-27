@@ -169,6 +169,11 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
         return []
 
+    def notify_busy(self) -> list[dict[str, Any]] | None:
+        """Undo the idle backstop's marks on an IDLE->working transition, returning the resulting
+        snapshot, or None when the harness keeps no such marks (the default)."""
+        return None
+
     def take_unclaimed_queue(self) -> tuple[str, tuple[str, ...]]:
         """Remove and return the queue entries no delivery has claimed, as one block.
 

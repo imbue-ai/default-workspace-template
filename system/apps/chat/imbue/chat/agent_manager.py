@@ -847,9 +847,11 @@ class AgentManager:
     # pushed to the frontend on the agents WebSocket. Fed by the agent's watcher via
     # ``update_queued_messages`` and cleared on a working->IDLE transition through the
     # per-agent idle handler the watcher registers (its ``notify_idle`` -- the queue
-    # backstop). Both are dropped when activity tracking stops.
+    # backstop), whose marks the busy handler (``notify_busy``) undoes on IDLE->working.
+    # All are dropped when activity tracking stops.
     _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
     _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
+    _queue_busy_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]] | None]]
     # Per-agent live harness session (``HarnessSpec.session_class``): the control surface that
     # owns the send + its Sending records, tap availability, the native tap/interrupt dispatch,
     # daemon liveness (codex's app-server connection + ledger live inside its session), and the
@@ -981,6 +983,7 @@ class AgentManager:
         manager._activity_state_by_agent = {}
         manager._queued_messages_by_agent = {}
         manager._queue_idle_handler_by_agent = {}
+        manager._queue_busy_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_state_poller = ModelStatePoller.build(
@@ -1092,6 +1095,7 @@ class AgentManager:
             self._activity_state_by_agent.clear()
             self._queued_messages_by_agent.clear()
             self._queue_idle_handler_by_agent.clear()
+            self._queue_busy_handler_by_agent.clear()
             self._model_choice_by_agent.clear()
         for session in sessions:
             session.close()
@@ -3624,6 +3628,7 @@ class AgentManager:
             self._activity_state_by_agent.pop(agent_id, None)
             self._queued_messages_by_agent.pop(agent_id, None)
             self._queue_idle_handler_by_agent.pop(agent_id, None)
+            self._queue_busy_handler_by_agent.pop(agent_id, None)
         # Reap the live backend outside the lock (codex's join blocks on its reader thread);
         # idempotent, and a re-track rebuilds it via ensure_live.
         if session is not None:
@@ -3776,6 +3781,17 @@ class AgentManager:
         """
         with self._lock:
             self._queue_idle_handler_by_agent[agent_id] = handler
+
+    def register_queue_busy_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]] | None]) -> None:
+        """Register the agent watcher's IDLE->working counterpart of the queue backstop.
+
+        Called once when the watcher is created. On an IDLE->working transition with something
+        queued, ``_recompute_activity_state`` invokes it: the handler undoes the idle backstop's
+        marks and returns the resulting snapshot (None when its harness keeps no marks), which
+        is folded in the same way the idle handler's is.
+        """
+        with self._lock:
+            self._queue_busy_handler_by_agent[agent_id] = handler
 
     def update_queued_messages(self, agent_id: str, snapshot: list[dict[str, Any]]) -> None:
         """Cache and broadcast a fresh queued-message snapshot from the agent's watcher.
@@ -4022,15 +4038,27 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().activity_state, new_state)
             )
-            idle_handler = self._queue_idle_handler_by_agent.get(agent_id) if has_stale_queue else None
+            # An idle reading can predate the fold of the turn a leave just opened (the watcher
+            # pushes the queue snapshot ahead of that turn's events), so the backstop may have
+            # marked what is parked behind it; the working reading that follows undoes that.
+            is_leaving_idle = (
+                old_state == ActivityState.IDLE and not is_idle and bool(self._queued_messages_by_agent.get(agent_id))
+            )
+            if has_stale_queue:
+                queue_handler = self._queue_idle_handler_by_agent.get(agent_id)
+            elif is_leaving_idle:
+                queue_handler = self._queue_busy_handler_by_agent.get(agent_id)
+            else:
+                queue_handler = None
 
-        # The idle handler applies the watcher's queue backstop and returns the
-        # resulting snapshot; it calls into the watcher, so it runs outside
-        # the lock, and its snapshot is folded into the same broadcast as the IDLE
+        # The queue handler applies the watcher's queue backstop (or undoes it) and
+        # returns the resulting snapshot; it calls into the watcher, so it runs outside
+        # the lock, and its snapshot is folded into the same broadcast as the activity
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
-        if idle_handler is not None:
-            drained = tuple(QueuedMessageState.model_validate(entry) for entry in idle_handler())
+        handled_snapshot = queue_handler() if queue_handler is not None else None
+        if handled_snapshot is not None:
+            drained = tuple(QueuedMessageState.model_validate(entry) for entry in handled_snapshot)
             with self._lock:
                 idle_agent_state = self._agents.get(agent_id)
                 if idle_agent_state is not None and idle_agent_state.queued_messages != drained:

@@ -22,6 +22,7 @@ The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
   dequeues a parked message after its end-of-turn hooks run, so clearing at once
   would blank the message until its turn arrives. A marked entry renders as a
   message being sent (``is_sending``) until its leave record or the grace expiry.
+  IDLE -> working -> forget the marks (``on_busy``): what is still queued waits for that turn.
 
 This keys resolution off the ledger's LEAVE ops ONLY -- never ``promptSource`` or
 the ``queued_command`` attachment -- because in the real Mind flow every message
@@ -124,6 +125,15 @@ class ClaudeQueueTracker:
         for message in self._queued_set.pending:
             self._idle_since_by_id.setdefault(message.queued_id, now)
         self.expire(now)
+
+    def on_busy(self) -> None:
+        """The agent reads as working again: whatever is still queued is parked behind that turn.
+
+        Undoes marks from an idle reading taken before the turn's events were folded in (the
+        queue snapshot a leave produces is pushed ahead of the prompt it opened a turn with), so
+        the rest of the queue is not dropped at the grace expiry while it waits.
+        """
+        self._idle_since_by_id = {}
 
     def expire(self, now: float) -> None:
         """Drop the entries still queued :data:`DELIVERY_GRACE_SECONDS` after the agent went idle."""

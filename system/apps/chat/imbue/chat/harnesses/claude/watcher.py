@@ -617,6 +617,15 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
             self._last_broadcast_queue_snapshot = snapshot
         return snapshot
 
+    def notify_busy(self) -> list[dict[str, Any]] | None:
+        """Forget the idle backstop's marks (the agent reads as working again) and return the
+        resulting snapshot, recorded as broadcast the same way :meth:`notify_idle`'s is."""
+        with self._lock:
+            self._queue_tracker.on_busy()
+            snapshot = self._queue_tracker.snapshot()
+            self._last_broadcast_queue_snapshot = snapshot
+        return snapshot
+
     def _broadcast_queue_snapshot_if_changed(self) -> None:
         """Push the live queued snapshot to the registered sink when it has changed. The
         comparison runs under the lock; the callback fan-out runs outside it."""

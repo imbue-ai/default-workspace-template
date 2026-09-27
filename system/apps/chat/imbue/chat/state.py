@@ -134,14 +134,16 @@ class ChatAppState(MutableModel):
             # watcher, so nothing here knows which harness is running.
             watcher = build_watcher(agent_info, on_events)
             # Bridge the watcher's live queued-message snapshot onto the agents WS
-            # state, and register its working->IDLE queue backstop with the manager.
-            # Both are no-ops for a harness without a queue populator. The manager
+            # state, and register its working->IDLE queue backstop (and the IDLE->working
+            # undo of it) with the manager. All are no-ops for a harness without a queue
+            # populator. The manager
             # de-dupes/broadcasts, so pushing the full snapshot on each change is
             # cheap.
             watcher.set_queue_snapshot_callback(
                 lambda snapshot: self.agent_manager.update_queued_messages(agent_info.id, snapshot)
             )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
+            self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
             # A harness that holds the queue on its agent's behalf (antigravity) also needs to
             # DELIVER it, which needs the manager's send path and a liveness check. No-op for
             # every other harness, whose queue its own harness consumes.
