@@ -13,8 +13,13 @@ import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
+import { describeElement } from "@imbue/workspace-ui/src/element_reference";
+import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperImageUrl } from "../model/api";
 import { launchPathOf } from "../model/launch";
+import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
@@ -66,10 +71,38 @@ import { SQUIGGLE_GLYPHS } from "./squiggles";
 type OpenMenu =
   | { readonly kind: "window"; readonly windowId: string }
   | { readonly kind: "size"; readonly windowId: string }
-  | { readonly kind: "entry"; readonly windowId: string }
-  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut }
+  | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
+  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "desktops" }
-  | { readonly kind: "desktop"; readonly desktopId: string };
+  | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
+  | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
+
+/** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
+ *  holds the target, when one does. */
+function shellReferenceScope(store: DesktopStore, target: Element): ReferenceScope {
+  const state = store.getState();
+  return {
+    app: SHELL_APP_NAME,
+    windowId: target.closest(`[${WINDOW_ID_ATTRIBUTE}]`)?.getAttribute(WINDOW_ID_ATTRIBUTE) ?? null,
+    desktopId: state.activeDesktopId,
+    clientId: state.clientId,
+  };
+}
+
+/** The reference rows a right-click menu of the shell's own ends with (element-reference-menu plan section
+ *  4.4): none for a menu opened without a right-click (a long press with nothing under it). */
+function referenceRowsFor(store: DesktopStore, target: Element | null, x: number, y: number): MenuRow[] {
+  if (target === null) return [];
+  const click = { clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY };
+  const reference = describeElement(target, click, shellReferenceScope(store, target));
+  return elementReferenceRows(reference, (text) => void store.draftText(text), true);
+}
+
+/** ``rows`` followed by the reference rows after a divider, or ``rows`` alone when there are none. */
+function withReferenceRows(rows: MenuRow[] | null, referenceRows: readonly MenuRow[]): MenuRow[] | null {
+  if (rows === null || referenceRows.length === 0) return rows;
+  return [...rows, { kind: "divider" }, ...referenceRows];
+}
 
 /** The width the desktop's menus never go under, so a menu of two-word verbs is still a card. */
 const MENU_MIN_WIDTH = 176;
@@ -120,6 +153,7 @@ export function App(): m.Component<AppAttrs> {
   let backdropArea: HTMLElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let detachGestures: (() => void) | null = null;
+  let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
@@ -140,7 +174,7 @@ export function App(): m.Component<AppAttrs> {
       return openMenu?.kind === "size" ? "center" : undefined;
     },
     // The marker class each menu is known by. Read off the open menu on every render, so one
-    // component can wear all five names.
+    // component can wear every kind's name.
     get extraClass(): string | undefined {
       return openMenu === null ? undefined : `${openMenu.kind}-menu`;
     },
@@ -352,6 +386,8 @@ export function App(): m.Component<AppAttrs> {
       },
       onLongPress: (binding, client) => {
         const anchor = anchorForPoint(client.x, client.y);
+        const referenceRows = (): MenuRow[] =>
+          referenceRowsFor(current, document.elementFromPoint(client.x, client.y), client.x, client.y);
         switch (binding.kind) {
           case "window-move":
           case "window-resize":
@@ -361,15 +397,17 @@ export function App(): m.Component<AppAttrs> {
             const shortcut = activeDesktop(current.getState())?.shortcuts.find(
               (candidate) => candidate.target.app === binding.app && candidate.target.launch === binding.launch,
             );
-            if (shortcut !== undefined) openMenuAt({ kind: "shortcut", shortcut }, anchor);
+            if (shortcut !== undefined) {
+              openMenuAt({ kind: "shortcut", shortcut, referenceRows: referenceRows() }, anchor);
+            }
             break;
           }
           case "taskbar-entry":
-            openMenuAt({ kind: "entry", windowId: binding.windowId }, anchor);
+            openMenuAt({ kind: "entry", windowId: binding.windowId, referenceRows: referenceRows() }, anchor);
             break;
           case "floating-entry": {
             const windowId = pinnedWindowIdOf(binding.app);
-            if (windowId !== null) openMenuAt({ kind: "entry", windowId }, anchor);
+            if (windowId !== null) openMenuAt({ kind: "entry", windowId, referenceRows: referenceRows() }, anchor);
             break;
           }
         }
@@ -570,13 +608,15 @@ export function App(): m.Component<AppAttrs> {
       case "size":
         return rowsOfSizeMenu(current, open.windowId);
       case "entry":
-        return rowsOfEntryMenu(current, open.windowId);
+        return withReferenceRows(rowsOfEntryMenu(current, open.windowId), open.referenceRows);
       case "shortcut":
-        return rowsOfShortcutMenu(current, open.shortcut);
+        return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
       case "desktops":
         return rowsOfDesktopsMenu(current);
       case "desktop":
-        return rowsOfDesktopMenu(current, open.desktopId);
+        return withReferenceRows(rowsOfDesktopMenu(current, open.desktopId), open.referenceRows);
+      case "element":
+        return [...open.rows];
     }
   }
 
@@ -741,11 +781,24 @@ export function App(): m.Component<AppAttrs> {
 
   return {
     oncreate(vnode) {
-      store = vnode.attrs.store;
+      const current = vnode.attrs.store;
+      store = current;
       document.addEventListener("keydown", onDocumentKeyDown);
       document.addEventListener("pointerdown", onDocumentPointerDown, true);
       const root = vnode.dom as HTMLElement;
-      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(vnode.attrs.store, root));
+      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(current, root));
+      // The element menu over the shell's own chrome (element-reference-menu plan section 6): what a right-click
+      // the views do not handle themselves opens, drawn as the desktop's one menu. The shell is no frame's page:
+      // its draft route is the store's, and a draft can always go.
+      uninstallContextMenu = installElementContextMenu({
+        draft: (text) => void current.draftText(text),
+        isDraftAvailable: () => true,
+        scope: (target) => shellReferenceScope(current, target.element),
+        open: (rows, point) => {
+          openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
+          m.redraw();
+        },
+      });
     },
     onupdate() {
       pages?.reconcile();
@@ -755,6 +808,7 @@ export function App(): m.Component<AppAttrs> {
       document.removeEventListener("pointerdown", onDocumentPointerDown, true);
       // A menu still open here would keep its own window listeners for good.
       menu.dispose();
+      uninstallContextMenu?.();
       detachGestures?.();
       resizeObserver?.disconnect();
     },
@@ -769,8 +823,11 @@ export function App(): m.Component<AppAttrs> {
       const launcher = launcherMenu(current);
       // A pinned entry answers the same way in the bar and afloat.
       const onEntryClick = (windowId: string): void => current.toggleTaskbarEntry(windowId);
-      const onEntryContextMenu = (windowId: string, x: number, y: number): void => {
-        openMenuAt({ kind: "entry", windowId }, anchorForPoint(x, y));
+      const onEntryContextMenu = (windowId: string, x: number, y: number, target: Element): void => {
+        openMenuAt(
+          { kind: "entry", windowId, referenceRows: referenceRowsFor(current, target, x, y) },
+          anchorForPoint(x, y),
+        );
       };
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
       // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
@@ -827,8 +884,15 @@ export function App(): m.Component<AppAttrs> {
                       selectedShortcutKey = key;
                     },
                     onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
-                    onShortcutContextMenu: (shortcut, point) => {
-                      openMenuAt({ kind: "shortcut", shortcut }, anchorForPoint(point.x, point.y));
+                    onShortcutContextMenu: (shortcut, point, target) => {
+                      openMenuAt(
+                        {
+                          kind: "shortcut",
+                          shortcut,
+                          referenceRows: referenceRowsFor(current, target, point.x, point.y),
+                        },
+                        anchorForPoint(point.x, point.y),
+                      );
                     },
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
                     onPagesHostCreated: (host) => {
@@ -892,8 +956,11 @@ export function App(): m.Component<AppAttrs> {
                 if (openMenu?.kind === "desktops") menu.close();
                 else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
               },
-              onDesktopContextMenu: (desktopId, x, y) => {
-                openMenuAt({ kind: "desktop", desktopId }, anchorForPoint(x, y));
+              onDesktopContextMenu: (desktopId, x, y, target) => {
+                openMenuAt(
+                  { kind: "desktop", desktopId, referenceRows: referenceRowsFor(current, target, x, y) },
+                  anchorForPoint(x, y),
+                );
               },
             },
             onEntryClick,

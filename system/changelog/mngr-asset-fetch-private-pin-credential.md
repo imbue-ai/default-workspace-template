@@ -1,0 +1,1 @@
+The workspace build's mngr asset fetch now runs its checkout with the private-repo credential too, so a template pinned to mngr-internal builds instead of failing on the lazy blob fetch of the vendored files (`fatal: could not fetch <blob> from promisor remote`).

@@ -5,14 +5,21 @@ build two creations in one workspace at the same time. That is a property of the
 files the script touches, not of the lib it generates, so these run the real script
 over a real (temporary) workspace and assert on the tree it leaves behind.
 
-The port pre-flight is checked the same way: every program declares its port in
-its own drop-in now, so a pre-flight that read only the main config would hand a
-new app a port another program already holds.
+The port pre-flight is checked against the same kind of workspace: every program
+declares its port in its own drop-in now, so a pre-flight that read only the main
+config would hand a new app a port another program already holds. Its port
+choice -- the auto pick and the refusal of a requested port -- runs in-process
+with a bind probe the test supplies, because the real probe asks this machine,
+and a live workspace already has apps listening across the auto-pick range. The
+supplied probe reports nothing bound, except in the test of the probe itself.
+One test runs the real script to check the pick reaches the files it
+writes, asserting only what holds whatever this machine is listening on.
 """
 
 from __future__ import annotations
 
 import configparser
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -21,10 +28,13 @@ import pytest
 import scaffold_flask_lib
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import MAX_DISPLAY_NAME_LENGTH
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
+
+_DESCRIPTION = "a test app"
 
 # The shipped shape: the main config declares no programs at all, only the
 # daemon's own sections and the [include] that pulls in the drop-ins.
@@ -85,6 +95,10 @@ def _make_workspace(
     return root
 
 
+def _nothing_bound(port: int) -> bool:
+    return False
+
+
 def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess[str]:
     icon = root.parent / "icon.svg"
     icon.write_text(_ICON)
@@ -95,7 +109,7 @@ def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess
             "--name",
             name,
             "--description",
-            "a test app",
+            _DESCRIPTION,
             "--icon-file",
             str(icon),
             "--repo-root",
@@ -168,9 +182,8 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
         main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM,
     )
 
-    taken_port = _scaffold(root, "news", "--port", "8080")
-    assert taken_port.returncode != 0
-    assert "already in use" in taken_port.stderr
+    with pytest.raises(SystemExit, match="8080 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8080, _nothing_bound)
 
     taken_name = _scaffold(root, "dashboard")
     assert taken_name.returncode != 0
@@ -181,25 +194,53 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
 
     # 8080 is held by the main config and 8081 by the drop-in, so the auto pick
     # lands on 8082 -- it would answer 8080 if the main config went unread.
-    ok = _scaffold(root, "news")
-    assert ok.returncode == 0, ok.stderr
-    assert (
-        "http://localhost:8082"
-        in (root / "system/supervisord.conf.d/news.conf").read_text()
-    )
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:
     """8080 and 8081 are taken by drop-ins alone, so the next app gets 8082."""
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "dashboard": 8080})
 
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8082
+
+
+def test_a_port_something_is_listening_on_is_skipped_and_refused(
+    tmp_path: Path,
+) -> None:
+    """No config holds 8080, so only the bind probe can keep the scaffold off it."""
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
+
+    def only_8080_bound(port: int) -> bool:
+        return port == 8080
+
+    assert scaffold_flask_lib._pick_port(root, None, only_8080_bound) == 8082
+    with pytest.raises(SystemExit, match="8080 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8080, only_8080_bound)
+
+
+def test_the_scaffold_writes_the_port_it_picked(tmp_path: Path) -> None:
+    """The program's forward_port URL and the runner's default port are the picked one.
+
+    This runs the real script, so its bind probe asks this machine and the exact
+    port depends on what is listening here. The assertion is what holds on any
+    machine: both files carry the same port, and it is not one the config holds.
+    """
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "dashboard": 8080})
+
     result = _scaffold(root, "news")
     assert result.returncode == 0, result.stderr
 
-    assert (
-        "http://localhost:8082"
-        in (root / "system/supervisord.conf.d/news.conf").read_text()
+    program = (root / "system/supervisord.conf.d/news.conf").read_text()
+    (program_port,) = {
+        int(match.group(1))
+        for match in scaffold_flask_lib.LOCALHOST_PORT_RE.finditer(program)
+    }
+    runner = (root / "system/apps/news/src/news/runner.py").read_text()
+    assert runner == scaffold_flask_lib._lib_runner(
+        "news", "news", _DESCRIPTION, program_port
     )
+    assert program_port >= scaffold_flask_lib.LOWEST_AUTO_PORT
+    assert program_port not in {8080, 8081}
 
 
 def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
@@ -215,18 +256,19 @@ def test_a_directory_matching_the_include_glob_does_not_break_the_scan(
     root = _make_workspace(tmp_path / "workspace", {"dashboard": 8080})
     (root / "system/supervisord.conf.d/archive.conf").mkdir()
 
+    # The real drop-in beside it was still scanned: 8080 is taken, so the new app gets 8081.
+    assert scaffold_flask_lib._pick_port(root, None, _nothing_bound) == 8081
+
     result = _scaffold(root, "news")
 
     assert result.returncode == 0, result.stderr
-    # The real drop-in beside it was still scanned: 8080 is taken, so the new app gets 8081.
-    assert (
-        "http://localhost:8081"
-        in (root / "system/supervisord.conf.d/news.conf").read_text()
-    )
 
 
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
+
+    with pytest.raises(SystemExit, match="8081 is already in use"):
+        scaffold_flask_lib._pick_port(root, 8081, _nothing_bound)
 
     result = _scaffold(root, "news", "--port", "8081")
 
@@ -312,12 +354,107 @@ def test_the_display_name_limit_matches_the_library() -> None:
     assert scaffold_flask_lib.MAX_DISPLAY_NAME_LENGTH == MAX_DISPLAY_NAME_LENGTH
 
 
-def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
+def test_the_runner_page_connects_to_the_shell_and_installs_the_element_menu() -> None:
     source = scaffold_flask_lib._lib_runner(
         "inbox-status", "inbox_status", "inbox status dashboard", 8081
     )
-    assert '"shell:location"' in source
+    assert 'from "/_static/app_contract.js"' in source
+    assert 'from "/_static/context_menu.js"' in source
+    assert "connection.location(location.pathname + location.search" in source
+    assert (
+        "installElementContextMenu({ connection, handshake: () => handshake })"
+        in source
+    )
     assert "minds-location" not in source
+
+
+def test_a_secrets_file_that_is_not_a_slug_is_refused_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    """The name is spliced into the program's `bash -c` string, so the scaffold holds
+    it to the slug every other reader of data/.secrets/ enforces, up front."""
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
+    refused = _scaffold(root, "news", "--secrets-file", "My Secret")
+    assert refused.returncode != 0
+    assert "--secrets-file" in refused.stderr
+    assert not (root / "system/supervisord.conf.d/news.conf").exists()
+    assert not (root / "system/apps/news").exists()
+
+    ok = _scaffold(root, "news", "--secrets-file", "news-api")
+    assert ok.returncode == 0, ok.stderr
+    assert (
+        "data/.secrets/news-api.env -- news"
+        in (root / "system/supervisord.conf.d/news.conf").read_text()
+    )
+
+
+def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
+    tmp_path: Path,
+) -> None:
+    """The app must read its key through the wrapper and nothing else: the program command
+    carries the wrapper in front of the entry point, and only when a file was named."""
+    plain = tmp_path / "plain.conf"
+    scaffold_flask_lib._write_supervisord_program(
+        plain, "widget-app", "widget_app", 8090, None
+    )
+    assert '&& widget-app"' in plain.read_text()
+    wrapped = tmp_path / "wrapped.conf"
+    scaffold_flask_lib._write_supervisord_program(
+        wrapped, "widget-app", "widget_app", 8090, "widget"
+    )
+    assert (
+        '&& python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
+        in wrapped.read_text()
+    )
+
+
+def test_the_shell_module_paths_match_the_library() -> None:
+    # The scaffold runs in its own PEP 723 environment and cannot import the
+    # library, so it carries its own copy of the paths; this keeps the copy honest.
+    assert (
+        Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
+        == SHELL_APP_CONTRACT_PATH.parent
+    )
+    assert (
+        Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
+        == SHELL_CONTEXT_MENU_PATH.parent
+    )
+    assert scaffold_flask_lib.SHELL_STATIC_MODULE_NAMES == (
+        SHELL_APP_CONTRACT_PATH.name,
+        SHELL_CONTEXT_MENU_PATH.name,
+    )
+
+
+def test_the_runner_serves_the_shell_modules_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scaffolded app answers the two shell-built modules from its own origin, and 404s any other name."""
+    source = scaffold_flask_lib._lib_runner(
+        "inbox-status", "inbox_status", "inbox status dashboard", 8081
+    )
+    runner = tmp_path / "runner.py"
+    runner.write_text(source)
+    modules_dir = tmp_path / scaffold_flask_lib.SHELL_STATIC_MODULES_DIR
+    modules_dir.mkdir(parents=True)
+    (modules_dir / "app_contract.js").write_text(
+        "export function connectToShell() {}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    spec = importlib.util.spec_from_file_location("scaffolded_runner", runner)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    client = module.app.test_client()
+    served = client.get("/_static/app_contract.js")
+    assert served.status_code == 200
+    assert served.mimetype == "text/javascript"
+    assert b"connectToShell" in served.data
+    assert client.get("/_static/context_menu.js").status_code == 404
+    assert client.get("/_static/runner.py").status_code == 404
+    assert client.get("/_static/..%2Frunner.py").status_code == 404
+    page = client.get("/")
+    assert page.status_code == 200
+    assert b'from "/_static/context_menu.js"' in page.data
 
 
 def test_the_runner_does_not_use_reloader() -> None:

@@ -12,6 +12,7 @@
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
@@ -42,7 +43,7 @@ export interface ShortcutIconAttrs {
   readonly isRunOnClick: boolean;
   readonly onSelect: () => void;
   readonly onRun: () => void;
-  readonly onContextMenu: (x: number, y: number) => void;
+  readonly onContextMenu: (x: number, y: number, target: Element) => void;
 }
 
 /** What a shortcut reads: its app's name, whatever its mode ("Terminal"); the launch path's label is the
@@ -178,7 +179,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
           },
           oncontextmenu: (event: MouseEvent) => {
             event.preventDefault();
-            onContextMenu(event.clientX, event.clientY);
+            onContextMenu(event.clientX, event.clientY, targetElementOf(event));
           },
         },
         // The box wraps the icon and the name, and starts at the cell's top: every icon then sits

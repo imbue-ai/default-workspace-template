@@ -1,0 +1,7 @@
+Fixed three tests that fail on a real workspace or developer machine while passing in CI, because they read live machine state instead of isolating it.
+
+The lead-address test no longer depends on which providers the host has enabled. It resolves a name that should be gone, but a name that resolves nowhere reports the first provider that could not be reached rather than "not found" -- and the docker provider is on by built-in default with no daemon to reach inside a workspace container. It creates a local agent, so both providers that answer over a network are turned off, matching the block the repo's other real-mngr tests already write.
+
+The agy shim's OOM-tag test is skipped where there is no tag to apply. It asserts the tag by reading `/proc/self/oom_score_adj`, and both the tag and the file are Linux kernel interfaces, so off Linux it failed for the absence of the mechanism rather than for the shim's behavior. It now asks whether that file is writable, which is the gate the OOM service's own test already uses for the same interface -- a platform name would still have run it on a Linux host where the file is absent or read-only.
+
+The strict-mode bash ratchet no longer checks gitignored scripts. It scanned every `.sh` file on disk, and in a live workspace that includes the shell scripts the terminal app generates under `data/` -- machine state, not template code, whose style is not this ratchet's business. It now asks git for the scripts it would consider (tracked, or untracked but not ignored), so a new script is still checked before it is staged.

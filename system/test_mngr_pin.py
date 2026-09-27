@@ -2,9 +2,11 @@
 
 mngr comes from wherever ``pyproject.toml``'s ``[tool.uv.sources]`` entry for
 ``imbue-mngr`` points, and the tracked tree points it at one commit of the public
-mngr repo. The tool environments (``build_workspace.sh``, the update-self refresh)
-and the workspace venv (``uv.lock``) all derive from that one entry, so nothing may
-drift from it, and no copy of mngr's source may be tracked in the tree.
+mngr repo, or -- on a branch iterating on a paired mngr change -- of the private
+mngr-internal repo. The tool environments (``build_workspace.sh``, the update-self
+refresh) and the workspace venv (``uv.lock``) all derive from that one entry, so
+nothing may drift from it, and no copy of mngr's source may be tracked in the tree.
+A private pin never ships: the release gates on the mngr side refuse it.
 
 mngr's packages arrive as built wheels, whose build configs exclude test
 infrastructure (``conftest.py``, ``testing.py``, ``*_test.py``), so a module this
@@ -28,11 +30,15 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PUBLIC_MNGR_REPO = "https://github.com/imbue-ai/mngr"
+_INTERNAL_MNGR_REPO = "https://github.com/imbue-ai/mngr-internal"
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 sys.path.insert(0, str(_REPO_ROOT / "system" / "scripts"))
 
 import list_mngr_plugins  # noqa: E402
+import set_mngr_pin  # noqa: E402
+
+_MNGR_REPOS = (_PUBLIC_MNGR_REPO, _INTERNAL_MNGR_REPO)
 
 _MANIFEST = """
 [[plugins]]
@@ -54,10 +60,10 @@ def _pin() -> dict[str, str]:
     return sources["imbue-mngr"]
 
 
-def test_mngr_is_pinned_to_a_commit_of_the_public_repo() -> None:
+def test_mngr_is_pinned_to_a_commit_of_a_mngr_repo() -> None:
     pin = _pin()
-    assert pin["git"] == _PUBLIC_MNGR_REPO, (
-        "mngr must come from the public repo, never mngr-internal"
+    assert pin["git"] in _MNGR_REPOS, (
+        "mngr must come from the public mirror or from mngr-internal, nowhere else"
     )
     assert _FULL_SHA.match(pin["rev"]), (
         f"pin a full 40-hex commit, not a branch or tag: {pin['rev']!r}"
@@ -66,19 +72,25 @@ def test_mngr_is_pinned_to_a_commit_of_the_public_repo() -> None:
 
 
 def test_every_locked_mngr_package_is_at_the_pinned_commit() -> None:
-    """One resolution, one commit: the tools and the venv resolve from the same lock."""
-    rev = _pin()["rev"]
+    """One resolution, one repo, one commit: the tools and the venv resolve from the same lock."""
+    pin = _pin()
+    rev = pin["rev"]
     lock = tomllib.loads((_REPO_ROOT / "uv.lock").read_text())
     from_mngr = {
         package["name"]: package["source"]["git"]
         for package in lock["package"]
-        if _PUBLIC_MNGR_REPO in str(package.get("source", {}).get("git", ""))
+        if any(
+            repo in str(package.get("source", {}).get("git", ""))
+            for repo in _MNGR_REPOS
+        )
     }
     assert "imbue-mngr" in from_mngr
     off_pin = {
-        name: src for name, src in from_mngr.items() if not src.endswith(f"#{rev}")
+        name: src
+        for name, src in from_mngr.items()
+        if not (src.startswith(pin["git"]) and src.endswith(f"#{rev}"))
     }
-    assert not off_pin, f"locked at a commit other than the pin: {off_pin}"
+    assert not off_pin, f"locked at a repo or commit other than the pin: {off_pin}"
     stale_paths = [
         p["name"]
         for p in lock["package"]
@@ -111,35 +123,50 @@ def test_no_copy_of_mngr_is_tracked() -> None:
     assert tracked == ""
 
 
-def test_a_git_pin_installs_every_package_from_that_commit() -> None:
+@pytest.mark.parametrize("repo", _MNGR_REPOS)
+def test_a_git_pin_installs_every_package_from_that_commit(repo: str) -> None:
     rev = "0123456789abcdef0123456789abcdef01234567"
     pyproject = (
         "[tool.uv.sources]\n"
-        f'imbue-mngr = {{ git = "{_PUBLIC_MNGR_REPO}", rev = "{rev}", subdirectory = "libs/mngr" }}\n'
+        f'imbue-mngr = {{ git = "{repo}", rev = "{rev}", subdirectory = "libs/mngr" }}\n'
     )
     source = list_mngr_plugins.read_mngr_source(pyproject)
 
     assert list_mngr_plugins.base_arguments(source) == [
-        f"imbue-mngr @ git+{_PUBLIC_MNGR_REPO}@{rev}#subdirectory=libs/mngr"
+        f"imbue-mngr @ git+{repo}@{rev}#subdirectory=libs/mngr"
     ]
     assert list_mngr_plugins.plugin_arguments_for_tool(_MANIFEST, source, "mngr") == [
         "--with",
-        f"imbue-mngr-claude @ git+{_PUBLIC_MNGR_REPO}@{rev}#subdirectory=libs/mngr_claude",
+        f"imbue-mngr-claude @ git+{repo}@{rev}#subdirectory=libs/mngr_claude",
         "--with",
-        f"imbue-mngr-wait @ git+{_PUBLIC_MNGR_REPO}@{rev}#subdirectory=libs/mngr_wait",
+        f"imbue-mngr-wait @ git+{repo}@{rev}#subdirectory=libs/mngr_wait",
     ]
     assert list_mngr_plugins.plugin_arguments_for_tool(
         _MANIFEST, source, "system-interface"
     ) == [
         "--with",
-        f"imbue-mngr-claude @ git+{_PUBLIC_MNGR_REPO}@{rev}#subdirectory=libs/mngr_claude",
+        f"imbue-mngr-claude @ git+{repo}@{rev}#subdirectory=libs/mngr_claude",
     ]
+
+
+def test_the_pin_kind_names_the_repo() -> None:
+    rev = "0123456789abcdef0123456789abcdef01234567"
+    public = list_mngr_plugins.read_mngr_source(
+        f'[tool.uv.sources]\nimbue-mngr = {{ git = "{_PUBLIC_MNGR_REPO}", rev = "{rev}" }}\n'
+    )
+    internal = list_mngr_plugins.read_mngr_source(
+        f'[tool.uv.sources]\nimbue-mngr = {{ git = "{_INTERNAL_MNGR_REPO}", rev = "{rev}" }}\n'
+    )
+    assert (public.is_internal, public.kind) == (False, "public")
+    assert (internal.is_internal, internal.kind) == (True, "internal")
 
 
 @pytest.mark.parametrize(
     "entry",
     [
         'imbue-mngr = { git = "https://github.com/imbue-ai/mngr", subdirectory = "libs/mngr" }',
+        'imbue-mngr = { git = "https://github.com/imbue-ai/mngr-internal", subdirectory = "libs/mngr" }',
+        'imbue-mngr = { git = "https://github.com/someone-else/mngr", rev = "0123456789abcdef0123456789abcdef01234567" }',
         'imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }',
         'imbue-mngr = { index = "pypi" }',
     ],
@@ -230,3 +257,170 @@ def test_every_imported_mngr_module_is_installed(module: str) -> None:
     assert importlib.util.find_spec(module) is not None, (
         f"{module} is not in the installed packages"
     )
+
+
+_OTHER_REV = "fedcba9876543210fedcba9876543210fedcba98"
+_MAINTAINED_FILES = (
+    "pyproject.toml",
+    set_mngr_pin.SETTINGS_PATH,
+    set_mngr_pin.DOCKERFILE_PATH,
+)
+
+
+def _copy_maintained_files(root: Path) -> None:
+    for path in _MAINTAINED_FILES:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text((_REPO_ROOT / path).read_text())
+
+
+def _texts(root: Path) -> dict[str, str]:
+    return {path: (root / path).read_text() for path in _MAINTAINED_FILES}
+
+
+def test_the_tracked_tree_agrees_with_its_pin() -> None:
+    """The pin's repo and the BuildKit lines set_mngr_pin.py maintains always move together."""
+    assert (
+        set_mngr_pin.check_tree(_REPO_ROOT)
+        == list_mngr_plugins.read_mngr_source(
+            (_REPO_ROOT / "pyproject.toml").read_text()
+        ).kind
+    )
+
+
+def test_a_pin_move_to_the_other_repo_and_back_restores_the_tree(
+    tmp_path: Path,
+) -> None:
+    _copy_maintained_files(tmp_path)
+    original = _texts(tmp_path)
+    original_kind = set_mngr_pin.check_tree(tmp_path)
+    original_rev = _pin()["rev"]
+    other_kind = "public" if original_kind == "internal" else "internal"
+
+    written = set_mngr_pin.set_pin(tmp_path, other_kind, _OTHER_REV)
+
+    assert sorted(written) == sorted(_MAINTAINED_FILES), (
+        "every maintained file changes with the repo"
+    )
+    assert set_mngr_pin.check_tree(tmp_path) == other_kind
+    moved = _texts(tmp_path)
+    assert all(moved[path] != original[path] for path in _MAINTAINED_FILES)
+    for lines in set_mngr_pin.BUILDKIT_LINES:
+        public, internal = lines.count(moved[lines.path])
+        assert (public, internal) == (
+            (0, internal) if other_kind == "internal" else (public, 0)
+        )
+        assert public + internal >= 1
+
+    assert set_mngr_pin.set_pin(tmp_path, original_kind, original_rev) == written
+    assert _texts(tmp_path) == original
+
+
+def test_a_pin_move_within_the_same_repo_touches_only_the_pyproject(
+    tmp_path: Path,
+) -> None:
+    _copy_maintained_files(tmp_path)
+    original = _texts(tmp_path)
+    kind = set_mngr_pin.check_tree(tmp_path)
+
+    assert set_mngr_pin.set_pin(tmp_path, kind, _OTHER_REV) == ["pyproject.toml"]
+
+    moved = _texts(tmp_path)
+    assert moved[set_mngr_pin.SETTINGS_PATH] == original[set_mngr_pin.SETTINGS_PATH]
+    assert moved[set_mngr_pin.DOCKERFILE_PATH] == original[set_mngr_pin.DOCKERFILE_PATH]
+    assert set_mngr_pin.check_tree(tmp_path) == kind
+    lock_sources = tomllib.loads(moved["pyproject.toml"])["tool"]["uv"]["sources"]
+    assert {
+        source["rev"]
+        for source in lock_sources.values()
+        if isinstance(source, dict) and source.get("git") in _MNGR_REPOS
+    } == {_OTHER_REV}
+
+
+def test_a_pin_move_to_an_unknown_kind_is_refused_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    _copy_maintained_files(tmp_path)
+    original = _texts(tmp_path)
+
+    with pytest.raises(list_mngr_plugins.MngrPinError, match="not 'mirror'"):
+        set_mngr_pin.set_pin(tmp_path, "mirror", _OTHER_REV)
+
+    assert _texts(tmp_path) == original
+
+
+def test_a_tree_whose_buildkit_lines_disagree_with_the_pin_fails_the_check_until_repinned(
+    tmp_path: Path,
+) -> None:
+    _copy_maintained_files(tmp_path)
+    kind = set_mngr_pin.check_tree(tmp_path)
+    other_kind = "public" if kind == "internal" else "internal"
+    pyproject = tmp_path / "pyproject.toml"
+    other_repo = _INTERNAL_MNGR_REPO if other_kind == "internal" else _PUBLIC_MNGR_REPO
+    pyproject.write_text(
+        set_mngr_pin.rewrite_pin_sources(pyproject.read_text(), other_repo, _OTHER_REV)
+    )
+
+    with pytest.raises(set_mngr_pin.MngrPinTreeError, match=f"shaped for a {kind} pin"):
+        set_mngr_pin.check_tree(tmp_path)
+
+    set_mngr_pin.set_pin(tmp_path, other_kind, _OTHER_REV)
+
+    assert set_mngr_pin.check_tree(tmp_path) == other_kind
+
+
+def test_a_file_mixing_both_shapes_is_reported_by_name() -> None:
+    settings = set_mngr_pin.BUILDKIT_LINES[0]
+    dockerfile_lines = set_mngr_pin.BUILDKIT_LINES[1:]
+    files = {
+        settings.path: f"a = [{settings.public}]\nb = [{settings.internal}]\n",
+        **{lines.path: f"{lines.public}\n" for lines in dockerfile_lines},
+    }
+
+    with pytest.raises(
+        set_mngr_pin.MngrPinTreeError,
+        match=f"{settings.path} mixes 1 public and 1 private",
+    ):
+        set_mngr_pin.buildkit_lines_kind(files)
+
+
+def test_a_file_with_none_of_the_maintained_lines_is_reported_by_name() -> None:
+    files = {lines.path: "" for lines in set_mngr_pin.BUILDKIT_LINES}
+
+    with pytest.raises(
+        set_mngr_pin.MngrPinTreeError, match=set_mngr_pin.DOCKERFILE_PATH
+    ):
+        set_mngr_pin.buildkit_lines_kind(files)
+
+
+def test_rewrite_pin_sources_moves_every_mngr_entry_and_nothing_else() -> None:
+    old = "0123456789abcdef0123456789abcdef01234567"
+    text = (
+        "[tool.uv.sources]\n"
+        f'imbue-mngr = {{ git = "{_PUBLIC_MNGR_REPO}", rev = "{old}", subdirectory = "libs/mngr" }}\n'
+        f'imbue-mngr-claude = {{ git = "{_PUBLIC_MNGR_REPO}", rev = "{old}", subdirectory = "libs/mngr_claude" }}\n'
+        'tk = { path = "system/vendor/tk", editable = true }\n'
+    )
+
+    assert set_mngr_pin.rewrite_pin_sources(text, _INTERNAL_MNGR_REPO, _OTHER_REV) == (
+        "[tool.uv.sources]\n"
+        f'imbue-mngr = {{ git = "{_INTERNAL_MNGR_REPO}", rev = "{_OTHER_REV}", subdirectory = "libs/mngr" }}\n'
+        f'imbue-mngr-claude = {{ git = "{_INTERNAL_MNGR_REPO}", rev = "{_OTHER_REV}", subdirectory = "libs/mngr_claude" }}\n'
+        'tk = { path = "system/vendor/tk", editable = true }\n'
+    )
+
+
+def test_the_cli_reports_a_private_pin_as_not_public(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _copy_maintained_files(tmp_path)
+    set_mngr_pin.set_pin(tmp_path, "internal", _OTHER_REV)
+
+    assert set_mngr_pin.main(["--check", "--repo-root", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == "internal"
+    assert set_mngr_pin.main(["--require-public", "--repo-root", str(tmp_path)]) == 1
+    assert "never merges to main" in capsys.readouterr().err
+
+    set_mngr_pin.set_pin(tmp_path, "public", _OTHER_REV)
+
+    assert set_mngr_pin.main(["--require-public", "--repo-root", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == "public"

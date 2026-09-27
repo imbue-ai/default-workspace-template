@@ -18,8 +18,10 @@ import type {
 } from "../model/api";
 import { StalePlacementsSaveError } from "../model/api";
 import {
+  NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
   chatPath,
+  draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
   launchPathOf,
@@ -154,6 +156,8 @@ export interface PageDriver {
   reloadApp(appName: string): void;
   /** Send the page ``shell:close-request`` (the minds close chord). */
   requestClose(windowId: string): void;
+  /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
+  ownsCloseChord(windowId: string): boolean;
 }
 
 export interface StoreDependencies {
@@ -928,6 +932,18 @@ export class DesktopStore {
     return (await this.launchAt(found.app.name, found.launchPath.id, params, { kind: "new" })) !== null;
   }
 
+  /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
+   *  window that takes a draft, else through the first draft row of the machine; with neither the user is told. */
+  async draftText(text: string): Promise<boolean> {
+    if (draftTargetOf(this.state) !== null) return this.draftIntoPinnedWindow(text);
+    const [draftRow] = draftRowsOf(openableApps(this.state));
+    if (draftRow === undefined) {
+      this.deps.notify(NO_DRAFT_APP_REASON);
+      return false;
+    }
+    return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
+  }
+
   /** A page's ``shell:start-with-text`` (launcher plan section 3.7): the primary text action runs with the text;
    *  with no free-text row on the machine the user is told. */
   async startWithText(text: string): Promise<boolean> {
@@ -1029,6 +1045,8 @@ export class DesktopStore {
       return;
     }
     this.pageDriver?.requestClose(focused);
+    // A page that owns the chord (a browser closing one of its tabs) keeps its window.
+    if (this.pageDriver?.ownsCloseChord(focused) === true) return;
     await this.closeWindow(focused);
   }
 
