@@ -3772,12 +3772,13 @@ class AgentManager:
         return session.switch_options()
 
     def register_queue_idle_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]]]) -> None:
-        """Register the agent watcher's working->IDLE queue backstop.
+        """Register the agent watcher's idle queue backstop.
 
-        Called once when the watcher is created. On a working->IDLE transition
-        ``_recompute_activity_state`` invokes it: the handler applies the harness
-        queue populator's idle backstop and returns the resulting snapshot, which the
-        same broadcast that carries the IDLE state also carries.
+        Called once when the watcher is created. ``_recompute_activity_state`` invokes it
+        on every recompute that finds the agent IDLE with something queued, not only on the
+        working->IDLE transition: the handler applies the harness queue populator's idle
+        backstop and returns the resulting snapshot, which the same broadcast that carries
+        the IDLE state also carries.
         """
         with self._lock:
             self._queue_idle_handler_by_agent[agent_id] = handler
