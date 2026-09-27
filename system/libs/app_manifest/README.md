@@ -208,8 +208,9 @@ A path selects:
   and `test_<stem>*.py`; a deleted script needs no pair);
 - its consumers: every workspace member that depends on its package, directly
   or transitively (`pyproject.toml` dependencies and dependency groups), and
-  the unpackaged scripts that import one of its modules (not for a test file,
-  which nothing that depends on the package runs);
+  the unpackaged scripts that import one of its modules, through the tests
+  paired with each and the suites the override file records for it (not for a
+  test file, which nothing that depends on the package runs);
 - for a `uv.lock` change, every member that depends on a package the lock
   upgraded (a package only added selects nothing beyond the member whose
   `pyproject.toml` added it);

@@ -906,11 +906,21 @@ def _referenced_directory_requests(
 def _importer_requests(
     context: _SelectionContext, path: str, path_class: ChangedPathClass, member: str
 ) -> list[_PytestRequest]:
-    """The tests of the unpackaged scripts that import one of ``member``'s modules."""
+    """The tests of the unpackaged scripts that import one of ``member``'s modules: those paired
+    with each script, and the suites the override file's consumer entries record for it."""
+    layout = context.layout
     requests: list[_PytestRequest] = []
     for importer in context.import_index.get(member, ()):
         reason = _reason(path, path_class, f"{importer} imports {member}")
-        requests.extend(_own_unit_requests(context.layout, importer, reason))
+        requests.extend(_own_unit_requests(layout, importer, reason))
+        requests.extend(
+            _present(
+                _suite_request(layout, suite, reason)
+                for consumer in layout.overrides.consumer
+                if _matches_any(consumer.paths, importer)
+                for suite in consumer.suites
+            )
+        )
     return requests
 
 

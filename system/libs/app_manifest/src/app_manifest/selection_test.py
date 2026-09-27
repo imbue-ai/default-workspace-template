@@ -77,6 +77,28 @@ def test_a_shared_library_change_runs_the_tests_of_scripts_importing_a_consumer(
     assert "uv run pytest system/scripts/mid_report_test.py" in _command_lines(selection)
 
 
+def test_a_shared_library_change_runs_the_suites_the_override_file_records_for_an_importer(
+    workspace: Path,
+) -> None:
+    write_repo_file(workspace, "system/scripts/guard_check.py", "from midlib.core import VALUE\n")
+    write_repo_file(
+        workspace, "system/scripts/guard_hook_test.py", "def test_hook() -> None:\n    pass\n"
+    )
+    overrides = workspace / "system/config/test_selection_overrides.toml"
+    write_repo_file(
+        workspace,
+        "system/config/test_selection_overrides.toml",
+        overrides.read_text()
+        + '\n[[consumer]]\npaths = ["system/scripts/guard_check.py"]\n'
+        + 'suites = ["system/scripts/guard_hook_test.py"]\nnote = "run by the hook\'s test"\n',
+    )
+    commit_everything(workspace, "a script whose tests the override file records")
+
+    selection = _select(workspace, ["system/libs/corelib/src/corelib/core.py"])
+
+    assert "uv run pytest system/scripts/guard_hook_test.py" in _command_lines(selection)
+
+
 def test_a_shared_library_test_change_runs_only_the_librarys_own_suite(workspace: Path) -> None:
     selection = _select(workspace, ["system/libs/corelib/src/corelib/core_test.py"])
 
