@@ -316,7 +316,10 @@ export function App(): m.Component<AppAttrs> {
       },
       // Inert for the whole press: the pixels before the threshold are spent beside the handle, often
       // over a neighbouring page, and a move the root cannot see is a move the threshold never counts.
-      onPressStart: () => {
+      onPressStart: (binding) => {
+        const pressedWindowId =
+          binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
+        pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
       },
       onPressEnd: () => {

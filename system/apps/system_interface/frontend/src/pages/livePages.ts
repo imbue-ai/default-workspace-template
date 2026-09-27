@@ -128,12 +128,27 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
+    // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
+    this.host.tabIndex = -1;
     this.store.setPageDriver(this);
   }
 
   /** Whether a window's page has been created in this client. */
   hasPage(windowId: string): boolean {
     return this.pages.has(windowId);
+  }
+
+  /** A press on a handle of ``windowId`` (null for a handle of no window: a shortcut, an entry) takes the
+   *  document's focus back from any other window's page that holds it, as the browser would have on a press
+   *  whose default the gesture source did not prevent. Left in that page, the focus would come back to it with
+   *  the chrome window's (a tear-out drag returning, a switch to another application and back), and the page
+   *  would report it and be raised over the window the user chose. The pressed window's own page keeps it. */
+  takeFocusFromOtherPages(windowId: string | null): void {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLIFrameElement)) return;
+    const page = this.pageOfFrame(active);
+    if (page === undefined || page.windowId === windowId) return;
+    this.host.focus({ preventScroll: true });
   }
 
   /** Make every page inert for the length of a press on a handle (the drag it may become begins

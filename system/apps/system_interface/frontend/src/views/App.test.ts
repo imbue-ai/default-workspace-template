@@ -221,6 +221,24 @@ describe("a window drag", () => {
     listener.onPressEnd(binding);
     expect(page.style.pointerEvents).toBe("auto");
   });
+  it("takes the document's focus back from a page on a press elsewhere, and leaves it on a press of its own window", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const content = document.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+    m.redraw.sync();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    frame.focus();
+    expect(document.activeElement).toBe(frame);
+    const listener = gestureListener as GestureListener;
+    listener.onPressStart(binding);
+    expect(document.activeElement).toBe(frame);
+    listener.onPressEnd(binding);
+    listener.onPressStart({ kind: "shortcut", app: "docs", launch: "open", element: content });
+    expect(document.activeElement).toBe(frame.parentElement?.parentElement);
+    listener.onPressEnd({ kind: "shortcut", app: "docs", launch: "open", element: content });
+  });
+
   // The chrome's release ends the gesture with no release the pointer source sees (its events stop at the chrome
   // window's edge), so the redraw must settle the hidden window itself: a return before the cursor is back over
   // the shell would otherwise show a window whose page stays marked as out.

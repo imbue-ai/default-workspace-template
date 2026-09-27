@@ -620,6 +620,29 @@ describe("the contract", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
   });
 
+  it("a press on a window's handle takes the document's focus back from another window's page, not its own", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    frameOf("win-2").focus();
+    expect(document.activeElement).toBe(frameOf("win-2"));
+    layer.takeFocusFromOtherPages("win-2");
+    expect(document.activeElement).toBe(frameOf("win-2"));
+    layer.takeFocusFromOtherPages("win-1");
+    expect(document.activeElement).toBe(host);
+    // A handle of no window (a shortcut, an entry) takes it from any page.
+    frameOf("win-2").focus();
+    layer.takeFocusFromOtherPages(null);
+    expect(document.activeElement).toBe(host);
+    // An iframe that is no page of the shell's is left alone.
+    const other = document.createElement("iframe");
+    other.tabIndex = 0;
+    document.body.appendChild(other);
+    other.focus();
+    layer.takeFocusFromOtherPages("win-1");
+    expect(document.activeElement).toBe(other);
+    other.remove();
+  });
+
   it("opens a page's shell:open on its own app, and warns about the address form", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     messageFromPage("win-1", { type: SHELL_OPEN, path: "/?doc=3", ifPresent: "new" });

@@ -102,7 +102,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           // The pages' host: a sibling of the windows with no stacking context of its own, so a page
           // at 2i+1 and its chrome at 2i+2 interleave in the backdrop's context.
           m("div", {
-            class: "live-pages pointer-events-none absolute inset-0 [&>*]:pointer-events-auto",
+            class: "live-pages pointer-events-none absolute inset-0 outline-none [&>*]:pointer-events-auto",
             oncreate: (created: m.VnodeDOM) => attrs.onPagesHostCreated(created.dom as HTMLElement),
             onbeforeupdate: () => false,
           }),

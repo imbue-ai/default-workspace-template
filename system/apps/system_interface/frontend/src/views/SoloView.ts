@@ -29,7 +29,7 @@ export const SoloView: m.Component<SoloViewAttrs> = {
       },
       [
         m("div", {
-          class: "live-pages pointer-events-none absolute inset-0 [&>*]:pointer-events-auto",
+          class: "live-pages pointer-events-none absolute inset-0 outline-none [&>*]:pointer-events-auto",
           oncreate: (created: m.VnodeDOM) => vnode.attrs.onPagesHostCreated(created.dom as HTMLElement),
           onbeforeupdate: () => false,
         }),
