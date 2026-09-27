@@ -112,6 +112,11 @@ const MENU_MIN_WIDTH = 176;
  *  paints without redrawing, and mithril leaves an attribute no vnode carries alone. */
 const WINDOW_DRAGGING_ATTRIBUTE = "data-window-dragging";
 
+/** Set on the desktop's root for the length of a press, which is longer than the drag it may
+ *  become, so a window the pointer carries is held by it rather than trailing it (style.css). The
+ *  snap a release commits is written after the press has ended, and travels the last step. */
+const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
+
 interface SettingsDialogState {
   readonly desktopId: string;
   readonly isDeleting: boolean;
@@ -152,6 +157,10 @@ export function App(): m.Component<AppAttrs> {
   let draggedWindowId: string | null = null;
   let backdropArea: HTMLElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  /** How many of a travelling window's properties are still in transition, by window id. A count
+   *  rather than a flag: a move runs one transition per property it changes, each ending on its own. */
+  const travellingWindows = new Map<string, number>();
+  let travelFrame: number | null = null;
   let detachGestures: (() => void) | null = null;
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
@@ -240,6 +249,12 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
+  /** The chrome of one window as the backdrop holds it now, else null (its window is closed, or its desktop
+   *  is no longer the one on screen). */
+  function windowElement(windowId: string): HTMLElement | null {
+    return backdropArea?.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`) ?? null;
+  }
+
   /** Paint a window as the store now has it, straight onto the DOM: its rectangle onto its element, its
    *  page over the content box that just moved, and the snap preview shown or hidden. Per pointer move
    *  of a drag or resize, with no redraw (one per move would re-render the whole desktop and reposition
@@ -249,7 +264,7 @@ export function App(): m.Component<AppAttrs> {
   function paintWindow(current: DesktopStore, windowId: string): void {
     const area = backdropArea;
     if (area === null) return;
-    const element = area.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
+    const element = windowElement(windowId);
     if (element !== null) applyRectStyle(element, current.windowRect(windowId));
     // A window pulled past the viewport is drawn by the chrome under the cursor: hidden here, chrome and page,
     // until the drag comes back inside or ends.
@@ -280,6 +295,53 @@ export function App(): m.Component<AppAttrs> {
     pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
     pages.start();
     pages.reconcile();
+  }
+
+  /** The window a transition belongs to, else null: the chrome's root is the only element whose
+   *  travel moves the window, so a transition on something laid out inside it (a control taking
+   *  its hover colour) must not drive the page. */
+  function travellingWindowId(event: Event): string | null {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return null;
+    return target.getAttribute(WINDOW_ID_ATTRIBUTE);
+  }
+
+  /** Lay each travelling window's page over the content box as it stands this frame.
+   *
+   *  A page is positioned by measuring the chrome it sits in rather than by being handed a
+   *  rectangle, so it cannot carry the same transition: it would have nothing to transition
+   *  towards, and would sit at the old rectangle until something measured the chrome again.
+   *  Re-measuring per frame is the placement a drag already does, driven by the transition
+   *  instead of by the pointer. */
+  function followTravellingWindows(): void {
+    for (const windowId of [...travellingWindows.keys()]) {
+      // A window that leaves the desktop mid-travel (closed, or its desktop swapped for another) has its
+      // transitions cancelled on a chrome already out of the document, where the event never reaches the
+      // backdrop that listens for it: the frame that cannot find the chrome is what ends its travel.
+      if (windowElement(windowId) === null) travellingWindows.delete(windowId);
+      else pages?.placePage(windowId);
+    }
+    travelFrame = travellingWindows.size > 0 ? requestAnimationFrame(followTravellingWindows) : null;
+  }
+
+  function onWindowTravelStart(event: Event): void {
+    const windowId = travellingWindowId(event);
+    if (windowId === null) return;
+    travellingWindows.set(windowId, (travellingWindows.get(windowId) ?? 0) + 1);
+    if (travelFrame === null) travelFrame = requestAnimationFrame(followTravellingWindows);
+  }
+
+  function onWindowTravelEnd(event: Event): void {
+    const windowId = travellingWindowId(event);
+    if (windowId === null) return;
+    const stillRunning = (travellingWindows.get(windowId) ?? 1) - 1;
+    if (stillRunning > 0) {
+      travellingWindows.set(windowId, stillRunning);
+      return;
+    }
+    travellingWindows.delete(windowId);
+    // Where the chrome landed, not the last value a frame happened to catch on the way.
+    pages?.placePage(windowId);
   }
 
   /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and
@@ -321,9 +383,11 @@ export function App(): m.Component<AppAttrs> {
           binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
         pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
+        root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");
       },
       onPressEnd: () => {
         pages?.setGestureActive(false);
+        root.removeAttribute(WINDOW_MOTION_ATTRIBUTE);
       },
       onBegin: (binding, rootPoint, rootPress) => {
         const point = toBackdrop(rootPoint);
@@ -846,6 +910,7 @@ export function App(): m.Component<AppAttrs> {
       uninstallContextMenu?.();
       detachGestures?.();
       resizeObserver?.disconnect();
+      if (travelFrame !== null) cancelAnimationFrame(travelFrame);
     },
     view(vnode) {
       const current = vnode.attrs.store;
@@ -904,6 +969,11 @@ export function App(): m.Component<AppAttrs> {
               oncreate: (created: m.VnodeDOM) => {
                 backdropArea = created.dom as HTMLElement;
                 observeBackdropSize(current, backdropArea);
+                // The window roots are rendered and re-rendered under here, so the travel is bound
+                // once to the backdrop the events bubble to rather than per window.
+                backdropArea.addEventListener("transitionrun", onWindowTravelStart);
+                backdropArea.addEventListener("transitionend", onWindowTravelEnd);
+                backdropArea.addEventListener("transitioncancel", onWindowTravelEnd);
               },
             },
             [

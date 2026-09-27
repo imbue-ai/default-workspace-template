@@ -160,6 +160,33 @@ def test_open_of_a_launch_path_or_a_url_posts_the_launch_and_its_params(
     assert capsys.readouterr().out == f"{_CHAT_WINDOW['id']}\n" * 4
 
 
+def test_open_beside_posts_the_window_it_pairs_with_and_says_so(
+    registry: Path, fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_shell.op_answer = desktop_answer(windows=[_FILES_WINDOW], window_id=_FILES_WINDOW["id"])
+    assert layout.main(["open", "files", "--beside"]) == layout.EXIT_OK
+    assert layout.main(["open", "files", "--beside", _CHAT_WINDOW["id"]]) == layout.EXIT_OK
+    assert layout.main(["open", "files", "--beside", "terminal"]) == layout.EXIT_OK
+    assert _posted_ops(fake_shell) == [
+        ("open", {"app": "files", "beside": "self"}),
+        ("open", {"app": "files", "beside": _CHAT_WINDOW["id"]}),
+        ("open", {"app": "files", "beside": "terminal"}),
+    ]
+    assert f"opened window {_FILES_WINDOW['id']} (files at /notes/) beside self on" in capsys.readouterr().err
+
+
+def test_open_beside_refuses_a_non_window_and_refuses_minimized(
+    registry: Path, fake_shell: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        layout.main(["open", "files", "--beside", "not a window"])
+    assert "is not a window" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        layout.main(["open", "files", "--beside", "--minimized"])
+    assert "one or the other" in capsys.readouterr().err
+    assert fake_shell.posted == []
+
+
 def test_open_with_no_client_says_the_window_landed_for_nobody(
     registry: Path, fake_shell: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
