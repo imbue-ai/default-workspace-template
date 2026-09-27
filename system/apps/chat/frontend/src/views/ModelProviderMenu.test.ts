@@ -309,6 +309,16 @@ describe("the combo card", () => {
     expect(text).not.toContain("Model");
   });
 
+  it("says a chat whose account is gone has no account, not that nobody is signed in", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
+    render();
+    click(".model-selector-trigger");
+    const providerRow = document.querySelector('[data-menu-row="providers"]')?.textContent ?? "";
+    expect(providerRow).toContain("No account");
+    expect(providerRow).toContain("Pick one to move this chat to it");
+    expect(screenText()).not.toContain("Not signed in");
+  });
+
   it("renders a read-only harness without an effort control", () => {
     // agy: its `/model` is an interactive TUI with no scriptable form, so a picker there
     // offers a switch that cannot work.
