@@ -1360,13 +1360,7 @@ def test_an_emit_cycle_drops_a_message_left_queued_past_the_idle_grace(tmp_path:
     the delivery grace runs out, by an emit cycle that has no new ledger line to read."""
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     pushed: list[list[str]] = []
-    watcher = ClaudeSessionWatcher(
-        agent_id="test-agent",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-        work_dir=None,
-        on_events=lambda _aid, _evts: None,
-    )
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
     watcher.set_queue_snapshot_callback(lambda snapshot: pushed.append([entry["content"] for entry in snapshot]))
     with open(session_file, "ab") as f:
         f.write((json.dumps(_queue_enqueue_record("stranded", "test-session")) + "\n").encode("utf-8"))
