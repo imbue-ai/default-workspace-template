@@ -8,7 +8,7 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
-import { accountForAgent, openProviderChooser } from "../models/Providers";
+import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -429,7 +429,6 @@ const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent
 function renderReauthAction(chatId: string): m.Children {
   const chat = getChatById(chatId);
   const accountId = chat?.active_agent.account_id ?? "";
-  const ownAccount = accountForAgent(accountId);
   return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
     "This provider is no longer working. ",
     m(
@@ -437,14 +436,19 @@ function renderReauthAction(chatId: string): m.Children {
       {
         type: "button",
         class: REAUTH_ACTION_CLASS,
-        onclick: () =>
+        onclick: () => {
+          // Before the account list has loaded no account reads as signed in, which says nothing
+          // about whether this chat's is gone.
+          const isOwnAccountSignedIn =
+            accountId !== "" && (!areAccountsLoaded() || accountForAgent(accountId) !== null);
           openProviderChooser(
-            ownAccount !== null
-              ? { accountId: ownAccount.id }
+            isOwnAccountSignedIn
+              ? { accountId }
               : chat === undefined
                 ? {}
                 : { onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) },
-          ),
+          );
+        },
       },
       "Sign in again",
     ),
