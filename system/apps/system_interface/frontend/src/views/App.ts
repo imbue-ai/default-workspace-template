@@ -56,6 +56,7 @@ import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
+import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
@@ -152,6 +153,8 @@ export function App(): m.Component<AppAttrs> {
   let launcherFieldRise = 0;
   let selectedShortcutKey: string | null = null;
   let pages: LivePagesLayer | null = null;
+  // The window the last redraw painted as dragged, for one more paint once the gesture is gone.
+  let draggedWindowId: string | null = null;
   let backdropArea: HTMLElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   /** How many of a travelling window's properties are still in transition, by window id. A count
@@ -213,6 +216,15 @@ export function App(): m.Component<AppAttrs> {
 
   const onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
+    // A window drag in progress is cancelled first of all: the window returns to where the drag began, and a
+    // tear-out drops the desktop window the chrome was dragging.
+    const gesture = store?.getGesture() ?? null;
+    if (store !== null && gesture !== null && gesture.kind === "move") {
+      store.cancelGesture();
+      paintWindow(store, gesture.windowId);
+      m.redraw();
+      return;
+    }
     // One layer per Escape: a dialog (the settings dialog, the avatar chooser) takes it through the
     // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
     if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
@@ -254,9 +266,35 @@ export function App(): m.Component<AppAttrs> {
     if (area === null) return;
     const element = windowElement(windowId);
     if (element !== null) applyRectStyle(element, current.windowRect(windowId));
+    // A window pulled past the viewport is drawn by the chrome under the cursor: hidden here, chrome and page,
+    // until the drag comes back inside or ends.
+    const isTornOut = current.isTearingOut(windowId);
+    if (element !== null) element.style.visibility = isTornOut ? "hidden" : "";
+    pages?.setTornOutWindow(isTornOut ? windowId : null);
     pages?.placePage(windowId);
     const preview = area.querySelector<HTMLElement>(`[${SNAP_PREVIEW_ATTRIBUTE}]`);
     if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
+  }
+
+  /** Feed ``element``'s size to the store as the backdrop's, now and whenever it changes: the backdrop area of a
+   *  desktop, or the pages host of a solo shell, whose one page is laid over it on every redraw. */
+  function observeBackdropSize(current: DesktopStore, element: HTMLElement): void {
+    const measure = (): void => {
+      const box = element.getBoundingClientRect();
+      current.setBackdropSize({ width: box.width, height: box.height });
+    };
+    resizeObserver?.disconnect();
+    resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(element);
+    measure();
+  }
+
+  /** Build the live-pages layer over ``host`` once the render that made the host is over (the window chrome is
+   *  in the DOM), and place the pages now: when every load had already landed no further redraw follows. */
+  function startPagesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
+    pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
+    pages.start();
+    pages.reconcile();
   }
 
   /** The window a transition belongs to, else null: the chrome's root is the only element whose
@@ -340,7 +378,10 @@ export function App(): m.Component<AppAttrs> {
       },
       // Inert for the whole press: the pixels before the threshold are spent beside the handle, often
       // over a neighbouring page, and a move the root cannot see is a move the threshold never counts.
-      onPressStart: () => {
+      onPressStart: (binding) => {
+        const pressedWindowId =
+          binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
+        pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
         root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");
       },
@@ -503,6 +544,7 @@ export function App(): m.Component<AppAttrs> {
         app !== undefined && current.canStopApp(app)
           ? (action) => void current.setAppLifecycle(app.name, action)
           : null,
+      popOut: current.getCanPopOut() && !state.modes.isCompact ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });
   }
@@ -517,6 +559,10 @@ export function App(): m.Component<AppAttrs> {
       {
         isMinimized: placement.is_minimized,
         isMaximized: placement.state === "MAXIMIZED",
+        isDetached: placement.is_detached,
+        show: () => current.showDetachedWindow(windowId),
+        showGhost: () => current.showWindowGhost(windowId),
+        bringBack: () => void current.reattachWindow(windowId, null),
         restore: () => current.restoreWindow(windowId),
         minimize: () => current.minimizeWindow(windowId),
         maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
@@ -845,6 +891,15 @@ export function App(): m.Component<AppAttrs> {
       });
     },
     onupdate() {
+      // The chrome's word on a tear-out arrives between pointer moves (its window has the cursor by then), so
+      // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
+      // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
+      // painted once more when the gesture is gone: shown again, its page's torn-out mark lifted.
+      const gesture = store?.getGesture() ?? null;
+      const movingWindowId = gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
+      const windowToPaint = movingWindowId ?? draggedWindowId;
+      if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
+      draggedWindowId = movingWindowId;
       pages?.reconcile();
     },
     onremove() {
@@ -861,6 +916,23 @@ export function App(): m.Component<AppAttrs> {
       const current = vnode.attrs.store;
       store = current;
       const state = current.getState();
+      const soloWindowId = current.getSoloWindowId();
+      if (soloWindowId !== null) {
+        // A pulled-out window's own desktop window: that one window edge to edge, and the banners above it.
+        return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
+          m(UpdateStalenessBanner),
+          m(UpdateNoticeBanner, { store: current }),
+          m(SoloView, {
+            store: current,
+            windowId: soloWindowId,
+            onPagesHostCreated: (host) => {
+              startPagesLayer(current, host, vnode.attrs);
+              // The host is the whole viewport here: the page is laid over it edge to edge, and follows its size.
+              observeBackdropSize(current, host);
+            },
+          }),
+        ]);
+      }
       const desktop: Desktop | null = activeDesktop(state);
       const placements = activePlacements(state);
       const focused = activeFocusedWindowId(state);
@@ -896,13 +968,7 @@ export function App(): m.Component<AppAttrs> {
               class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
               oncreate: (created: m.VnodeDOM) => {
                 backdropArea = created.dom as HTMLElement;
-                const measure = (): void => {
-                  const box = backdropArea?.getBoundingClientRect();
-                  if (box !== undefined) current.setBackdropSize({ width: box.width, height: box.height });
-                };
-                resizeObserver = new ResizeObserver(measure);
-                resizeObserver.observe(backdropArea);
-                measure();
+                observeBackdropSize(current, backdropArea);
                 // The window roots are rendered and re-rendered under here, so the travel is bound
                 // once to the backdrop the events bubble to rather than per window.
                 backdropArea.addEventListener("transitionrun", onWindowTravelStart);
@@ -945,16 +1011,10 @@ export function App(): m.Component<AppAttrs> {
                       );
                     },
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
-                    onPagesHostCreated: (host) => {
-                      pages = new LivePagesLayer(host, current, {
-                        host: vnode.attrs.host,
-                        protocol: vnode.attrs.protocol,
-                      });
-                      pages.start();
-                      // The render that made the host is over (the window chrome is in the DOM), and when every
-                      // load had already landed no further redraw follows it: the pages are placed now.
-                      pages.reconcile();
-                    },
+                    onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
+                    onHideWindowGhost: (windowId) => current.minimizeWindow(windowId),
+                    onBringBackWindow: (windowId) => void current.reattachWindow(windowId, null),
+                    onPagesHostCreated: (host) => startPagesLayer(current, host, vnode.attrs),
                   }),
               isLauncherOpen
                 ? m(LauncherMenu, {
