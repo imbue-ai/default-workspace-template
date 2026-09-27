@@ -171,7 +171,10 @@ describe("the verbs", () => {
     const hidden = withWindowMinimized(detached, "win-2");
     expect(hidden.placements[1]).toMatchObject({ is_detached: true, is_minimized: true });
     expect(focusedWindowId(hidden.placements)).toBe("win-3");
-    expect(withWindowDetached(hidden, "win-2").placements[1]).toMatchObject({ is_detached: true, is_minimized: false });
+    expect(withWindowDetached(hidden, "win-2").placements[1]).toMatchObject({
+      is_detached: true,
+      is_minimized: false,
+    });
     expect(withWindowReattached(hidden, "win-2", null).placements[2]).toMatchObject({
       is_detached: false,
       is_minimized: false,

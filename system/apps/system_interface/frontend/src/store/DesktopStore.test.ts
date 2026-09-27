@@ -1481,10 +1481,7 @@ describe("pulled-out windows", () => {
     // The chrome window's focus comes back with the drag, and the other window's page reports it took focus:
     // the drag still owns the top of the stack, and nothing is written for the report.
     store.raiseWindow("win-2");
-    expect(activePlacements(store.getState()).map((placement) => placement.window_id)).toEqual([
-      "win-2",
-      "win-1",
-    ]);
+    expect(activePlacements(store.getState()).map((placement) => placement.window_id)).toEqual(["win-2", "win-1"]);
     await vi.advanceTimersByTimeAsync(300);
     await settle();
     expect(savedCalls()).toHaveLength(2);
