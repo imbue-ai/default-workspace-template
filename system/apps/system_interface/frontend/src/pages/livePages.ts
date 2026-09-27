@@ -221,7 +221,7 @@ export class LivePagesLayer implements PageDriver {
    *  interactivity alone: the per-move step of a drag or resize, which redraws nothing. */
   placePage(windowId: string): void {
     const page = this.pages.get(windowId);
-    if (page === undefined || page.wrapper.style.display === "none") return;
+    if (page === undefined || !this.isShown(page)) return;
     const box = this.contentBox(windowId);
     if (box !== null) this.position(page, box);
   }
@@ -433,7 +433,7 @@ export class LivePagesLayer implements PageDriver {
       page.isCloseChordCapable = false;
       page.lastSentVisibility = null;
       this.greet(page);
-      this.syncVisibility(page, page.wrapper.style.display !== "none");
+      this.syncVisibility(page, this.isShown(page));
     });
     this.pages.set(window.id, page);
     this.host.appendChild(wrapper);
