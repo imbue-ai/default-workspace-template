@@ -539,6 +539,11 @@ def _box(locator: Locator) -> FloatRect:
     return box
 
 
+def _travel_duration(window: Locator) -> str:
+    """How long the window's chrome would take to travel to a new rectangle, as its computed style has it."""
+    return window.evaluate("(element) => getComputedStyle(element).transitionDuration.split(',')[0].trim()")
+
+
 def _center(box: FloatRect) -> tuple[float, float]:
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
@@ -620,6 +625,8 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
     """A second browser context: its own storage, so its own client id."""
     browser = page.context.browser
     assert browser is not None
+    # Nothing of ``browser_context_args`` reaches here, so the suite's reduced motion is asked for again.
+    context_args.setdefault("reduced_motion", "reduce")
     return browser.new_context(**context_args)
 
 
@@ -1074,6 +1081,22 @@ def test_move_and_resize_persist_across_reload(e2e_server: E2EServer, page: Page
     # The page is back too, laid over the restored window, whatever order the loads landed in.
     expect(page.locator(f'iframe[data-live-page="{window_id}"]')).to_be_visible(timeout=15000)
     assert _page_frame(page, window_id).url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_window_travels_only_where_the_platform_welcomes_motion(e2e_server: E2EServer, page: Page) -> None:
+    """The travel is asked for, not taken away: a context saying motion is welcome transitions a window's
+    rectangle, and one asking for less motion -- which every context of this suite does, so a box can be read
+    the moment a state lands -- puts the window at its new rectangle outright."""
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    assert _travel_duration(_window(page, window_id)) == "0s"
+
+    with _second_client(page, e2e_server, reduced_motion="no-preference") as other_page:
+        # The window is shared but its placement is not, so it reaches a fresh client minimized.
+        _taskbar_entry(other_page, window_id).click()
+        expect(_window(other_page, window_id)).to_be_visible(timeout=15000)
+        assert _travel_duration(_window(other_page, window_id)) != "0s"
 
 
 @pytest.mark.timeout(90, func_only=False)
