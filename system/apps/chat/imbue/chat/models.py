@@ -270,8 +270,8 @@ class QueuedMessageState(FrozenModel):
             "True while this chip is a message the backend is actively delivering (a codex "
             "shoulder-tap's interrupt+resend, Fix 3; or a Claude message still queued when the reply "
             "landed, which Claude picks up after its end-of-turn hooks): it stays continuously "
-            "visible but is rendered as an ordinary sent message rather than as a plain queued chip, so it never blinks "
-            "out (contract A1a). "
+            "visible but is rendered as an ordinary sent message rather than as a plain queued "
+            "chip, so it never blinks out (contract A1a). "
             "False for an ordinary parked queue chip."
         ),
     )
