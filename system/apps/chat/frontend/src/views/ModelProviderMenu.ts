@@ -844,8 +844,6 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           kind: "submenu",
           key: "providers",
           label: "Provider",
-          // A chat whose label names no signed-in account runs on a credential no listed account
-          // holds; "not signed in" would contradict the accounts listed right under it.
           value: account?.provider ?? "No account",
           sub: account?.harness_label ?? "Pick one to move this chat to it",
           content: () => providerSubmenu(chatId, account),

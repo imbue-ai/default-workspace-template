@@ -422,7 +422,7 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
  * ON that account and re-authenticates it in place -- every chat bound to it recovers. When the
  * label names no signed-in account (a chat from before accounts, or one whose account was signed
  * out and signed in again as a new one), there is nothing to re-authenticate: the account signed
- * in, or picked, is what this chat moves to, or signing in would leave it as unbound as before.
+ * in, or picked, is what this chat moves to.
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 

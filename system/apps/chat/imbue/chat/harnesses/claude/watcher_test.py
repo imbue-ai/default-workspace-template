@@ -1144,9 +1144,6 @@ def test_subagent_discovered_after_history_file_disappears(tmp_path: Path) -> No
     assert upgraded["subagent_metadata"]["session_id"] == "agent-rotsubid"
 
 
-# --- Queue replay scoped to the latest main session ---
-
-
 def _queue_enqueue_record(
     content: str, session_id: str, timestamp: str = "2026-01-01T00:00:05.000Z"
 ) -> dict[str, Any]:
@@ -1427,9 +1424,6 @@ def test_truncation_reset_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
     assert _queued_contents(watcher) == []
 
 
-# --- Main-session discovery: no read-path stalls, history-ordered registration ---
-
-
 def test_discovery_miss_does_not_stall_the_read_path(tmp_path: Path) -> None:
     """A session listed in history whose file is not on disk yet (an agent's
     startup window) must not make the synchronous read-path discovery wait for
@@ -1581,9 +1575,6 @@ def test_a_session_filed_under_the_work_dir_is_found_as_soon_as_it_lands_while_i
     (project_dir / f"{session_id}.jsonl").write_text(json.dumps(_user_event(7)) + "\n")
 
     assert [event["event_id"] for event in watcher.get_all_events()] == ["uuid-7-user"]
-
-
-# --- Bounded tail/backfill/offset paging over the resident store ---
 
 
 def _ts(index: int) -> str:
@@ -1826,9 +1817,6 @@ def test_get_latest_main_session_file_none_without_history(tmp_path: Path) -> No
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
     assert watcher.get_latest_main_session_file() is None
-
-
-# --- On-demand payload detail ---
 
 
 def _make_bash_result_line(uuid: str, timestamp: str, call_id: str, output: str) -> str:

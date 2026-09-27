@@ -100,9 +100,6 @@ def _contents(tracker: ClaudeQueueTracker) -> list[str]:
     return [entry["content"] for entry in tracker.snapshot()]
 
 
-# --- Scenario tests -----------------------------------------------------------
-
-
 def test_enqueue_then_dequeue_nets_to_empty() -> None:
     tracker = ClaudeQueueTracker.build()
     _feed(tracker, _enqueue_line("hello"))
@@ -267,9 +264,6 @@ def test_snapshot_ids_are_stable_across_replays() -> None:
     assert first.snapshot()[0]["queued_id"] != ""
 
 
-# --- Regression: the real stranded-message bug --------------------------------
-
-
 def test_stranded_message_repro_nets_to_empty() -> None:
     """The exact 12-record ledger of the live bug must leave the snapshot empty.
 
@@ -282,9 +276,6 @@ def test_stranded_message_repro_nets_to_empty() -> None:
     tracker = ClaudeQueueTracker.build()
     _feed(tracker, *lines)
     assert tracker.snapshot() == []
-
-
-# --- Real recorded-session fixture tests --------------------------------------
 
 
 def _fixture_lines(path: Path) -> list[str]:
