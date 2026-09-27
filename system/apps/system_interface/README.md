@@ -49,10 +49,15 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
-- `/_static/app_contract.js`: the browser-side contract module (source in
-  `system/libs/workspace_ui/src/app_contract.ts`), built into this app's static
-  output; every app serves that same file from its own origin, since a
-  cross-origin module import carries no cookie and the forwarder refuses it.
+- `/_static/app_contract.js` and `/_static/context_menu.js`: the browser-side
+  contract module and the element context menu module (sources in
+  `system/libs/workspace_ui/src/app_contract.ts` and `context_menu.ts`), built
+  into this app's static output; every app serves those same files from its
+  own origin, since a cross-origin module import carries no cookie and the
+  forwarder refuses it. The desktop's own chrome draws the element menu too: a
+  right-click the views leave alone opens it, and the entry, shortcut, and
+  desktop menus end with its reference rows
+  (`docs/system/blueprint/element-reference-menu/`).
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
@@ -167,8 +172,10 @@ for critical apps; the desktop offers them on the window menu
 (`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
-stored on its window and reopens there, and one that declared `navigation`
-is sent `shell:navigate` when an agent points its window elsewhere.
+stored on its window and reopens there, one that declared `navigation`
+is sent `shell:navigate` when an agent points its window elsewhere, and one
+that declared `closeChord` keeps its window on the close chord (it is only sent
+`shell:close-request`; the browser closes one of its own tabs that way).
 
 ### Who is here
 
@@ -269,7 +276,11 @@ highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
-intents and templates use it). The shell names no app in any of this. A
+intents and templates use it), and drafts a text into the chat on screen
+through `shell:draft-text`, which the shell answers by running the pinned
+app's launch path with a `draft_param` into the pinned window, as the avatar
+dialog's "Design your own..." does (the element context menu's "Explain..."
+uses it). The shell names no app in any of this. A
 fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
 
@@ -314,7 +325,7 @@ and windows (desktop-interface contracts.md section 8):
 ```bash
 python3 system/scripts/layout.py desktops
 python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open files --path /notes/ --desktop Research
+python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/ --desktop Research
 python3 system/scripts/layout.py open terminal
 python3 system/scripts/layout.py place self --zone left
 python3 system/scripts/layout.py navigate win-0123456789abcdef /other/

@@ -885,3 +885,28 @@ def test_load_manifest_off_the_apps_layout_skips_the_location_rules_until_a_root
 
     with pytest.raises(ManifestLoadError, match="does not exist"):
         load_manifest(manifest_path, repo_root=tmp_path)
+
+
+def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_variable_list() -> None:
+    data = {
+        **_full_manifest_data(),
+        "secrets": [
+            {"file": "widget", "variables": ["WIDGET_TOKEN", "WIDGET_ORG"], "note": "a Widget API token"},
+            {"file": "mailer", "variables": ["SMTP_PASSWORD"]},
+        ],
+    }
+    manifest = AppManifest.model_validate(data)
+    assert [(str(secret.file), tuple(secret.variables)) for secret in manifest.secrets] == [
+        ("widget", ("WIDGET_TOKEN", "WIDGET_ORG")),
+        ("mailer", ("SMTP_PASSWORD",)),
+    ]
+    assert manifest.secrets[1].note is None
+    for bad in (
+        [{"file": "widget", "variables": ["A"]}, {"file": "widget", "variables": ["B"]}],
+        [{"file": "widget", "variables": []}],
+        [{"file": "widget", "variables": ["A", "A"]}],
+        [{"file": "Widget", "variables": ["A"]}],
+        [{"file": "widget", "variables": ["1A"]}],
+    ):
+        with pytest.raises(ValidationError):
+            AppManifest.model_validate({**_full_manifest_data(), "secrets": bad})

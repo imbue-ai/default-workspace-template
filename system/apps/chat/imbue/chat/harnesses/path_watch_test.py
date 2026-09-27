@@ -6,6 +6,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+import pytest
 from watchdog.utils import BaseThread
 
 from imbue.chat.harnesses.path_watch import PathWatcher
@@ -95,6 +96,12 @@ def test_path_watcher_stop_releases_an_observer_the_loop_thread_creates_late(tmp
     assert not leaked, f"stop() left watchdog threads running: {sorted(type(t).__name__ for t in leaked)}"
 
 
+# Failed once in a loaded parallel run of the whole chat suite, cause unconfirmed, so
+# this stays marked flaky. The timeout covers the budget the code under test declares:
+# stop() joins the watchdog observer and then the watcher thread for up to 5s each, and
+# the test calls stop() twice, so the body can outlast the suite's 10s cap.
+@pytest.mark.flaky
+@pytest.mark.timeout(30)
 def test_path_watcher_stop_is_idempotent(tmp_path: Path) -> None:
     watcher = PathWatcher.build((tmp_path,), lambda: None, min_cycle_interval_seconds=0.0)
     watcher.start()

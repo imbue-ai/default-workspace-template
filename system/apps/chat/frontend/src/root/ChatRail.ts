@@ -14,6 +14,8 @@ import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
+import { describeElement, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { isUnread } from "./chatUnread";
 import { destroyChat, renameChat, startChat, stopChat } from "./verbs";
@@ -30,6 +32,12 @@ export interface ChatRailAttrs {
   isCompact: boolean;
   onPick: (chatId: string) => void;
   onNew: () => void;
+  /** The scope a reference to a row carries (the root's handshake). */
+  referenceScope: ReferenceScope;
+  /** Where a row's "Explain..." drafts (element-reference-menu plan section 4.4). */
+  onDraftReference: (text: string) => void;
+  /** Whether such a draft has somewhere to go; the rows grey otherwise. */
+  isReferenceDraftAvailable: boolean;
 }
 
 /** The status each dot stands for: working is the accent and breathes; done (a finished turn
@@ -51,7 +59,7 @@ function monogramOf(row: ChatRow): string {
   return title === "" ? "?" : title.slice(0, 1).toUpperCase();
 }
 
-// ---------- per-browser rail state ----------
+// Per-browser rail state
 
 let collapsedChoice: boolean | null = null;
 
@@ -75,7 +83,7 @@ function setCollapsed(collapsed: boolean): void {
   }
 }
 
-// ---------- renames, deletes, menus ----------
+// Renames, deletes, and the row menu
 
 interface RenameState {
   chatId: string;
@@ -89,6 +97,8 @@ const deletingChatIds = new Set<string>();
 // The row whose menu is up, or null. Which row it belongs to is this file's; opening, placing,
 // dismissing and closing are the component's, and its `onClose` keeps the two in step.
 let menuChatId: string | null = null;
+// The reference rows for the element the open menu was opened on, built at the right-click.
+let menuReferenceRows: readonly MenuRow[] = [];
 
 const railMenu = createMenu({
   placement: "below",
@@ -98,6 +108,7 @@ const railMenu = createMenu({
   extraClass: "chat-rail-menu",
   onClose: () => {
     menuChatId = null;
+    menuReferenceRows = [];
   },
 });
 
@@ -158,7 +169,7 @@ function deleteFromMenu(attrs: ChatRailAttrs, row: ChatRow): void {
   });
 }
 
-/** The rows a chat's context menu offers. */
+/** The rows a chat's context menu offers, ending with the reference rows for the element right-clicked. */
 function rowMenuRows(attrs: ChatRailAttrs, row: ChatRow): MenuRow[] {
   const isStopped = row.status === "stopped";
   return [
@@ -177,10 +188,18 @@ function rowMenuRows(attrs: ChatRailAttrs, row: ChatRow): MenuRow[] {
       tone: "danger",
       onSelect: () => deleteFromMenu(attrs, row),
     },
+    ...(menuReferenceRows.length === 0 ? [] : [{ kind: "divider" } as MenuRow, ...menuReferenceRows]),
   ];
 }
 
-// ---------- marks ----------
+/** The reference rows for a right-click on a row's element, built as the menu opens. */
+function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow[] {
+  const target = targetOfEvent(event, document);
+  const reference = describeElement(target.element, target.click, attrs.referenceScope);
+  return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
+}
+
+// The status marks
 
 /** A plus, drawn here because the shared icon set has no bare one. */
 function plusGlyph(): m.Vnode {
@@ -234,7 +253,7 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
   });
 }
 
-// ---------- the component ----------
+// The component
 
 export const ChatRail: m.Component<ChatRailAttrs> = {
   onremove() {
@@ -343,6 +362,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow, collapsed: boolean): m.Vnod
         event.preventDefault();
         if (isDeleting || row.isProvisional) return;
         menuChatId = row.chatId;
+        menuReferenceRows = referenceRowsForEvent(attrs, event);
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
       },
     },
