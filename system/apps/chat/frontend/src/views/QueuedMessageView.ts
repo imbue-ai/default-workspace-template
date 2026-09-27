@@ -81,7 +81,8 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
  *  same markup ``StableUserMessage`` produces for a plain prompt) directly, rather
  *  than the classifier -- a queued message is always shown verbatim.
  *
- *  A chip the backend reports as ``is_sending`` (a codex shoulder-tap's interrupt+resend)
+ *  A chip the backend reports as ``is_sending`` (a codex shoulder-tap's interrupt+resend, or a
+ *  Claude message still queued when the reply landed)
  *  renders identically to the optimistic outgoing bubble (see OutgoingMessageView), so a
  *  re-sent message stays continuously visible through the resend rather than blinking out
  *  (contract A1a); the backend drives the transition to the committed turn. */

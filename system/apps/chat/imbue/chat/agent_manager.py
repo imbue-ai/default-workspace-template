@@ -4002,14 +4002,16 @@ class AgentManager:
             )
             old_state = self._activity_state_by_agent.get(agent_id)
             # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
-            # IDLE agent's harness queue is drained by definition, so ANY queued
-            # survivor while idle is stale -- an interrupt, our flush-restart SIGKILL,
-            # a crash, a hole in the harness's own ledger (an enqueue with no matching
-            # leave), or a stale entry re-surfaced by a backend restart's full replay
-            # (which sees no new working->IDLE transition to sweep it). So sweep
-            # whenever the agent is idle with a non-empty queue, even if the activity
-            # state itself did not change this cycle -- an edge-only backstop leaves
-            # such survivors stranded on an idle agent forever.
+            # IDLE agent's harness queue is about to drain, so a queued survivor while
+            # idle is either on its way in (Claude dequeues only after its end-of-turn
+            # hooks; its backstop shows such entries as being sent for a grace period)
+            # or stale -- an interrupt, our flush-restart SIGKILL, a crash, a hole in
+            # the harness's own ledger (an enqueue with no matching leave), or a stale
+            # entry re-surfaced by a backend restart's full replay (which sees no new
+            # working->IDLE transition to sweep it). So run the backstop whenever the
+            # agent is idle with a non-empty queue, even if the activity state itself
+            # did not change this cycle -- an edge-only backstop leaves such survivors
+            # stranded on an idle agent forever.
             is_idle = new_state == ActivityState.IDLE
             has_stale_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
             if old_state == new_state and agent_state.activity_state == new_state.value and not has_stale_queue:
