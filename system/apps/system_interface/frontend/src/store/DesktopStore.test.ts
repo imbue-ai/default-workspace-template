@@ -1504,6 +1504,28 @@ describe("pulled-out windows", () => {
     expect(savedCalls()).toHaveLength(2);
   });
 
+  it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
+    const { store, calls, reports } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    await store.detachWindow("win-1");
+    expect(calls).toHaveLength(1);
+    // The ghost's "Hide": out of sight, but still out, and still reported as such.
+    store.minimizeWindow("win-1");
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: true });
+    expect(last(reports)).toMatchObject([{ windowId: "win-1" }]);
+    // The entry's click shows the ghost again where it stood, asking the chrome for nothing.
+    store.toggleTaskbarEntry("win-1");
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({ is_detached: true, is_minimized: false });
+    expect(calls).toHaveLength(1);
+    // With the ghost showing, the click shows the window's own desktop window as before.
+    store.toggleTaskbarEntry("win-1");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject(["request", { windowId: "win-1" }]);
+    await settle();
+    expect(storedPlacement("win-1")).toMatchObject({ is_detached: true, is_minimized: false });
+  });
+
   it("reports the active desktop's pulled-out windows with their titles whenever the set changes", async () => {
     const { store, reports } = makePopOutStore();
     await store.start(NO_LINK);

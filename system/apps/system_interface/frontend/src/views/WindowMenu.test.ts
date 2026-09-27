@@ -117,6 +117,7 @@ describe("taskbarEntryMenuRows", () => {
   const actions = {
     isDetached: false,
     show: vi.fn(),
+    showGhost: vi.fn(),
     bringBack: vi.fn(),
     restore: vi.fn(),
     minimize: vi.fn(),
@@ -196,19 +197,35 @@ describe("taskbarEntryMenuRows", () => {
     ]);
   });
 
-  it("offers a pulled-out window's entry Show and Bring back in place of the arrangement verbs", () => {
+  it("offers a pulled-out window's entry Show, Hide placeholder, and Bring back in place of the arrangement verbs", () => {
     const show = vi.fn();
+    const minimize = vi.fn();
     const bringBack = vi.fn();
     const rows = taskbarEntryMenuRows(
-      { ...actions, isDetached: true, show, bringBack, isMinimized: false, isMaximized: false },
+      { ...actions, isDetached: true, show, minimize, bringBack, isMinimized: false, isMaximized: false },
       false,
     );
-    expect(keysOf(rows)).toEqual(["show", "bring-back", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["show", "hide-ghost", "bring-back", "|", "close"]);
     rowOf(rows, "show").onSelect();
+    rowOf(rows, "hide-ghost").onSelect();
     rowOf(rows, "bring-back").onSelect();
     expect(show).toHaveBeenCalledTimes(1);
+    expect(minimize).toHaveBeenCalledTimes(1);
     expect(bringBack).toHaveBeenCalledTimes(1);
+    expect(rowOf(rows, "hide-ghost").label).toBe("Hide placeholder");
     expect(rowOf(rows, "bring-back").label).toBe("Bring back to desktop");
+  });
+
+  it("offers Show placeholder instead once a pulled-out window's ghost is hidden", () => {
+    const showGhost = vi.fn();
+    const rows = taskbarEntryMenuRows(
+      { ...actions, isDetached: true, showGhost, isMinimized: true, isMaximized: false },
+      false,
+    );
+    expect(keysOf(rows)).toEqual(["show", "show-ghost", "bring-back", "|", "close"]);
+    rowOf(rows, "show-ghost").onSelect();
+    expect(showGhost).toHaveBeenCalledTimes(1);
+    expect(rowOf(rows, "show-ghost").label).toBe("Show placeholder");
   });
 });
 

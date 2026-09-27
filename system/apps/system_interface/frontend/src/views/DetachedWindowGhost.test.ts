@@ -17,6 +17,7 @@ function render(overrides: Partial<DetachedWindowGhostAttrs> = {}): HTMLElement 
     rect: { x: 50, y: 60, width: 640, height: 480 },
     stackIndex: 1,
     onShow: vi.fn(),
+    onHide: vi.fn(),
     onBringBack: vi.fn(),
     ...overrides,
   };
@@ -40,15 +41,20 @@ describe("DetachedWindowGhost", () => {
     expect(element.querySelector("[data-drag-handle]")).toBeNull();
   });
 
-  it("offers Show and Bring back, each reaching its own handler", () => {
+  it("offers Show, Hide, and Bring back, each reaching its own handler", () => {
     const onShow = vi.fn();
+    const onHide = vi.fn();
     const onBringBack = vi.fn();
-    const element = render({ onShow, onBringBack });
+    const element = render({ onShow, onHide, onBringBack });
     (element.querySelector('[data-ghost-action="show"]') as HTMLElement).click();
     expect(onShow).toHaveBeenCalledTimes(1);
+    expect(onHide).not.toHaveBeenCalled();
     expect(onBringBack).not.toHaveBeenCalled();
+    (element.querySelector('[data-ghost-action="hide"]') as HTMLElement).click();
+    expect(onHide).toHaveBeenCalledTimes(1);
     (element.querySelector('[data-ghost-action="bring-back"]') as HTMLElement).click();
     expect(onBringBack).toHaveBeenCalledTimes(1);
     expect(onShow).toHaveBeenCalledTimes(1);
+    expect(onHide).toHaveBeenCalledTimes(1);
   });
 });

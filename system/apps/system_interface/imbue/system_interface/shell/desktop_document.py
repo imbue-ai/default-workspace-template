@@ -738,14 +738,12 @@ def with_window_raised(layout: DesktopLayout, window_id: WindowId) -> DesktopLay
 
 @pure
 def with_window_minimized(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
-    """Minimize: the window out of sight where it stands in the stack (back from its own window, if it was out)."""
+    """Minimize: the window out of sight where it stands in the stack. A pulled-out window stays out; what goes out
+    of sight is its ghost, which ``with_window_detached`` shows again."""
     current = placement_of(layout, window_id)
     return _with_placement_in_place(
         layout,
-        current.model_copy_update(
-            to_update(current.field_ref().is_minimized, True),
-            to_update(current.field_ref().is_detached, False),
-        ),
+        current.model_copy_update(to_update(current.field_ref().is_minimized, True)),
     )
 
 
@@ -795,7 +793,8 @@ def with_window_frame(layout: DesktopLayout, window_id: WindowId, frame: Frame) 
 @pure
 def with_window_detached(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
     """Pull out: the window shown in a desktop window of the chrome's own, where it stands in the stack, its frame
-    kept so the ghost and a later return land where the drag began."""
+    kept so the ghost and a later return land where the drag began. On a window already out, the ghost shown again
+    after a minimize hid it."""
     current = placement_of(layout, window_id)
     return _with_placement_in_place(
         layout,

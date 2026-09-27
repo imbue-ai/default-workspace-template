@@ -502,13 +502,19 @@ def test_a_pulled_out_window_stays_where_it_is_and_every_showing_verb_brings_it_
     # Back where a drop back onto the desktop named.
     dropped = with_window_reattached(detached, _WIN_2, Frame(x=0.4, y=0.3, width=0.5, height=0.5))
     assert dropped.placements[-1].frame == Frame(x=0.4, y=0.3, width=0.5, height=0.5)
-    # Every verb that shows the window on the desktop brings it back, minimize included.
+    # Every verb that shows the window on the desktop brings it back.
     assert with_window_raised(detached, _WIN_2).placements[-1].is_detached is False
     assert with_window_restored(detached, _WIN_2).placements[-1].is_detached is False
     assert with_window_state(detached, _WIN_2, WindowState.MAXIMIZED).placements[-1].is_detached is False
     assert with_window_frame(detached, _WIN_2, cascade_frame(3)).placements[-1].is_detached is False
-    minimized = with_window_minimized(detached, _WIN_2)
-    assert minimized.placements[1].is_detached is False and minimized.placements[1].is_minimized is True
+    # Minimize shows nothing: the window stays out, and its ghost goes out of sight until detach shows it again.
+    hidden = with_window_minimized(detached, _WIN_2)
+    assert hidden.placements[1].is_detached is True and hidden.placements[1].is_minimized is True
+    shown_again = with_window_detached(hidden, _WIN_2)
+    assert shown_again.placements[1].is_detached is True and shown_again.placements[1].is_minimized is False
+    returned_from_hidden = with_window_reattached(hidden, _WIN_2, None)
+    assert returned_from_hidden.placements[-1].is_detached is False
+    assert returned_from_hidden.placements[-1].is_minimized is False
     # A placement file without the key reads as attached.
     stored_without_key = WindowPlacement.model_validate(
         {"window_id": str(_WIN_1), "frame": cascade_frame(0).model_dump(), "state": "NORMAL", "is_minimized": False}

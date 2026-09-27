@@ -1262,6 +1262,12 @@ export class DesktopStore {
     this.showDetachedWindow(windowId);
   }
 
+  /** Show the ghost of a pulled-out window again where it stood, after ``minimizeWindow`` hid it (the ghost's
+   *  "Hide"); the window itself stays in the chrome's desktop window. */
+  showWindowGhost(windowId: string): void {
+    this.dispatch({ type: "window_detached", windowId });
+  }
+
   /** Raise (or reopen) the desktop window a pulled-out window is shown in, at the size the window renders here. */
   showDetachedWindow(windowId: string): void {
     if (findWindow(this.state, windowId) === null) return;
@@ -1312,12 +1318,13 @@ export class DesktopStore {
     return this.soloWindowId === null || windowId === this.soloWindowId;
   }
 
-  /** A taskbar entry's click: show a pulled-out window's own desktop window; else restore and raise when
-   *  minimized, minimize when focused, raise otherwise. */
+  /** A taskbar entry's click: for a pulled-out window, show its ghost again when the ghost is hidden, else its
+   *  own desktop window; otherwise restore and raise when minimized, minimize when focused, raise otherwise. */
   toggleTaskbarEntry(windowId: string): void {
     const placement = placementOf(this.state.layout, windowId);
     if (placement.is_detached) {
-      this.showDetachedWindow(windowId);
+      if (placement.is_minimized) this.showWindowGhost(windowId);
+      else this.showDetachedWindow(windowId);
       return;
     }
     if (placement.is_minimized) this.restoreWindow(windowId);

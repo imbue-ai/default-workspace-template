@@ -1,8 +1,9 @@
 /**
  * The ghost of a pulled-out window (the pull-out-window spec, section 4.2): a dashed outline at the window's
- * frame, with the app's glyph, the title, and the two ways to it -- "Show", which raises or reopens the desktop
- * window the chrome shows it in, and "Bring back", which returns it to the desktop here. It never takes focus
- * and no page is drawn in it; the window's page lives in the chrome's own window.
+ * frame, with the app's glyph, the title, and three buttons -- "Show", which raises or reopens the desktop window
+ * the chrome shows it in, "Hide", which puts the ghost itself out of sight until its taskbar entry is clicked,
+ * and "Bring back", which returns the window to the desktop here. It never takes focus and no page is drawn in
+ * it; the window's page lives in the chrome's own window.
  */
 
 import m from "mithril";
@@ -24,12 +25,13 @@ export interface DetachedWindowGhostAttrs {
   readonly rect: PixelRect;
   readonly stackIndex: number;
   readonly onShow: () => void;
+  readonly onHide: () => void;
   readonly onBringBack: () => void;
 }
 
 export const DetachedWindowGhost: m.Component<DetachedWindowGhostAttrs> = {
   view(vnode) {
-    const { window, app, title, rect, stackIndex, onShow, onBringBack } = vnode.attrs;
+    const { window, app, title, rect, stackIndex, onShow, onHide, onBringBack } = vnode.attrs;
     return m(
       "div",
       {
@@ -52,6 +54,7 @@ export const DetachedWindowGhost: m.Component<DetachedWindowGhostAttrs> = {
         m("div", { class: "text-(length:--font-size-row) text-faint" }, "Open in its own window"),
         m("div", { class: "flex flex-wrap items-center justify-center gap-2" }, [
           m(Button, { variant: "secondary", sm: true, "data-ghost-action": "show", onclick: onShow }, "Show"),
+          m(Button, { variant: "secondary", sm: true, "data-ghost-action": "hide", onclick: onHide }, "Hide"),
           m(Button, { sm: true, "data-ghost-action": "bring-back", onclick: onBringBack }, "Bring back"),
         ]),
       ],

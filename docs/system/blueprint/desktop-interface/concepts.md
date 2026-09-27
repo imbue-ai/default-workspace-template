@@ -112,7 +112,7 @@ The taskbar is the bar along the bottom of the viewport.
 Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized and pulled-out ones marked; then the **system tray**.
 An entry shows the app icon and the title (icon only in compact mode).
 A pinned window's entry is always there, and a client may draw it in the bar in a style (the app's icon, or the workspace's avatar) or floating above the windows (pinned-taskbar-entries plan section 4.2).
-Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window, minimizes the top window, or raises any other window.
+Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window (or, when its ghost is hidden, the ghost), minimizes the top window, or raises any other window.
 
 The launcher is the text field and the menu it opens above the field: one row per launch path of every app, window rows (every desktop's windows, while typing), and at the foot the free-text rows, which send the typed text to whichever app declares a launch path with a `text_param` (the chat's new chat, and its send to an existing chat).
 One row is always highlighted; Enter runs it, Ctrl+Enter (Cmd+Enter on macOS) runs the secondary free-text row, and typing filters the rows.

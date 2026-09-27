@@ -503,6 +503,29 @@ describe("a pulled-out window", () => {
   });
 });
 
+describe("a hidden ghost", () => {
+  it("goes out of sight from the ghost's Hide and comes back from the taskbar entry, the window staying out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    m.redraw.sync();
+    (document.querySelector('[data-ghost-action="hide"]') as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
+    expect(entry.getAttribute("data-detached")).toBe("true");
+    expect(entry.getAttribute("data-minimized")).toBe("true");
+    entry.click();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+  });
+});
+
 describe("a solo shell", () => {
   /** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
    *  empty and the real observer never fires. */

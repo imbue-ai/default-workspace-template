@@ -44,6 +44,7 @@ export interface BackdropAttrs {
   readonly onWindowControl: (windowId: string, control: WindowControl, event: MouseEvent) => void;
   /** A pulled-out window's ghost was asked to show its own desktop window, or to bring the window back. */
   readonly onShowDetachedWindow: (windowId: string) => void;
+  readonly onHideWindowGhost: (windowId: string) => void;
   readonly onBringBackWindow: (windowId: string) => void;
   /** The element the live pages are appended to, created once and never re-rendered. */
   readonly onPagesHostCreated: (host: HTMLElement) => void;
@@ -111,7 +112,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
             // window's chrome sits over its own page in the stacking order, and the page must get the rest.
             { class: "windows absolute inset-0 pointer-events-none" },
-            // A keyed list tolerates no holes: a minimized or unknown window contributes nothing.
+            // A keyed list tolerates no holes: a minimized or unknown window contributes nothing (a pulled-out
+            // window's hidden ghost included).
             placements.flatMap((placement, index): m.Children[] => {
               const window = windowsById.get(placement.window_id);
               if (placement.is_minimized || window === undefined) return [];
@@ -128,6 +130,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                     rect: store.renderedRect({ ...placement, state: "NORMAL" }),
                     stackIndex: index,
                     onShow: () => attrs.onShowDetachedWindow(window.id),
+                    onHide: () => attrs.onHideWindowGhost(window.id),
                     onBringBack: () => attrs.onBringBackWindow(window.id),
                   }),
                 ];

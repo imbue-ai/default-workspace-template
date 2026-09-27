@@ -162,14 +162,19 @@ describe("the verbs", () => {
     // Back where a drop back onto the desktop named, clamped into the square.
     const dropped = withWindowReattached(detached, "win-2", { x: 0.8, y: 0.9, width: 0.5, height: 0.5 });
     expect(dropped.placements[2].frame).toEqual({ x: 0.5, y: 0.5, width: 0.5, height: 0.5 });
-    // Every verb that shows the window on the desktop brings it back, minimize included.
+    // Every verb that shows the window on the desktop brings it back.
     expect(withWindowRaised(detached, "win-2").placements[2].is_detached).toBe(false);
     expect(withWindowRestored(detached, "win-2").placements[2].is_detached).toBe(false);
     expect(withWindowState(detached, "win-2", "MAXIMIZED").placements[2].is_detached).toBe(false);
     expect(withWindowFrame(detached, "win-2", cascadeFrame(3)).placements[2].is_detached).toBe(false);
-    expect(withWindowMinimized(detached, "win-2").placements[1]).toMatchObject({
+    // Minimize shows nothing: the window stays out, and its ghost goes out of sight until detach shows it again.
+    const hidden = withWindowMinimized(detached, "win-2");
+    expect(hidden.placements[1]).toMatchObject({ is_detached: true, is_minimized: true });
+    expect(focusedWindowId(hidden.placements)).toBe("win-3");
+    expect(withWindowDetached(hidden, "win-2").placements[1]).toMatchObject({ is_detached: true, is_minimized: false });
+    expect(withWindowReattached(hidden, "win-2", null).placements[2]).toMatchObject({
       is_detached: false,
-      is_minimized: true,
+      is_minimized: false,
     });
     // Pulling out a window already out changes nothing (no gesture to save).
     expect(withWindowDetached(detached, "win-2")).toBe(detached);

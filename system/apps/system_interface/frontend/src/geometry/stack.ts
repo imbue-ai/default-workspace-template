@@ -109,16 +109,17 @@ export function withWindowPlacedOnOpen(layout: Layout, windowId: string): Layout
 }
 
 // Every verb that shows a window on the desktop brings a pulled-out one back: the desktop is where
-// it is being shown.
+// it is being shown. Minimize shows nothing, so it leaves a pulled-out window out.
 
 /** Focus: the window restored (un-minimized) and moved to the top of the stack. */
 export function withWindowRaised(layout: Layout, windowId: string): Layout {
   return withPlacementOnTop(layout, { ...placementOf(layout, windowId), is_minimized: false, is_detached: false });
 }
 
-/** Minimize: the window out of sight where it stands in the stack (back from its own window, if it was out). */
+/** Minimize: the window out of sight where it stands in the stack. A pulled-out window stays out; what goes out of
+ *  sight is its ghost, which ``withWindowDetached`` shows again. */
 export function withWindowMinimized(layout: Layout, windowId: string): Layout {
-  return withPlacementInPlace(layout, { ...placementOf(layout, windowId), is_minimized: true, is_detached: false });
+  return withPlacementInPlace(layout, { ...placementOf(layout, windowId), is_minimized: true });
 }
 
 /** Restore: the window shown at its own frame, normal, on top of the stack. */
@@ -153,7 +154,8 @@ export function withWindowFrame(layout: Layout, windowId: string, frame: Frame):
 }
 
 /** Pull out: the window shown in a desktop window of the chrome's own, where it stands in the stack, its frame
- *  kept so the ghost and a later return land where the drag began. */
+ *  kept so the ghost and a later return land where the drag began. On a window already out, the ghost shown
+ *  again after a minimize hid it. */
 export function withWindowDetached(layout: Layout, windowId: string): Layout {
   return withPlacementInPlace(layout, { ...placementOf(layout, windowId), is_minimized: false, is_detached: true });
 }

@@ -86,6 +86,8 @@ export interface TaskbarEntryMenuActions {
   readonly isDetached: boolean;
   /** Raise or reopen the window's own desktop window. */
   readonly show: () => void;
+  /** Show a pulled-out window's ghost again after it was hidden (``minimize`` hides it). */
+  readonly showGhost: () => void;
   /** Bring a pulled-out window back to the desktop. */
   readonly bringBack: () => void;
   readonly restore: () => void;
@@ -108,8 +110,8 @@ function styleLabel(style: PinStyle): string {
   }
 }
 
-/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show
- *  and Bring back to desktop instead of those), then for a pinned entry Float or Move to taskbar (not in compact
+/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show,
+ *  Hide placeholder or Show placeholder, and Bring back to desktop instead of those), then for a pinned entry Float or Move to taskbar (not in compact
  *  mode, where every entry is in the bar), the style to show it in, and the avatar chooser while it shows the
  *  avatar, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
@@ -117,6 +119,9 @@ export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact
   const rows: MenuRow[] = actions.isDetached
     ? [
         { kind: "action", key: "show", label: "Show", onSelect: actions.show },
+        actions.isMinimized
+          ? { kind: "action", key: "show-ghost", label: "Show placeholder", onSelect: actions.showGhost }
+          : { kind: "action", key: "hide-ghost", label: "Hide placeholder", onSelect: actions.minimize },
         { kind: "action", key: "bring-back", label: "Bring back to desktop", onSelect: actions.bringBack },
       ]
     : [
