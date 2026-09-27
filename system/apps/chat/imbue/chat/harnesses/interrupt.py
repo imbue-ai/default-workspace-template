@@ -171,8 +171,7 @@ def restart_drain(
     Clearing first means the settle's IDLE never meets the returned messages still queued, which
     the idle backstop would otherwise show as being delivered. No empty-queue short-circuit: a
     stop with nothing queued still interrupts the turn (callers wanting a no-op on an empty
-    queue, e.g. the flush, check first). Raises
-    :class:`AgentRestartError` if the restart fails.
+    queue, e.g. the flush, check first). Raises :class:`AgentRestartError` if the restart fails.
     """
     block = watcher.get_queued_block()
     is_restarted, output = restart_process()
