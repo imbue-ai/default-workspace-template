@@ -806,11 +806,11 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
     will be rather than on the shell; no agent is created until an account is chosen (post-launch-paths plan
     section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
-        chat = _start_new_chat(page, server)
+        chat_frame = _start_new_chat(page, server)
         root = _chat_root(page)
         expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # Under the chooser, the composer's provider row already says there is no provider to start on.
-        expect(chat.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
+        expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
         # The shell itself renders no chooser: the sign-in lives in the chat's page.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
         assert [str(chat.chat_id) for chat in server.chat_state.agent_manager.get_chat_snapshots()] == [
