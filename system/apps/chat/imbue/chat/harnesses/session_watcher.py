@@ -137,9 +137,8 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """True when ``event`` belongs to the agent's own session rather than a subagent's."""
 
-    # --- Queued messages (the shoulder-tap surface). ---------------------------
-    # Concrete no-op defaults so a harness without a queued-message populator
-    # needs no changes; the Claude watcher overrides them. Everything downstream
+    # The queued-message (shoulder-tap) surface has concrete no-op defaults so a harness
+    # without a queued-message populator needs no changes. Everything downstream
     # (the WS snapshot field and the two common actions) is harness-agnostic.
 
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
