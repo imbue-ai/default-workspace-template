@@ -339,7 +339,7 @@ let selectedAccountId: string | null = null;
 
 /** The account a chat with no agent yet starts on: the one it was minted for, else the selected
  *  one. Null when neither exists, and its first send has to ask for a sign-in. */
-export function accountForFirstSend(accountId: string): ProviderAccount | null {
+export function accountForFirstSend(accountId: string | undefined): ProviderAccount | null {
   return accountForAgent(accountId) ?? getSelectedAccount();
 }
 
