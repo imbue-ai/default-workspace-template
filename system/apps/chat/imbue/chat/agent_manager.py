@@ -845,9 +845,9 @@ class AgentManager:
     _activity_state_by_agent: dict[str, ActivityState]
     # Per-agent live queued-message snapshot (a sibling of ``_activity_state_by_agent``),
     # pushed to the frontend on the agents WebSocket. Fed by the agent's watcher via
-    # ``update_queued_messages`` and cleared on a working->IDLE transition through the
-    # per-agent idle handler the watcher registers (its ``notify_idle`` -- the queue
-    # backstop), whose marks the busy handler (``notify_busy``) undoes on IDLE->working.
+    # ``update_queued_messages`` and swept while IDLE through the per-agent idle handler
+    # the watcher registers (its ``notify_idle`` -- the queue backstop), whose marks the
+    # busy handler (``notify_busy``) undoes on IDLE->working.
     # All are dropped when activity tracking stops.
     _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
     _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
@@ -3803,9 +3803,10 @@ class AgentManager:
         A replayed snapshot can arrive with no recompute ever following it (e.g. a
         priming replay for a stopped agent, whose lifecycle never changes again),
         so the level-triggered idle sweep is run here, after caching and BEFORE the
-        broadcast: an idle agent's stale snapshot is drained via its idle handler
-        and the single broadcast below carries the post-sweep state, so phantoms
-        are never rendered. A live mid-turn agent derives non-IDLE (its transcript
+        broadcast: an idle agent's snapshot goes through its idle handler (which
+        drops stale entries, or for Claude shows them as being sent until the
+        delivery grace runs out) and the single broadcast below carries the
+        post-sweep state. A live mid-turn agent derives non-IDLE (its transcript
         signals are seeded before the watcher starts) and the snapshot stands.
         """
         queued = tuple(QueuedMessageState.model_validate(entry) for entry in snapshot)
