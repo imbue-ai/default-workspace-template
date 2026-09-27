@@ -44,6 +44,7 @@ from imbue.system_interface.shell.desktop_document import grid_dimensions
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
 from imbue.system_interface.shell.desktop_document import nearest_free_cell
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
+from imbue.system_interface.shell.desktop_document import paired_frames
 from imbue.system_interface.shell.desktop_document import path_carries_marker
 from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import place_shortcuts
@@ -131,6 +132,49 @@ def test_snap_frame_vectors(state_name: str) -> None:
     placement_frame = Frame(x=0.1, y=0.1, width=0.3, height=0.3)
     assert frame_for_state(placement_frame, WindowState(state_name)) == _frame(_VECTORS["snap_frames"][state_name])
     assert frame_for_state(placement_frame, WindowState.NORMAL) == placement_frame
+
+
+@pytest.mark.parametrize(
+    ("anchor", "expected_anchor", "expected_opened"),
+    [
+        # Room to the right of a window narrower than the pair's width: nothing about it changes, and the
+        # opened window sits against it, taking its height and where it sits down the backdrop.
+        ((0.05, 0.1, 0.4, 0.7), (0.05, 0.1, 0.4, 0.7), (0.45, 0.1, 0.5, 0.7)),
+        # Room on the left only: the opened window goes there rather than move anything.
+        ((0.5, 0.2, 0.5, 0.6), (0.5, 0.2, 0.5, 0.6), (0.0, 0.2, 0.5, 0.6)),
+        # A window already snapped to the left half is exactly the first case, at the edge.
+        ((0.0, 0.0, 0.5, 1.0), (0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
+        # Neither side has the room, and the right is the nearer to open: the anchor goes left by the
+        # 0.1 it is short by, not the 0.2 that would take it to the edge.
+        ((0.2, 0.15, 0.4, 0.5), (0.1, 0.15, 0.4, 0.5), (0.5, 0.15, 0.5, 0.5)),
+        # A chat only just short of the room: a nudge of 0.05, and nothing like a trip to the edge.
+        ((0.17, 0.1, 0.38, 0.7), (0.12, 0.1, 0.38, 0.7), (0.5, 0.1, 0.5, 0.7)),
+        # Neither side has the room, and the left is the nearer to open: the anchor goes right by 0.05.
+        ((0.45, 0.15, 0.4, 0.5), (0.5, 0.15, 0.4, 0.5), (0.0, 0.15, 0.5, 0.5)),
+        # A tie goes right, where the pair reads in order; here the least move is to the edge anyway.
+        ((0.25, 0.0, 0.5, 1.0), (0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
+        # Wider than the pair's width, so no amount of moving opens that much beside it: this is the one
+        # anchor that is resized, and even then only across -- its height and its top are its own.
+        ((0.1, 0.2, 0.8, 0.6), (0.0, 0.2, 0.5, 0.6), (0.5, 0.2, 0.5, 0.6)),
+        # Maximized, as the state's frame reads: the same case.
+        ((0.0, 0.0, 1.0, 1.0), (0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 0.5, 1.0)),
+    ],
+)
+def test_pairing_moves_a_window_across_at_most_and_never_up_or_down(
+    anchor: tuple[float, float, float, float],
+    expected_anchor: tuple[float, float, float, float],
+    expected_opened: tuple[float, float, float, float],
+) -> None:
+    def frame(values: tuple[float, float, float, float]) -> Frame:
+        return Frame(x=values[0], y=values[1], width=values[2], height=values[3])
+
+    kept, opened = paired_frames(frame(anchor))
+    assert kept.model_dump() == pytest.approx(frame(expected_anchor).model_dump())
+    assert opened.model_dump() == pytest.approx(frame(expected_opened).model_dump())
+    # Whatever else the rule does, it never moves the anchor up or down or changes its height, and the
+    # window it opens shares both.
+    assert (kept.y, kept.height) == (anchor[1], anchor[3])
+    assert (opened.y, opened.height) == (anchor[1], anchor[3])
 
 
 @pytest.mark.parametrize("case", _VECTORS["fit"], ids=lambda case: case["name"])
