@@ -136,9 +136,8 @@ class ChatAppState(MutableModel):
             # Bridge the watcher's live queued-message snapshot onto the agents WS
             # state, and register its working->IDLE queue backstop (and the IDLE->working
             # undo of it) with the manager. All are no-ops for a harness without a queue
-            # populator. The manager
-            # de-dupes/broadcasts, so pushing the full snapshot on each change is
-            # cheap.
+            # populator. The manager de-dupes/broadcasts, so pushing the full snapshot on
+            # each change is cheap.
             watcher.set_queue_snapshot_callback(
                 lambda snapshot: self.agent_manager.update_queued_messages(agent_info.id, snapshot)
             )
