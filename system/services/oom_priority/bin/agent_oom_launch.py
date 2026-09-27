@@ -22,6 +22,12 @@ most-expendable band. Because the process tags itself at launch, the band is set
 before any subprocess exists -- the process that needs tagging is known directly,
 with no process tree to inspect.
 
+codex installed from npm is the one harness whose command is not the harness
+process: its ``bin/codex.js`` entry point runs the native binary as a child. So
+for ``codex`` the wrapper execs that native binary directly, with the environment
+the entry point would have given it, keeping the registered pid the one earlyoom
+kills.
+
 Harness-agnostic by construction: the band comes from the agent's label
 (``MNGR_AGENT_NAME`` + the host records), never from which binary is being run.
 
@@ -62,17 +68,20 @@ Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 ``sys.path`` insert), since this runs under a plain ``python3``.
 """
 
+import logging
 import os
+import platform
+import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(
-    0, str(Path(__file__).resolve().parents[1] / "src")
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import bands
 from oom_priority.agent_identity import is_chat_agent, is_primary_agent, is_worker_agent
 from oom_priority.registry import record_agent_pid
+
+_logger = logging.getLogger(__name__)
 
 
 def _band_for(agent_name: str) -> int:
@@ -113,6 +122,61 @@ def _tag_self() -> None:
     )
 
 
+# The npm platform package and target triple ``bin/codex.js`` picks for each
+# (``sys.platform``, ``platform.machine()``), so the wrapper execs the same native
+# binary the entry point would.
+_CODEX_NATIVE_TARGETS = {
+    ("linux", "x86_64"): ("linux-x64", "x86_64-unknown-linux-musl"),
+    ("linux", "aarch64"): ("linux-arm64", "aarch64-unknown-linux-musl"),
+    ("darwin", "x86_64"): ("darwin-x64", "x86_64-apple-darwin"),
+    ("darwin", "arm64"): ("darwin-arm64", "aarch64-apple-darwin"),
+}
+
+
+def _npm_codex_native_launch() -> tuple[Path, dict[str, str]] | None:
+    """The native binary behind an npm-installed ``codex``, and the environment
+    its npm entry point would give it; None when ``codex`` is not that install.
+
+    An npm entry point whose native binary for this machine is missing is
+    reported on stderr before returning None, since the fallback leaves codex
+    unattributed."""
+    entry_point = shutil.which("codex")
+    if entry_point is None:
+        return None
+    resolved_entry_point = Path(entry_point).resolve()
+    if resolved_entry_point.name != "codex.js":
+        return None
+    package_root = resolved_entry_point.parents[1]
+    target = _CODEX_NATIVE_TARGETS.get((sys.platform, platform.machine()))
+    candidates = []
+    if target is not None:
+        package, triple = target
+        candidates = [
+            package_root
+            / f"node_modules/@openai/codex-{package}/vendor/{triple}/bin/codex",
+            package_root / f"vendor/{triple}/bin/codex",
+        ]
+    native = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if native is None:
+        _logger.warning(
+            "agent_oom_launch: no native codex binary for %s/%s at %s;"
+            " launching the npm entry point, so an OOM kill of codex will not"
+            " be attributed to this agent",
+            sys.platform,
+            platform.machine(),
+            [str(candidate) for candidate in candidates],
+        )
+        return None
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("CODEX_MANAGED_BY_")
+    }
+    env["CODEX_MANAGED_BY_NPM"] = "1"
+    env["CODEX_MANAGED_PACKAGE_ROOT"] = str(package_root)
+    return native, env
+
+
 def main() -> None:
     # Tag before exec so the band (and registry entry) are in place the instant
     # the harness -- and any child it spawns -- exists. A tagging failure must never
@@ -126,7 +190,11 @@ def main() -> None:
     try:
         _tag_self()
     except Exception as error:
-        print(f"agent_oom_launch: tagging skipped: {error}", file=sys.stderr)
+        _logger.warning("agent_oom_launch: tagging skipped: %s", error)
+    native_launch = _npm_codex_native_launch() if binary == "codex" else None
+    if native_launch is not None:
+        native, env = native_launch
+        os.execve(native, [binary, *sys.argv[2:]], env)
     os.execvp(binary, [binary, *sys.argv[2:]])
 
 

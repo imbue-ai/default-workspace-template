@@ -47,8 +47,8 @@ provision_drop_inherited_pins
 : "${UV_VERSION:=0.11.7}"
 : "${NODE_VERSION:=22.23.2}"
 : "${CLAUDE_CODE_VERSION:=2.1.280}"
-: "${CODEX_VERSION:=0.154.0}"
-: "${PI_VERSION:=0.83.0}"
+: "${CODEX_VERSION:=0.157.0}"
+: "${PI_VERSION:=0.87.1}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.18.19}"
 : "${MODAL_VERSION:=1.4.2}"
@@ -282,6 +282,16 @@ command -v node npm >/dev/null
 npm install -g "@openai/codex@${CODEX_VERSION}"
 command -v codex >/dev/null
 codex --version
+# The OOM launch wrapper (system/services/oom_priority/bin/agent_oom_launch.py)
+# execs this native binary itself, because the npm entry point would run it as a
+# child under a pid the wrapper never registered. It looks where the entry point
+# does for this machine; fail here if a version bump moved it, rather than let the
+# wrapper fall back to the entry point.
+codex_native_binary="$(npm root -g)/@openai/codex/node_modules/@openai/codex-linux-${node_goarch}/vendor/${node_arch}-unknown-linux-musl/bin/codex"
+if [ ! -x "${codex_native_binary}" ]; then
+    echo "Expected the native codex binary at ${codex_native_binary}" >&2
+    exit 1
+fi
 
 # OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
 # VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the

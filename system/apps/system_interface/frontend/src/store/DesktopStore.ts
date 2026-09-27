@@ -155,6 +155,8 @@ export interface PageDriver {
   reloadApp(appName: string): void;
   /** Send the page ``shell:close-request`` (the minds close chord). */
   requestClose(windowId: string): void;
+  /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
+  ownsCloseChord(windowId: string): boolean;
 }
 
 /** What the shell asks the embedding chrome for when a window is pulled out (the pull-out-window spec). */
@@ -1197,6 +1199,8 @@ export class DesktopStore {
       return;
     }
     this.pageDriver?.requestClose(focused);
+    // A page that owns the chord (a browser closing one of its tabs) keeps its window.
+    if (this.pageDriver?.ownsCloseChord(focused) === true) return;
     await this.closeWindow(focused);
   }
 

@@ -16,9 +16,11 @@ loop can keep its two-poll debounce (see `LiveBrowser._keepalive_loop`).
 """
 
 import asyncio
+import contextlib
 import json
 import urllib.error
 import urllib.request
+from collections.abc import AsyncIterator
 from typing import Any
 
 import websockets
@@ -219,20 +221,57 @@ class CdpClient:
     async def navigate(self, target_id: str, url: str) -> None:
         """Point one tab at ``url``, raising CdpError when Chromium refuses.
 
-        ``Page.navigate`` is a page-domain call, so it needs a session on the target: attach
-        flattened, navigate through that session, detach. Chromium reports a navigation it
-        could not even start (a bad host, a refused scheme) in ``errorText`` rather than as a
-        protocol error, so that is raised too.
+        Chromium reports a navigation it could not even start (a bad host, a refused scheme)
+        in ``errorText`` rather than as a protocol error, so that is raised too.
+        """
+        async with self._attached(target_id) as session_id:
+            result = await self.send("Page.navigate", {"url": url}, session_id=session_id)
+        error_text = result.get("errorText")
+        if error_text:
+            raise CdpError(f"Page.navigate to {url}: {error_text}")
+
+    async def press_paste(self, target_id: str) -> None:
+        """Deliver a Ctrl+V chord to one tab through the protocol, raising CdpError on refusal.
+
+        The chord goes to the page's input pipeline directly, so it needs no X keyboard
+        focus and cannot interleave with keys a human is physically holding on the XTEST
+        keyboard. ``rawKeyDown`` (no ``text``) is what makes Chromium run the editing
+        command for the combination rather than insert a character.
+        """
+        async with self._attached(target_id) as session_id:
+            for event in _PASTE_CHORD_EVENTS:
+                await self.send("Input.dispatchKeyEvent", dict(event), session_id=session_id)
+
+    async def is_shown(self, target_id: str) -> bool:
+        """Whether one tab is the one in front of its window, asked of the page itself.
+
+        The fleet's own record of the foreground tab goes stale when a human switches tabs
+        inside Chrome (see ``LiveBrowser._on_proxy_activity``); the page always knows:
+        exactly one tab of a shown window has a visible document. Raises CdpError when the
+        page cannot answer.
+        """
+        async with self._attached(target_id) as session_id:
+            result = await self.send(
+                "Runtime.evaluate",
+                {"expression": 'document.visibilityState === "visible"', "returnByValue": True},
+                session_id=session_id,
+            )
+        return result.get("result", {}).get("value") is True
+
+    @contextlib.asynccontextmanager
+    async def _attached(self, target_id: str) -> AsyncIterator[str]:
+        """A flattened session on one target for the page-domain calls of the block.
+
+        Page-domain calls (``Page.*``, ``Input.*``, ``Runtime.*``) need a session on the
+        target; the block's calls pass the yielded session id, and the session is dropped on
+        the way out whether or not they succeeded.
         """
         attached = await self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
         session_id = attached["sessionId"]
         try:
-            result = await self.send("Page.navigate", {"url": url}, session_id=session_id)
+            yield session_id
         finally:
             await self._detach_quietly(session_id)
-        error_text = result.get("errorText")
-        if error_text:
-            raise CdpError(f"Page.navigate to {url}: {error_text}")
 
     async def _detach_quietly(self, session_id: str) -> None:
         """Drop a session opened for one call; a detach that fails changes nothing for the caller."""
@@ -240,6 +279,29 @@ class CdpClient:
             await self.send("Target.detachFromTarget", {"sessionId": session_id})
         except CdpError as e:
             logger.debug("cdp detach of session {} ignored ({})", session_id, e)
+
+
+_CONTROL_MODIFIER = 2
+_CONTROL_KEY_EVENT: dict[str, Any] = {
+    "key": "Control",
+    "code": "ControlLeft",
+    "windowsVirtualKeyCode": 17,
+    "nativeVirtualKeyCode": 17,
+}
+_V_KEY_EVENT: dict[str, Any] = {
+    "key": "v",
+    "code": "KeyV",
+    "windowsVirtualKeyCode": 86,
+    "nativeVirtualKeyCode": 86,
+}
+# Ctrl+V as ``Input.dispatchKeyEvent`` params, in press order: Control down, v down, v up,
+# Control up. The modifier flag rides every event while Control is held.
+_PASTE_CHORD_EVENTS: tuple[dict[str, Any], ...] = (
+    {"type": "rawKeyDown", "modifiers": _CONTROL_MODIFIER, **_CONTROL_KEY_EVENT},
+    {"type": "rawKeyDown", "modifiers": _CONTROL_MODIFIER, **_V_KEY_EVENT},
+    {"type": "keyUp", "modifiers": _CONTROL_MODIFIER, **_V_KEY_EVENT},
+    {"type": "keyUp", "modifiers": 0, **_CONTROL_KEY_EVENT},
+)
 
 
 def _is_real_page(target: dict[str, Any]) -> bool:
