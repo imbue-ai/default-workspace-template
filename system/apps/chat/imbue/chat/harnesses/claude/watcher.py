@@ -604,12 +604,13 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         self._broadcast_queue_snapshot_if_changed()
 
     def notify_idle(self) -> list[dict[str, Any]]:
-        """Apply the working->IDLE backstop and return the resulting snapshot.
+        """Apply the idle backstop and return the resulting snapshot.
 
-        The caller (the agent manager, on a working->IDLE transition) folds the returned
-        snapshot into the same broadcast that carries the IDLE activity state, so this does
-        not push a broadcast of its own -- it only records the snapshot as broadcast so
-        the poll loop does not re-push it.
+        The caller (the agent manager, whenever it reads the agent as IDLE with something
+        queued, not only on the working->IDLE transition) folds the returned snapshot into
+        the same broadcast that carries the IDLE activity state, so this does not push a
+        broadcast of its own -- it only records the snapshot as broadcast so the poll loop
+        does not re-push it.
         """
         with self._lock:
             self._queue_tracker.on_idle(time.monotonic())
