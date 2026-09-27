@@ -186,6 +186,17 @@ def test_the_idle_grace_runs_from_the_first_idle_not_the_latest() -> None:
     assert tracker.snapshot() == []
 
 
+def test_the_idle_grace_sweeps_a_stranded_phantom_so_later_leaves_stay_aligned() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("   ", timestamp="2026-08-07T00:00:01.000Z"), _enqueue_line("stranded"))
+    tracker.on_idle(now=100.0)
+    tracker.expire(now=100.0 + DELIVERY_GRACE_SECONDS)
+    assert tracker.snapshot() == []
+    # A left-over phantom would take this dequeue and leave the delivered message queued.
+    _feed(tracker, _enqueue_line("next", timestamp="2026-08-07T00:00:02.000Z"), _dequeue_line())
+    assert tracker.snapshot() == []
+
+
 def test_a_leave_parks_the_rest_of_the_queue_again() -> None:
     tracker = ClaudeQueueTracker.build()
     _feed(tracker, _enqueue_line("first"), _enqueue_line("second"))

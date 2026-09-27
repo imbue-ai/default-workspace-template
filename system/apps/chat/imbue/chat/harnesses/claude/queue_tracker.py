@@ -15,7 +15,7 @@ The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
 * dequeue / remove / popAll -> ``resolve_oldest`` (pop the FIFO head, phantom or
   real). One record = one pop; popAll emits one record per flushed message, so a
   per-record pop is uniform (no special "clear all").
-* working -> IDLE -> mark every real entry as being delivered, and ``resolve`` the
+* working -> IDLE -> mark every entry (phantom or real) as being delivered, and ``resolve`` the
   ones still there :data:`DELIVERY_GRACE_SECONDS` later (the one backstop; sweeps
   interrupts, SIGKILL, crashes -- none of which the poll loop would otherwise
   reconcile). The agent reads as IDLE the moment its reply lands, but Claude only
@@ -118,10 +118,11 @@ class ClaudeQueueTracker:
         (rendered as being sent) rather than blanking until its turn lands. One still
         queued :data:`DELIVERY_GRACE_SECONDS` later is stale (an interrupt, a
         flush-restart SIGKILL, a crash -- none of which write a resolution record) and
-        is dropped.
+        is dropped. Phantom slots are swept too: a stale one left at the FIFO head would
+        take the next message's positional leave.
         """
-        for entry in self._queued_set.snapshot():
-            self._idle_since_by_id.setdefault(entry["queued_id"], now)
+        for message in self._queued_set.pending:
+            self._idle_since_by_id.setdefault(message.queued_id, now)
         self.expire(now)
 
     def expire(self, now: float) -> None:
