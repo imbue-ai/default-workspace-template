@@ -1211,10 +1211,9 @@ export class DesktopStore {
   }
 
   /** Raise a window to the top of the stack, unless a move or resize of another window is in progress: the
-   *  gestured window holds the top until its gesture ends, and a raise that arrives meanwhile is not the user
-   *  choosing that window (a page reports focus when the chrome window's focus comes back mid-drag, which a
-   *  tear-out drag returning does every time). Dropped rather than deferred: the gesture's end raises its own
-   *  window again, and a deferred raise would then undo it. */
+   *  gestured window holds the top until its gesture ends, and a raise that arrives meanwhile (a page reporting
+   *  focus as the chrome window's focus comes back mid-drag) is not the user choosing that window. Dropped
+   *  rather than deferred, since the gesture's end raises its own window again. */
   raiseWindow(windowId: string): void {
     if (this.isAnotherWindowGestured(windowId)) return;
     this.dispatch({ type: "window_raised", windowId });

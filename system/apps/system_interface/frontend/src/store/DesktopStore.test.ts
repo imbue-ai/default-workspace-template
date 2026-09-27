@@ -760,7 +760,6 @@ describe("gestures", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
     store.endWindowMove({ x: 150, y: 90 });
     expect(last(activePlacements(store.getState()))?.window_id).toBe("win-1");
-    // Once the gesture is over, a raise is a raise again.
     store.raiseWindow("win-2");
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
 
