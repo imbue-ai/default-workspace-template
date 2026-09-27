@@ -21,6 +21,8 @@ const STROKE_PATHS = {
   // The single canonical "x".
   close: '<path d="M18 6L6 18"/><path d="M6 6l12 12"/>',
   file: '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/>',
+  pointer:
+    '<path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2l.6 2.4"/><path d="M2.2 7.2l2.4.6"/><path d="M3.6 3.6l1.7 1.7"/>',
   send: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',

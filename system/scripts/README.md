@@ -10,9 +10,10 @@ Provisioning and utility scripts:
   the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
-  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi
-  spawns their `*_check.py` checkers from `.pi/extensions/`. See
-  `tool-call-policies.md` for what each one enforces.
+  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
+  `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same
+  scripts the payload they read on stdin. See `tool-call-policies.md` for what
+  each one enforces.
 - Plugin provisioning: `claude_update_plugin.sh` installs project-scoped Claude
   plugins; `codex_update_plugin.sh` installs native code-guardian into each
   mngr Codex agent's isolated home, after its config is written and before
@@ -28,10 +29,13 @@ Provisioning and utility scripts:
   desktop's window and shortcut ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`; `--create` makes a new chat there
-  the same way, with `mngr create` as the backoff), `seed_welcome_chat.py`
-  (open the workspace's first chat on the conversation the Mind app had before
-  the workspace existed; run through `mngr exec` by the Mind app),
-  `require_create_account.py` (the
+  the same way, with `mngr create` as the backoff), `with_secrets.py` (run a
+  command with one `data/.secrets/<name>.env` file's variables in its
+  environment; the one sanctioned reader of that directory, which
+  `agent_secrets_guard.sh` enforces -- see the `connect-external-service`
+  skill), `seed_welcome_chat.py` (open the workspace's first chat on the
+  conversation the Mind app had before the workspace existed; run through
+  `mngr exec` by the Mind app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.

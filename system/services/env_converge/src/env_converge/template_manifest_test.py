@@ -17,6 +17,7 @@ from env_converge.template_manifest import (
     TemplateManifestParseError,
     check_env_d_units,
     check_markdown_agreement,
+    check_secret_references,
     check_unfinished_placeholders,
     find_manifest_path,
     load_template_manifest,
@@ -66,7 +67,7 @@ def _manifest(toml_text: str, tmp_path: Path) -> TemplateManifest:
     return load_template_manifest(path)
 
 
-# --- the schema itself ---
+# the schema itself
 
 
 def test_a_minimal_manifest_loads_with_the_documented_defaults(tmp_path: Path) -> None:
@@ -223,7 +224,7 @@ def test_a_v1_repo_with_slug_named_manifests_is_not_mistaken_for_v2(
     assert find_manifest_path(tmp_path) is None
 
 
-# --- env.d unit checks ---
+# env.d unit checks
 
 
 def _manifest_with_units(
@@ -296,7 +297,7 @@ def test_a_unit_covered_by_a_parent_include_path_is_accepted(tmp_path: Path) -> 
     assert check_env_d_units(manifest) == ()
 
 
-# --- markdown / toml agreement ---
+# markdown / toml agreement
 
 
 def test_matching_markdown_and_toml_agree(tmp_path: Path) -> None:
@@ -389,7 +390,7 @@ def test_declared_activation_requirements_matching_the_markdown_pass(
     assert check_markdown_agreement(manifest, markdown) == ()
 
 
-# --- placeholders ---
+# placeholders
 
 
 def test_unreplaced_placeholders_are_caught() -> None:
@@ -398,7 +399,7 @@ def test_unreplaced_placeholders_are_caught() -> None:
     assert check_unfinished_placeholders("<!-- minds-placeholder-thumbnail -->")
 
 
-# --- the whole tree ---
+# the whole tree
 
 
 def test_a_complete_tree_validates_clean(tmp_path: Path) -> None:
@@ -486,7 +487,7 @@ def test_every_problem_in_a_tree_is_reported_at_once(tmp_path: Path) -> None:
     assert len(problems) >= 2
 
 
-# --- the import constraint that keeps the publish-time gate runnable ---
+# the import constraint that keeps the publish-time gate runnable
 
 
 def test_the_schema_module_imports_only_stdlib_and_pydantic() -> None:
@@ -558,7 +559,7 @@ def test_an_template_needing_no_activation_says_so() -> None:
     ).has_activation_requirements()
 
 
-# --- front matter is YAML, and titles are the user's own words ---
+# front matter is YAML, and titles are the user's own words
 
 
 @pytest.mark.parametrize(
@@ -623,7 +624,7 @@ def test_an_unquoted_plain_title_still_works(tmp_path: Path) -> None:
     assert check_markdown_agreement(manifest, _MINIMAL_MARKDOWN) == ()
 
 
-# --- a manifest written by a workspace we are not ---
+# a manifest written by a workspace we are not
 
 
 def test_a_format_this_workspace_does_not_write_is_refused(tmp_path: Path) -> None:
@@ -663,3 +664,65 @@ def test_a_manifest_with_no_format_key_is_treated_as_ours(tmp_path: Path) -> Non
     manifest = _manifest(_MINIMAL_TOML.replace('format = "v2"\n', ""), tmp_path)
 
     assert manifest.format == CURRENT_MANIFEST_FORMAT
+
+
+def test_a_secret_requirement_names_a_file_with_variables_or_a_legacy_bare_name(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        _MINIMAL_TOML
+        + '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["WIDGET_TOKEN"]\nnote = "a token"\n'
+        + '\n[[requirements.secret]]\nname = "SLACK_SIGNING_SECRET"\n',
+        tmp_path,
+    )
+    modern, legacy = manifest.requirements.secret
+    assert (modern.file, modern.variables, modern.name) == (
+        "widget",
+        ("WIDGET_TOKEN",),
+        None,
+    )
+    assert (legacy.file, legacy.variables, legacy.name) == (
+        None,
+        (),
+        "SLACK_SIGNING_SECRET",
+    )
+    for bad in (
+        '\n[[requirements.secret]]\nfile = "widget"\n',
+        '\n[[requirements.secret]]\nnote = "nothing named"\n',
+        '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["A"]\nname = "A"\n',
+    ):
+        with pytest.raises(TemplateManifestParseError):
+            _manifest(_MINIMAL_TOML + bad, tmp_path)
+
+
+def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
+    tmp_path: Path,
+) -> None:
+    _write_tree(tmp_path)
+    (tmp_path / "system/supervisord.conf.d").mkdir(parents=True)
+    (tmp_path / "system/supervisord.conf.d/widget.conf").write_text(
+        'command=bash -c "python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget"\n'
+    )
+    (tmp_path / "mcp-servers.json").write_text(
+        '{"mcpServers": {"m": {"args": ["/home/user/workspace/data/.secrets/mailer.env"]}}}'
+    )
+
+    problems = validate_template_tree(tmp_path)
+
+    assert len(problems) == 2
+    assert any(
+        "widget.conf" in problem and "widget.env" in problem for problem in problems
+    )
+    assert any(
+        "mcp-servers.json" in problem and "mailer.env" in problem
+        for problem in problems
+    )
+
+    (tmp_path / "declared").mkdir()
+    declared = _manifest(
+        _MINIMAL_TOML
+        + '\n[[requirements.secret]]\nfile = "widget"\nvariables = ["A"]\n'
+        + '\n[[requirements.secret]]\nfile = "mailer"\nvariables = ["B"]\n',
+        tmp_path / "declared",
+    )
+    assert check_secret_references(tmp_path, declared) == ()

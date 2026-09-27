@@ -9,6 +9,9 @@
 import m from "mithril";
 import "./style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
+import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "./models/TemplateCatalog";
 import { GettingStartedPage } from "./views/GettingStartedPage";
 
@@ -16,10 +19,16 @@ export const PAGE_PATH = "/";
 export const PAGE_TITLE = "Getting Started";
 
 function bootstrap(): void {
+  let handshake: ShellHandshake | null = null;
   const connection = connectToShell({
-    onHandshake: () => connection.location(PAGE_PATH, PAGE_TITLE),
+    onHandshake: (received) => {
+      handshake = received;
+      connection.location(PAGE_PATH, PAGE_TITLE);
+    },
   });
   window.addEventListener("focus", () => connection.focused());
+  // The element menu (element-reference-menu plan section 8): a reference drafts through the shell.
+  installElementContextMenu({ connection, handshake: () => handshake, open: createContextMenuOpener().open });
   ensureTemplateCatalogRequested();
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
