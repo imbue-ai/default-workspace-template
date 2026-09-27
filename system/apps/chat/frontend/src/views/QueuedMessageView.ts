@@ -119,10 +119,11 @@ export function renderQueuedMessages(chatId: string): m.Vnode[] {
   // Nothing is actually parked: every entry the backend published is one it is about to
   // type or is typing (agy's idle send, codex's shoulder-tap resend, a Claude message still
   // queued when the reply landed). Painting the "Queued messages" header and the tap button
-  // over those tells the user a message is WAITING when the backend is reporting the opposite -- and the header is the only
-  // reason an idle send ever looked queued, since the bubbles themselves already render
-  // as ordinary sends. Bare bubbles, no group wrapper: identical markup to the optimistic
-  // ones they replace, so the handoff is invisible rather than a reflow.
+  // over those tells the user a message is WAITING when the backend is reporting the
+  // opposite -- and the header is the only reason an idle send ever looked queued, since the
+  // bubbles themselves already render as ordinary sends. Bare bubbles, no group wrapper:
+  // identical markup to the optimistic ones they replace, so the handoff is invisible rather
+  // than a reflow.
   if (queued.every((message) => message.is_sending === true)) {
     return queued.map((message) => renderQueuedBubble(message, false));
   }
