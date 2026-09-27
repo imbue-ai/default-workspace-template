@@ -14,6 +14,7 @@ import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
+import { DetachedWindowGhost } from "./DetachedWindowGhost";
 import { FloatingEntries } from "./FloatingEntries";
 import { rectStyle } from "./pixelStyle";
 import { ShortcutIcon, shortcutContent } from "./ShortcutIcon";
@@ -41,6 +42,11 @@ export interface BackdropAttrs {
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint, target: Element) => void;
   readonly onWindowControl: (windowId: string, control: WindowControl, event: MouseEvent) => void;
+  /** A pulled-out window's ghost was asked to show its own desktop window, to hide itself, or to bring the
+   *  window back. */
+  readonly onShowDetachedWindow: (windowId: string) => void;
+  readonly onHideWindowGhost: (windowId: string) => void;
+  readonly onBringBackWindow: (windowId: string) => void;
   /** The element the live pages are appended to, created once and never re-rendered. */
   readonly onPagesHostCreated: (host: HTMLElement) => void;
 }
@@ -98,7 +104,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           // The pages' host: a sibling of the windows with no stacking context of its own, so a page
           // at 2i+1 and its chrome at 2i+2 interleave in the backdrop's context.
           m("div", {
-            class: "live-pages pointer-events-none absolute inset-0 [&>*]:pointer-events-auto",
+            class: "live-pages pointer-events-none absolute inset-0 outline-none [&>*]:pointer-events-auto",
             oncreate: (created: m.VnodeDOM) => attrs.onPagesHostCreated(created.dom as HTMLElement),
             onbeforeupdate: () => false,
           }),
@@ -107,11 +113,29 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
             // window's chrome sits over its own page in the stacking order, and the page must get the rest.
             { class: "windows absolute inset-0 pointer-events-none" },
-            // A keyed list tolerates no holes: a minimized or unknown window contributes nothing.
-            placements.flatMap((placement, index) => {
+            // A keyed list tolerates no holes: a minimized or unknown window contributes nothing (a pulled-out
+            // window's hidden ghost included).
+            placements.flatMap((placement, index): m.Children[] => {
               const window = windowsById.get(placement.window_id);
               if (placement.is_minimized || window === undefined) return [];
               const app = appByName(state, window.app);
+              // A pulled-out window leaves its ghost at its frame, where a return lands, whatever state it was
+              // pulled out in (detach keeps the state); its page is in the chrome's own window.
+              if (placement.is_detached) {
+                return [
+                  m(DetachedWindowGhost, {
+                    key: window.id,
+                    window,
+                    app,
+                    title: effectiveWindowTitle(state, window, app),
+                    rect: store.renderedRect({ ...placement, state: "NORMAL" }),
+                    stackIndex: index,
+                    onShow: () => attrs.onShowDetachedWindow(window.id),
+                    onHide: () => attrs.onHideWindowGhost(window.id),
+                    onBringBack: () => attrs.onBringBackWindow(window.id),
+                  }),
+                ];
+              }
               return [
                 m(Window, {
                   key: window.id,
