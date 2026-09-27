@@ -2923,23 +2923,26 @@ def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
 
 
 def test_stop_activity_tracking_clears_queued_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """Stopping tracking drops the queued snapshot and idle handler alongside activity state."""
+    """Stopping tracking drops the queued snapshot and both queue handlers alongside activity state."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
     agent_manager._ensure_activity_tracking("agent-1")
     agent_manager.register_queue_idle_handler("agent-1", lambda: [])
+    agent_manager.register_queue_busy_handler("agent-1", lambda: None)
     agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
 
     with agent_manager._lock:
         assert "agent-1" in agent_manager._queued_messages_by_agent
         assert "agent-1" in agent_manager._queue_idle_handler_by_agent
+        assert "agent-1" in agent_manager._queue_busy_handler_by_agent
 
     agent_manager._stop_activity_tracking("agent-1")
 
     with agent_manager._lock:
         assert "agent-1" not in agent_manager._queued_messages_by_agent
         assert "agent-1" not in agent_manager._queue_idle_handler_by_agent
+        assert "agent-1" not in agent_manager._queue_busy_handler_by_agent
 
 
 def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(
