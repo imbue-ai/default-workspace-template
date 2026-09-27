@@ -6,7 +6,7 @@ Usage, from the repo root (every skill's cwd)::
     python3 system/scripts/message_chat.py <chat-id> -m "text"
     python3 system/scripts/message_chat.py <chat-id> --message-file path/to/task.md
     some-command | python3 system/scripts/message_chat.py <chat-id>
-    python3 system/scripts/message_chat.py <chat-id> --system -m "a browser-fleet nudge"
+    python3 system/scripts/message_chat.py <chat-id> --browser-fleet -m "a browser-fleet nudge"
     python3 system/scripts/message_chat.py --create --name "assist-1a2b3c" --label auto_open=true -m "/assist ..."
 
 This is the in-workspace replacement for ``mngr message <agent>``. A chat is
@@ -47,12 +47,10 @@ no read timeout: the route blocks for as long as the harness takes to accept the
 text, and giving up part-way would be the one way to deliver the message twice.
 The connect timeout is short so an unreachable chat app is detected fast.
 
-``--system`` wraps the text in the browser fleet's sentinel, which the chat
-transcript renders as a collapsed "Browser fleet" chip instead of a user bubble.
-It exists for the browser app's wake-up nudges and labels anything else wrongly;
-the result of a background command goes to its agent through
-``run_in_background.py`` instead. The tag is pinned against the chat app's copy
-by a test there.
+``--browser-fleet`` wraps the text in the browser fleet's sentinel, which the
+chat transcript renders as a collapsed "Browser fleet" chip instead of a user
+bubble; the browser app's wake-up nudges use it. The tag is pinned against the
+chat app's copy by a test there.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
 create route, so the chat is what a launcher-started chat would be: the app mints its id,
@@ -99,7 +97,7 @@ CHAT_APP_FALLBACK_URL = "http://127.0.0.1:8010"
 
 # Mirrors ``BROWSER_FLEET_TAG`` in the chat app's ``harnesses/message_display.py``
 # (and the frontend's copy); a test in the chat app pins the two equal.
-SYSTEM_MESSAGE_TAG = "agentic-browser-fleet"
+BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
 # ``mngr message``'s exit codes (``imbue/mngr/cli/exit_codes.py``).
 EXIT_DELIVERED = 0
@@ -207,9 +205,9 @@ class ChatAppUnreachableError(Exception):
     """
 
 
-def wrap_system_message(text: str) -> str:
-    """Wrap an automated nudge in the sentinel; adds no newlines, so the wrapped text types into a pane like the bare text."""
-    return f"<{SYSTEM_MESSAGE_TAG}>{text}</{SYSTEM_MESSAGE_TAG}>"
+def wrap_browser_fleet_nudge(text: str) -> str:
+    """Wrap a browser-fleet nudge in the sentinel; adds no newlines, so the wrapped text types into a pane like the bare text."""
+    return f"<{BROWSER_FLEET_TAG}>{text}</{BROWSER_FLEET_TAG}>"
 
 
 def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
@@ -584,10 +582,14 @@ def _build_parser() -> argparse.ArgumentParser:
     source.add_argument("-m", "--message", help="The message text.")
     source.add_argument("--message-file", help="A file whose contents are the message.")
     parser.add_argument(
-        "--system",
+        "--browser-fleet",
         action="store_true",
-        help="Mark the message as a browser-fleet nudge, rendered as a collapsed 'Browser fleet' chip in the chat. "
-        "For the browser app's wake-ups only; a background command's result goes through run_in_background.py.",
+        help="Mark the message as a browser-fleet nudge, rendered as a collapsed 'Browser fleet' chip in the chat.",
+    )
+    # CLEANUP: drop this alias in the release after the one that renamed it to --browser-fleet;
+    # until an update restarts the browser app, its old code still passes --system to this script.
+    parser.add_argument(
+        "--system", dest="browser_fleet", action="store_true", help=argparse.SUPPRESS
     )
     create = parser.add_argument_group("creating a chat")
     create.add_argument(
@@ -614,9 +616,9 @@ def _validate_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.create:
         if args.chat_id is not None:
             parser.error("--create makes a new chat; it takes no chat id")
-        if args.system:
+        if args.browser_fleet:
             parser.error(
-                "--system marks a nudge to an existing chat; it does not apply to --create"
+                "--browser-fleet marks a nudge to an existing chat; it does not apply to --create"
             )
         return
     if args.chat_id is None:
@@ -637,8 +639,8 @@ def main(
     _validate_mode(parser, args)
     resolved_environ = os.environ if environ is None else environ
     text = _read_message(parser, args, sys.stdin if stdin is None else stdin)
-    if args.system:
-        text = wrap_system_message(text)
+    if args.browser_fleet:
+        text = wrap_browser_fleet_nudge(text)
     base_url = chat_app_url(resolved_environ, Path.cwd())
     if args.create:
         request = CreateRequest(

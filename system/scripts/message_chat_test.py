@@ -129,10 +129,13 @@ def test_a_dash_initial_message_is_taken_when_bound_with_an_equals_sign(
     assert body["message"] == "-continue"
 
 
-def test_a_system_message_is_wrapped_in_the_sentinel(
-    fake_chat_app: Any, fake_mngr: Path
+# ``--system`` is the flag's old name, which a browser app still running the pre-update code
+# passes until the update restarts it.
+@pytest.mark.parametrize("flag", ["--browser-fleet", "--system"])
+def test_a_browser_fleet_nudge_is_wrapped_in_the_sentinel(
+    fake_chat_app: Any, fake_mngr: Path, flag: str
 ) -> None:
-    rc, _ = _run("--system", "-m", "the browser is yours again")
+    rc, _ = _run(flag, "-m", "the browser is yours again")
 
     assert rc == message_chat.EXIT_DELIVERED
     [(_path, body)] = fake_chat_app.posted
@@ -230,7 +233,7 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_keeps_its_blocked
     monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
     monkeypatch.setenv("FAKE_MNGR_EXIT", "7")
 
-    rc, slept = _run("--system", "-m", "wake up")
+    rc, slept = _run("--browser-fleet", "-m", "wake up")
 
     assert rc == message_chat.EXIT_DELIVERED_BUT_BLOCKED
     assert slept == []
@@ -657,7 +660,7 @@ def test_a_chat_app_without_the_create_route_hands_the_create_to_mngr(
     "argv, complaint",
     [
         (["--create", _CHAT_ID, "-m", "x"], "takes no chat id"),
-        (["--create", "--system", "-m", "x"], "does not apply to --create"),
+        (["--create", "--browser-fleet", "-m", "x"], "does not apply to --create"),
         ([_CHAT_ID, "--name", "n", "-m", "x"], "apply only with --create"),
         ([_CHAT_ID, "--label", "a=b", "-m", "x"], "apply only with --create"),
         (["--create", "--label", "novalue", "-m", "x"], "takes NAME=VALUE"),

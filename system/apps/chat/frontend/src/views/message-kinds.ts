@@ -199,8 +199,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
  * bare user bubble. mngr itself is untouched (it is an independent product and has
  * no business knowing about this display concern).
  *
- * The wrapping side is `system/scripts/message_chat.py --system`
- * (`SYSTEM_MESSAGE_TAG`), which posts through the chat app's send route; the
+ * The wrapping side is `system/scripts/message_chat.py --browser-fleet`
+ * (`BROWSER_FLEET_TAG`), which posts through the chat app's send route; the
  * backend's copy is `BROWSER_FLEET_TAG` in `harnesses/message_display.py`. Keep the
  * tag string in sync. The tag adds no newlines, so a wrapped message types into the
  * agent's pane identically to the same text sent unwrapped.

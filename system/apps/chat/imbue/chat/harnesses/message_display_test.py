@@ -347,13 +347,13 @@ def _load_system_script(filename: str) -> Any:
     return module
 
 
-def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() -> None:
-    """``system/scripts/message_chat.py --system`` wraps a nudge in the tag this module recognises; the script
+def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_strips() -> None:
+    """``system/scripts/message_chat.py --browser-fleet`` wraps a nudge in the tag this module recognises; the script
     is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
     module = _load_system_script("message_chat.py")
 
-    assert module.SYSTEM_MESSAGE_TAG == BROWSER_FLEET_TAG
-    decision = classify_user_message(module.wrap_system_message("Browser b1 was handed back to you."))
+    assert module.BROWSER_FLEET_TAG == BROWSER_FLEET_TAG
+    decision = classify_user_message(module.wrap_browser_fleet_nudge("Browser b1 was handed back to you."))
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
 

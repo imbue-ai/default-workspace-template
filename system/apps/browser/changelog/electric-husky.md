@@ -1,0 +1,1 @@
+The wake-up the fleet sends an agent whose browser is its again now passes `message_chat.py --browser-fleet` instead of `--system`. The flag was renamed after what it does, since it marks a message as a browser-fleet nudge and nothing else. The chat shows the nudge exactly as before.

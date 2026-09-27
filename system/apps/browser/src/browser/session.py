@@ -388,8 +388,8 @@ def _repo_root() -> Path:
 # The in-workspace chat messenger (see `_message_agent`): the owner recorded on a browser is
 # a chat id, and the chat app knows which agent is taking that chat's messages; the script
 # falls back to `mngr message` itself when the chat app cannot take the message. Its
-# `--system` flag wraps the fleet's nudges in the sentinel the chat transcript renders as a
-# collapsed system chip instead of a bare user bubble.
+# `--browser-fleet` flag wraps the fleet's nudges in the sentinel the chat transcript renders
+# as a collapsed "Browser fleet" chip instead of a bare user bubble.
 _MESSAGE_CHAT_SCRIPT = Path("system") / "scripts" / "message_chat.py"
 
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
@@ -1356,8 +1356,9 @@ class LiveBrowser(MutableModel):
         delivered but the agent's input is blocked) both leave a warning; the claim window /
         lifecycle handling is the backstop if a message never lands.
 
-        These are automated, non-human nudges, so they go with ``--system``: the transcript
-        UI renders them as a collapsed system chip instead of a bare user bubble. This is
+        These are automated, non-human nudges, so they go with ``--browser-fleet``: the
+        transcript UI renders them as a collapsed "Browser fleet" chip instead of a bare user
+        bubble. This is
         display-only -- the agent still receives the message and resumes its turn exactly
         as before. The chat is addressed by its chat id, never by an agent's name."""
         try:
@@ -1365,7 +1366,7 @@ class LiveBrowser(MutableModel):
                 sys.executable,
                 str(_MESSAGE_CHAT_SCRIPT),
                 agent_id,
-                "--system",
+                "--browser-fleet",
                 "--message",
                 text,
                 # Run from the repo root: the script path is repo-relative and the `mngr`
