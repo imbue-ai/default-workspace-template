@@ -586,8 +586,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Mark the message as a browser-fleet nudge, rendered as a collapsed 'Browser fleet' chip in the chat.",
     )
-    # CLEANUP: drop this alias in the release after the one that renamed it to --browser-fleet;
-    # until an update restarts the browser app, its old code still passes --system to this script.
+    # CLEANUP: drop this alias once update-self's floor, the oldest release the app updates from,
+    # passes --browser-fleet itself: an update from an older release runs this script while the
+    # browser app, until the update restarts it, still passes --system.
     parser.add_argument(
         "--system", dest="browser_fleet", action="store_true", help=argparse.SUPPRESS
     )
