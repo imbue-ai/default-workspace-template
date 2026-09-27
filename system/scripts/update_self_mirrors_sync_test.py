@@ -3,9 +3,7 @@
 update-self stages its skill directory from the release it updates to and runs it as a
 self-contained unit, so it cannot import or run anything out of ``system/scripts/`` of a
 workspace that may predate it; the scripts it shares are mirrored into its own directory
-instead. Equivalence by review is what failed last time -- the two shebang parsers in
-``tool_env.py`` drifted and the difference only showed on a ``#! /path`` spelling -- so this
-asserts sameness, which cannot drift at all.
+instead, and held byte-identical here rather than equivalent by review.
 """
 
 from __future__ import annotations

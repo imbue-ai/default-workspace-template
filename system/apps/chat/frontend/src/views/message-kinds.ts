@@ -3,9 +3,7 @@
  * transcript is displayed, and the single source of truth a NEW HARNESS reads to
  * know what it must produce.
  *
- * ---------------------------------------------------------------------------
  * Why this file exists
- * ---------------------------------------------------------------------------
  * SCOPE: this catalogues ONLY the `user_message` event channel -- the transcript
  * slot that is OVERLOADED (a genuine human turn AND framework/system injections
  * all share it), and so needs disambiguating. Assistant-side surfaces
@@ -33,9 +31,7 @@
  *      it opens a new turn, and a prose description of the net visual. Read it to
  *      answer "what will my message look like?" without tracing render code.
  *
- * ---------------------------------------------------------------------------
  * Adding a harness (Codex, etc.)
- * ---------------------------------------------------------------------------
  * The `UserMessageKind`s below are harness-AGNOSTIC -- they are display buckets, not
  * Claude-specific markers. A new harness does NOT add kinds; it appends detectors
  * that map ITS framework markers to these existing kinds onto the ONE shared list in
