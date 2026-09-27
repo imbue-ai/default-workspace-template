@@ -115,7 +115,8 @@ function styleLabel(style: PinStyle): string {
  *  Float or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and
  *  the avatar chooser while it shows the avatar, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
-  // A pulled-out window's arrangement is the chrome's: the entry shows its window or brings it back.
+  // A pulled-out window's arrangement is the chrome's: the entry shows its window, hides or shows its
+  // placeholder here, or brings it back.
   const rows: MenuRow[] = actions.isDetached
     ? [
         { kind: "action", key: "show", label: "Show", onSelect: actions.show },
