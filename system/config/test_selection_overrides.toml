@@ -97,6 +97,11 @@ suites = ["system/scripts/agy_shim"]
 note = "agent hooks, run by the agy shim's tests; the always-run wiring guard checks each one's wiring"
 
 [[consumer]]
+paths = ["system/scripts/agent_block_pipe_tail_head_check.py"]
+suites = ["system/scripts/agent_block_pipe_tail_head_test.py", "system/scripts/agy_shim"]
+note = "the decision agent_block_pipe_tail_head.sh execs, which that hook's test and the agy shim's tests run"
+
+[[consumer]]
 paths = [
     "system/scripts/agent_open_tickets_stop_nudge.sh",
     "system/scripts/imbue_plan_extra/**",
