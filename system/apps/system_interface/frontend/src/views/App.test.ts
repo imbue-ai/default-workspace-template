@@ -235,7 +235,7 @@ describe("a window drag", () => {
     expect(document.activeElement).toBe(frame);
     listener.onPressEnd(binding);
     listener.onPressStart({ kind: "shortcut", app: "docs", launch: "open", element: content });
-    expect(document.activeElement).toBe(frame.parentElement?.parentElement);
+    expect(document.activeElement).toBe(document.querySelector(".live-pages"));
     listener.onPressEnd({ kind: "shortcut", app: "docs", launch: "open", element: content });
   });
 
