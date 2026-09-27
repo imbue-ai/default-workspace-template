@@ -4030,8 +4030,8 @@ class AgentManager:
             # did not change this cycle -- an edge-only backstop leaves such survivors
             # stranded on an idle agent forever.
             is_idle = new_state == ActivityState.IDLE
-            has_stale_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
-            if old_state == new_state and agent_state.activity_state == new_state.value and not has_stale_queue:
+            has_idle_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
+            if old_state == new_state and agent_state.activity_state == new_state.value and not has_idle_queue:
                 return
             self._activity_state_by_agent[agent_id] = new_state
             # Update just this slot so any cached ``model_choice`` stays intact --
@@ -4045,7 +4045,7 @@ class AgentManager:
             is_leaving_idle = (
                 old_state == ActivityState.IDLE and not is_idle and bool(self._queued_messages_by_agent.get(agent_id))
             )
-            if has_stale_queue:
+            if has_idle_queue:
                 queue_handler = self._queue_idle_handler_by_agent.get(agent_id)
             elif is_leaving_idle:
                 queue_handler = self._queue_busy_handler_by_agent.get(agent_id)
