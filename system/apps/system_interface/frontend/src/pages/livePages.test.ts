@@ -609,6 +609,17 @@ describe("the contract", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
   });
 
+  it("leaves the dragged window on top when another page says it took focus mid-drag", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    messageFromPage("win-2", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    store.endWindowMove({ x: 150, y: 90 });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+  });
+
   it("opens a page's shell:open on its own app, and warns about the address form", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     messageFromPage("win-1", { type: SHELL_OPEN, path: "/?doc=3", ifPresent: "new" });

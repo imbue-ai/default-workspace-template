@@ -1210,8 +1210,20 @@ export class DesktopStore {
     await this.closeWindow(windowId);
   }
 
+  /** Raise a window to the top of the stack, unless a move or resize of another window is in progress: the
+   *  gestured window holds the top until its gesture ends, and a raise that arrives meanwhile is not the user
+   *  choosing that window (a page reports focus when the chrome window's focus comes back mid-drag, which a
+   *  tear-out drag returning does every time). Dropped rather than deferred: the gesture's end raises its own
+   *  window again, and a deferred raise would then undo it. */
   raiseWindow(windowId: string): void {
+    if (this.isAnotherWindowGestured(windowId)) return;
     this.dispatch({ type: "window_raised", windowId });
+  }
+
+  private isAnotherWindowGestured(windowId: string): boolean {
+    const gesture = this.gesture;
+    if (gesture === null) return false;
+    return (gesture.kind === "move" || gesture.kind === "resize") && gesture.windowId !== windowId;
   }
 
   minimizeWindow(windowId: string): void {
@@ -1367,7 +1379,6 @@ export class DesktopStore {
     if (this.state.modes.isCompact) return;
     const placement = placementOf(this.state.layout, windowId);
     const startRect = this.renderedRect(placement);
-    this.raiseWindow(windowId);
     // A solo shell shows one window edge to edge; there is no desktop to pull a window out of.
     const isWatched = this.canPopOut && this.soloWindowId === null;
     this.gesture = {
@@ -1381,6 +1392,7 @@ export class DesktopStore {
       isWatched,
       isTearingOut: false,
     };
+    this.raiseWindow(windowId);
     if (isWatched) this.announceWindowDrag(windowId, startRect, pointer);
     this.notifyListeners();
   }
@@ -1449,12 +1461,12 @@ export class DesktopStore {
     const placement = placementOf(this.state.layout, windowId);
     // Resizing a snapped or maximized window first un-snaps it, at the rectangle it rendered at.
     const startRect = this.renderedRect(placement);
+    this.gesture = { kind: "resize", windowId, edge, startRect, currentRect: startRect };
     if (placement.state !== "NORMAL") {
       this.dispatch({ type: "window_frame_set", windowId, frame: frameFromPixels(startRect, this.backdrop) });
     } else {
       this.raiseWindow(windowId);
     }
-    this.gesture = { kind: "resize", windowId, edge, startRect, currentRect: startRect };
     this.notifyListeners();
   }
 

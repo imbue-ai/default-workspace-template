@@ -750,6 +750,28 @@ describe("gestures", () => {
     expect(snapped?.frame).toEqual(moved?.frame);
   });
 
+  it("drops a raise of another window while a move or resize is in progress, and keeps the gestured window's own", async () => {
+    const store = await startedStore();
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    // A page reporting focus mid-drag, a notification click: not the user choosing that window.
+    store.raiseWindow("win-2");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    store.raiseWindow("win-1");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    store.endWindowMove({ x: 150, y: 90 });
+    expect(last(activePlacements(store.getState()))?.window_id).toBe("win-1");
+    // Once the gesture is over, a raise is a raise again.
+    store.raiseWindow("win-2");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+
+    store.beginWindowResize("win-1", "e");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    store.raiseWindow("win-2");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    store.endWindowResize({ x: 20, y: 0 });
+    expect(last(activePlacements(store.getState()))?.window_id).toBe("win-1");
+  });
+
   it("dragging a maximized window un-snaps it after the release distance", async () => {
     const store = await startedStore();
     store.setWindowState("win-1", "MAXIMIZED");
@@ -1422,6 +1444,35 @@ describe("pulled-out windows", () => {
     await store.reattachWindow("win-1", { x: 0.1, y: 0.1, width: 0.4, height: 0.4 });
     expect(last(activePlacements(store.getState()))).toMatchObject({ window_id: "win-1", is_detached: false });
     expect(savedCalls()).toHaveLength(2);
+  });
+
+  it("keeps the dragged window on top over a raise of another window once the chrome has brought it back", async () => {
+    // Two placed windows, the dragged one at the bottom.
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-2")],
+    });
+    const { store } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.setTearOut("win-1", "out");
+    store.setTearOut("win-1", "in");
+    await settle();
+    expect(savedCalls()).toHaveLength(2);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    // The chrome window's focus comes back with the drag, and the other window's page reports it took focus:
+    // the drag still owns the top of the stack, and nothing is written for the report.
+    store.raiseWindow("win-2");
+    expect(activePlacements(store.getState()).map((placement) => placement.window_id)).toEqual([
+      "win-2",
+      "win-1",
+    ]);
+    await vi.advanceTimersByTimeAsync(300);
+    await settle();
+    expect(savedCalls()).toHaveLength(2);
+    store.endWindowMove({ x: 150, y: 90 });
+    expect(last(activePlacements(store.getState()))).toMatchObject({ window_id: "win-1", is_detached: false });
   });
 
   it("opens a window in its own desktop window from the menu, shows it again, and brings it back", async () => {
