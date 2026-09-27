@@ -1,7 +1,7 @@
 """The Claude queued-message populator -- the ONLY harness-specific queue code.
 
 Wraps one common :class:`QueuedSet` and maps Claude's raw queue ledger onto its
-``add`` / ``resolve_oldest`` / ``clear`` mutators. It is a pure function of the
+``add`` / ``resolve_oldest`` / ``resolve`` / ``clear`` mutators. It is a pure function of the
 ledger it is fed (plus the coarse ``on_idle`` backstop); it holds no UI state and
 knows nothing about the frontend or the two common actions -- those all read the
 shared entity.
