@@ -1,10 +1,10 @@
 """The Claude queued-message populator -- the ONLY harness-specific queue code.
 
 Wraps one common :class:`QueuedSet` and maps Claude's raw queue ledger onto its
-``add`` / ``resolve_oldest`` / ``resolve`` / ``clear`` mutators. It is a pure function of the
-ledger it is fed (plus the coarse ``on_idle`` backstop); it holds no UI state and
-knows nothing about the frontend or the two common actions -- those all read the
-shared entity.
+``add`` / ``resolve_oldest`` / ``resolve`` / ``clear`` mutators. It is a function of the
+ledger it is fed plus the agent's idle and working readings (the ``on_idle`` /
+``on_busy`` backstop); it holds no UI state and knows nothing about the frontend or
+the two common actions -- those all read the shared entity.
 
 The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
 ``docs/claude_queued_messages_impl.md``):
@@ -22,7 +22,8 @@ The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
   dequeues a parked message after its end-of-turn hooks run, so clearing at once
   would blank the message until its turn arrives. A marked entry renders as a
   message being sent (``is_sending``) until its leave record or the grace expiry.
-  IDLE -> working -> forget the marks (``on_busy``): what is still queued waits for that turn.
+* IDLE -> working -> forget the marks (``on_busy``): what is still queued waits for
+  that turn.
 
 This keys resolution off the ledger's LEAVE ops ONLY -- never ``promptSource`` or
 the ``queued_command`` attachment -- because in the real Mind flow every message
