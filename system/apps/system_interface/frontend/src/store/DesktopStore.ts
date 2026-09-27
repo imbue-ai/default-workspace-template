@@ -110,6 +110,11 @@ import type {
 // an op that follows a gesture has to see the gesture in the file.
 const SAVE_DEBOUNCE_MS = 300;
 
+// How long a solo shell whose first layout does not say its window is out waits for the desktop's word before
+// writing the detach itself: the main window's shell writes it as the window leaves, and that save is on its
+// way while the solo shell boots, so a first load that beats it is followed by the broadcast within this.
+const SOLO_HEAL_GRACE_MS = 1000;
+
 /** The routes the store calls, injectable so the store is tested against a fake shell. */
 export interface DesktopApi {
   /** The desktops, the apps, and the clients in one read (contracts.md section 5.5): what a page boots from. */
@@ -192,7 +197,8 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
 
 // The layout verbs a solo shell (the pull-out-window spec, section 7.5) never applies: it is a view of one
 // window, and the desktop's arrangement belongs to the client's main window. The two exceptions are its own
-// window's detach (the first load's self-heal) and reattach (the way back).
+// window's detach (the first load's fallback, when no desktop shell wrote it) and reattach (the way back
+// when no desktop shell can take it).
 const SOLO_IGNORED_LAYOUT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
   "window_raised",
   "window_minimized",
@@ -319,6 +325,11 @@ export class DesktopStore {
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
   private isSoloFirstLayoutPending: boolean;
+  /** The grace a solo shell gives the desktop's detach save before writing the detach itself. */
+  private soloHealTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A solo shell's reattach is on its way to the shell: the detached-set report waits for it to land, since
+   *  the chrome closes this window on a report without its window, which would abort the save. */
+  private isReportHeldForSave = false;
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
@@ -358,33 +369,43 @@ export class DesktopStore {
     return gesture !== null && gesture.kind === "move" && gesture.windowId === windowId ? gesture : null;
   }
 
-  /** The chrome reported a step of the drag it watches. "out": the window is hidden here, the chrome's own
-   *  desktop window standing in for it under the cursor. "in": shown again where the drag has it, and brought
-   *  back should the popout's own shell have detached it meanwhile. "released": the window is detached where it
-   *  stood, its frame untouched, saved at once (the chrome's window reads the placement as soon as it loads),
-   *  and the gesture is over; a release this shell saw itself first has already done that, and this is a no-op. */
+  /** The chrome reported a step of the drag it watches. "out": the window is detached where it stood, its
+   *  frame untouched, and saved at once, so the chrome's own desktop window (which stands in for it under the
+   *  cursor from here) reads a placement that already says so, in this shell's stacking order; the ghost
+   *  stands where the drag began. "in": the chrome dropped that window, and this one is brought back and shown
+   *  again where the drag has it, saved at once too. "released": the button came up while out, and the gesture
+   *  is over; the placement is already what it is to be, so nothing is written. This shell is the one writer
+   *  during a drag; the chrome's window only reads. */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
     if (gesture === null || !gesture.isWatched) return;
     if (phase === "released") {
       if (!gesture.isTearingOut) return;
       this.gesture = null;
-      this.detachDraggedWindow(windowId);
       this.notifyListeners();
       return;
     }
     const isTearingOut = phase === "out";
     if (gesture.isTearingOut === isTearingOut) return;
     this.gesture = { ...gesture, isTearingOut, zone: isTearingOut ? null : gesture.zone };
-    if (!isTearingOut) this.bringBackIfDetached(windowId);
+    if (isTearingOut) this.detachDraggedWindow(windowId);
+    else this.bringBackDraggedWindow(windowId);
     this.notifyListeners();
   }
 
-  /** Released while out: the window is detached where it stood, its frame untouched, so the ghost stands where
-   *  the drag began and a return lands there. Saved at once, since the chrome's window reads the placement as
-   *  soon as it loads. */
+  /** Out: the window is detached where it stood, its frame untouched, so the ghost stands where the drag began
+   *  and a return lands there. Saved at once, since the chrome's window reads the placement as soon as it loads. */
   private detachDraggedWindow(windowId: string): void {
     this.dispatch({ type: "window_detached", windowId });
+    void this.flushPendingSave();
+  }
+
+  /** Back inside, or cancelled while out: the window is on the desktop again, raised (its state kept, so a
+   *  snapped window that un-snapped mid-drag is still where the drag has it), saved at once so the file never
+   *  says a window is out while the desktop shows it. */
+  private bringBackDraggedWindow(windowId: string): void {
+    if (!placementOf(this.state.layout, windowId).is_detached) return;
+    this.dispatch({ type: "window_raised", windowId });
     void this.flushPendingSave();
   }
 
@@ -471,11 +492,12 @@ export class DesktopStore {
   }
 
   /** Tell the embedder which windows of the active desktop are pulled out, when that changed. Only once the
-   *  layout is known and, in a solo shell, its first load has been healed: a report without the solo window
-   *  (before the layout loads, or between a first load that does not yet say it is out and the heal) would
-   *  read, in that window's own desktop window, as its window having been brought back. */
+   *  layout is known and, in a solo shell, its first load has settled and no reattach save is on its way: a
+   *  report without the solo window (before the layout loads, between a first load that does not yet say it
+   *  is out and the desktop's word, or before its own reattach has landed) would read, in that window's own
+   *  desktop window, as its window having been brought back, and the chrome closes that window on it. */
   private reportDetachedWindows(): void {
-    if (!this.state.isLayoutLoaded || this.isSoloFirstLayoutPending) return;
+    if (!this.state.isLayoutLoaded || this.isSoloFirstLayoutPending || this.isReportHeldForSave) return;
     const report = detachedWindowsOf(this.state);
     const serialized = JSON.stringify(report);
     if (serialized === this.lastReportedDetached) return;
@@ -1221,12 +1243,12 @@ export class DesktopStore {
 
   /** Pull a window out into a desktop window of the embedder's own without a drag (the window menu's "Open in
    *  its own window"): the chrome opens it beside its window, at the size the window renders here. The
-   *  placement is saved at once, since the chrome's new window reads it as soon as it loads. */
+   *  placement is saved first, since the chrome's new window reads it as soon as it loads. */
   async detachWindow(windowId: string): Promise<void> {
     if (!this.canPopOut || !this.isPopOutVerbOwn(windowId) || findWindow(this.state, windowId) === null) return;
-    this.showDetachedWindow(windowId);
     this.dispatch({ type: "window_detached", windowId });
     await this.flushPendingSave();
+    this.showDetachedWindow(windowId);
   }
 
   /** Raise (or reopen) the desktop window a pulled-out window is shown in, at the size the window renders here. */
@@ -1258,14 +1280,18 @@ export class DesktopStore {
   /** Bring a pulled-out window back to the desktop (``minds:reattach-window``, the ghost's "Bring back", the
    *  entry's menu): shown and raised, at ``frame`` when a drop back onto the desktop named one. The window's own
    *  desktop is shown first when the client has moved to another meanwhile (the chrome names a window, not a
-   *  desktop). Saved at once: the chrome's window is closing on the answer. */
+   *  desktop). Saved at once, and in a solo shell reported only once saved: the chrome closes that shell's
+   *  desktop window on the report, which would abort a save still on its way. */
   async reattachWindow(windowId: string, frame: Frame | null): Promise<void> {
     if (!this.isPopOutVerbOwn(windowId)) return;
     const found = findWindow(this.state, windowId);
     if (found === null) return;
     if (found.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(found.desktop.id);
+    this.isReportHeldForSave = this.soloWindowId !== null;
     this.dispatch({ type: "window_reattached", windowId, frame });
     await this.flushPendingSave();
+    this.isReportHeldForSave = false;
+    this.reportDetachedWindows();
   }
 
   /** Whether a pull-out verb for ``windowId`` is this shell's to apply: any window's in a desktop shell, and only
@@ -1393,14 +1419,6 @@ export class DesktopStore {
     this.gesture = { ...start, currentRect, zone };
   }
 
-  /** A tear-out that ends without a detach (the pointer back inside, the gesture cancelled) leaves the window on
-   *  the desktop. The layout may say otherwise by then: the popout's solo shell detaches the window on its first
-   *  load when the placement does not yet say so, and its save lands here mid-drag. The window is then brought
-   *  back where the drag raised it, so no ghost stands for a popout the chrome has dropped. */
-  private bringBackIfDetached(windowId: string): void {
-    if (placementOf(this.state.layout, windowId).is_detached) this.dispatch({ type: "window_raised", windowId });
-  }
-
   endWindowMove(pointer: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "move") return;
@@ -1411,8 +1429,8 @@ export class DesktopStore {
     const placement = placementOf(this.state.layout, settled.windowId);
     if (settled.isWatched) this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut);
     if (settled.isTearingOut) {
-      // Released outside, and this shell saw the release itself (a pointer that does leave the chrome's window).
-      this.detachDraggedWindow(settled.windowId);
+      // Released outside, and this shell saw the release itself (a pointer that does leave the chrome's window):
+      // the window was detached and saved as it went out, so the gesture only ends.
     } else if (settled.zone !== null) {
       // The frame is untouched so restore returns to it (an un-snapped drag kept it too).
       this.dispatch({ type: "window_state_set", windowId: settled.windowId, state: settled.zone });
@@ -1547,10 +1565,11 @@ export class DesktopStore {
     if (this.gesture === null) return;
     const cancelled = this.gesture;
     this.gesture = null;
-    // A watched drag cancelled mid-way (Escape, the browser): the chrome drops any window it was dragging.
+    // A watched drag cancelled mid-way (Escape, the browser): the chrome drops any window it was dragging, and
+    // one that was out comes back to the desktop.
     if (cancelled.kind === "move" && cancelled.isWatched) {
       this.popOut.endWindowDrag(cancelled.windowId, false);
-      if (cancelled.isTearingOut) this.bringBackIfDetached(cancelled.windowId);
+      if (cancelled.isTearingOut) this.bringBackDraggedWindow(cancelled.windowId);
     }
     this.notifyListeners();
   }
@@ -1633,23 +1652,44 @@ export class DesktopStore {
     this.healSoloWindowOnFirstLoad();
   }
 
-  /** A solo shell exists because its window is pulled out; the first layout it loads may say otherwise (the
-   *  detach's save had not landed, the placement was written elsewhere, a relaunch after a return on another
-   *  device). That first load takes the shell's existence as the truth and detaches the window; a later load
-   *  that says the window is back is the desktop's word, and the chrome closes this window on the report. */
+  /** A solo shell exists because its window is pulled out; the first layout it loads may say otherwise. During
+   *  a drag the desktop's shell writes the detach as the window goes out and that save is on its way while this
+   *  shell boots, so a load that does not yet say it waits for the desktop's word (the broadcast's refetch is
+   *  another load, which settles this). Only when no word comes within the grace (a relaunch after a return on
+   *  another device, a detach whose save was refused) does this shell take its own existence as the truth and
+   *  detach the window itself. Until then the report is held: one without the solo window would close this
+   *  window. A later load that says the window is back is the desktop's word, and the chrome closes it. */
   private healSoloWindowOnFirstLoad(): void {
     if (!this.isSoloFirstLayoutPending || this.soloWindowId === null) return;
-    this.isSoloFirstLayoutPending = false;
     const found = findWindow(this.state, this.soloWindowId);
-    const isHealNeeded =
+    const isAttachedHere =
       found !== null &&
       found.desktop.id === this.state.activeDesktopId &&
       !placementOf(this.state.layout, this.soloWindowId).is_detached;
-    if (!isHealNeeded) {
-      // The report the first load owed, held back until now.
-      this.reportDetachedWindows();
+    if (!isAttachedHere) {
+      this.settleSoloFirstLoad();
       return;
     }
+    if (this.soloHealTimer !== null) return;
+    this.soloHealTimer = setTimeout(() => this.detachSoloWindowAfterGrace(), SOLO_HEAL_GRACE_MS);
+  }
+
+  /** The first load's question is answered (the layout says the window is out, or it is not here at all): the
+   *  report the first load owed goes out. */
+  private settleSoloFirstLoad(): void {
+    this.isSoloFirstLayoutPending = false;
+    if (this.soloHealTimer !== null) {
+      clearTimeout(this.soloHealTimer);
+      this.soloHealTimer = null;
+    }
+    this.reportDetachedWindows();
+  }
+
+  /** No load within the grace said the window is out: this shell's existence is the truth, and it writes it. */
+  private detachSoloWindowAfterGrace(): void {
+    this.soloHealTimer = null;
+    if (!this.isSoloFirstLayoutPending || this.soloWindowId === null) return;
+    this.isSoloFirstLayoutPending = false;
     this.dispatch({ type: "window_detached", windowId: this.soloWindowId });
     void this.flushPendingSave();
   }
