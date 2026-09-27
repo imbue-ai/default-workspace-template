@@ -221,6 +221,7 @@ describe("a window drag", () => {
     listener.onPressEnd(binding);
     expect(page.style.pointerEvents).toBe("auto");
   });
+
   it("takes the document's focus back from a page on a press elsewhere, and leaves it on a press of its own window", () => {
     store.setBackdropSize({ width: 1000, height: 800 });
     m.redraw.sync();
