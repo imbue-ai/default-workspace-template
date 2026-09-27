@@ -31,7 +31,7 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(11))
+    rc.check_bare_print(_DIR, snapshot(10))
 
 
 def test_prevent_bare_except() -> None:
