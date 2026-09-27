@@ -24,7 +24,7 @@ import {
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import type { Placement } from "../model/records";
-import { activeFocusedWindowId } from "../reducers/desktopState";
+import { activeFocusedWindowId, activePlacements } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -607,6 +607,41 @@ describe("the contract", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
     messageFromPage("win-1", { type: SHELL_FOCUSED });
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+  });
+
+  it("ignores a focus report from a hidden page, so a pulled-out or minimized window is not brought back by it", async () => {
+    // Minimized: its page is hidden, and the browser can still restore focus to it.
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    expect(frameOf("win-1").parentElement?.style.display).toBe("none");
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-1")).toMatchObject({
+      is_minimized: true,
+    });
+    // Pulled out: the same, and the window stays out.
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-2", { is_minimized: true }), placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    layer.reconcile();
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-1")).toMatchObject({
+      is_detached: true,
+    });
+    expect(api.calls.filter((call) => call.startsWith("savePlacements"))).toEqual([]);
+  });
+
+  it("takes the document's focus off a page as it hides it", () => {
+    frameOf("win-1").focus();
+    expect(document.activeElement).toBe(frameOf("win-1"));
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
+    store.restoreWindow("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
   });
 
   it("leaves the dragged window on top when another page says it took focus mid-drag", () => {

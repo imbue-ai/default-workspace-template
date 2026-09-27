@@ -463,9 +463,17 @@ export class LivePagesLayer implements PageDriver {
     this.syncVisibility(page, true);
   }
 
+  /** Out of sight, and out of the document's focus: a hidden frame left holding it is the one the browser
+   *  restores focus to when the chrome window's focus comes back, and the page would then report focus it
+   *  never got from the user. */
   private hide(page: LivePage): void {
     page.wrapper.style.display = "none";
+    if (document.activeElement === page.frame) this.host.focus({ preventScroll: true });
     this.syncVisibility(page, false);
+  }
+
+  private isShown(page: LivePage): boolean {
+    return page.wrapper.style.display !== "none";
   }
 
   /** The handshake names the desktop the page's window is on (a hidden page can reload while another desktop
@@ -524,9 +532,13 @@ export class LivePagesLayer implements PageDriver {
     });
   }
 
+  /** ``shell:focused`` from a page: its window is raised. A page that is not shown (minimized, pulled out into the
+   *  chrome's own window, or being pulled out) cannot have been chosen by the user, and a raise would bring its
+   *  window back onto the desktop. */
   private takeFocused(frame: HTMLIFrameElement): void {
     const page = this.pageOfFrame(frame);
-    if (page !== undefined) this.store.raiseWindow(page.windowId);
+    if (page === undefined || !this.isShown(page)) return;
+    this.store.raiseWindow(page.windowId);
   }
 
   /** ``shell:start-with-text {text}`` from a page: the launcher's primary text action runs with it, on the active
