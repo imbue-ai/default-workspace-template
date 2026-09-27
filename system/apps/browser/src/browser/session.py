@@ -1358,9 +1358,9 @@ class LiveBrowser(MutableModel):
 
         These are automated, non-human nudges, so they go with ``--browser-fleet``: the
         transcript UI renders them as a collapsed "Browser fleet" chip instead of a bare user
-        bubble. This is
-        display-only -- the agent still receives the message and resumes its turn exactly
-        as before. The chat is addressed by its chat id, never by an agent's name."""
+        bubble. This is display-only -- the agent still receives the message and resumes its
+        turn exactly as before. The chat is addressed by its chat id, never by an agent's
+        name."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
