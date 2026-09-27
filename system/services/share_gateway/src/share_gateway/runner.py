@@ -31,42 +31,43 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from werkzeug.serving import BaseWSGIServer
-from werkzeug.serving import make_server
+from inotify_simple import INotify
+from inotify_simple import flags as inotify_flags
+from werkzeug.serving import BaseWSGIServer, make_server
 
 from share_gateway import materials as materials_module
-from share_gateway.assignment import RelayAssignment
-from share_gateway.assignment import load_assignment
-from share_gateway.log import log as _log
-from share_gateway.caddyfile import build_label_to_name
-from share_gateway.caddyfile import read_registered_apps
-from share_gateway.caddyfile import render_caddyfile
-from share_gateway.certs import CertProvisioningError
-from share_gateway.certs import ensure_share_certificate
+from share_gateway.assignment import RelayAssignment, load_assignment
+from share_gateway.caddyfile import (
+    build_label_to_name,
+    read_registered_apps,
+    render_caddyfile,
+)
+from share_gateway.certs import CertProvisioningError, ensure_share_certificate
 from share_gateway.frpc_config import render_frpc_toml
-from share_gateway.handoff import JwksCache
-from share_gateway.handoff import SingleUseJtiRegistry
-from share_gateway.materials import ShareMaterials
-from share_gateway.materials import discard_signing_secret
-from share_gateway.materials import load_or_create_auth_label
-from share_gateway.materials import load_or_create_signing_secret
-from share_gateway.materials import read_share_materials
-from share_gateway.retry_state import STATUS_HALTED
-from share_gateway.retry_state import STATUS_RETRYING
-from share_gateway.retry_state import STATUS_UP
-from share_gateway.retry_state import ProvisioningRetryState
-from share_gateway.retry_state import ShareStackStartError
-from share_gateway.retry_state import remove_gateway_status
-from share_gateway.retry_state import utc_now
-from share_gateway.retry_state import write_gateway_status
-from share_gateway.server import PendingLoginRegistry
-from share_gateway.server import build_gateway_app
+from share_gateway.handoff import JwksCache, SingleUseJtiRegistry
+from share_gateway.log import log as _log
+from share_gateway.materials import (
+    ShareMaterials,
+    discard_signing_secret,
+    load_or_create_auth_label,
+    load_or_create_signing_secret,
+    read_share_materials,
+)
+from share_gateway.retry_state import (
+    STATUS_HALTED,
+    STATUS_RETRYING,
+    STATUS_UP,
+    ProvisioningRetryState,
+    ShareStackStartError,
+    remove_gateway_status,
+    utc_now,
+    write_gateway_status,
+)
+from share_gateway.server import PendingLoginRegistry, build_gateway_app
 
 POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
@@ -75,35 +76,36 @@ _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
-    """Watch the parent directories of every gating file; None when inotify is unavailable."""
-    try:
-        import inotifyx  # type: ignore[import-untyped]
+    """Watch the parent directories of every gating file; None when inotify is unavailable.
 
-        fd = inotifyx.init()
+    Uses inotify_simple (pure Python, Linux only), the same library the
+    app_watcher service watches with.
+    """
+    try:
+        inotify = INotify()
         for parent in {path.parent for path in paths}:
             parent.mkdir(parents=True, exist_ok=True)
-            inotifyx.add_watch(
-                fd,
+            inotify.add_watch(
                 str(parent),
-                inotifyx.IN_MODIFY
-                | inotifyx.IN_CREATE
-                | inotifyx.IN_MOVED_TO
-                | inotifyx.IN_DELETE
-                | inotifyx.IN_MOVED_FROM,
+                inotify_flags.MODIFY
+                | inotify_flags.CREATE
+                | inotify_flags.MOVED_TO
+                | inotify_flags.DELETE
+                | inotify_flags.MOVED_FROM,
             )
-        return fd
-    except (ImportError, OSError):
+        return inotify
+    except OSError:
         return None
 
 
-def _wait_for_change_inotify(fd: object, timeout_seconds: float) -> bool:
-    try:
-        import inotifyx  # type: ignore[import-untyped]
-
-        events = inotifyx.get_events(fd, timeout_seconds)
-        return len(events) > 0
-    except (ImportError, OSError):
+def _wait_for_change_inotify(inotify: object, timeout_seconds: float) -> bool:
+    if not isinstance(inotify, INotify):
         return False
+    try:
+        events = inotify.read(timeout=int(timeout_seconds * 1000))
+    except OSError:
+        return False
+    return len(events) > 0
 
 
 def _stop_child(process: subprocess.Popen[bytes] | None, name: str) -> None:
@@ -120,7 +122,9 @@ def _stop_child(process: subprocess.Popen[bytes] | None, name: str) -> None:
 
 def _start_child(argv: list[str], name: str) -> subprocess.Popen[bytes]:
     _log(f"Starting {name}: {' '.join(argv[:3])}...")
-    return subprocess.Popen(argv, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno())
+    return subprocess.Popen(
+        argv, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno()
+    )
 
 
 def _reload_caddy(caddyfile_text: str) -> bool:
@@ -136,7 +140,9 @@ def _reload_caddy(caddyfile_text: str) -> bool:
         _log(f"caddy admin reload failed: {exc}")
         return False
     if response.status_code >= 400:
-        _log(f"caddy admin reload rejected ({response.status_code}): {response.text[:300]}")
+        _log(
+            f"caddy admin reload rejected ({response.status_code}): {response.text[:300]}"
+        )
         return False
     return True
 
@@ -154,7 +160,9 @@ def _reload_frpc(config_path: Path) -> bool:
         _log(f"frpc reload failed: {exc}")
         return False
     if result.returncode != 0:
-        _log(f"frpc reload rejected ({result.returncode}): {result.stdout.decode(errors='replace')[:300]}")
+        _log(
+            f"frpc reload rejected ({result.returncode}): {result.stdout.decode(errors='replace')[:300]}"
+        )
         return False
     return True
 
@@ -162,7 +170,9 @@ def _reload_frpc(config_path: Path) -> bool:
 class ShareStack:
     """The running pieces of one active share: gateway server, caddy, one frpc per assigned relay."""
 
-    def __init__(self, materials: ShareMaterials, auth_label: str, assignment: RelayAssignment) -> None:
+    def __init__(
+        self, materials: ShareMaterials, auth_label: str, assignment: RelayAssignment
+    ) -> None:
         self.materials = materials
         self.auth_label = auth_label
         self.assignment = assignment
@@ -219,14 +229,19 @@ def _start_frpc_for_relay(stack: ShareStack, relay_id: str) -> None:
     config_path = materials_module.frpc_config_path(relay_id)
     config_path.write_text(config_text)
     stack.frpc_config_text_by_relay_id[relay_id] = config_text
-    stack.frpc_process_by_relay_id[relay_id] = _start_child(["frpc", "-c", str(config_path)], f"frpc[{relay_id}]")
+    stack.frpc_process_by_relay_id[relay_id] = _start_child(
+        ["frpc", "-c", str(config_path)], f"frpc[{relay_id}]"
+    )
 
 
 def _converge_frpc_processes(stack: ShareStack) -> None:
     """Start frpc for newly assigned relays and stop frpc for relays that left the assignment."""
     assigned = set(stack.assignment.endpoint_by_relay_id)
     for removed_relay_id in sorted(set(stack.frpc_process_by_relay_id) - assigned):
-        _stop_child(stack.frpc_process_by_relay_id.pop(removed_relay_id), f"frpc[{removed_relay_id}]")
+        _stop_child(
+            stack.frpc_process_by_relay_id.pop(removed_relay_id),
+            f"frpc[{removed_relay_id}]",
+        )
         stack.frpc_config_text_by_relay_id.pop(removed_relay_id, None)
         stack.admin_port_by_relay_id.pop(removed_relay_id, None)
         _log(f"Relay {removed_relay_id} left the assignment; its tunnel is down")
@@ -255,15 +270,23 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
             retry_after_seconds=exc.retry_after_seconds,
         ) from exc
 
-    assignment = load_assignment(materials.connector_url, materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH)
+    assignment = load_assignment(
+        materials.connector_url,
+        materials.relay_token,
+        materials_module.ASSIGNMENT_CACHE_PATH,
+    )
     if assignment is None:
         raise ShareStackStartError(
-            "no relay assignment available yet", is_retryable=True, retry_after_seconds=None
+            "no relay assignment available yet",
+            is_retryable=True,
+            retry_after_seconds=None,
         )
 
     auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
     stack = ShareStack(materials, auth_label, assignment)
-    signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE, materials.relay_token)
+    signing_secret = load_or_create_signing_secret(
+        materials_module.SIGNING_SECRET_FILE, materials.relay_token
+    )
     app = build_gateway_app(
         materials=materials,
         grants_path=materials_module.GRANTS_FILE,
@@ -272,16 +295,32 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
-        get_label_to_name=lambda: build_label_to_name(read_registered_apps(APPS_TOML_PATH)),
+        get_label_to_name=lambda: build_label_to_name(
+            read_registered_apps(APPS_TOML_PATH)
+        ),
     )
-    stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
-    threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
+    stack.gateway_server = make_server(
+        "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True
+    )
+    threading.Thread(
+        target=stack.gateway_server.serve_forever,
+        name="share-gateway-http",
+        daemon=True,
+    ).start()
 
     materials_module.STATE_DIR.mkdir(parents=True, exist_ok=True)
     stack.last_caddyfile_text = stack.render_current_caddyfile()
     materials_module.CADDYFILE_PATH.write_text(stack.last_caddyfile_text)
     stack.caddy_process = _start_child(
-        ["caddy", "run", "--config", str(materials_module.CADDYFILE_PATH), "--adapter", "caddyfile"], "caddy"
+        [
+            "caddy",
+            "run",
+            "--config",
+            str(materials_module.CADDYFILE_PATH),
+            "--adapter",
+            "caddyfile",
+        ],
+        "caddy",
     )
 
     _converge_frpc_processes(stack)
@@ -292,7 +331,9 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
     return stack
 
 
-def _try_start_stack(materials: ShareMaterials, retry_state: ProvisioningRetryState) -> ShareStack | None:
+def _try_start_stack(
+    materials: ShareMaterials, retry_state: ProvisioningRetryState
+) -> ShareStack | None:
     """One bring-up attempt: on failure, schedule the retry and report it in the status file."""
     try:
         stack = _start_stack(materials)
@@ -302,7 +343,9 @@ def _try_start_stack(materials: ShareMaterials, retry_state: ProvisioningRetrySt
             _log(f"{exc}; not retrying until the share materials change")
             state = STATUS_HALTED
         else:
-            _log(f"{exc}; retrying in {delay}s (attempt {retry_state.failed_attempt_count})")
+            _log(
+                f"{exc}; retrying in {delay}s (attempt {retry_state.failed_attempt_count})"
+            )
             state = STATUS_RETRYING
         write_gateway_status(
             materials_module.GATEWAY_STATUS_FILE,
@@ -344,7 +387,9 @@ def _restart_dead_frpc_processes(stack: ShareStack) -> None:
     for relay_id in sorted(stack.frpc_process_by_relay_id):
         frpc_process = stack.frpc_process_by_relay_id[relay_id]
         if frpc_process.poll() is not None:
-            _log(f"frpc[{relay_id}] exited with {frpc_process.returncode}; restarting it")
+            _log(
+                f"frpc[{relay_id}] exited with {frpc_process.returncode}; restarting it"
+            )
             _start_frpc_for_relay(stack, relay_id)
 
 
@@ -354,11 +399,15 @@ def _repoll_assignment(stack: ShareStack) -> None:
         return
     stack.last_assignment_fetch = time.monotonic()
     refreshed = load_assignment(
-        stack.materials.connector_url, stack.materials.relay_token, materials_module.ASSIGNMENT_CACHE_PATH
+        stack.materials.connector_url,
+        stack.materials.relay_token,
+        materials_module.ASSIGNMENT_CACHE_PATH,
     )
     if refreshed is None or refreshed == stack.assignment:
         return
-    _log(f"Relay assignment changed; converging tunnels to {sorted(refreshed.endpoint_by_relay_id)}")
+    _log(
+        f"Relay assignment changed; converging tunnels to {sorted(refreshed.endpoint_by_relay_id)}"
+    )
     stack.assignment = refreshed
     _converge_frpc_processes(stack)
 
@@ -366,7 +415,9 @@ def _repoll_assignment(stack: ShareStack) -> None:
 def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
     """Periodic upkeep for a running stack: restart dead children, re-render configs, renew the cert."""
     if stack.caddy_process is not None and stack.caddy_process.poll() is not None:
-        _log(f"caddy exited with {stack.caddy_process.returncode}; restarting the stack")
+        _log(
+            f"caddy exited with {stack.caddy_process.returncode}; restarting the stack"
+        )
         _stop_stack(stack)
         return None
     _restart_dead_frpc_processes(stack)
@@ -394,7 +445,11 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
     now = datetime.now(timezone.utc)
     if now - stack.last_renewal_check >= _RENEWAL_CHECK_INTERVAL:
         stack.last_renewal_check = now
-        cert_before = materials_module.TLS_CERT_FILE.read_text() if materials_module.TLS_CERT_FILE.exists() else ""
+        cert_before = (
+            materials_module.TLS_CERT_FILE.read_text()
+            if materials_module.TLS_CERT_FILE.exists()
+            else ""
+        )
         try:
             ensure_share_certificate(
                 key_path=materials_module.TLS_KEY_FILE,
@@ -442,7 +497,9 @@ def main() -> None:
             _log("Share materials removed; tearing the stack down")
             _stop_stack(stack)
             discard_signing_secret(materials_module.SIGNING_SECRET_FILE)
-            _log("Discarded the session signing secret; every existing session is now invalid")
+            _log(
+                "Discarded the session signing secret; every existing session is now invalid"
+            )
             stack = None
             remove_gateway_status(materials_module.GATEWAY_STATUS_FILE)
         elif materials is None:
@@ -454,7 +511,9 @@ def main() -> None:
             remove_gateway_status(materials_module.GATEWAY_STATUS_FILE)
             retried_materials = None
             if discard_signing_secret(materials_module.SIGNING_SECRET_FILE):
-                _log("Discarded a session signing secret left by an earlier share; its sessions are now invalid")
+                _log(
+                    "Discarded a session signing secret left by an earlier share; its sessions are now invalid"
+                )
         elif stack is None:
             if retry_state.is_attempt_due(time.monotonic()):
                 stack = _try_start_stack(materials, retry_state)
