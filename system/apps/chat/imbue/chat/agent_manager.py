@@ -4060,13 +4060,13 @@ class AgentManager:
         # mutation); only the broadcast itself is gated.
         handled_snapshot = queue_handler() if queue_handler is not None else None
         if handled_snapshot is not None:
-            drained = tuple(QueuedMessageState.model_validate(entry) for entry in handled_snapshot)
+            handled_queue = tuple(QueuedMessageState.model_validate(entry) for entry in handled_snapshot)
             with self._lock:
-                idle_agent_state = self._agents.get(agent_id)
-                if idle_agent_state is not None and idle_agent_state.queued_messages != drained:
-                    self._queued_messages_by_agent[agent_id] = drained
-                    self._agents[agent_id] = idle_agent_state.model_copy_update(
-                        to_update(idle_agent_state.field_ref().queued_messages, drained)
+                handled_agent_state = self._agents.get(agent_id)
+                if handled_agent_state is not None and handled_agent_state.queued_messages != handled_queue:
+                    self._queued_messages_by_agent[agent_id] = handled_queue
+                    self._agents[agent_id] = handled_agent_state.model_copy_update(
+                        to_update(handled_agent_state.field_ref().queued_messages, handled_queue)
                     )
 
         if broadcast_on_change:
