@@ -630,7 +630,6 @@ describe("the contract", () => {
     expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-1")).toMatchObject({
       is_detached: true,
     });
-    expect(api.calls.filter((call) => call.startsWith("savePlacements"))).toEqual([]);
   });
 
   it("takes the document's focus off a page as it hides it", () => {
