@@ -42,7 +42,8 @@ export interface BackdropAttrs {
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint, target: Element) => void;
   readonly onWindowControl: (windowId: string, control: WindowControl, event: MouseEvent) => void;
-  /** A pulled-out window's ghost was asked to show its own desktop window, or to bring the window back. */
+  /** A pulled-out window's ghost was asked to show its own desktop window, to hide itself, or to bring the
+   *  window back. */
   readonly onShowDetachedWindow: (windowId: string) => void;
   readonly onHideWindowGhost: (windowId: string) => void;
   readonly onBringBackWindow: (windowId: string) => void;
