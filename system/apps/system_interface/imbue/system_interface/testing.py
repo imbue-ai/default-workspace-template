@@ -206,8 +206,9 @@ def build_test_state(
     ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
     the resolver that names and pictures each account (one that can reach no connector by default, so no test
     fetches anything unless it says so). ``launch_poster`` answers the POST launches the shell would otherwise make
-    over loopback. ``is_lifecycle_enabled`` runs the lifecycle manager's sweep once the shell is started (off by
-    default, so no test parks a port by accident), with the grace period and idle sweep interval given.
+    over loopback. ``is_lifecycle_enabled`` makes the lifecycle manager own the apps: its sweep runs once the shell
+    is started, and a POST launch wakes a stopped app (off by default, so no test parks a port or starts a
+    program by accident), with the grace period and idle sweep interval given.
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_presence_directory = (

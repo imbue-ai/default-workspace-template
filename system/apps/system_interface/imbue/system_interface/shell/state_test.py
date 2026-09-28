@@ -218,15 +218,31 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
         never_up.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
     assert started == ["docs", "docs"] and len(posts) == 1
 
+    # A manager that does not own the live apps (a preview's) wakes nothing: the post goes out as it is and fails
+    # as one to any unreachable app does.
+    preview = built.model_copy_update(
+        to_update(
+            built.field_ref().lifecycle,
+            _launch_waking_manager(built, started.append, time.monotonic, is_enabled=False),
+        )
+    ).model_copy_update(to_update(built.field_ref().launch_poster, _refusing_launch_poster))
+    with pytest.raises(LaunchUnavailableError, match="refused"):
+        preview.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert started == ["docs", "docs"]
+
+
+def _refusing_launch_poster(post: LaunchPost) -> LaunchPostOutcome:
+    raise LaunchUnavailableError(f"{post.app} could not be reached for the launch: refused")
+
 
 def _launch_waking_manager(
-    shell: ShellState, start_program: Callable[[str], None], clock: Callable[[], float]
+    shell: ShellState, start_program: Callable[[str], None], clock: Callable[[], float], is_enabled: bool = True
 ) -> AppLifecycleManager:
     """A lifecycle manager over the shell's inventory whose supervisord is a stopped ``docs`` and whose start is
-    ``start_program``; nothing is swept (it is never started)."""
+    ``start_program``; enabled, so a launch wakes the app, but never started, so nothing is swept."""
     return AppLifecycleManager(
         inventory=shell.inventory,
-        is_enabled=False,
+        is_enabled=is_enabled,
         count_windows_of_app=lambda app: 0,
         program_states=lambda: {"docs": "STOPPED"},
         start_program=start_program,

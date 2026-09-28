@@ -286,9 +286,10 @@ class ShellState(MutableModel):
         """The page a launch of the path opens (post-launch-paths plan section 3.2): built for a GET launch path,
         asked of the app for a POST one, with the requesting client, its desktop, and the aimed-at window's path as
         the envelope. A POST to a stoppable app that is stopped wakes it first and waits for it to answer (the
-        stop-when-no-windows spec, section 5.6). Raises LaunchRefusedError (a 400) and LaunchUnavailableError (a
-        502)."""
-        if launch_path.method is LaunchPathMethod.POST and not entry.is_running:
+        stop-when-no-windows spec, section 5.6) when the lifecycle manager owns the live workspace's apps; a
+        preview's does not, and its post fails as one to any unreachable app does. Raises LaunchRefusedError (a
+        400) and LaunchUnavailableError (a 502)."""
+        if launch_path.method is LaunchPathMethod.POST and not entry.is_running and self.lifecycle.is_enabled:
             is_stoppable = stoppable_program_of(entry, self.inventory.entries()) is not None
             if is_stoppable and not self.lifecycle.wake_and_wait(entry):
                 raise LaunchUnavailableError(f"{str(entry.row.name)} did not come up in time for the launch")
@@ -754,8 +755,9 @@ def build_shell_state(
     served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
     that can reach no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a
     POST launch path is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the
-    lifecycle manager's sweep runs (the production shell's yes; a preview's and a test's no, so no test parks a
-    port by accident), and the two timings are the manager's grace period and idle sweep interval, which a test
+    lifecycle manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the
+    production shell's yes; a preview's and a test's no, so neither starts a live app or parks a port by
+    accident), and the two timings are the manager's grace period and idle sweep interval, which a test
     shortens."""
     resolved_inventory = (
         inventory

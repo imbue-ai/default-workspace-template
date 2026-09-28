@@ -8,8 +8,9 @@ an app that failed to start with the failure page, and stops a running app that 
 arrived at the shell since it started (spec section 6: before anyone has looked at the workspace, "no windows"
 says nothing about use, and the apps that deliver something on the first visit need to be running for it). A wake releases the parker before asking supervisord to start
 the program, so the app's first bind never collides with the shell's listener, and is budgeted so a broken app
-cannot be restarted by every reload. Supervisord access is injectable, and the sweep thread runs only when the
-manager is enabled (never in a preview shell, and in tests only when a test says so).
+cannot be restarted by every reload. Supervisord access is injectable, and the sweep thread runs (and a POST
+launch wakes a stopped app) only when the manager is enabled: never in a preview shell, whose registry is a copy
+of the live one, and in tests only when a test says so.
 """
 
 import socket
@@ -90,7 +91,10 @@ class AppLifecycleManager(MutableModel):
 
     inventory: AppInventory = Field(frozen=True, description="The registry rows and each app's liveness")
     is_enabled: bool = Field(
-        frozen=True, description="Whether the sweep thread runs; a preview shell and most tests leave it off"
+        frozen=True,
+        description="Whether the manager owns the live workspace's app lifecycles: its sweep runs, and a POST "
+        "launch wakes a stopped app. A preview shell and most tests leave it off; the verbs a caller asks for "
+        "(wake, stop) act regardless",
     )
     count_windows_of_app: Callable[[str], int] = Field(
         frozen=True, description="How many windows across every desktop show the app, by app name"
