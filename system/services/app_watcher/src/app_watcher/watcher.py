@@ -6,7 +6,8 @@ events/services/events.jsonl so the desktop client can discover available servic
 A registration event goes out only for an app whose registered fields changed --
 the whole file is rewritten whenever any app registers, so a write says nothing
 about which apps moved. The first pass remembers nothing and so announces them all.
-A log over the archive threshold at startup is gzipped out of the replay first.
+A log over the archive threshold at startup is moved out of the replay before the
+first pass and gzipped after it.
 
 Uses both inotify (when available) and mtime polling (5-second fallback).
 """
